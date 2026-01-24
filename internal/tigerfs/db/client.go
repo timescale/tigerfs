@@ -20,6 +20,21 @@ type Client struct {
 func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client, error) {
 	logging.Debug("Creating database client", zap.String("connection", connStr))
 
+	// Resolve password from multiple sources (env vars, password_command)
+	// Note: .pgpass file is handled automatically by pgx
+	password, err := resolvePassword(ctx, cfg, connStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve password: %w", err)
+	}
+
+	// Inject password into connection string if found
+	if password != "" {
+		connStr, err = injectPasswordIntoConnStr(connStr, password)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inject password: %w", err)
+		}
+	}
+
 	// Parse connection string
 	poolConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
