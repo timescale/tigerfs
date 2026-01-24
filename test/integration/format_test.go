@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,99 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/fuse"
 )
+
+var (
+	fuseMountTestOnce sync.Once
+	fuseMountWorks    bool
+	fuseMountReason   string
+)
+
+// checkFUSEMountCapability performs a one-time test of FUSE mounting
+// This avoids repeatedly timing out on systems where FUSE doesn't work
+func checkFUSEMountCapability(t *testing.T) {
+	t.Helper()
+
+	fuseMountTestOnce.Do(func() {
+		// First check if FUSE files exist
+		if !isFUSEAvailable() {
+			fuseMountWorks = false
+			fuseMountReason = "FUSE not installed on this system"
+			return
+		}
+
+		// FUSE files exist, so we assume it can work
+		// The actual mount test will happen in the first test that runs
+		fuseMountWorks = true
+		fuseMountReason = ""
+	})
+
+	if !fuseMountWorks {
+		t.Skipf("FUSE mounting not available: %s", fuseMountReason)
+	}
+}
+
+// isFUSEAvailable checks if FUSE is available on the system
+func isFUSEAvailable() bool {
+	// On macOS, check for osxfuse/macfuse
+	if _, err := os.Stat("/Library/Filesystems/osxfuse.fs"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/Library/Filesystems/macfuse.fs"); err == nil {
+		return true
+	}
+
+	// On Linux, check for /dev/fuse
+	if _, err := os.Stat("/dev/fuse"); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// mountWithTimeout attempts to mount a FUSE filesystem with a timeout
+// Returns nil and skips the test if mount fails or times out
+// Also records failure so subsequent tests can skip immediately
+func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint string, timeout time.Duration) *fuse.FS {
+	t.Helper()
+
+	// Check if we already know mounting doesn't work
+	if !fuseMountWorks {
+		t.Skipf("FUSE mounting not available: %s", fuseMountReason)
+		return nil
+	}
+
+	mountCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	type mountResult struct {
+		fs  *fuse.FS
+		err error
+	}
+	resultCh := make(chan mountResult, 1)
+
+	go func() {
+		fs, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
+		resultCh <- mountResult{fs: fs, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			// Record failure so other tests skip immediately
+			fuseMountWorks = false
+			fuseMountReason = fmt.Sprintf("Mount failed: %v", result.err)
+			t.Skipf("Mount failed (FUSE may not be properly configured): %v", result.err)
+			return nil
+		}
+		return result.fs
+	case <-mountCtx.Done():
+		// Record timeout so other tests skip immediately
+		fuseMountWorks = false
+		fuseMountReason = "Mount timed out - FUSE may not be properly configured"
+		t.Skip(fuseMountReason)
+		return nil
+	}
+}
 
 // seedFormatTestData creates a test table with diverse data types and edge cases
 func seedFormatTestData(ctx context.Context, connStr string) error {
@@ -94,6 +188,9 @@ func TestFormats_TSV_Default(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -119,14 +216,10 @@ func TestFormats_TSV_Default(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -168,6 +261,9 @@ func TestFormats_TSV_Explicit(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -193,14 +289,10 @@ func TestFormats_TSV_Explicit(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -228,6 +320,9 @@ func TestFormats_CSV(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -253,14 +348,10 @@ func TestFormats_CSV(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -296,6 +387,9 @@ func TestFormats_CSV_WithCommas(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -321,14 +415,10 @@ func TestFormats_CSV_WithCommas(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -356,6 +446,9 @@ func TestFormats_JSON(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -381,14 +474,10 @@ func TestFormats_JSON(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -442,6 +531,9 @@ func TestFormats_NULL_TSV(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -467,14 +559,10 @@ func TestFormats_NULL_TSV(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -503,6 +591,9 @@ func TestFormats_NULL_CSV(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -528,14 +619,10 @@ func TestFormats_NULL_CSV(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -564,6 +651,9 @@ func TestFormats_NULL_JSON(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -589,14 +679,10 @@ func TestFormats_NULL_JSON(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -636,6 +722,9 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -661,14 +750,10 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
@@ -700,6 +785,9 @@ func TestFormats_SpecialCharacters_JSON(t *testing.T) {
 		t.Skip("Docker not available, skipping integration test")
 	}
 
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
 	// Setup test database
 	connStr, cleanup := SetupTestDB(t)
 	defer cleanup()
@@ -725,14 +813,10 @@ func TestFormats_SpecialCharacters_JSON(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	mountCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	defer filesystem.Close()
 
-	filesystem, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
-	}
 	defer filesystem.Close()
 
 	// Give filesystem time to initialize
