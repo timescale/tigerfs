@@ -126,3 +126,57 @@ func (c *Client) GetColumn(ctx context.Context, schema, table, pkColumn, pkValue
 	}
 	return GetColumn(ctx, c.pool, schema, table, pkColumn, pkValue, columnName)
 }
+
+// UpdateColumn updates a single column value for a row by primary key
+// Empty string is treated as NULL
+func UpdateColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+	logging.Debug("Updating column",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.String("pk_value", pkValue),
+		zap.String("column", columnName),
+		zap.Bool("is_null", newValue == ""))
+
+	// Build UPDATE query with proper quoting for identifiers
+	// UPDATE "schema"."table" SET "column" = $1 WHERE "pk_column" = $2
+	query := fmt.Sprintf(
+		`UPDATE "%s"."%s" SET "%s" = $1 WHERE "%s" = $2`,
+		schema, table, columnName, pkColumn,
+	)
+
+	// Convert empty string to NULL
+	var value interface{}
+	if newValue == "" {
+		value = nil
+	} else {
+		value = newValue
+	}
+
+	// Execute update
+	cmdTag, err := pool.Exec(ctx, query, value, pkValue)
+	if err != nil {
+		return fmt.Errorf("failed to update column: %w", err)
+	}
+
+	// Check if any rows were affected
+	if cmdTag.RowsAffected() == 0 {
+		return fmt.Errorf("row not found")
+	}
+
+	logging.Debug("Column updated successfully",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", columnName),
+		zap.Int64("rows_affected", cmdTag.RowsAffected()))
+
+	return nil
+}
+
+// UpdateColumn is a convenience wrapper for Client
+func (c *Client) UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+	return UpdateColumn(ctx, c.pool, schema, table, pkColumn, pkValue, columnName, newValue)
+}

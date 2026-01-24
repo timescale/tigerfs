@@ -33,6 +33,7 @@ type ColumnFileNode struct {
 var _ fs.InodeEmbedder = (*ColumnFileNode)(nil)
 var _ fs.NodeOpener = (*ColumnFileNode)(nil)
 var _ fs.NodeGetattrer = (*ColumnFileNode)(nil)
+var _ fs.NodeSetattrer = (*ColumnFileNode)(nil)
 
 // NewColumnFileNode creates a new column file node
 func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue, columnName string) *ColumnFileNode {
@@ -66,22 +67,50 @@ func (c *ColumnFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 		}
 	}
 
-	out.Mode = 0644 | syscall.S_IFREG
+	out.Mode = 0644 | syscall.S_IFREG // Read-write
 	out.Nlink = 1
 	out.Size = uint64(len(c.data))
 
 	return 0
 }
 
-// Open opens the column file for reading
-func (c *ColumnFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	logging.Debug("ColumnFileNode.Open called",
+// Setattr handles attribute changes (used for truncation during writes)
+func (c *ColumnFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	logging.Debug("ColumnFileNode.Setattr called",
 		zap.String("table", c.tableName),
 		zap.String("pk", c.pkValue),
 		zap.String("column", c.columnName))
 
-	// Fetch column data if not already cached
-	if c.data == nil {
+	// Handle truncation (e.g., > /path/to/file or echo "text" > /path/to/file)
+	if sz, ok := in.GetSize(); ok {
+		if sz == 0 {
+			// Truncate to zero - clear cached data
+			c.data = nil
+			logging.Debug("Column file truncated",
+				zap.String("table", c.tableName),
+				zap.String("pk", c.pkValue),
+				zap.String("column", c.columnName))
+		}
+	}
+
+	// Return current attributes
+	return c.Getattr(ctx, fh, out)
+}
+
+// Open opens the column file for reading or writing
+func (c *ColumnFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	logging.Debug("ColumnFileNode.Open called",
+		zap.String("table", c.tableName),
+		zap.String("pk", c.pkValue),
+		zap.String("column", c.columnName),
+		zap.Uint32("flags", flags))
+
+	// Check if opening for write
+	accessMode := flags & syscall.O_ACCMODE
+	isWrite := accessMode == syscall.O_WRONLY || accessMode == syscall.O_RDWR
+
+	// Fetch column data if not already cached and not truncating
+	if c.data == nil && !isWrite {
 		if err := c.fetchData(ctx); err != nil {
 			logging.Error("Failed to fetch column data",
 				zap.String("table", c.tableName),
@@ -94,6 +123,7 @@ func (c *ColumnFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 
 	// Create file handle
 	fh := &ColumnFileHandle{
+		node: c,
 		data: c.data,
 	}
 
@@ -120,12 +150,15 @@ func (c *ColumnFileNode) fetchData(ctx context.Context) error {
 	return nil
 }
 
-// ColumnFileHandle represents an open file handle for reading column data
+// ColumnFileHandle represents an open file handle for reading/writing column data
 type ColumnFileHandle struct {
+	node *ColumnFileNode
 	data []byte
 }
 
 var _ fs.FileReader = (*ColumnFileHandle)(nil)
+var _ fs.FileWriter = (*ColumnFileHandle)(nil)
+var _ fs.FileFlusher = (*ColumnFileHandle)(nil)
 
 // Read reads column data from the file
 func (fh *ColumnFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
@@ -144,4 +177,79 @@ func (fh *ColumnFileHandle) Read(ctx context.Context, dest []byte, off int64) (f
 
 	// Return data slice
 	return fuse.ReadResultData(fh.data[off:end]), 0
+}
+
+// Write writes data to the column file
+func (fh *ColumnFileHandle) Write(ctx context.Context, data []byte, off int64) (written uint32, errno syscall.Errno) {
+	logging.Debug("ColumnFileHandle.Write called",
+		zap.Int64("offset", off),
+		zap.Int("size", len(data)))
+
+	// For simplicity, only support writes starting at offset 0
+	// This handles the common case: echo "value" > file
+	if off == 0 {
+		fh.data = make([]byte, len(data))
+		copy(fh.data, data)
+	} else {
+		// Extend data buffer if necessary
+		newLen := off + int64(len(data))
+		if newLen > int64(len(fh.data)) {
+			newData := make([]byte, newLen)
+			copy(newData, fh.data)
+			fh.data = newData
+		}
+		// Write at offset
+		copy(fh.data[off:], data)
+	}
+
+	logging.Debug("ColumnFileHandle.Write buffered",
+		zap.Int("bytes_written", len(data)),
+		zap.Int("total_size", len(fh.data)))
+
+	return uint32(len(data)), 0
+}
+
+// Flush writes buffered data to the database
+func (fh *ColumnFileHandle) Flush(ctx context.Context) syscall.Errno {
+	logging.Debug("ColumnFileHandle.Flush called",
+		zap.String("table", fh.node.tableName),
+		zap.String("pk", fh.node.pkValue),
+		zap.String("column", fh.node.columnName),
+		zap.Int("data_size", len(fh.data)))
+
+	// Convert data to string, trim trailing newline if present
+	value := string(fh.data)
+	if len(value) > 0 && value[len(value)-1] == '\n' {
+		value = value[:len(value)-1]
+	}
+
+	// Update column in database
+	err := fh.node.db.UpdateColumn(
+		ctx,
+		fh.node.schema,
+		fh.node.tableName,
+		fh.node.pkColumn,
+		fh.node.pkValue,
+		fh.node.columnName,
+		value,
+	)
+
+	if err != nil {
+		logging.Error("Failed to update column",
+			zap.String("table", fh.node.tableName),
+			zap.String("pk", fh.node.pkValue),
+			zap.String("column", fh.node.columnName),
+			zap.Error(err))
+		return syscall.EIO
+	}
+
+	// Update cached data in node
+	fh.node.data = fh.data
+
+	logging.Debug("Column updated successfully",
+		zap.String("table", fh.node.tableName),
+		zap.String("pk", fh.node.pkValue),
+		zap.String("column", fh.node.columnName))
+
+	return 0
 }
