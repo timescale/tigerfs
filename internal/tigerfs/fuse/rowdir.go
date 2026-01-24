@@ -30,6 +30,7 @@ var _ fs.InodeEmbedder = (*RowDirectoryNode)(nil)
 var _ fs.NodeGetattrer = (*RowDirectoryNode)(nil)
 var _ fs.NodeReaddirer = (*RowDirectoryNode)(nil)
 var _ fs.NodeLookuper = (*RowDirectoryNode)(nil)
+var _ fs.NodeUnlinker = (*RowDirectoryNode)(nil)
 
 // NewRowDirectoryNode creates a new row directory node
 func NewRowDirectoryNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
@@ -138,4 +139,66 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 
 	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
 	return child, 0
+}
+
+// Unlink deletes a column file (rm /users/123/email) by setting column to NULL
+func (r *RowDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	logging.Debug("RowDirectoryNode.Unlink called",
+		zap.String("table", r.tableName),
+		zap.String("pk", r.pkValue),
+		zap.String("column", name))
+
+	// Get column information to validate it's nullable
+	columns, err := r.db.GetColumns(ctx, r.schema, r.tableName)
+	if err != nil {
+		logging.Error("Failed to get columns",
+			zap.String("table", r.tableName),
+			zap.Error(err))
+		return syscall.EIO
+	}
+
+	// Find the column being deleted
+	var targetColumn *db.Column
+	for i := range columns {
+		if columns[i].Name == name {
+			targetColumn = &columns[i]
+			break
+		}
+	}
+
+	if targetColumn == nil {
+		logging.Debug("Column not found",
+			zap.String("table", r.tableName),
+			zap.String("pk", r.pkValue),
+			zap.String("column", name))
+		return syscall.ENOENT
+	}
+
+	// Check if column is nullable
+	if !targetColumn.IsNullable && targetColumn.Default == "" {
+		// Column is NOT NULL without default - cannot set to NULL
+		logging.Debug("Cannot delete NOT NULL column without default",
+			zap.String("table", r.tableName),
+			zap.String("pk", r.pkValue),
+			zap.String("column", name))
+		return syscall.EACCES
+	}
+
+	// Set column to NULL via UPDATE (empty string is converted to NULL)
+	err = r.db.UpdateColumn(ctx, r.schema, r.tableName, r.pkColumn, r.pkValue, name, "")
+	if err != nil {
+		logging.Error("Failed to set column to NULL",
+			zap.String("table", r.tableName),
+			zap.String("pk", r.pkValue),
+			zap.String("column", name),
+			zap.Error(err))
+		return syscall.EIO
+	}
+
+	logging.Debug("Column set to NULL successfully",
+		zap.String("table", r.tableName),
+		zap.String("pk", r.pkValue),
+		zap.String("column", name))
+
+	return 0
 }
