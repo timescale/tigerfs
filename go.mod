@@ -3,6 +3,7 @@ module github.com/timescale/tigerfs
 go 1.25.1
 
 require (
+	github.com/hanwen/go-fuse/v2 v2.9.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
