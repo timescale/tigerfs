@@ -98,11 +98,41 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("table", t.tableName),
 		zap.String("row_pk", name))
 
-	// TODO: Implement full row file node in Task 1.7
-	// For now, return ENOENT (file not found)
-	logging.Debug("Row file lookup not yet implemented",
-		zap.String("table", t.tableName),
-		zap.String("row_pk", name))
+	// Get primary key for table
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
 
-	return nil, syscall.ENOENT
+	pkColumn := pk.Columns[0]
+
+	// Check if row exists by trying to fetch it
+	// This validates the row exists before creating the inode
+	_, err = t.db.GetRow(ctx, t.schema, t.tableName, pkColumn, name)
+	if err != nil {
+		logging.Debug("Row not found",
+			zap.String("table", t.tableName),
+			zap.String("pk", name),
+			zap.Error(err))
+		return nil, syscall.ENOENT
+	}
+
+	// Row exists - create row file node
+	logging.Debug("Row found",
+		zap.String("table", t.tableName),
+		zap.String("pk", name))
+
+	// Create stable inode for the row file
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFREG,
+	}
+
+	// Create row file node
+	rowNode := NewRowFileNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, name)
+
+	child := t.NewPersistentInode(ctx, rowNode, stableAttr)
+	return child, 0
 }
