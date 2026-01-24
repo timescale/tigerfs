@@ -2,6 +2,7 @@ package fuse
 
 import (
 	"context"
+	"strings"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -28,6 +29,8 @@ var _ fs.InodeEmbedder = (*TableNode)(nil)
 var _ fs.NodeGetattrer = (*TableNode)(nil)
 var _ fs.NodeReaddirer = (*TableNode)(nil)
 var _ fs.NodeLookuper = (*TableNode)(nil)
+var _ fs.NodeUnlinker = (*TableNode)(nil)
+var _ fs.NodeRmdirer = (*TableNode)(nil)
 
 // NewTableNode creates a new table directory node
 func NewTableNode(cfg *config.Config, dbClient *db.Client, schema, tableName string) *TableNode {
@@ -220,4 +223,104 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string) (*fs.In
 		zap.String("type", fileType))
 
 	return child, 0
+}
+
+// Unlink deletes a row file (rm /users/123.csv)
+func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	logging.Debug("TableNode.Unlink called",
+		zap.String("table", t.tableName),
+		zap.String("name", name))
+
+	// Can't delete metadata files
+	if name == ".columns" || name == ".schema" || name == ".count" {
+		logging.Debug("Cannot delete metadata file",
+			zap.String("table", t.tableName),
+			zap.String("file", name))
+		return syscall.EACCES
+	}
+
+	// Parse filename to get PK value (strip format extension)
+	pkValue, _ := util.ParseRowFilename(name)
+
+	// Get primary key for table
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Delete row from database
+	err = t.db.DeleteRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	if err != nil {
+		logging.Error("Failed to delete row",
+			zap.String("table", t.tableName),
+			zap.String("pk", pkValue),
+			zap.Error(err))
+		// Map constraint violations to EACCES
+		if strings.Contains(err.Error(), "foreign key") ||
+			strings.Contains(err.Error(), "constraint") {
+			return syscall.EACCES
+		}
+		return syscall.EIO
+	}
+
+	logging.Debug("Row deleted successfully",
+		zap.String("table", t.tableName),
+		zap.String("pk", pkValue))
+
+	return 0
+}
+
+// Rmdir deletes a row directory (rm -r /users/123/)
+func (t *TableNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	logging.Debug("TableNode.Rmdir called",
+		zap.String("table", t.tableName),
+		zap.String("name", name))
+
+	// Can't rmdir row files (must use unlink)
+	// Check if name has format extension
+	pkValue, _ := util.ParseRowFilename(name)
+	if name != pkValue {
+		// Has extension - this is a file, not a directory
+		logging.Debug("Cannot rmdir a file",
+			zap.String("table", t.tableName),
+			zap.String("name", name))
+		return syscall.ENOTDIR
+	}
+
+	// Get primary key for table
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Delete row from database
+	err = t.db.DeleteRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	if err != nil {
+		logging.Error("Failed to delete row",
+			zap.String("table", t.tableName),
+			zap.String("pk", pkValue),
+			zap.Error(err))
+		// Map constraint violations to EACCES
+		if strings.Contains(err.Error(), "foreign key") ||
+			strings.Contains(err.Error(), "constraint") {
+			return syscall.EACCES
+		}
+		return syscall.EIO
+	}
+
+	logging.Debug("Row directory deleted successfully",
+		zap.String("table", t.tableName),
+		zap.String("pk", pkValue))
+
+	return 0
 }

@@ -319,3 +319,45 @@ func (c *Client) UpdateRow(ctx context.Context, schema, table, pkColumn, pkValue
 	}
 	return UpdateRow(ctx, c.pool, schema, table, pkColumn, pkValue, columns, values)
 }
+
+// DeleteRow deletes a row by primary key
+func DeleteRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue string) error {
+	logging.Debug("Deleting row",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.String("pk_value", pkValue))
+
+	// Build DELETE query with proper quoting for identifiers
+	// DELETE FROM "schema"."table" WHERE "pk_column" = $1
+	query := fmt.Sprintf(
+		`DELETE FROM "%s"."%s" WHERE "%s" = $1`,
+		schema, table, pkColumn,
+	)
+
+	// Execute delete
+	cmdTag, err := pool.Exec(ctx, query, pkValue)
+	if err != nil {
+		return fmt.Errorf("failed to delete row: %w", err)
+	}
+
+	// Check if any rows were affected
+	if cmdTag.RowsAffected() == 0 {
+		return fmt.Errorf("row not found")
+	}
+
+	logging.Debug("Row deleted successfully",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int64("rows_affected", cmdTag.RowsAffected()))
+
+	return nil
+}
+
+// DeleteRow is a convenience wrapper for Client
+func (c *Client) DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+	return DeleteRow(ctx, c.pool, schema, table, pkColumn, pkValue)
+}
