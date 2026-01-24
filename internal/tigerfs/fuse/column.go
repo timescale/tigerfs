@@ -108,9 +108,13 @@ func (c *ColumnFileNode) fetchData(ctx context.Context) error {
 		return err
 	}
 
-	// Convert value to string representation
+	// Convert value to string representation using enhanced type conversion
+	// Handles JSONB, arrays, and all PostgreSQL types
 	// NULL values become empty string (0 bytes)
-	str := format.ValueToString(value)
+	str, err := format.ConvertValueToText(value)
+	if err != nil {
+		return err
+	}
 
 	c.data = []byte(str)
 	return nil
