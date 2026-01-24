@@ -185,7 +185,7 @@ func isFUSEAvailable(t *testing.T) bool {
 func TestRootNode_Basic(t *testing.T) {
 	cfg := &config.Config{}
 
-	root := NewRootNode(cfg, nil)
+	root := NewRootNode(cfg, nil, nil)
 
 	if root.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -201,7 +201,7 @@ func TestRootNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	root := NewRootNode(cfg, nil)
+	root := NewRootNode(cfg, nil, nil)
 
 	// Verify we can use root as various interface types
 	_ = interface{}(root).(interface{})

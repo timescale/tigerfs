@@ -12,7 +12,7 @@ func TestNewTableNode(t *testing.T) {
 		MaxLsRows:     10000,
 	}
 
-	tableNode := NewTableNode(cfg, nil, "public", "users")
+	tableNode := NewTableNode(cfg, nil, "public", "users", nil)
 
 	if tableNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -33,7 +33,7 @@ func TestTableNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	tableNode := NewTableNode(cfg, nil, "public", "users")
+	tableNode := NewTableNode(cfg, nil, "public", "users", nil)
 
 	// Verify we can use tableNode as various interface types
 	_ = interface{}(tableNode).(interface{})

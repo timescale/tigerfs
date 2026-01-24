@@ -11,7 +11,7 @@ func TestNewRowDirectoryNode(t *testing.T) {
 		DefaultSchema: "public",
 	}
 
-	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1")
+	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
 
 	if rowDirNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -40,7 +40,7 @@ func TestRowDirectoryNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1")
+	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
 
 	// Verify we can use rowDirNode as various interface types
 	_ = interface{}(rowDirNode).(interface{})

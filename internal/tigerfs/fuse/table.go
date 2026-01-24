@@ -19,10 +19,11 @@ import (
 type TableNode struct {
 	fs.Inode
 
-	cfg       *config.Config
-	db        *db.Client
-	tableName string
-	schema    string
+	cfg          *config.Config
+	db           *db.Client
+	tableName    string
+	schema       string
+	partialRows  *PartialRowTracker
 }
 
 var _ fs.InodeEmbedder = (*TableNode)(nil)
@@ -31,14 +32,16 @@ var _ fs.NodeReaddirer = (*TableNode)(nil)
 var _ fs.NodeLookuper = (*TableNode)(nil)
 var _ fs.NodeUnlinker = (*TableNode)(nil)
 var _ fs.NodeRmdirer = (*TableNode)(nil)
+var _ fs.NodeMkdirer = (*TableNode)(nil)
 
 // NewTableNode creates a new table directory node
-func NewTableNode(cfg *config.Config, dbClient *db.Client, schema, tableName string) *TableNode {
+func NewTableNode(cfg *config.Config, dbClient *db.Client, schema, tableName string, partialRows *PartialRowTracker) *TableNode {
 	return &TableNode{
-		cfg:       cfg,
-		db:        dbClient,
-		tableName: tableName,
-		schema:    schema,
+		cfg:         cfg,
+		db:          dbClient,
+		tableName:   tableName,
+		schema:      schema,
+		partialRows: partialRows,
 	}
 }
 
@@ -181,7 +184,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		Mode: syscall.S_IFDIR,
 	}
 
-	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue)
+	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }
@@ -323,4 +326,62 @@ func (t *TableNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		zap.String("pk", pkValue))
 
 	return 0
+}
+
+// Mkdir creates a new row directory (for incremental row creation)
+func (t *TableNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	logging.Debug("TableNode.Mkdir called",
+		zap.String("table", t.tableName),
+		zap.String("name", name))
+
+	// Parse filename - should be just PK value with no extension
+	pkValue, _ := util.ParseRowFilename(name)
+	if name != pkValue {
+		// Has extension - can't mkdir a file name
+		logging.Debug("Cannot mkdir with format extension",
+			zap.String("table", t.tableName),
+			zap.String("name", name))
+		return nil, syscall.EINVAL
+	}
+
+	// Get primary key for table
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Check if row already exists
+	_, err = t.db.GetRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	if err == nil {
+		// Row already exists
+		logging.Debug("Row already exists",
+			zap.String("table", t.tableName),
+			zap.String("pk", pkValue))
+		return nil, syscall.EEXIST
+	}
+
+	// Row doesn't exist - create row directory node for new row
+	logging.Debug("Creating new row directory",
+		zap.String("table", t.tableName),
+		zap.String("pk", pkValue))
+
+	// Create stable inode for row directory
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	// Create row directory node (will be empty until columns are written)
+	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
+	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
+
+	logging.Debug("Row directory created",
+		zap.String("table", t.tableName),
+		zap.String("pk", pkValue))
+
+	return child, 0
 }

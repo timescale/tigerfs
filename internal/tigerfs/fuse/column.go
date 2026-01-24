@@ -18,13 +18,14 @@ import (
 type ColumnFileNode struct {
 	fs.Inode
 
-	cfg        *config.Config
-	db         *db.Client
-	schema     string
-	tableName  string
-	pkColumn   string
-	pkValue    string
-	columnName string
+	cfg         *config.Config
+	db          *db.Client
+	schema      string
+	tableName   string
+	pkColumn    string
+	pkValue     string
+	columnName  string
+	partialRows *PartialRowTracker
 
 	// Cached column data
 	data []byte
@@ -36,15 +37,16 @@ var _ fs.NodeGetattrer = (*ColumnFileNode)(nil)
 var _ fs.NodeSetattrer = (*ColumnFileNode)(nil)
 
 // NewColumnFileNode creates a new column file node
-func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue, columnName string) *ColumnFileNode {
+func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue, columnName string, partialRows *PartialRowTracker) *ColumnFileNode {
 	return &ColumnFileNode{
-		cfg:        cfg,
-		db:         dbClient,
-		schema:     schema,
-		tableName:  tableName,
-		pkColumn:   pkColumn,
-		pkValue:    pkValue,
-		columnName: columnName,
+		cfg:         cfg,
+		db:          dbClient,
+		schema:      schema,
+		tableName:   tableName,
+		pkColumn:    pkColumn,
+		pkValue:     pkValue,
+		columnName:  columnName,
+		partialRows: partialRows,
 	}
 }
 
@@ -132,7 +134,37 @@ func (c *ColumnFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 
 // fetchData retrieves the column value from the database and converts to text
 func (c *ColumnFileNode) fetchData(ctx context.Context) error {
-	// Query column value from database
+	// First check if this is an uncommitted partial row
+	partialRow := c.partialRows.Get(c.schema, c.tableName, c.pkValue)
+	if partialRow != nil && !partialRow.Committed {
+		// Row exists in partial state - check if this column has been set
+		if value, ok := partialRow.Columns[c.columnName]; ok {
+			// Column value exists in partial row
+			logging.Debug("Fetching column from partial row",
+				zap.String("table", c.tableName),
+				zap.String("pk", c.pkValue),
+				zap.String("column", c.columnName))
+
+			// Convert value to string
+			str, err := format.ConvertValueToText(value)
+			if err != nil {
+				return err
+			}
+
+			c.data = []byte(str)
+			return nil
+		}
+
+		// Column not yet set in partial row - return empty
+		logging.Debug("Column not yet set in partial row",
+			zap.String("table", c.tableName),
+			zap.String("pk", c.pkValue),
+			zap.String("column", c.columnName))
+		c.data = []byte{}
+		return nil
+	}
+
+	// Row is committed or doesn't exist in partial state - query database
 	value, err := c.db.GetColumn(ctx, c.schema, c.tableName, c.pkColumn, c.pkValue, c.columnName)
 	if err != nil {
 		return err
@@ -223,8 +255,54 @@ func (fh *ColumnFileHandle) Flush(ctx context.Context) syscall.Errno {
 		value = value[:len(value)-1]
 	}
 
-	// Update column in database
-	err := fh.node.db.UpdateColumn(
+	// Check if row exists in database
+	_, err := fh.node.db.GetRow(ctx, fh.node.schema, fh.node.tableName, fh.node.pkColumn, fh.node.pkValue)
+	rowExists := (err == nil)
+
+	if !rowExists {
+		// Row doesn't exist - use incremental row creation
+		logging.Debug("Row doesn't exist, using incremental creation",
+			zap.String("table", fh.node.tableName),
+			zap.String("pk", fh.node.pkValue),
+			zap.String("column", fh.node.columnName))
+
+		// Add column to partial row
+		fh.node.partialRows.SetColumn(fh.node.schema, fh.node.tableName, fh.node.pkColumn, fh.node.pkValue, fh.node.columnName, value)
+
+		// Try to commit if enough columns provided
+		committed, err := fh.node.partialRows.TryCommit(ctx, fh.node.schema, fh.node.tableName, fh.node.pkColumn, fh.node.pkValue)
+		if err != nil {
+			logging.Error("Failed to commit partial row",
+				zap.String("table", fh.node.tableName),
+				zap.String("pk", fh.node.pkValue),
+				zap.Error(err))
+			return syscall.EIO
+		}
+
+		if committed {
+			logging.Debug("Partial row committed successfully",
+				zap.String("table", fh.node.tableName),
+				zap.String("pk", fh.node.pkValue))
+			// Update cached data in node
+			fh.node.data = fh.data
+		} else {
+			logging.Debug("Partial row not yet ready to commit",
+				zap.String("table", fh.node.tableName),
+				zap.String("pk", fh.node.pkValue))
+			// Update cached data in node even if not committed yet
+			fh.node.data = fh.data
+		}
+
+		return 0
+	}
+
+	// Row exists - use regular UPDATE
+	logging.Debug("Row exists, using regular update",
+		zap.String("table", fh.node.tableName),
+		zap.String("pk", fh.node.pkValue),
+		zap.String("column", fh.node.columnName))
+
+	err = fh.node.db.UpdateColumn(
 		ctx,
 		fh.node.schema,
 		fh.node.tableName,

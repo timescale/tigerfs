@@ -17,9 +17,10 @@ import (
 type RootNode struct {
 	fs.Inode
 
-	cfg   *config.Config
-	db    *db.Client
-	cache *MetadataCache
+	cfg         *config.Config
+	db          *db.Client
+	cache       *MetadataCache
+	partialRows *PartialRowTracker
 }
 
 var _ fs.InodeEmbedder = (*RootNode)(nil)
@@ -28,13 +29,14 @@ var _ fs.NodeLookuper = (*RootNode)(nil)
 var _ fs.NodeGetattrer = (*RootNode)(nil)
 
 // NewRootNode creates a new root directory node
-func NewRootNode(cfg *config.Config, dbClient *db.Client) *RootNode {
+func NewRootNode(cfg *config.Config, dbClient *db.Client, partialRows *PartialRowTracker) *RootNode {
 	cache := NewMetadataCache(cfg, dbClient)
 
 	return &RootNode{
-		cfg:   cfg,
-		db:    dbClient,
-		cache: cache,
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		partialRows: partialRows,
 	}
 }
 
@@ -101,8 +103,8 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		Mode: syscall.S_IFDIR,
 	}
 
-	// Create table node with database client
-	tableNode := NewTableNode(r.cfg, r.db, r.cfg.DefaultSchema, name)
+	// Create table node with database client and partial row tracker
+	tableNode := NewTableNode(r.cfg, r.db, r.cfg.DefaultSchema, name, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, tableNode, stableAttr)
 	return child, 0

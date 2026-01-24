@@ -17,12 +17,13 @@ import (
 type RowDirectoryNode struct {
 	fs.Inode
 
-	cfg       *config.Config
-	db        *db.Client
-	schema    string
-	tableName string
-	pkColumn  string
-	pkValue   string
+	cfg         *config.Config
+	db          *db.Client
+	schema      string
+	tableName   string
+	pkColumn    string
+	pkValue     string
+	partialRows *PartialRowTracker
 }
 
 var _ fs.InodeEmbedder = (*RowDirectoryNode)(nil)
@@ -31,14 +32,15 @@ var _ fs.NodeReaddirer = (*RowDirectoryNode)(nil)
 var _ fs.NodeLookuper = (*RowDirectoryNode)(nil)
 
 // NewRowDirectoryNode creates a new row directory node
-func NewRowDirectoryNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue string) *RowDirectoryNode {
+func NewRowDirectoryNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
 	return &RowDirectoryNode{
-		cfg:       cfg,
-		db:        dbClient,
-		schema:    schema,
-		tableName: tableName,
-		pkColumn:  pkColumn,
-		pkValue:   pkValue,
+		cfg:         cfg,
+		db:          dbClient,
+		schema:      schema,
+		tableName:   tableName,
+		pkColumn:    pkColumn,
+		pkValue:     pkValue,
+		partialRows: partialRows,
 	}
 }
 
@@ -131,8 +133,8 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 		Mode: syscall.S_IFREG,
 	}
 
-	// Create column file node
-	columnNode := NewColumnFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, name)
+	// Create column file node with partial row tracker
+	columnNode := NewColumnFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, name, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
 	return child, 0

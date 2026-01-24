@@ -11,7 +11,7 @@ func TestNewColumnFileNode(t *testing.T) {
 		DefaultSchema: "public",
 	}
 
-	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email")
+	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
 
 	if colNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -48,7 +48,7 @@ func TestColumnFileNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email")
+	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
 
 	// Verify we can use colNode as various interface types
 	_ = interface{}(colNode).(interface{})

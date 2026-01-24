@@ -14,11 +14,12 @@ import (
 
 // FS represents a mounted TigerFS filesystem
 type FS struct {
-	cfg        *config.Config
-	db         *db.Client
-	mountpoint string
-	server     *fuse.Server
-	root       *RootNode
+	cfg           *config.Config
+	db            *db.Client
+	mountpoint    string
+	server        *fuse.Server
+	root          *RootNode
+	partialRows   *PartialRowTracker
 }
 
 // Mount creates and mounts a new TigerFS filesystem
@@ -36,10 +37,13 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 
 	logging.Info("Database connection established")
 
-	// 2. Create root node
-	root := NewRootNode(cfg, dbClient)
+	// 2. Create partial row tracker
+	partialRows := NewPartialRowTracker(dbClient)
 
-	// 3. Configure FUSE mount options
+	// 3. Create root node with partial row tracker
+	root := NewRootNode(cfg, dbClient, partialRows)
+
+	// 4. Configure FUSE mount options
 	opts := &fs.Options{
 		MountOptions: fuse.MountOptions{
 			Name:   "tigerfs",
@@ -61,7 +65,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 		zap.Bool("debug", cfg.Debug),
 	)
 
-	// 4. Mount the filesystem
+	// 5. Mount the filesystem
 	server, err := fs.Mount(mountpoint, root, opts)
 	if err != nil {
 		dbClient.Close()
@@ -73,11 +77,12 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	)
 
 	return &FS{
-		cfg:        cfg,
-		db:         dbClient,
-		mountpoint: mountpoint,
-		server:     server,
-		root:       root,
+		cfg:         cfg,
+		db:          dbClient,
+		mountpoint:  mountpoint,
+		server:      server,
+		root:        root,
+		partialRows: partialRows,
 	}, nil
 }
 
