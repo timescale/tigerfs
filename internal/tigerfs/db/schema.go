@@ -96,3 +96,60 @@ func (c *Client) GetTables(ctx context.Context, schema string) ([]string, error)
 	}
 	return GetTables(ctx, c.pool, schema)
 }
+
+// Column represents metadata about a table column
+type Column struct {
+	Name       string
+	DataType   string
+	IsNullable bool
+}
+
+// GetColumns returns all columns for a table in schema order
+func GetColumns(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Column, error) {
+	logging.Debug("Querying columns from information_schema",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	query := `
+		SELECT column_name, data_type, is_nullable
+		FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = $2
+		ORDER BY ordinal_position
+	`
+
+	rows, err := pool.Query(ctx, query, schema, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query columns: %w", err)
+	}
+	defer rows.Close()
+
+	var columns []Column
+	for rows.Next() {
+		var col Column
+		var isNullableStr string
+		if err := rows.Scan(&col.Name, &col.DataType, &isNullableStr); err != nil {
+			return nil, fmt.Errorf("failed to scan column: %w", err)
+		}
+		col.IsNullable = (isNullableStr == "YES")
+		columns = append(columns, col)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating columns: %w", err)
+	}
+
+	logging.Debug("Found columns",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int("count", len(columns)))
+
+	return columns, nil
+}
+
+// GetColumns is a convenience wrapper around GetColumns for Client
+func (c *Client) GetColumns(ctx context.Context, schema, table string) ([]Column, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetColumns(ctx, c.pool, schema, table)
+}

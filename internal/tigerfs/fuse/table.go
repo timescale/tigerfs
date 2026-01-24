@@ -130,20 +130,31 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return nil, syscall.ENOENT
 	}
 
-	// Row exists - create row file node
+	// Row exists - decide whether to create directory or file node
 	logging.Debug("Row found",
 		zap.String("table", t.tableName),
 		zap.String("pk", pkValue),
 		zap.String("format", format))
 
-	// Create stable inode for the row file
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFREG,
+	// If name has explicit format extension, create row file node
+	// Otherwise create row directory node
+	if name != pkValue {
+		// Name has extension (e.g., "1.csv"), create row file node
+		stableAttr := fs.StableAttr{
+			Mode: syscall.S_IFREG,
+		}
+
+		rowNode := NewRowFileNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, format)
+		child := t.NewPersistentInode(ctx, rowNode, stableAttr)
+		return child, 0
 	}
 
-	// Create row file node with format
-	rowNode := NewRowFileNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, format)
+	// No extension, create row directory node
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
 
-	child := t.NewPersistentInode(ctx, rowNode, stableAttr)
+	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue)
+	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }
