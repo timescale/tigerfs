@@ -11,7 +11,7 @@ func TestNewRowFileNode(t *testing.T) {
 		DefaultSchema: "public",
 	}
 
-	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1")
+	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
 
 	if rowNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -33,6 +33,10 @@ func TestNewRowFileNode(t *testing.T) {
 		t.Errorf("Expected pkValue='1', got '%s'", rowNode.pkValue)
 	}
 
+	if rowNode.format != "tsv" {
+		t.Errorf("Expected format='tsv', got '%s'", rowNode.format)
+	}
+
 	if rowNode.data != nil {
 		t.Error("Expected data to be nil initially")
 	}
@@ -44,7 +48,7 @@ func TestRowFileNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1")
+	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
 
 	// Verify we can use rowNode as various interface types
 	_ = interface{}(rowNode).(interface{})

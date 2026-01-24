@@ -158,21 +158,6 @@ func TestClose_SafeWhenNil(t *testing.T) {
 
 // Helper functions
 
-func getTestConnectionString(t *testing.T) string {
-	t.Helper()
-
-	// Check for explicit test database configuration
-	if host := os.Getenv("PGHOST"); host != "" {
-		return "postgres://localhost/postgres?sslmode=disable"
-	}
-
-	if connStr := os.Getenv("TEST_DATABASE_URL"); connStr != "" {
-		return connStr
-	}
-
-	return ""
-}
-
 func isFUSEAvailable(t *testing.T) bool {
 	t.Helper()
 

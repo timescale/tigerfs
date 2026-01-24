@@ -9,6 +9,7 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
+	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
 )
 
@@ -98,6 +99,15 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("table", t.tableName),
 		zap.String("row_pk", name))
 
+	// Parse filename to extract PK value and format
+	pkValue, format := util.ParseRowFilename(name)
+
+	logging.Debug("Parsed row filename",
+		zap.String("table", t.tableName),
+		zap.String("filename", name),
+		zap.String("pk_value", pkValue),
+		zap.String("format", format))
+
 	// Get primary key for table
 	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
 	if err != nil {
@@ -109,13 +119,13 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	pkColumn := pk.Columns[0]
 
-	// Check if row exists by trying to fetch it
+	// Check if row exists by trying to fetch it (use PK value without extension)
 	// This validates the row exists before creating the inode
-	_, err = t.db.GetRow(ctx, t.schema, t.tableName, pkColumn, name)
+	_, err = t.db.GetRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
 	if err != nil {
 		logging.Debug("Row not found",
 			zap.String("table", t.tableName),
-			zap.String("pk", name),
+			zap.String("pk", pkValue),
 			zap.Error(err))
 		return nil, syscall.ENOENT
 	}
@@ -123,15 +133,16 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Row exists - create row file node
 	logging.Debug("Row found",
 		zap.String("table", t.tableName),
-		zap.String("pk", name))
+		zap.String("pk", pkValue),
+		zap.String("format", format))
 
 	// Create stable inode for the row file
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFREG,
 	}
 
-	// Create row file node
-	rowNode := NewRowFileNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, name)
+	// Create row file node with format
+	rowNode := NewRowFileNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, format)
 
 	child := t.NewPersistentInode(ctx, rowNode, stableAttr)
 	return child, 0

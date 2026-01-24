@@ -14,7 +14,7 @@ import (
 )
 
 // RowFileNode represents a single row as a file
-// Reading the file returns the entire row in TSV format
+// Reading the file returns the entire row in the specified format (TSV, CSV, or JSON)
 type RowFileNode struct {
 	fs.Inode
 
@@ -24,6 +24,7 @@ type RowFileNode struct {
 	tableName string
 	pkColumn  string
 	pkValue   string
+	format    string // "tsv", "csv", or "json"
 
 	// Cached row data
 	data []byte
@@ -34,7 +35,7 @@ var _ fs.NodeOpener = (*RowFileNode)(nil)
 var _ fs.NodeGetattrer = (*RowFileNode)(nil)
 
 // NewRowFileNode creates a new row file node
-func NewRowFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue string) *RowFileNode {
+func NewRowFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue, format string) *RowFileNode {
 	return &RowFileNode{
 		cfg:       cfg,
 		db:        dbClient,
@@ -42,6 +43,7 @@ func NewRowFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, 
 		tableName: tableName,
 		pkColumn:  pkColumn,
 		pkValue:   pkValue,
+		format:    format,
 	}
 }
 
@@ -94,7 +96,7 @@ func (r *RowFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, ui
 	return fh, fuse.FOPEN_DIRECT_IO, 0
 }
 
-// fetchData retrieves the row data from the database and converts to TSV
+// fetchData retrieves the row data from the database and converts to the specified format
 func (r *RowFileNode) fetchData(ctx context.Context) error {
 	// Query row from database
 	row, err := r.db.GetRow(ctx, r.schema, r.tableName, r.pkColumn, r.pkValue)
@@ -102,8 +104,20 @@ func (r *RowFileNode) fetchData(ctx context.Context) error {
 		return err
 	}
 
-	// Convert to TSV format
-	data, err := format.RowToTSV(row.Columns, row.Values)
+	// Convert to requested format
+	var data []byte
+	switch r.format {
+	case "csv":
+		data, err = format.RowToCSV(row.Columns, row.Values)
+	case "json":
+		// TODO: Implement JSON format in future task
+		return syscall.ENOTSUP
+	case "tsv":
+		fallthrough
+	default:
+		data, err = format.RowToTSV(row.Columns, row.Values)
+	}
+
 	if err != nil {
 		return err
 	}
