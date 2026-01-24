@@ -110,8 +110,7 @@ func (r *RowFileNode) fetchData(ctx context.Context) error {
 	case "csv":
 		data, err = format.RowToCSV(row.Columns, row.Values)
 	case "json":
-		// TODO: Implement JSON format in future task
-		return syscall.ENOTSUP
+		data, err = format.RowToJSON(row.Columns, row.Values)
 	case "tsv":
 		fallthrough
 	default:
