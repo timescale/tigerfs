@@ -77,7 +77,25 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	}
 
 	// Convert rows to directory entries
-	entries := make([]fuse.DirEntry, 0, len(rows))
+	entries := make([]fuse.DirEntry, 0, len(rows)+3) // +3 for metadata files
+
+	// Add metadata files first
+	entries = append(entries,
+		fuse.DirEntry{
+			Name: ".columns",
+			Mode: syscall.S_IFREG,
+		},
+		fuse.DirEntry{
+			Name: ".schema",
+			Mode: syscall.S_IFREG,
+		},
+		fuse.DirEntry{
+			Name: ".count",
+			Mode: syscall.S_IFREG,
+		},
+	)
+
+	// Add rows
 	for _, rowPK := range rows {
 		entries = append(entries, fuse.DirEntry{
 			Name: rowPK,
@@ -87,17 +105,23 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 	logging.Debug("Table directory listing",
 		zap.String("table", t.tableName),
-		zap.Int("row_count", len(entries)),
+		zap.Int("row_count", len(rows)),
+		zap.Int("total_entries", len(entries)),
 		zap.Int("max_ls_rows", t.cfg.MaxLsRows))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a row by primary key value
+// Lookup looks up a row by primary key value or metadata file
 func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("TableNode.Lookup called",
 		zap.String("table", t.tableName),
-		zap.String("row_pk", name))
+		zap.String("name", name))
+
+	// Check if this is a metadata file lookup
+	if name == ".columns" || name == ".schema" || name == ".count" {
+		return t.lookupMetadataFile(ctx, name)
+	}
 
 	// Parse filename to extract PK value and format
 	pkValue, format := util.ParseRowFilename(name)
@@ -156,5 +180,44 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
+	return child, 0
+}
+
+// lookupMetadataFile handles lookups for metadata files (.columns, .schema, .count)
+func (t *TableNode) lookupMetadataFile(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up metadata file",
+		zap.String("table", t.tableName),
+		zap.String("file", name))
+
+	// Determine metadata file type
+	var fileType string
+	switch name {
+	case ".columns":
+		fileType = "columns"
+	case ".schema":
+		fileType = "schema"
+	case ".count":
+		fileType = "count"
+	default:
+		logging.Debug("Unknown metadata file",
+			zap.String("table", t.tableName),
+			zap.String("file", name))
+		return nil, syscall.ENOENT
+	}
+
+	// Create stable inode for metadata file
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFREG,
+	}
+
+	// Create metadata file node
+	metadataNode := NewMetadataFileNode(t.cfg, t.db, t.schema, t.tableName, fileType)
+	child := t.NewPersistentInode(ctx, metadataNode, stableAttr)
+
+	logging.Debug("Created metadata file node",
+		zap.String("table", t.tableName),
+		zap.String("file", name),
+		zap.String("type", fileType))
+
 	return child, 0
 }
