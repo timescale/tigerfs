@@ -205,3 +205,215 @@ func TestClient_GetRow_NilPool(t *testing.T) {
 		t.Errorf("Expected 'database connection not initialized', got: %v", err)
 	}
 }
+
+func TestGetColumn(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer client.Close()
+
+	// Create a test table
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_get_column (
+			id serial PRIMARY KEY,
+			name text NOT NULL,
+			email text,
+			age integer
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		// Cleanup test table
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_column")
+	}()
+
+	// Insert test data
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_get_column (id, name, email, age) VALUES
+		(1, 'Alice', 'alice@example.com', 30),
+		(2, 'Bob', NULL, 25)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Test getting a text column
+	value, err := client.GetColumn(ctx, "public", "test_get_column", "id", "1", "name")
+	if err != nil {
+		t.Fatalf("GetColumn() failed: %v", err)
+	}
+
+	if value == nil {
+		t.Fatal("Expected non-null value for name column")
+	}
+
+	nameStr, ok := value.(string)
+	if !ok {
+		t.Fatalf("Expected string value, got %T", value)
+	}
+
+	if nameStr != "Alice" {
+		t.Errorf("Expected name='Alice', got '%s'", nameStr)
+	}
+
+	// Test getting an integer column
+	value, err = client.GetColumn(ctx, "public", "test_get_column", "id", "1", "age")
+	if err != nil {
+		t.Fatalf("GetColumn() failed for age: %v", err)
+	}
+
+	if value == nil {
+		t.Fatal("Expected non-null value for age column")
+	}
+
+	// pgx returns int32 for integer columns
+	ageInt, ok := value.(int32)
+	if !ok {
+		t.Fatalf("Expected int32 value, got %T", value)
+	}
+
+	if ageInt != 30 {
+		t.Errorf("Expected age=30, got %d", ageInt)
+	}
+
+	// Test getting a NULL column
+	value, err = client.GetColumn(ctx, "public", "test_get_column", "id", "2", "email")
+	if err != nil {
+		t.Fatalf("GetColumn() failed for NULL email: %v", err)
+	}
+
+	if value != nil {
+		t.Errorf("Expected NULL value for email, got %v", value)
+	}
+
+	t.Logf("GetColumn tests passed")
+}
+
+func TestGetColumn_NonExistentRow(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer client.Close()
+
+	// Create a test table
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_column_nonexistent (
+			id serial PRIMARY KEY,
+			name text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		// Cleanup test table
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_column_nonexistent")
+	}()
+
+	// Test getting column from non-existent row
+	_, err = client.GetColumn(ctx, "public", "test_column_nonexistent", "id", "999", "name")
+	if err == nil {
+		t.Fatal("Expected error for non-existent row, got nil")
+	}
+
+	t.Logf("Got expected error: %v", err)
+}
+
+func TestGetColumn_NonExistentColumn(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer client.Close()
+
+	// Create a test table
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_column_invalid (
+			id serial PRIMARY KEY,
+			name text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		// Cleanup test table
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_column_invalid")
+	}()
+
+	// Insert test data
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_column_invalid (id, name) VALUES (1, 'Alice')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Test getting non-existent column
+	_, err = client.GetColumn(ctx, "public", "test_column_invalid", "id", "1", "nonexistent_column")
+	if err == nil {
+		t.Fatal("Expected error for non-existent column, got nil")
+	}
+
+	t.Logf("Got expected error: %v", err)
+}
+
+func TestClient_GetColumn_NilPool(t *testing.T) {
+	client := &Client{
+		cfg: &config.Config{},
+	}
+
+	ctx := context.Background()
+
+	_, err := client.GetColumn(ctx, "public", "test_table", "id", "1", "name")
+	if err == nil {
+		t.Error("Expected error for nil pool, got nil")
+	}
+
+	if err.Error() != "database connection not initialized" {
+		t.Errorf("Expected 'database connection not initialized', got: %v", err)
+	}
+}

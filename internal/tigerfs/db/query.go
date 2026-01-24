@@ -86,3 +86,43 @@ func (c *Client) GetRow(ctx context.Context, schema, table, pkColumn, pkValue st
 	}
 	return GetRow(ctx, c.pool, schema, table, pkColumn, pkValue)
 }
+
+// GetColumn fetches a single column value from a row by primary key
+// Returns the column value and whether it was NULL
+func GetColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+	logging.Debug("Querying column",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.String("pk_value", pkValue),
+		zap.String("column", columnName))
+
+	// Build query with proper quoting for identifiers
+	// SELECT "column" FROM "schema"."table" WHERE "pk_column" = $1
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" WHERE "%s" = $1`,
+		columnName, schema, table, pkColumn,
+	)
+
+	var value interface{}
+	err := pool.QueryRow(ctx, query, pkValue).Scan(&value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query column: %w", err)
+	}
+
+	logging.Debug("Column fetched successfully",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", columnName),
+		zap.Bool("is_null", value == nil))
+
+	return value, nil
+}
+
+// GetColumn is a convenience wrapper for Client
+func (c *Client) GetColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetColumn(ctx, c.pool, schema, table, pkColumn, pkValue, columnName)
+}

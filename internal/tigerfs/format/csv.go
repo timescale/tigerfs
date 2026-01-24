@@ -31,7 +31,7 @@ func RowToCSV(columns []string, values []interface{}) ([]byte, error) {
 // Handles quoting according to RFC 4180
 func valueToCSVField(value interface{}) string {
 	// Convert to string first
-	str := valueToString(value)
+	str := ValueToString(value)
 
 	// Determine if field needs quoting
 	needsQuote := strings.ContainsAny(str, ",\"\n\r")

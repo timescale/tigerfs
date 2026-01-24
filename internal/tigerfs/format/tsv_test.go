@@ -81,14 +81,14 @@ func TestRowToTSV_EmptyRow(t *testing.T) {
 }
 
 func TestValueToString_String(t *testing.T) {
-	result := valueToString("hello")
+	result := ValueToString("hello")
 	if result != "hello" {
 		t.Errorf("Expected 'hello', got '%s'", result)
 	}
 }
 
 func TestValueToString_Bytes(t *testing.T) {
-	result := valueToString([]byte("hello"))
+	result := ValueToString([]byte("hello"))
 	if result != "hello" {
 		t.Errorf("Expected 'hello', got '%s'", result)
 	}
@@ -112,9 +112,9 @@ func TestValueToString_Int(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := valueToString(tt.value)
+		result := ValueToString(tt.value)
 		if result != tt.expected {
-			t.Errorf("valueToString(%v) = '%s', expected '%s'", tt.value, result, tt.expected)
+			t.Errorf("ValueToString(%v) = '%s', expected '%s'", tt.value, result, tt.expected)
 		}
 	}
 }
@@ -131,26 +131,26 @@ func TestValueToString_Float(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := valueToString(tt.value)
+		result := ValueToString(tt.value)
 		if result != tt.expected {
-			t.Errorf("valueToString(%v) = '%s', expected '%s'", tt.value, result, tt.expected)
+			t.Errorf("ValueToString(%v) = '%s', expected '%s'", tt.value, result, tt.expected)
 		}
 	}
 }
 
 func TestValueToString_Bool(t *testing.T) {
-	if valueToString(true) != "t" {
+	if ValueToString(true) != "t" {
 		t.Errorf("Expected 't' for true")
 	}
 
-	if valueToString(false) != "f" {
+	if ValueToString(false) != "f" {
 		t.Errorf("Expected 'f' for false")
 	}
 }
 
 func TestValueToString_Time(t *testing.T) {
 	testTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
-	result := valueToString(testTime)
+	result := ValueToString(testTime)
 
 	// Should be in RFC3339 format
 	expected := "2024-01-15T10:30:00Z"
@@ -160,7 +160,7 @@ func TestValueToString_Time(t *testing.T) {
 }
 
 func TestValueToString_NULL(t *testing.T) {
-	result := valueToString(nil)
+	result := ValueToString(nil)
 	if result != "" {
 		t.Errorf("Expected empty string for NULL, got '%s'", result)
 	}

@@ -17,7 +17,7 @@ func RowToTSV(columns []string, values []interface{}) ([]byte, error) {
 	// Convert each value to string
 	fields := make([]string, len(values))
 	for i, value := range values {
-		fields[i] = valueToString(value)
+		fields[i] = ValueToString(value)
 	}
 
 	// Join with tabs
@@ -27,9 +27,10 @@ func RowToTSV(columns []string, values []interface{}) ([]byte, error) {
 	return []byte(line + "\n"), nil
 }
 
-// valueToString converts a database value to its string representation for TSV
+// ValueToString converts a database value to its string representation
 // NULL values become empty strings
-func valueToString(value interface{}) string {
+// This is a public function used by TSV, CSV, and column file formatting
+func ValueToString(value interface{}) string {
 	if value == nil {
 		return ""
 	}

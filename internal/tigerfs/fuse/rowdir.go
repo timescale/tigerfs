@@ -131,8 +131,9 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 		Mode: syscall.S_IFREG,
 	}
 
-	// Create column file node (TODO: implement ColumnFileNode in next task)
-	// For now, return ENOTSUP as placeholder
-	_ = stableAttr
-	return nil, syscall.ENOTSUP
+	// Create column file node
+	columnNode := NewColumnFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, name)
+
+	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
+	return child, 0
 }
