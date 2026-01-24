@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hanwen/go-fuse/v2/fs"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
@@ -15,7 +17,8 @@ type FS struct {
 	cfg        *config.Config
 	db         *db.Client
 	mountpoint string
-	// TODO: Add FUSE server instance (TBD based on library choice)
+	server     *fuse.Server
+	root       *RootNode
 }
 
 // Mount creates and mounts a new TigerFS filesystem
@@ -25,61 +28,110 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 		zap.String("connection", connStr),
 	)
 
-	// TODO: Implement FUSE mount
-	// 1. Connect to database (db.NewClient)
-	// 2. Initialize FUSE filesystem
-	// 3. Register FUSE operations (Lookup, Read, Write, etc.)
-	// 4. Mount at mountpoint
-
-	// Stub: Create filesystem instance
-	fs := &FS{
-		cfg:        cfg,
-		mountpoint: mountpoint,
-	}
-
-	// TODO: Connect to database
+	// 1. Connect to database
 	dbClient, err := db.NewClient(ctx, cfg, connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
-	fs.db = dbClient
 
 	logging.Info("Database connection established")
 
-	// TODO: Mount FUSE filesystem
-	return fs, fmt.Errorf("FUSE mount not yet implemented")
+	// 2. Create root node
+	root := NewRootNode(cfg, dbClient)
+
+	// 3. Configure FUSE mount options
+	opts := &fs.Options{
+		MountOptions: fuse.MountOptions{
+			Name:   "tigerfs",
+			FsName: "tigerfs",
+			Debug:  cfg.Debug,
+
+			// Use DirectMount for macOS compatibility
+			DirectMount: true,
+		},
+
+		// Set timeouts for attribute caching
+		AttrTimeout:  &cfg.AttrTimeout,
+		EntryTimeout: &cfg.EntryTimeout,
+	}
+
+	logging.Debug("FUSE mount options",
+		zap.Duration("attr_timeout", cfg.AttrTimeout),
+		zap.Duration("entry_timeout", cfg.EntryTimeout),
+		zap.Bool("debug", cfg.Debug),
+	)
+
+	// 4. Mount the filesystem
+	server, err := fs.Mount(mountpoint, root, opts)
+	if err != nil {
+		dbClient.Close()
+		return nil, fmt.Errorf("failed to mount FUSE filesystem: %w", err)
+	}
+
+	logging.Info("FUSE filesystem mounted successfully",
+		zap.String("mountpoint", mountpoint),
+	)
+
+	return &FS{
+		cfg:        cfg,
+		db:         dbClient,
+		mountpoint: mountpoint,
+		server:     server,
+		root:       root,
+	}, nil
 }
 
 // Serve serves FUSE requests (blocks until unmount or context cancellation)
-func (fs *FS) Serve(ctx context.Context) error {
+func (f *FS) Serve(ctx context.Context) error {
 	logging.Debug("Starting FUSE server")
 
-	// TODO: Serve FUSE requests
-	// This should block until:
-	// - Filesystem is unmounted
-	// - Context is cancelled (signal received)
-	// - Error occurs
+	if f.server == nil {
+		return fmt.Errorf("FUSE server not initialized")
+	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	// Wait for either unmount or context cancellation
+	// The server.Wait() blocks until the filesystem is unmounted
+	go func() {
+		<-ctx.Done()
+		logging.Info("Context cancelled, unmounting filesystem")
+		f.server.Unmount()
+	}()
+
+	// Wait for server to finish (blocks until unmount)
+	f.server.Wait()
+
+	logging.Info("FUSE server stopped")
+	return nil
 }
 
 // Close cleanly shuts down the filesystem
-func (fs *FS) Close() error {
-	logging.Debug("Closing filesystem", zap.String("mountpoint", fs.mountpoint))
+func (f *FS) Close() error {
+	logging.Debug("Closing filesystem", zap.String("mountpoint", f.mountpoint))
 
-	// TODO: Cleanup
-	// 1. Stop accepting new requests
-	// 2. Wait for in-flight operations
-	// 3. Close database connections
-	// 4. Unmount filesystem
+	var lastErr error
 
-	if fs.db != nil {
-		if err := fs.db.Close(); err != nil {
-			logging.Error("Failed to close database connection", zap.Error(err))
-			return err
+	// 1. Unmount filesystem if still mounted
+	if f.server != nil {
+		logging.Debug("Unmounting filesystem")
+		if err := f.server.Unmount(); err != nil {
+			logging.Warn("Failed to unmount filesystem", zap.Error(err))
+			lastErr = err
 		}
 	}
 
+	// 2. Close database connection
+	if f.db != nil {
+		logging.Debug("Closing database connection")
+		if err := f.db.Close(); err != nil {
+			logging.Error("Failed to close database connection", zap.Error(err))
+			lastErr = err
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("errors during cleanup: %w", lastErr)
+	}
+
+	logging.Info("Filesystem closed successfully")
 	return nil
 }
