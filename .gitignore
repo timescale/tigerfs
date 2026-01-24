@@ -40,4 +40,4 @@ config.local.yaml
 # Temporary files
 tmp/
 temp/
-tigerfs
+/tigerfs

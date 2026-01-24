@@ -84,6 +84,11 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// Pool returns the underlying connection pool
+func (c *Client) Pool() *pgxpool.Pool {
+	return c.pool
+}
+
 // Query executes a SQL query and returns results
 func (c *Client) Query(ctx context.Context, sql string, args ...interface{}) (interface{}, error) {
 	logging.Debug("Executing query", zap.String("sql", sql))

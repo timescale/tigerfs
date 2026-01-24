@@ -104,6 +104,7 @@ type Column struct {
 	Name       string
 	DataType   string
 	IsNullable bool
+	Default    string // Column default value (empty string if no default)
 }
 
 // GetColumns returns all columns for a table in schema order

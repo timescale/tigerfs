@@ -153,6 +153,22 @@ func (t *PartialRowTracker) TryCommit(ctx context.Context, schema, table, pkColu
 		values = append([]interface{}{row.PkValue}, values...)
 	}
 
+	// Validate constraints before INSERT
+	// Build values map for constraint validation
+	valuesMap := make(map[string]interface{})
+	for i, col := range columns {
+		valuesMap[col] = values[i]
+	}
+
+	if err := db.ValidateConstraints(ctx, t.db.Pool(), row.Schema, row.Table, valuesMap); err != nil {
+		logging.Error("Constraint validation failed",
+			zap.String("schema", schema),
+			zap.String("table", table),
+			zap.String("pk", pkValue),
+			zap.Error(err))
+		return false, fmt.Errorf("constraint validation failed: %w", err)
+	}
+
 	// Execute INSERT
 	_, err = t.db.InsertRow(ctx, row.Schema, row.Table, columns, values)
 	if err != nil {
