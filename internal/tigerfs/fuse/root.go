@@ -93,8 +93,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.ENOENT
 	}
 
-	// Table exists - create a placeholder table directory node
-	// TODO: Implement full TableNode in Task 1.6
+	// Table exists - create table directory node
 	logging.Debug("Table found", zap.String("table", name))
 
 	// Create a stable inode for the table directory
@@ -102,34 +101,9 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		Mode: syscall.S_IFDIR,
 	}
 
-	// Create a placeholder table node (empty directory for now)
-	tableNode := &PlaceholderTableNode{
-		tableName: name,
-	}
+	// Create table node with database client
+	tableNode := NewTableNode(r.cfg, r.db, r.cfg.DefaultSchema, name)
 
 	child := r.NewPersistentInode(ctx, tableNode, stableAttr)
 	return child, 0
-}
-
-// PlaceholderTableNode is a temporary placeholder for table directories
-// Will be replaced with full TableNode implementation in Task 1.6
-type PlaceholderTableNode struct {
-	fs.Inode
-	tableName string
-}
-
-var _ fs.InodeEmbedder = (*PlaceholderTableNode)(nil)
-var _ fs.NodeGetattrer = (*PlaceholderTableNode)(nil)
-var _ fs.NodeReaddirer = (*PlaceholderTableNode)(nil)
-
-func (t *PlaceholderTableNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Mode = 0755 | syscall.S_IFDIR
-	out.Nlink = 2
-	out.Size = 4096
-	return 0
-}
-
-func (t *PlaceholderTableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	// Empty directory for now
-	return fs.NewListDirStream([]fuse.DirEntry{}), 0
 }
