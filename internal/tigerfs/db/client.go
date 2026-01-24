@@ -20,24 +20,44 @@ type Client struct {
 func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client, error) {
 	logging.Debug("Creating database client", zap.String("connection", connStr))
 
-	// TODO: Implement database client
-	// 1. Resolve connection string (handle Tiger Cloud integration if needed)
-	// 2. Handle password resolution (.pgpass, password_command, env vars)
-	// 3. Create pgx connection pool
-	// 4. Verify connection with ping
-
-	client := &Client{
-		cfg: cfg,
+	// Parse connection string
+	poolConfig, err := pgxpool.ParseConfig(connStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse connection string: %w", err)
 	}
 
-	// TODO: Create connection pool
-	// poolConfig, err := pgxpool.ParseConfig(connStr)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to parse connection string: %w", err)
-	// }
+	// Configure connection pool from config
+	poolConfig.MaxConns = int32(cfg.PoolSize)
+	poolConfig.MinConns = int32(cfg.PoolMaxIdle)
 
-	// Stub: return client without actual connection
-	return client, fmt.Errorf("database connection not yet implemented")
+	logging.Debug("Configuring connection pool",
+		zap.Int("max_conns", cfg.PoolSize),
+		zap.Int("min_conns", cfg.PoolMaxIdle),
+	)
+
+	// Create connection pool
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+	}
+
+	// Verify connection with ping
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	logging.Info("Database connection established",
+		zap.String("host", poolConfig.ConnConfig.Host),
+		zap.Uint16("port", poolConfig.ConnConfig.Port),
+		zap.String("database", poolConfig.ConnConfig.Database),
+		zap.String("user", poolConfig.ConnConfig.User),
+	)
+
+	return &Client{
+		pool: pool,
+		cfg:  cfg,
+	}, nil
 }
 
 // Close closes the database connection pool
