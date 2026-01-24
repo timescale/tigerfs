@@ -17,8 +17,9 @@ import (
 type RootNode struct {
 	fs.Inode
 
-	cfg *config.Config
-	db  *db.Client
+	cfg   *config.Config
+	db    *db.Client
+	cache *MetadataCache
 }
 
 var _ fs.InodeEmbedder = (*RootNode)(nil)
@@ -28,9 +29,12 @@ var _ fs.NodeGetattrer = (*RootNode)(nil)
 
 // NewRootNode creates a new root directory node
 func NewRootNode(cfg *config.Config, dbClient *db.Client) *RootNode {
+	cache := NewMetadataCache(cfg, dbClient)
+
 	return &RootNode{
-		cfg: cfg,
-		db:  dbClient,
+		cfg:   cfg,
+		db:    dbClient,
+		cache: cache,
 	}
 }
 
@@ -46,26 +50,86 @@ func (r *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 }
 
 // Readdir lists the contents of the root directory
-// For now, returns empty list (tables will be added in Task 1.5)
+// Returns tables from the default schema (schema flattening)
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("RootNode.Readdir called")
 
-	// TODO: Implement schema discovery in Task 1.5
-	// For now, return empty directory listing
-	entries := []fuse.DirEntry{}
+	// Get tables from cache
+	tables, err := r.cache.GetTables(ctx)
+	if err != nil {
+		logging.Error("Failed to get tables", zap.Error(err))
+		return nil, syscall.EIO
+	}
 
-	logging.Debug("Root directory listing", zap.Int("entries", len(entries)))
+	// Convert tables to directory entries
+	entries := make([]fuse.DirEntry, 0, len(tables))
+	for _, table := range tables {
+		entries = append(entries, fuse.DirEntry{
+			Name: table,
+			Mode: syscall.S_IFDIR, // Tables are directories
+		})
+	}
+
+	logging.Debug("Root directory listing",
+		zap.Int("table_count", len(entries)),
+		zap.Strings("tables", tables))
 
 	return fs.NewListDirStream(entries), 0
 }
 
 // Lookup looks up a table name in the root directory
-// For now, returns ENOENT (tables will be added in Task 1.5)
 func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	logging.Debug("RootNode.Lookup called", zap.String("name", name))
+	logging.Debug("RootNode.Lookup called", zap.String("table", name))
 
-	// TODO: Implement table lookup in Task 1.5
-	// For now, all lookups fail
-	logging.Debug("Table not found", zap.String("name", name))
-	return nil, syscall.ENOENT
+	// Check if table exists in cache
+	exists, err := r.cache.HasTable(ctx, name)
+	if err != nil {
+		logging.Error("Failed to check table existence", zap.String("table", name), zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	if !exists {
+		logging.Debug("Table not found", zap.String("table", name))
+		return nil, syscall.ENOENT
+	}
+
+	// Table exists - create a placeholder table directory node
+	// TODO: Implement full TableNode in Task 1.6
+	logging.Debug("Table found", zap.String("table", name))
+
+	// Create a stable inode for the table directory
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	// Create a placeholder table node (empty directory for now)
+	tableNode := &PlaceholderTableNode{
+		tableName: name,
+	}
+
+	child := r.NewPersistentInode(ctx, tableNode, stableAttr)
+	return child, 0
+}
+
+// PlaceholderTableNode is a temporary placeholder for table directories
+// Will be replaced with full TableNode implementation in Task 1.6
+type PlaceholderTableNode struct {
+	fs.Inode
+	tableName string
+}
+
+var _ fs.InodeEmbedder = (*PlaceholderTableNode)(nil)
+var _ fs.NodeGetattrer = (*PlaceholderTableNode)(nil)
+var _ fs.NodeReaddirer = (*PlaceholderTableNode)(nil)
+
+func (t *PlaceholderTableNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0755 | syscall.S_IFDIR
+	out.Nlink = 2
+	out.Size = 4096
+	return 0
+}
+
+func (t *PlaceholderTableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	// Empty directory for now
+	return fs.NewListDirStream([]fuse.DirEntry{}), 0
 }
