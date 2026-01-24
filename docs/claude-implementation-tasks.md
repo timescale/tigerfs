@@ -1051,6 +1051,391 @@ go tool cover -html=coverage.txt
 
 ---
 
+### Task 2.13: Comprehensive Unit Test Coverage
+
+**Objective:** Add missing unit tests to achieve >60% coverage across all packages
+
+**Overview:** Current coverage analysis shows critical gaps:
+- format: 67.3% (parse.go has 0%)
+- db: 20.1% (query.go edge cases missing)
+- fuse: 4.7% (most operations untested)
+- config: 0% (all functionality untested)
+- cmd: 0% (all commands untested)
+- logging: 0% (all functionality untested)
+- util: 100% ✅
+
+This task adds unit tests for 8 critical areas to bring overall coverage to >60%.
+
+---
+
+#### Task 2.13.1: Add format/parse_test.go
+
+**Objective:** Test parsing functions (TSV, CSV, JSON) - security-critical code
+
+**Steps:**
+1. Create `internal/tigerfs/format/parse_test.go`
+2. Test TSV parsing:
+   - `TestParseTSV_Basic` - Simple tab-separated values
+   - `TestParseTSV_EmptyFields` - NULL handling
+   - `TestParseTSV_SpecialCharacters` - Tabs, newlines in data
+   - `TestParseTSV_SingleValue` - One column
+   - `TestParseTSV_EmptyString` - Empty input
+3. Test CSV parsing:
+   - `TestParseCSV_Basic` - Simple comma-separated values
+   - `TestParseCSV_QuotedFields` - Quoted fields
+   - `TestParseCSV_CommasInQuotes` - Commas inside quoted fields
+   - `TestParseCSV_EmptyFields` - NULL handling
+   - `TestParseCSV_MalformedInput` - Invalid CSV
+   - `TestParseCSV_NewlinesInQuotes` - Newlines inside quoted fields
+4. Test JSON parsing:
+   - `TestParseJSON_Basic` - Simple object
+   - `TestParseJSON_NullValues` - Explicit null values
+   - `TestParseJSON_NestedObjects` - Should flatten or error
+   - `TestParseJSON_InvalidJSON` - Malformed JSON
+   - `TestParseJSON_EmptyObject` - {}
+   - `TestParseJSON_Arrays` - Array values
+   - `TestParseJSON_Numbers` - Numeric values
+
+**Files to Create:**
+- `internal/tigerfs/format/parse_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/format/ -run TestParse
+# All parse tests pass
+
+go test -cover ./internal/tigerfs/format/
+# Coverage should increase from 67.3% to >90%
+```
+
+**Completion Criteria:**
+- [ ] 15+ test cases covering all parsing functions
+- [ ] Edge cases tested (empty, malformed, special characters)
+- [ ] NULL handling verified
+- [ ] Error cases return appropriate errors
+- [ ] Coverage for format package >90%
+
+---
+
+#### Task 2.13.2: Add fuse/partial_test.go
+
+**Objective:** Test PartialRowTracker (incremental row creation state management)
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/partial_test.go`
+2. Test basic operations:
+   - `TestPartialRowTracker_GetOrCreate` - Creates new partial row
+   - `TestPartialRowTracker_GetOrCreate_Existing` - Returns existing
+   - `TestPartialRowTracker_Get_NotFound` - Returns nil
+   - `TestPartialRowTracker_SetColumn` - Sets column value
+   - `TestPartialRowTracker_SetColumn_Multiple` - Sets multiple columns
+3. Test TryCommit:
+   - `TestPartialRowTracker_TryCommit_Success` - All required columns set
+   - `TestPartialRowTracker_TryCommit_MissingNotNullColumn` - Should not commit
+   - `TestPartialRowTracker_TryCommit_ConstraintViolation` - UNIQUE violation
+   - `TestPartialRowTracker_TryCommit_AlreadyCommitted` - Idempotent
+4. Test concurrency:
+   - `TestPartialRowTracker_ConcurrentAccess` - Multiple goroutines
+   - `TestPartialRowTracker_MultipleRows` - Multiple partial rows
+5. Test cleanup:
+   - `TestPartialRowTracker_Delete` - Remove partial row
+
+**Files to Create:**
+- `internal/tigerfs/fuse/partial_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/fuse/ -run TestPartialRowTracker
+# All partial row tests pass
+
+go test -race ./internal/tigerfs/fuse/ -run TestPartialRowTracker_Concurrent
+# No race conditions
+```
+
+**Completion Criteria:**
+- [ ] 12+ test cases covering all PartialRowTracker operations
+- [ ] Constraint validation tested
+- [ ] Concurrency safety verified with -race
+- [ ] Edge cases covered
+- [ ] All tests pass
+
+---
+
+#### Task 2.13.3: Add config/config_test.go
+
+**Objective:** Test configuration loading (defaults, file, env vars, precedence)
+
+**Steps:**
+1. Create `internal/tigerfs/config/config_test.go`
+2. Test defaults:
+   - `TestConfig_Defaults` - All default values set correctly
+   - `TestGetDefaultConfigDir` - Returns correct path
+3. Test file loading:
+   - `TestInit_ConfigFileNotFound` - Should not error
+   - `TestInit_ValidConfigFile` - Loads values correctly
+   - `TestInit_InvalidConfigFile` - Returns error
+   - `TestLoad_UnmarshalConfig` - Maps to Config struct
+4. Test environment variables:
+   - `TestConfig_TigerFSEnvVars` - TIGERFS_* variables
+   - `TestConfig_PostgreSQLEnvVars` - PGHOST, PGPORT, etc.
+   - `TestConfig_TigerServiceIDEnv` - TIGER_SERVICE_ID
+5. Test precedence:
+   - `TestConfig_Precedence_EnvOverridesFile` - Env wins over file
+   - `TestConfig_Precedence_DefaultsLowest` - Defaults only if nothing else
+6. Test all config fields:
+   - `TestConfig_ConnectionFields` - Host, Port, User, Database, etc.
+   - `TestConfig_FilesystemFields` - MaxLsRows, timeouts
+   - `TestConfig_LoggingFields` - LogLevel, LogFile, Debug
+
+**Files to Create:**
+- `internal/tigerfs/config/config_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/config/
+# All config tests pass
+
+# Test with env vars
+TIGERFS_MAX_LS_ROWS=5000 go test -v ./internal/tigerfs/config/ -run TestConfig_TigerFSEnvVars
+# Should read env var
+
+go test -cover ./internal/tigerfs/config/
+# Coverage should increase from 0% to >80%
+```
+
+**Completion Criteria:**
+- [ ] 12+ test cases covering all config loading
+- [ ] All config fields tested
+- [ ] Precedence rules verified
+- [ ] Environment variable binding tested
+- [ ] Coverage for config package >80%
+
+---
+
+#### Task 2.13.4: Add fuse/root_test.go
+
+**Objective:** Test RootNode operations (root directory of filesystem)
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/root_test.go`
+2. Test Getattr:
+   - `TestRootNode_Getattr` - Returns directory attributes
+3. Test Readdir:
+   - `TestRootNode_Readdir` - Lists tables from default schema
+   - `TestRootNode_Readdir_EmptyDatabase` - No tables case
+   - `TestRootNode_Readdir_CacheRefresh` - Metadata cache works
+4. Test Lookup:
+   - `TestRootNode_Lookup_ValidTable` - Finds existing table
+   - `TestRootNode_Lookup_InvalidTable` - Returns ENOENT
+   - `TestRootNode_Lookup_CaseSensitivity` - Matches table name correctly
+
+**Files to Create:**
+- `internal/tigerfs/fuse/root_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/fuse/ -run TestRootNode
+# All root node tests pass
+```
+
+**Completion Criteria:**
+- [ ] 6+ test cases covering RootNode operations
+- [ ] Readdir lists tables correctly
+- [ ] Lookup validates table existence
+- [ ] Cache integration tested
+- [ ] All tests pass
+
+---
+
+#### Task 2.13.5: Expand db/query_test.go
+
+**Objective:** Increase db package coverage from 20.1% to >50%
+
+**Steps:**
+1. Expand `internal/tigerfs/db/query_test.go` with edge cases:
+   - Add `TestInsertRow_AutoGeneratedPK` - SERIAL primary key
+   - Add `TestInsertRow_ExplicitPK` - User-provided PK
+   - Add `TestInsertRow_NullValues` - NULL in nullable columns
+   - Add `TestUpdateRow_PartialUpdate` - Only some columns
+   - Add `TestUpdateRow_AllColumns` - Full row update
+   - Add `TestUpdateRow_SetToNull` - Empty string → NULL
+   - Add `TestUpdateColumn_SingleColumn` - Update one column
+   - Add `TestDeleteRow_Simple` - Delete existing row
+   - Add `TestDeleteRow_NotFound` - Should not error
+   - Add `TestGetRow_NotFound` - Should error
+   - Add `TestGetColumn_NullValue` - Returns nil
+   - Add `TestListRows_Empty` - No rows
+   - Add `TestListRows_Pagination` - Respects limit
+   - Add `TestListRows_Ordering` - Ordered by PK
+2. Test error handling:
+   - Add `TestInsertRow_DuplicatePK` - UNIQUE violation
+   - Add `TestUpdateRow_InvalidColumn` - Column doesn't exist
+   - Add `TestGetRow_InvalidTable` - Table doesn't exist
+
+**Files to Modify:**
+- `internal/tigerfs/db/query_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/db/ -run TestInsertRow
+go test -v ./internal/tigerfs/db/ -run TestUpdateRow
+go test -v ./internal/tigerfs/db/ -run TestDeleteRow
+
+go test -cover ./internal/tigerfs/db/
+# Coverage should increase from 20.1% to >50%
+```
+
+**Completion Criteria:**
+- [ ] 15+ new test cases added
+- [ ] All query functions tested
+- [ ] Edge cases covered (NULL, empty, errors)
+- [ ] Coverage for db package >50%
+- [ ] All tests pass
+
+---
+
+#### Task 2.13.6: Expand fuse/* unit tests
+
+**Objective:** Expand existing minimal fuse test files (table, column, row, rowdir)
+
+**Steps:**
+1. Expand `internal/tigerfs/fuse/table_test.go`:
+   - Add `TestTableNode_Getattr`
+   - Add `TestTableNode_Readdir` (mock db.ListRows)
+   - Add `TestTableNode_Lookup_ValidRow`
+   - Add `TestTableNode_Lookup_InvalidRow`
+   - Add `TestTableNode_Mkdir` (create row directory)
+   - Add `TestTableNode_Unlink` (delete row file)
+   - Add `TestTableNode_Rmdir` (delete row directory)
+2. Expand `internal/tigerfs/fuse/column_test.go`:
+   - Add `TestColumnFileNode_Getattr`
+   - Add `TestColumnFileNode_Read` (mock db.GetColumn)
+   - Add `TestColumnFileNode_Open`
+   - Add `TestColumnFileNode_Write`
+   - Add `TestColumnFileNode_Flush` (triggers UPDATE or INSERT)
+3. Expand `internal/tigerfs/fuse/row_test.go`:
+   - Add `TestRowFileNode_Getattr`
+   - Add `TestRowFileNode_Open`
+   - Add `TestRowFileNode_Read_TSV`
+   - Add `TestRowFileNode_Read_CSV`
+   - Add `TestRowFileNode_Read_JSON`
+   - Add `TestRowFileNode_Write_UPDATE`
+   - Add `TestRowFileNode_Write_INSERT`
+4. Expand `internal/tigerfs/fuse/rowdir_test.go`:
+   - Add `TestRowDirectoryNode_Getattr`
+   - Add `TestRowDirectoryNode_Readdir` (lists columns)
+   - Add `TestRowDirectoryNode_Lookup_ValidColumn`
+   - Add `TestRowDirectoryNode_Lookup_InvalidColumn`
+   - Add `TestRowDirectoryNode_Unlink` (SET NULL)
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table_test.go`
+- `internal/tigerfs/fuse/column_test.go`
+- `internal/tigerfs/fuse/row_test.go`
+- `internal/tigerfs/fuse/rowdir_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/fuse/ -run "TestTableNode|TestColumnFileNode|TestRowFileNode|TestRowDirectoryNode"
+# All expanded tests pass
+
+go test -cover ./internal/tigerfs/fuse/
+# Coverage should increase significantly toward >50%
+```
+
+**Completion Criteria:**
+- [ ] 20+ new test cases added across 4 test files
+- [ ] All existing minimal tests expanded with real functionality tests
+- [ ] Mock database interactions where needed
+- [ ] All CRUD operations covered
+- [ ] All tests pass
+
+---
+
+#### Task 2.13.7: Add logging/logging_test.go
+
+**Objective:** Test logging initialization and configuration
+
+**Steps:**
+1. Create `internal/tigerfs/logging/logging_test.go`
+2. Test initialization:
+   - `TestInit_DebugMode` - Debug=true sets debug level
+   - `TestInit_ProductionMode` - Debug=false sets warn level
+   - `TestInit_EncoderConfig` - Correct encoder settings
+3. Test log levels:
+   - `TestLogging_DebugLevel` - Debug logs appear in debug mode
+   - `TestLogging_InfoLevel` - Info logs appear
+   - `TestLogging_WarnLevel` - Warn logs appear
+   - `TestLogging_ErrorLevel` - Error logs appear
+4. Test output:
+   - `TestLogging_OutputPaths` - Logs go to stderr
+   - `TestSync` - Sync works without error
+
+**Files to Create:**
+- `internal/tigerfs/logging/logging_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/logging/
+# All logging tests pass
+
+go test -cover ./internal/tigerfs/logging/
+# Coverage should increase from 0% to >80%
+```
+
+**Completion Criteria:**
+- [ ] 8+ test cases covering logging setup
+- [ ] Both debug and production modes tested
+- [ ] Log level filtering verified
+- [ ] Coverage for logging package >80%
+- [ ] All tests pass
+
+---
+
+#### Task 2.13.8: Add cmd/* unit tests
+
+**Objective:** Test command builders and flag handling
+
+**Steps:**
+1. Create `internal/tigerfs/cmd/root_test.go`:
+   - `TestBuildRootCmd` - Root command created
+   - `TestBuildRootCmd_PersistentFlags` - Debug, config-dir flags
+   - `TestBuildRootCmd_Subcommands` - All subcommands added
+2. Create `internal/tigerfs/cmd/mount_test.go`:
+   - `TestBuildMountCmd` - Mount command created
+   - `TestBuildMountCmd_Flags` - All mount flags present
+   - `TestBuildMountCmd_Args` - Argument parsing
+3. Create `internal/tigerfs/cmd/version_test.go`:
+   - `TestBuildVersionCmd` - Version command created
+   - `TestVersionCmd_Output` - Shows version string
+4. Create `internal/tigerfs/cmd/config_test.go`:
+   - `TestBuildConfigCmd` - Config command created
+   - `TestBuildConfigCmd_Subcommands` - show, validate, path
+
+**Files to Create:**
+- `internal/tigerfs/cmd/root_test.go`
+- `internal/tigerfs/cmd/mount_test.go`
+- `internal/tigerfs/cmd/version_test.go`
+- `internal/tigerfs/cmd/config_test.go`
+
+**Verification:**
+```bash
+go test -v ./internal/tigerfs/cmd/
+# All cmd tests pass
+
+go test -cover ./internal/tigerfs/cmd/
+# Coverage should increase from 0% to >30%
+```
+
+**Completion Criteria:**
+- [ ] 10+ test cases covering command builders
+- [ ] Flag presence verified
+- [ ] Subcommand registration tested
+- [ ] Coverage for cmd package >30%
+- [ ] All tests pass
+
+---
+
 ## Phase 3: Advanced Features
 
 ### Task 3.1: Implement Index Discovery
