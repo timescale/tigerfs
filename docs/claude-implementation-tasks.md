@@ -1436,6 +1436,324 @@ go test -cover ./internal/tigerfs/cmd/
 
 ---
 
+### Task 2.14: Docker Testing Environment
+
+**Objective:** Create Docker-based testing environment for machines without PostgreSQL or FUSE
+
+**Overview:** Many development machines cannot run PostgreSQL locally or don't have FUSE installed/configured. This task creates a Docker container with both PostgreSQL and FUSE support, allowing tests to run in an isolated environment.
+
+**Steps:**
+
+1. Create `test/docker/Dockerfile`:
+   - Base image: Ubuntu 22.04 or Debian 12
+   - Install PostgreSQL 17
+   - Install FUSE libraries (fuse3, libfuse3-dev)
+   - Install Go 1.23+
+   - Create test database and user
+   - Set up FUSE permissions
+   - Configure PostgreSQL to accept connections
+   - Add healthcheck script
+
+2. Create `test/docker/docker-compose.yml`:
+   - PostgreSQL service (postgres:17-alpine for database only)
+   - TigerFS test service (custom Dockerfile with FUSE)
+   - Network configuration
+   - Volume mounts for code
+   - Environment variables for connection strings
+   - Privileged mode for FUSE
+
+3. Create `test/docker/init-db.sh`:
+   - Initialize PostgreSQL database
+   - Create test schema
+   - Create test tables (users, products)
+   - Seed test data
+   - Grant permissions
+
+4. Create `test/docker/entrypoint.sh`:
+   - Start PostgreSQL (if in same container)
+   - Wait for PostgreSQL to be ready
+   - Load FUSE kernel module
+   - Run tests or enter shell
+   - Clean up on exit
+
+5. Create `test/docker/run-tests.sh`:
+   - Wrapper script to run tests in Docker
+   - Detects if local PostgreSQL/FUSE available
+   - Falls back to Docker if not
+   - Passes test arguments through
+   - Handles cleanup
+
+6. Update `test/integration/setup.go`:
+   - Add `getTestConnectionStringWithFallback()` function
+   - Try local PostgreSQL first
+   - Fall back to Docker PostgreSQL if local unavailable
+   - Document environment variables
+
+7. Create `Makefile` (or update existing):
+   - `make test` - Run all tests (auto-detect local vs Docker)
+   - `make test-local` - Force local testing
+   - `make test-docker` - Force Docker testing
+   - `make docker-shell` - Open shell in test container
+   - `make docker-up` - Start Docker services
+   - `make docker-down` - Stop Docker services
+
+8. Update `.github/workflows/test.yml`:
+   - Use Docker-based testing in CI
+   - Install FUSE in GitHub Actions runner (alternative)
+   - Run both unit and integration tests
+   - Upload coverage reports
+
+**Files to Create:**
+- `test/docker/Dockerfile`
+- `test/docker/docker-compose.yml`
+- `test/docker/init-db.sh`
+- `test/docker/entrypoint.sh`
+- `test/docker/run-tests.sh`
+- `Makefile` (or update existing)
+
+**Files to Modify:**
+- `test/integration/setup.go` (add Docker fallback)
+- `.github/workflows/test.yml` (use Docker in CI)
+- `README.md` (document Docker testing option)
+- `CLAUDE.md` (update testing section)
+
+**Verification:**
+
+```bash
+# Test Docker setup
+cd test/docker
+docker-compose up -d
+docker-compose ps
+# Should show: postgres (healthy), tigerfs-test (running)
+
+# Test PostgreSQL connection
+docker-compose exec tigerfs-test psql -U postgres -c "SELECT version();"
+# Should show: PostgreSQL 17.x
+
+# Test FUSE availability
+docker-compose exec tigerfs-test ls /dev/fuse
+# Should show: /dev/fuse
+
+# Run tests in Docker
+./test/docker/run-tests.sh
+# Should run all tests successfully
+
+# Or via Makefile
+make test-docker
+# Should run all tests in Docker
+
+# Cleanup
+docker-compose down -v
+```
+
+**Dockerfile Template:**
+
+```dockerfile
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    postgresql-17 \
+    postgresql-contrib-17 \
+    fuse3 \
+    libfuse3-dev \
+    wget \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Go 1.23
+RUN wget https://go.dev/dl/go1.23.0.linux-amd64.tar.gz \
+    && tar -C /usr/local -xzf go1.23.0.linux-amd64.tar.gz \
+    && rm go1.23.0.linux-amd64.tar.gz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH="/go"
+ENV PATH="${GOPATH}/bin:${PATH}"
+
+# Configure PostgreSQL
+RUN echo "host all all 0.0.0.0/0 md5" >> /etc/postgresql/17/main/pg_hba.conf \
+    && echo "listen_addresses='*'" >> /etc/postgresql/17/main/postgresql.conf
+
+# Create test database
+USER postgres
+RUN /etc/init.d/postgresql start \
+    && psql -c "CREATE DATABASE tigerfs_test;" \
+    && psql -c "CREATE USER tigerfs_user WITH PASSWORD 'tigerfs_pass';" \
+    && psql -c "GRANT ALL PRIVILEGES ON DATABASE tigerfs_test TO tigerfs_user;"
+
+USER root
+
+# Set up FUSE permissions
+RUN chmod 666 /dev/fuse 2>/dev/null || true
+
+# Working directory
+WORKDIR /workspace
+
+# Healthcheck
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 \
+    CMD pg_isready -U postgres || exit 1
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
+```
+
+**docker-compose.yml Template:**
+
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tigerfs_test
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+
+  tigerfs-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    privileged: true  # Required for FUSE
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: tigerfs_test
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/tigerfs_test
+    volumes:
+      - ../..:/workspace
+    working_dir: /workspace
+```
+
+**run-tests.sh Template:**
+
+```bash
+#!/bin/bash
+set -e
+
+# Detect if we can run tests locally
+can_run_local=true
+
+# Check PostgreSQL
+if ! command -v psql &> /dev/null; then
+    echo "PostgreSQL not found locally"
+    can_run_local=false
+elif ! pg_isready -h localhost &> /dev/null; then
+    echo "PostgreSQL not running locally"
+    can_run_local=false
+fi
+
+# Check FUSE
+if [ ! -e /dev/fuse ]; then
+    echo "FUSE not available locally"
+    can_run_local=false
+fi
+
+# Run tests
+if [ "$can_run_local" = true ] && [ "$FORCE_DOCKER" != "1" ]; then
+    echo "Running tests locally..."
+    go test "$@" ./...
+else
+    echo "Running tests in Docker..."
+    cd test/docker
+    docker-compose up -d
+    docker-compose exec -T tigerfs-test go test "$@" ./...
+    exit_code=$?
+    docker-compose down
+    exit $exit_code
+fi
+```
+
+**Makefile Template:**
+
+```makefile
+.PHONY: test test-local test-docker docker-up docker-down docker-shell
+
+# Run tests (auto-detect)
+test:
+	@./test/docker/run-tests.sh -v ./...
+
+# Force local testing
+test-local:
+	go test -v ./...
+
+# Force Docker testing
+test-docker:
+	cd test/docker && docker-compose up -d
+	docker-compose -f test/docker/docker-compose.yml exec -T tigerfs-test go test -v ./...
+	cd test/docker && docker-compose down
+
+# Start Docker services
+docker-up:
+	cd test/docker && docker-compose up -d
+	@echo "Waiting for services to be healthy..."
+	@sleep 5
+	cd test/docker && docker-compose ps
+
+# Stop Docker services
+docker-down:
+	cd test/docker && docker-compose down -v
+
+# Open shell in test container
+docker-shell:
+	cd test/docker && docker-compose up -d
+	docker-compose -f test/docker/docker-compose.yml exec tigerfs-test bash
+
+# Run integration tests only
+test-integration:
+	@./test/docker/run-tests.sh -v ./test/integration/...
+
+# Run with coverage
+test-coverage:
+	@./test/docker/run-tests.sh -coverprofile=coverage.txt ./...
+	go tool cover -html=coverage.txt -o coverage.html
+```
+
+**Completion Criteria:**
+- [ ] Dockerfile builds successfully
+- [ ] docker-compose starts all services
+- [ ] PostgreSQL accessible in container
+- [ ] FUSE device available in container
+- [ ] Tests run successfully in Docker
+- [ ] Auto-detection script works (local vs Docker)
+- [ ] Makefile targets functional
+- [ ] CI workflow uses Docker
+- [ ] Documentation updated (README, CLAUDE.md)
+- [ ] All tests pass in both local and Docker environments
+
+**Benefits:**
+- Consistent testing environment across all machines
+- No need to install PostgreSQL or FUSE locally
+- Works on macOS, Linux, Windows (with WSL2)
+- CI/CD can use same Docker setup
+- Easy onboarding for new developers
+- Isolated test database (no conflicts with local DBs)
+
+---
+
 ## Phase 3: Advanced Features
 
 ### Task 3.1: Implement Index Discovery
