@@ -2,8 +2,6 @@ package integration
 
 import (
 	"context"
-	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,89 +10,6 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
-var (
-	pgAvailableTestOnce sync.Once
-	pgAvailable         bool
-	pgAvailableReason   string
-)
-
-// checkPostgreSQLAvailability performs a one-time test of PostgreSQL availability
-// This avoids repeatedly timing out on systems where PostgreSQL isn't running
-func checkPostgreSQLAvailability(t *testing.T) {
-	t.Helper()
-
-	pgAvailableTestOnce.Do(func() {
-		connStr := getTestConnectionStringInternal()
-		if connStr == "" {
-			pgAvailable = false
-			pgAvailableReason = "No PostgreSQL connection string available"
-			return
-		}
-
-		// Try to connect with a short timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		pool, err := pgxpool.New(ctx, connStr)
-		if err != nil {
-			pgAvailable = false
-			pgAvailableReason = "Failed to connect to PostgreSQL: " + err.Error()
-			return
-		}
-		defer pool.Close()
-
-		// Try a simple ping
-		if err := pool.Ping(ctx); err != nil {
-			pgAvailable = false
-			pgAvailableReason = "PostgreSQL not responding: " + err.Error()
-			return
-		}
-
-		pgAvailable = true
-		pgAvailableReason = ""
-	})
-
-	if !pgAvailable {
-		t.Skipf("PostgreSQL not available: %s", pgAvailableReason)
-	}
-}
-
-// getTestConnectionStringInternal returns connection string without test helper
-func getTestConnectionStringInternal() string {
-	// Check for explicit test connection string
-	if connStr := os.Getenv("TEST_DATABASE_URL"); connStr != "" {
-		return connStr
-	}
-
-	// Build from PG environment variables
-	host := os.Getenv("PGHOST")
-	if host == "" {
-		host = "localhost"
-	}
-
-	port := os.Getenv("PGPORT")
-	if port == "" {
-		port = "5432"
-	}
-
-	user := os.Getenv("PGUSER")
-	if user == "" {
-		user = os.Getenv("USER")
-	}
-
-	database := os.Getenv("PGDATABASE")
-	if database == "" {
-		database = "postgres"
-	}
-
-	password := os.Getenv("PGPASSWORD")
-	if password != "" {
-		return "postgres://" + user + ":" + password + "@" + host + ":" + port + "/" + database
-	}
-
-	return "postgres://" + user + "@" + host + ":" + port + "/" + database
-}
-
 // rowToMap converts a Row struct to a map for easier access
 func rowToMap(row *db.Row) map[string]interface{} {
 	result := make(map[string]interface{})
@@ -102,12 +17,6 @@ func rowToMap(row *db.Row) map[string]interface{} {
 		result[col] = row.Values[i]
 	}
 	return result
-}
-
-// getTestConnectionString returns a PostgreSQL connection string for testing
-func getTestConnectionString(t *testing.T) string {
-	t.Helper()
-	return getTestConnectionStringInternal()
 }
 
 // setupTestTable creates a test table and returns cleanup function
@@ -137,17 +46,17 @@ func setupTestTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) func(
 
 // TestCRUDFullCycle tests the complete INSERT → SELECT → UPDATE → DELETE cycle
 func TestCRUDFullCycle(t *testing.T) {
-	checkPostgreSQLAvailability(t)
-
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("No PostgreSQL connection available")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, connStr)
+	pool, err := pgxpool.New(ctx, dbResult.ConnStr)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -255,17 +164,17 @@ func TestCRUDFullCycle(t *testing.T) {
 
 // TestCRUDPartialUpdates tests updating only specific columns
 func TestCRUDPartialUpdates(t *testing.T) {
-	checkPostgreSQLAvailability(t)
-
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("No PostgreSQL connection available")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, connStr)
+	pool, err := pgxpool.New(ctx, dbResult.ConnStr)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -309,17 +218,17 @@ func TestCRUDPartialUpdates(t *testing.T) {
 
 // TestCRUDNullHandling tests NULL value operations
 func TestCRUDNullHandling(t *testing.T) {
-	checkPostgreSQLAvailability(t)
-
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("No PostgreSQL connection available")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, connStr)
+	pool, err := pgxpool.New(ctx, dbResult.ConnStr)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -381,17 +290,17 @@ func TestCRUDNullHandling(t *testing.T) {
 
 // TestCRUDConstraintViolations tests error scenarios
 func TestCRUDConstraintViolations(t *testing.T) {
-	checkPostgreSQLAvailability(t)
-
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("No PostgreSQL connection available")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, connStr)
+	pool, err := pgxpool.New(ctx, dbResult.ConnStr)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -435,17 +344,17 @@ func TestCRUDConstraintViolations(t *testing.T) {
 
 // TestCRUDConcurrentOperations tests concurrent access
 func TestCRUDConcurrentOperations(t *testing.T) {
-	checkPostgreSQLAvailability(t)
-
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("No PostgreSQL connection available")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, connStr)
+	pool, err := pgxpool.New(ctx, dbResult.ConnStr)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -503,17 +412,17 @@ func TestCRUDConcurrentOperations(t *testing.T) {
 
 // TestCRUDMultipleRows tests operations on multiple rows
 func TestCRUDMultipleRows(t *testing.T) {
-	checkPostgreSQLAvailability(t)
-
-	connStr := getTestConnectionString(t)
-	if connStr == "" {
-		t.Skip("No PostgreSQL connection available")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, connStr)
+	pool, err := pgxpool.New(ctx, dbResult.ConnStr)
 	if err != nil {
 		t.Fatalf("Failed to connect to database: %v", err)
 	}

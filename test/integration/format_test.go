@@ -45,24 +45,6 @@ func checkFUSEMountCapability(t *testing.T) {
 	}
 }
 
-// isFUSEAvailable checks if FUSE is available on the system
-func isFUSEAvailable() bool {
-	// On macOS, check for osxfuse/macfuse
-	if _, err := os.Stat("/Library/Filesystems/osxfuse.fs"); err == nil {
-		return true
-	}
-	if _, err := os.Stat("/Library/Filesystems/macfuse.fs"); err == nil {
-		return true
-	}
-
-	// On Linux, check for /dev/fuse
-	if _, err := os.Stat("/dev/fuse"); err == nil {
-		return true
-	}
-
-	return false
-}
-
 // mountWithTimeout attempts to mount a FUSE filesystem with a timeout
 // Returns nil and skips the test if mount fails or times out
 // Also records failure so subsequent tests can skip immediately
@@ -183,21 +165,19 @@ func seedFormatTestData(ctx context.Context, connStr string) error {
 }
 
 func TestFormats_TSV_Default(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -217,7 +197,10 @@ func TestFormats_TSV_Default(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -254,21 +237,19 @@ func TestFormats_TSV_Default(t *testing.T) {
 }
 
 func TestFormats_TSV_Explicit(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -288,7 +269,10 @@ func TestFormats_TSV_Explicit(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -311,21 +295,19 @@ func TestFormats_TSV_Explicit(t *testing.T) {
 }
 
 func TestFormats_CSV(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -345,7 +327,10 @@ func TestFormats_CSV(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -376,21 +361,19 @@ func TestFormats_CSV(t *testing.T) {
 }
 
 func TestFormats_CSV_WithCommas(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -410,7 +393,10 @@ func TestFormats_CSV_WithCommas(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -433,21 +419,19 @@ func TestFormats_CSV_WithCommas(t *testing.T) {
 }
 
 func TestFormats_JSON(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -467,7 +451,10 @@ func TestFormats_JSON(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -516,21 +503,19 @@ func TestFormats_JSON(t *testing.T) {
 }
 
 func TestFormats_NULL_TSV(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -550,7 +535,10 @@ func TestFormats_NULL_TSV(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -574,21 +562,19 @@ func TestFormats_NULL_TSV(t *testing.T) {
 }
 
 func TestFormats_NULL_CSV(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -608,7 +594,10 @@ func TestFormats_NULL_CSV(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -632,21 +621,19 @@ func TestFormats_NULL_CSV(t *testing.T) {
 }
 
 func TestFormats_NULL_JSON(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -666,7 +653,10 @@ func TestFormats_NULL_JSON(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -701,21 +691,19 @@ func TestFormats_NULL_JSON(t *testing.T) {
 }
 
 func TestFormats_SpecialCharacters_TSV(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -735,7 +723,10 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
@@ -762,21 +753,19 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 }
 
 func TestFormats_SpecialCharacters_JSON(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
-
 	// Seed format test data
 	ctx := context.Background()
-	if err := seedFormatTestData(ctx, connStr); err != nil {
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
 	}
 
@@ -796,7 +785,10 @@ func TestFormats_SpecialCharacters_JSON(t *testing.T) {
 	mountpoint := t.TempDir()
 
 	// Mount filesystem with timeout
-	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
 	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize

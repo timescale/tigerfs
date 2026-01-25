@@ -12,14 +12,17 @@ import (
 )
 
 func TestMount_ListTables(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
+	// Check FUSE availability
+	if !isFUSEAvailable() {
+		t.Skip("FUSE not available on this system")
+	}
 
 	// Create config
 	cfg := &config.Config{
@@ -40,7 +43,7 @@ func TestMount_ListTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	filesystem, err := fuse.Mount(ctx, cfg, connStr, mountpoint)
+	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
@@ -73,14 +76,17 @@ func TestMount_ListTables(t *testing.T) {
 }
 
 func TestMount_ListRows(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
+	// Check FUSE availability
+	if !isFUSEAvailable() {
+		t.Skip("FUSE not available on this system")
+	}
 
 	// Create config
 	cfg := &config.Config{
@@ -101,7 +107,7 @@ func TestMount_ListRows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	filesystem, err := fuse.Mount(ctx, cfg, connStr, mountpoint)
+	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
@@ -138,14 +144,17 @@ func TestMount_ListRows(t *testing.T) {
 }
 
 func TestMount_ReadRow(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
+	// Check FUSE availability
+	if !isFUSEAvailable() {
+		t.Skip("FUSE not available on this system")
+	}
 
 	// Create config
 	cfg := &config.Config{
@@ -166,7 +175,7 @@ func TestMount_ReadRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	filesystem, err := fuse.Mount(ctx, cfg, connStr, mountpoint)
+	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
@@ -223,14 +232,17 @@ func TestMount_ReadRow(t *testing.T) {
 }
 
 func TestMount_ReadNonExistentRow(t *testing.T) {
-	// Skip if Docker not available
-	if !isDockerAvailable(t) {
-		t.Skip("Docker not available, skipping integration test")
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
 	}
+	defer dbResult.Cleanup()
 
-	// Setup test database
-	connStr, cleanup := SetupTestDB(t)
-	defer cleanup()
+	// Check FUSE availability
+	if !isFUSEAvailable() {
+		t.Skip("FUSE not available on this system")
+	}
 
 	// Create config
 	cfg := &config.Config{
@@ -251,7 +263,7 @@ func TestMount_ReadNonExistentRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	filesystem, err := fuse.Mount(ctx, cfg, connStr, mountpoint)
+	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
@@ -283,21 +295,5 @@ func contains(slice []string, item string) bool {
 			return true
 		}
 	}
-	return false
-}
-
-func isDockerAvailable(t *testing.T) bool {
-	t.Helper()
-
-	// Check if Docker socket exists
-	if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-		return true
-	}
-
-	// Check if DOCKER_HOST is set
-	if os.Getenv("DOCKER_HOST") != "" {
-		return true
-	}
-
 	return false
 }
