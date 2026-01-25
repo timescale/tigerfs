@@ -20,6 +20,35 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Respects database constraints and permissions
 - Cross-platform support (Linux, macOS, Windows)
 
+## Architecture
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Unix Tools  │────▶│    FUSE      │────▶│   TigerFS    │────▶│  PostgreSQL  │
+│  ls, cat,    │     │   Kernel     │     │   Daemon     │     │   Database   │
+│  echo, rm    │◀────│   Module     │◀────│              │◀────│              │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+```
+
+TigerFS maps filesystem paths to database queries:
+
+```
+  Filesystem                    Database
+  ──────────                    ────────
+  /mnt/db/                  →   schemas
+  /mnt/db/public/           →   tables
+  /mnt/db/public/users/     →   rows (by PK)
+  /mnt/db/public/users/123  →   SELECT * FROM users WHERE id=123
+  /mnt/db/public/users/123/ →   columns as files
+```
+
+**Components:**
+- **FUSE Layer** - Filesystem interface (read, write, readdir operations)
+- **Database Layer** - PostgreSQL client with connection pooling
+- **Format Layer** - Data serialization (TSV, CSV, JSON)
+- **Configuration** - Viper-based multi-source configuration
+- **Logging** - Structured logging with zap
+
 ## Quick Start
 
 ```bash
@@ -196,15 +225,6 @@ go test ./...
 ```
 
 For detailed development information, see [CLAUDE.md](CLAUDE.md).
-
-## Architecture
-
-TigerFS consists of:
-- **FUSE Layer** - Filesystem interface (read, write, readdir operations)
-- **Database Layer** - PostgreSQL client with connection pooling
-- **Format Layer** - Data serialization (TSV, CSV, JSON)
-- **Configuration** - Viper-based multi-source configuration
-- **Logging** - Structured logging with zap
 
 ## Project Status
 
