@@ -68,7 +68,9 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	// 5. Mount the filesystem
 	server, err := fs.Mount(mountpoint, root, opts)
 	if err != nil {
-		dbClient.Close()
+		if closeErr := dbClient.Close(); closeErr != nil {
+			logging.Error("Failed to close database client during cleanup", zap.Error(closeErr))
+		}
 		return nil, fmt.Errorf("failed to mount FUSE filesystem: %w", err)
 	}
 
@@ -99,7 +101,9 @@ func (f *FS) Serve(ctx context.Context) error {
 	go func() {
 		<-ctx.Done()
 		logging.Info("Context cancelled, unmounting filesystem")
-		f.server.Unmount()
+		if err := f.server.Unmount(); err != nil {
+			logging.Error("Failed to unmount filesystem", zap.Error(err))
+		}
 	}()
 
 	// Wait for server to finish (blocks until unmount)

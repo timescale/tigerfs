@@ -303,7 +303,8 @@ func (fh *RowFileHandle) parseRowData() ([]string, []interface{}, error) {
 	case "tsv", "csv":
 		// TSV/CSV don't include column names, get from schema
 		ctx := context.Background()
-		tableColumns, err := fh.node.db.GetColumns(ctx, fh.node.schema, fh.node.tableName)
+		var tableColumns []db.Column
+		tableColumns, err = fh.node.db.GetColumns(ctx, fh.node.schema, fh.node.tableName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get table columns: %w", err)
 		}
@@ -323,7 +324,8 @@ func (fh *RowFileHandle) parseRowData() ([]string, []interface{}, error) {
 	default:
 		// Default to TSV
 		ctx := context.Background()
-		tableColumns, err := fh.node.db.GetColumns(ctx, fh.node.schema, fh.node.tableName)
+		var tableColumns []db.Column
+		tableColumns, err = fh.node.db.GetColumns(ctx, fh.node.schema, fh.node.tableName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get table columns: %w", err)
 		}

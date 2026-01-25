@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -72,14 +73,17 @@ func Init() error {
 	viper.AutomaticEnv()
 
 	// PostgreSQL standard env vars
-	viper.BindEnv("host", "PGHOST")
-	viper.BindEnv("port", "PGPORT")
-	viper.BindEnv("user", "PGUSER")
-	viper.BindEnv("database", "PGDATABASE")
-	viper.BindEnv("password", "PGPASSWORD")
-
-	// Tiger Cloud env var
-	viper.BindEnv("tiger_service_id", "TIGER_SERVICE_ID")
+	if err := errors.Join(
+		viper.BindEnv("host", "PGHOST"),
+		viper.BindEnv("port", "PGPORT"),
+		viper.BindEnv("user", "PGUSER"),
+		viper.BindEnv("database", "PGDATABASE"),
+		viper.BindEnv("password", "PGPASSWORD"),
+		// Tiger Cloud env var
+		viper.BindEnv("tiger_service_id", "TIGER_SERVICE_ID"),
+	); err != nil {
+		return err
+	}
 
 	// Read config file (ignore if doesn't exist)
 	if err := viper.ReadInConfig(); err != nil {

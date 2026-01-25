@@ -75,7 +75,11 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("failed to mount: %w", err)
 			}
-			defer fs.Close()
+			defer func() {
+				if err := fs.Close(); err != nil {
+					logging.Error("Failed to close filesystem", zap.Error(err))
+				}
+			}()
 
 			logging.Info("Filesystem mounted successfully", zap.String("mountpoint", mountpoint))
 
