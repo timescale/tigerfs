@@ -4,7 +4,7 @@ TigerFS is a FUSE-based filesystem that exposes PostgreSQL database contents as 
 
 ## Overview
 
-TigerFS lets tools and agents work with database state the same way they work with files. Present structured data as a directory tree, and any tool that reads file can now query your database.
+TigerFS lets tools and agents work with database state the same way they work with files. Present structured data as a directory tree, and any tool that reads files can now query your database.
 
 For example, `cat /mnt/db/users/123/email` reads a column value, and `echo 'new@example.com' > /mnt/db/users/123/email` updates it.
 
@@ -208,7 +208,27 @@ TigerFS consists of:
 
 ## Project Status
 
-🚧 **Early Development** - TigerFS is currently in active development. The repository structure is established, but core functionality is being implemented.
+🚧 **Active Development** - TigerFS core functionality is implemented and working:
+
+**Completed:**
+- FUSE filesystem with full CRUD operations (Read, Write, Create, Delete)
+- Row-as-file and row-as-directory access patterns
+- Column-level reads and writes
+- PostgreSQL database layer with connection pooling (pgx/v5)
+- Data format serialization (TSV, CSV, JSON) with NULL handling
+- Constraint validation (NOT NULL, UNIQUE)
+- Incremental row creation via mkdir
+- Metadata files (.schema, .columns, .count)
+- Metadata caching with configurable refresh
+- CLI with mount, unmount, status, and config commands
+- Comprehensive unit and integration test coverage
+
+**Planned:**
+- Index-based navigation (`.email/foo@example.com`)
+- Large table pagination (`.first/N/`, `.sample/N/`)
+- Composite primary key support
+- Permission mapping (PostgreSQL grants → file permissions)
+- Distribution (install scripts, GoReleaser packaging)
 
 ## Contributing
 
