@@ -1754,511 +1754,9 @@ test-coverage:
 
 ---
 
-## Phase 3: Advanced Features
+## Phase 3: CLI Commands
 
-### Task 3.1: Implement Index Discovery
-
-**Objective:** Query indexes from PostgreSQL, cache metadata
-
-**Steps:**
-1. Create `internal/tigerfs/db/indexes.go`
-2. Implement `GetIndexes(ctx, pool, schema, table)`:
-   ```sql
-   SELECT indexname, indexdef
-   FROM pg_indexes
-   WHERE schemaname=$1 AND tablename=$2
-   ```
-3. Parse index definition to extract columns
-4. Distinguish single-column vs composite indexes
-5. Cache index metadata
-
-**Files to Create:**
-- `internal/tigerfs/db/indexes.go`
-- `internal/tigerfs/db/indexes_test.go`
-
-**Verification:**
-```bash
-# Create indexes
-psql -c "CREATE INDEX users_email_idx ON users(email);"
-psql -c "CREATE INDEX users_name_idx ON users(last_name, first_name);"
-
-# Test index discovery
-go test -v ./internal/tigerfs/db/ -run TestGetIndexes
-```
-
-**Completion Criteria:**
-- [ ] Indexes queried from pg_indexes
-- [ ] Single-column indexes identified
-- [ ] Composite indexes identified
-- [ ] Index metadata cached
-- [ ] Tests pass
-
----
-
-### Task 3.2: Implement Single-Column Index Paths
-
-**Objective:** Navigate via single-column indexes (e.g., `.email/`)
-
-**Steps:**
-1. Create `internal/tigerfs/fuse/index.go`
-2. Implement index directory operations:
-   - `Lookup()` detects dotfile index paths (`.email/`)
-   - `ReadDir()` lists distinct values (limited to 100)
-   - `Getattr()` returns directory attributes
-3. Query distinct values:
-   ```sql
-   SELECT DISTINCT <column> FROM <table> ORDER BY <column> LIMIT 100
-   ```
-
-**Files to Create:**
-- `internal/tigerfs/fuse/index.go`
-- `internal/tigerfs/fuse/index_test.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls /tmp/testmount/users/.email/
-# Should show email addresses (up to 100)
-```
-
-**Completion Criteria:**
-- [ ] Index paths navigable
-- [ ] Distinct values listed
-- [ ] Limited to avoid huge listings
-- [ ] Tests pass
-
----
-
-### Task 3.3: Implement Index-Based Queries
-
-**Objective:** Query rows using index paths (e.g., `.email/foo@x.com/`)
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/index.go`:
-   - `Lookup()` handles value within index path
-   - Query row using index column:
-     ```sql
-     SELECT * FROM <table> WHERE <index_col>=$1
-     ```
-   - If single row: behave like row access
-   - If multiple rows: return directory with PKs
-2. Verify PostgreSQL uses index (EXPLAIN plan)
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/index.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-
-# Access via index
-cat /tmp/testmount/users/.email/test1@example.com/id
-# Should show: 1
-
-# Verify index used
-psql -c "EXPLAIN SELECT * FROM users WHERE email='test1@example.com';"
-# Should show: Index Scan using users_email_idx
-```
-
-**Completion Criteria:**
-- [ ] Index-based queries working
-- [ ] Single row results accessible
-- [ ] Multiple row results listed
-- [ ] PostgreSQL uses index
-- [ ] Tests pass
-
----
-
-### Task 3.4: Implement Composite Index Paths
-
-**Objective:** Navigate composite indexes (e.g., `.last_name.first_name/Smith/Johnson/`)
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/index.go`:
-   - Handle composite index paths with multiple components
-   - Parse path segments as index values
-   - Generate WHERE clause with multiple conditions:
-     ```sql
-     SELECT * FROM <table>
-     WHERE col1=$1 AND col2=$2
-     ```
-2. Support prefix matching:
-   ```sql
-   -- .last_name.first_name/Smith/
-   SELECT DISTINCT first_name FROM <table> WHERE last_name='Smith'
-   ```
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/index.go`
-
-**Verification:**
-```bash
-# Create composite index
-psql -c "ALTER TABLE users ADD COLUMN last_name TEXT, ADD COLUMN first_name TEXT;"
-psql -c "UPDATE users SET last_name='Smith', first_name='John' WHERE id=1;"
-psql -c "CREATE INDEX users_name_idx ON users(last_name, first_name);"
-
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-
-# Navigate composite index
-ls /tmp/testmount/users/.last_name.first_name/Smith/
-# Should show: John
-
-cat /tmp/testmount/users/.last_name.first_name/Smith/John/email
-# Should show email for that user
-```
-
-**Completion Criteria:**
-- [ ] Composite index paths work
-- [ ] Multi-level navigation functional
-- [ ] Prefix matching supported
-- [ ] Tests pass
-
----
-
-### Task 3.5: Implement Large Table Detection
-
-**Objective:** Detect large tables, enforce max_ls_rows limit
-
-**Steps:**
-1. Update `internal/tigerfs/db/schema.go`:
-   - Implement `GetTableRowCount(ctx, pool, schema, table)`:
-     ```sql
-     SELECT reltuples::bigint
-     FROM pg_class
-     WHERE relname=$1
-     ```
-   - Use estimate for speed
-2. Update `internal/tigerfs/fuse/table.go`:
-   - In `ReadDir()`, check row count before listing
-   - If count > max_ls_rows: return EIO
-   - Log helpful message: "Table too large (N rows). Use .first/, .sample/, or index paths"
-
-**Files to Modify:**
-- `internal/tigerfs/db/schema.go`
-- `internal/tigerfs/fuse/table.go`
-
-**Verification:**
-```bash
-# Create large table
-psql -c "INSERT INTO users (email) SELECT 'user'||i||'@example.com' FROM generate_series(1, 15000) i;"
-
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls /tmp/testmount/users/
-# Should fail with: Input/output error
-# Log should suggest: Use .first/, .sample/, or index paths
-```
-
-**Completion Criteria:**
-- [ ] Large tables detected
-- [ ] max_ls_rows enforced
-- [ ] Helpful error message logged
-- [ ] Tests pass
-
----
-
-### Task 3.6: Implement .first/N/ Pagination
-
-**Objective:** Access first N rows via .first/N/ path
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/table.go`:
-   - Detect `.first/` in path
-   - Parse N from path (e.g., `.first/100/`)
-   - Implement `ReadDir()` for `.first/N/`:
-     ```sql
-     SELECT <pk> FROM <table> ORDER BY <pk> LIMIT $1
-     ```
-   - List first N PKs
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/table.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls /tmp/testmount/users/.first/50/
-# Should show first 50 PKs
-
-cat /tmp/testmount/users/.first/50/1/email
-# Should access row normally
-```
-
-**Completion Criteria:**
-- [ ] `.first/N/` paths work
-- [ ] Returns first N rows by PK
-- [ ] Rows accessible normally
-- [ ] Tests pass
-
----
-
-### Task 3.7: Implement .sample/N/ Random Sampling
-
-**Objective:** Access random N rows via .sample/N/ path
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/table.go`:
-   - Detect `.sample/` in path
-   - Parse N from path (e.g., `.sample/100/`)
-   - Implement `ReadDir()` for `.sample/N/`:
-     ```sql
-     SELECT <pk> FROM <table> TABLESAMPLE BERNOULLI($1) LIMIT $2
-     ```
-   - Calculate percentage to approximate N rows
-2. Handle small tables (fallback to ORDER BY RANDOM())
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/table.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls /tmp/testmount/users/.sample/100/
-# Should show ~100 random PKs (may vary)
-
-# Run again, should get different sample
-ls /tmp/testmount/users/.sample/100/
-# Different PKs
-```
-
-**Completion Criteria:**
-- [ ] `.sample/N/` paths work
-- [ ] Returns approximately N random rows
-- [ ] Uses TABLESAMPLE for performance
-- [ ] Tests pass
-
----
-
-### Task 3.8: Implement .count File
-
-**Objective:** Show table row count in .count file
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/metadata.go`:
-   - Detect `.count` file
-   - Implement `Read()` for `.count`:
-     - For small tables (<100K): `SELECT count(*) FROM <table>`
-     - For large tables: Use pg_class.reltuples estimate
-   - Return count as text
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/metadata.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-cat /tmp/testmount/users/.count
-# Should show: 15000 (or current count)
-```
-
-**Completion Criteria:**
-- [ ] `.count` file readable
-- [ ] Accurate for small tables
-- [ ] Fast estimate for large tables
-- [ ] Tests pass
-
----
-
-### Task 3.9: Implement Permission Discovery
-
-**Objective:** Query PostgreSQL table privileges
-
-**Steps:**
-1. Create `internal/tigerfs/db/permissions.go`
-2. Implement `GetTablePermissions(ctx, pool, schema, table)`:
-   ```sql
-   SELECT
-     has_table_privilege('<schema>.<table>', 'SELECT') as can_select,
-     has_table_privilege('<schema>.<table>', 'INSERT') as can_insert,
-     has_table_privilege('<schema>.<table>', 'UPDATE') as can_update,
-     has_table_privilege('<schema>.<table>', 'DELETE') as can_delete
-   ```
-3. Cache permissions per table
-
-**Files to Create:**
-- `internal/tigerfs/db/permissions.go`
-- `internal/tigerfs/db/permissions_test.go`
-
-**Verification:**
-```bash
-# Create read-only user
-psql -c "CREATE USER readonly_user WITH PASSWORD 'test';"
-psql -c "GRANT SELECT ON users TO readonly_user;"
-
-# Test permission query
-go test -v ./internal/tigerfs/db/ -run TestGetTablePermissions
-```
-
-**Completion Criteria:**
-- [ ] Permissions queried correctly
-- [ ] All 4 privileges checked
-- [ ] Permissions cached
-- [ ] Tests pass
-
----
-
-### Task 3.10: Implement Permission Mapping
-
-**Objective:** Map PostgreSQL privileges to filesystem permissions
-
-**Steps:**
-1. Create `internal/tigerfs/util/permissions.go`
-2. Implement `MapPermissions(canSelect, canUpdate, canInsert, canDelete bool) os.FileMode`:
-   - SELECT → read (0400)
-   - UPDATE/INSERT → write (0200)
-   - Combine appropriately
-3. Update `internal/tigerfs/fuse/row.go` and `column.go`:
-   - Use permissions in `Getattr()`
-   - Return appropriate mode bits
-
-**Files to Create:**
-- `internal/tigerfs/util/permissions.go`
-- `internal/tigerfs/util/permissions_test.go`
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/row.go`
-- `internal/tigerfs/fuse/column.go`
-
-**Verification:**
-```bash
-# Test with read-only user
-go run ./cmd/tigerfs postgres://readonly_user:test@localhost/postgres /tmp/testmount
-
-ls -l /tmp/testmount/users/1
-# Should show: -r--r--r-- (read-only)
-
-echo 'test' > /tmp/testmount/users/1/email
-# Should fail: Permission denied
-```
-
-**Completion Criteria:**
-- [ ] Permissions mapped correctly
-- [ ] File modes accurate
-- [ ] Write attempts fail for read-only
-- [ ] Tests pass
-
----
-
-### Task 3.11: Implement Timestamps
-
-**Objective:** Show file modification times based on table columns
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/row.go`:
-   - Detect `updated_at` or `modified_at` column
-   - Query timestamp column value
-   - Return as mtime in `Getattr()`
-   - Fallback to current time if no timestamp column
-2. Cache timestamp column detection per table
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/row.go`
-
-**Verification:**
-```bash
-# Add timestamp column
-psql -c "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP DEFAULT NOW();"
-psql -c "UPDATE users SET updated_at='2026-01-15 10:00:00' WHERE id=1;"
-
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls -l /tmp/testmount/users/1
-# Should show modification time: Jan 15 10:00
-```
-
-**Completion Criteria:**
-- [ ] Timestamps from updated_at column
-- [ ] Fallback to current time
-- [ ] Shown in ls -l
-- [ ] Tests pass
-
----
-
-### Task 3.12: Implement File Sizes
-
-**Objective:** Calculate and return accurate file sizes
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/row.go`:
-   - Calculate row file size (byte length of TSV/CSV/JSON)
-   - Return size in `Getattr()`
-2. Update `internal/tigerfs/fuse/column.go`:
-   - Calculate column file size (text representation length)
-   - Return size in `Getattr()`
-3. Optimize by caching sizes
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/row.go`
-- `internal/tigerfs/fuse/column.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls -lh /tmp/testmount/users/1
-# Should show accurate file size
-
-ls -lh /tmp/testmount/users/1/email
-# Should show email length
-```
-
-**Completion Criteria:**
-- [ ] File sizes accurate
-- [ ] Shown in ls -lh
-- [ ] Sizes cached for performance
-- [ ] Tests pass
-
----
-
-### Task 3.13: Implement Schema Flattening
-
-**Objective:** Show public schema tables at root, other schemas with prefix
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/root.go`:
-   - In `ReadDir()`, list tables from default schema (config.DefaultSchema)
-   - Also show other schemas as directories
-   - Add `.schemas/` directory for explicit access
-2. Update path parsing to handle schema prefixes:
-   - `/users/` → public.users
-   - `/analytics/reports/` → analytics.reports
-   - `/.schemas/public/users/` → public.users (explicit)
-3. Make default schema configurable via config
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/root.go`
-- Path parsing logic in various files
-
-**Verification:**
-```bash
-# Create table in different schema
-psql -c "CREATE SCHEMA analytics;"
-psql -c "CREATE TABLE analytics.reports (id serial);"
-
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls /tmp/testmount/
-# Should show: users (from public), analytics (schema directory)
-
-ls /tmp/testmount/analytics/
-# Should show: reports
-
-ls /tmp/testmount/.schemas/
-# Should show: public, analytics
-
-ls /tmp/testmount/.schemas/public/
-# Should show: users
-```
-
-**Completion Criteria:**
-- [ ] Public schema tables at root
-- [ ] Other schemas accessible with prefix
-- [ ] `.schemas/` provides explicit access
-- [ ] Configurable default schema
-- [ ] Tests pass
-
----
-
-## Phase 4: Polish and Release
-
-### Task 4.1: Implement Unmount Command
+### Task 3.1: Implement Unmount Command
 
 **Objective:** Complete `tigerfs unmount` command implementation
 
@@ -2302,7 +1800,7 @@ ls /tmp/testmount/
 
 ---
 
-### Task 4.2: Implement Status Command
+### Task 3.2: Implement Status Command
 
 **Objective:** Show mount status and statistics
 
@@ -2345,7 +1843,7 @@ go run ./cmd/tigerfs status /tmp/testmount
 
 ---
 
-### Task 4.3: Implement List Command
+### Task 3.3: Implement List Command
 
 **Objective:** List all active mounts
 
@@ -2382,7 +1880,7 @@ go run ./cmd/tigerfs list
 
 ---
 
-### Task 4.4: Implement Test Connection Command
+### Task 3.4: Implement Test Connection Command
 
 **Objective:** Test database connectivity without mounting
 
@@ -2424,7 +1922,7 @@ go run ./cmd/tigerfs test-connection postgres://badhost/baddb
 
 ---
 
-### Task 4.5: Implement Config Commands
+### Task 3.5: Implement Config Commands
 
 **Objective:** Complete config show, validate, path commands
 
@@ -2469,7 +1967,7 @@ go run ./cmd/tigerfs config path
 
 ---
 
-### Task 4.6: Implement Tiger Cloud Integration
+### Task 3.6: Implement Tiger Cloud Integration
 
 **Objective:** Support `--tiger-service-id` flag to mount Tiger Cloud services
 
@@ -2517,7 +2015,765 @@ mv /tmp/tiger.bak $(which tiger)
 
 ---
 
-### Task 4.7: Create Unix Install Script
+### Task 3.7: Example Workflows for Basic Functionality
+
+**Objective:** Create documentation with real-world examples for basic TigerFS usage
+
+**Steps:**
+1. Create `docs/examples-basic.md`
+2. Write examples:
+   - **Example 1:** First mount - connecting to a local PostgreSQL database
+   - **Example 2:** Exploring database schema with ls and cat
+   - **Example 3:** Reading data in different formats (TSV, CSV, JSON)
+   - **Example 4:** Basic data modification (update a column, insert a row)
+   - **Example 5:** Using grep and awk to query data
+   - **Example 6:** Mounting a Tiger Cloud service
+3. Each example should include:
+   - Scenario description
+   - Complete commands
+   - Expected output
+   - Explanation
+
+**Files to Create:**
+- `docs/examples-basic.md`
+
+**Verification:**
+```bash
+# Run through each example
+# Verify commands work as documented
+```
+
+**Completion Criteria:**
+- [ ] At least 6 examples documented
+- [ ] Each example tested and works
+- [ ] Clear explanations provided
+- [ ] Output shown
+
+---
+
+## Phase 4: Advanced Features
+
+### Task 4.1: Implement Index Discovery
+
+**Objective:** Query indexes from PostgreSQL, cache metadata
+
+**Steps:**
+1. Create `internal/tigerfs/db/indexes.go`
+2. Implement `GetIndexes(ctx, pool, schema, table)`:
+   ```sql
+   SELECT indexname, indexdef
+   FROM pg_indexes
+   WHERE schemaname=$1 AND tablename=$2
+   ```
+3. Parse index definition to extract columns
+4. Distinguish single-column vs composite indexes
+5. Cache index metadata
+
+**Files to Create:**
+- `internal/tigerfs/db/indexes.go`
+- `internal/tigerfs/db/indexes_test.go`
+
+**Verification:**
+```bash
+# Create indexes
+psql -c "CREATE INDEX users_email_idx ON users(email);"
+psql -c "CREATE INDEX users_name_idx ON users(last_name, first_name);"
+
+# Test index discovery
+go test -v ./internal/tigerfs/db/ -run TestGetIndexes
+```
+
+**Completion Criteria:**
+- [ ] Indexes queried from pg_indexes
+- [ ] Single-column indexes identified
+- [ ] Composite indexes identified
+- [ ] Index metadata cached
+- [ ] Tests pass
+
+---
+
+### Task 4.2: Implement Single-Column Index Paths
+
+**Objective:** Navigate via single-column indexes (e.g., `.email/`)
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/index.go`
+2. Implement index directory operations:
+   - `Lookup()` detects dotfile index paths (`.email/`)
+   - `ReadDir()` lists distinct values (limited to 100)
+   - `Getattr()` returns directory attributes
+3. Query distinct values:
+   ```sql
+   SELECT DISTINCT <column> FROM <table> ORDER BY <column> LIMIT 100
+   ```
+
+**Files to Create:**
+- `internal/tigerfs/fuse/index.go`
+- `internal/tigerfs/fuse/index_test.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls /tmp/testmount/users/.email/
+# Should show email addresses (up to 100)
+```
+
+**Completion Criteria:**
+- [ ] Index paths navigable
+- [ ] Distinct values listed
+- [ ] Limited to avoid huge listings
+- [ ] Tests pass
+
+---
+
+### Task 4.3: Implement Index-Based Queries
+
+**Objective:** Query rows using index paths (e.g., `.email/foo@x.com/`)
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/index.go`:
+   - `Lookup()` handles value within index path
+   - Query row using index column:
+     ```sql
+     SELECT * FROM <table> WHERE <index_col>=$1
+     ```
+   - If single row: behave like row access
+   - If multiple rows: return directory with PKs
+2. Verify PostgreSQL uses index (EXPLAIN plan)
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/index.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# Access via index
+cat /tmp/testmount/users/.email/test1@example.com/id
+# Should show: 1
+
+# Verify index used
+psql -c "EXPLAIN SELECT * FROM users WHERE email='test1@example.com';"
+# Should show: Index Scan using users_email_idx
+```
+
+**Completion Criteria:**
+- [ ] Index-based queries working
+- [ ] Single row results accessible
+- [ ] Multiple row results listed
+- [ ] PostgreSQL uses index
+- [ ] Tests pass
+
+---
+
+### Task 4.4: Implement Composite Index Paths
+
+**Objective:** Navigate composite indexes (e.g., `.last_name.first_name/Smith/Johnson/`)
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/index.go`:
+   - Handle composite index paths with multiple components
+   - Parse path segments as index values
+   - Generate WHERE clause with multiple conditions:
+     ```sql
+     SELECT * FROM <table>
+     WHERE col1=$1 AND col2=$2
+     ```
+2. Support prefix matching:
+   ```sql
+   -- .last_name.first_name/Smith/
+   SELECT DISTINCT first_name FROM <table> WHERE last_name='Smith'
+   ```
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/index.go`
+
+**Verification:**
+```bash
+# Create composite index
+psql -c "ALTER TABLE users ADD COLUMN last_name TEXT, ADD COLUMN first_name TEXT;"
+psql -c "UPDATE users SET last_name='Smith', first_name='John' WHERE id=1;"
+psql -c "CREATE INDEX users_name_idx ON users(last_name, first_name);"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# Navigate composite index
+ls /tmp/testmount/users/.last_name.first_name/Smith/
+# Should show: John
+
+cat /tmp/testmount/users/.last_name.first_name/Smith/John/email
+# Should show email for that user
+```
+
+**Completion Criteria:**
+- [ ] Composite index paths work
+- [ ] Multi-level navigation functional
+- [ ] Prefix matching supported
+- [ ] Tests pass
+
+---
+
+### Task 4.5: Implement Large Table Detection
+
+**Objective:** Detect large tables, enforce max_ls_rows limit
+
+**Steps:**
+1. Update `internal/tigerfs/db/schema.go`:
+   - Implement `GetTableRowCount(ctx, pool, schema, table)`:
+     ```sql
+     SELECT reltuples::bigint
+     FROM pg_class
+     WHERE relname=$1
+     ```
+   - Use estimate for speed
+2. Update `internal/tigerfs/fuse/table.go`:
+   - In `ReadDir()`, check row count before listing
+   - If count > max_ls_rows: return EIO
+   - Log helpful message: "Table too large (N rows). Use .first/, .last/, .sample/, or index paths"
+
+**Files to Modify:**
+- `internal/tigerfs/db/schema.go`
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+# Create large table
+psql -c "INSERT INTO users (email) SELECT 'user'||i||'@example.com' FROM generate_series(1, 15000) i;"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls /tmp/testmount/users/
+# Should fail with: Input/output error
+# Log should suggest: Use .first/, .last/, .sample/, or index paths
+```
+
+**Completion Criteria:**
+- [ ] Large tables detected
+- [ ] max_ls_rows enforced
+- [ ] Helpful error message logged
+- [ ] Tests pass
+
+---
+
+### Task 4.6: Implement .first/N/ and .last/N/ Pagination
+
+**Objective:** Access first N or last N rows via .first/N/ and .last/N/ paths
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/table.go`:
+   - Detect `.first/` in path
+   - Parse N from path (e.g., `.first/100/`)
+   - Implement `ReadDir()` for `.first/N/`:
+     ```sql
+     SELECT <pk> FROM <table> ORDER BY <pk> ASC LIMIT $1
+     ```
+   - List first N PKs
+   - Detect `.last/` in path
+   - Parse N from path (e.g., `.last/100/`)
+   - Implement `ReadDir()` for `.last/N/`:
+     ```sql
+     SELECT <pk> FROM <table> ORDER BY <pk> DESC LIMIT $1
+     ```
+   - List last N PKs (in descending order by PK)
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# Test .first/N/
+ls /tmp/testmount/users/.first/50/
+# Should show first 50 PKs
+
+cat /tmp/testmount/users/.first/50/1/email
+# Should access row normally
+
+# Test .last/N/
+ls /tmp/testmount/users/.last/50/
+# Should show last 50 PKs (highest IDs)
+
+cat /tmp/testmount/users/.last/50/14999/email
+# Should access row normally
+```
+
+**Completion Criteria:**
+- [ ] `.first/N/` paths work
+- [ ] `.last/N/` paths work
+- [ ] Returns first/last N rows by PK
+- [ ] Rows accessible normally
+- [ ] Tests pass
+
+---
+
+### Task 4.7: Implement .sample/N/ Random Sampling
+
+**Objective:** Access random N rows via .sample/N/ path
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/table.go`:
+   - Detect `.sample/` in path
+   - Parse N from path (e.g., `.sample/100/`)
+   - Implement `ReadDir()` for `.sample/N/`:
+     ```sql
+     SELECT <pk> FROM <table> TABLESAMPLE BERNOULLI($1) LIMIT $2
+     ```
+   - Calculate percentage to approximate N rows
+2. Handle small tables (fallback to ORDER BY RANDOM())
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls /tmp/testmount/users/.sample/100/
+# Should show ~100 random PKs (may vary)
+
+# Run again, should get different sample
+ls /tmp/testmount/users/.sample/100/
+# Different PKs
+```
+
+**Completion Criteria:**
+- [ ] `.sample/N/` paths work
+- [ ] Returns approximately N random rows
+- [ ] Uses TABLESAMPLE for performance
+- [ ] Tests pass
+
+---
+
+### Task 4.8: Implement .count File
+
+**Objective:** Show table row count in .count file
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/metadata.go`:
+   - Detect `.count` file
+   - Implement `Read()` for `.count`:
+     - For small tables (<100K): `SELECT count(*) FROM <table>`
+     - For large tables: Use pg_class.reltuples estimate
+   - Return count as text
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/metadata.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+cat /tmp/testmount/users/.count
+# Should show: 15000 (or current count)
+```
+
+**Completion Criteria:**
+- [ ] `.count` file readable
+- [ ] Accurate for small tables
+- [ ] Fast estimate for large tables
+- [ ] Tests pass
+
+---
+
+### Task 4.9: Implement Permission Discovery
+
+**Objective:** Query PostgreSQL table privileges
+
+**Steps:**
+1. Create `internal/tigerfs/db/permissions.go`
+2. Implement `GetTablePermissions(ctx, pool, schema, table)`:
+   ```sql
+   SELECT
+     has_table_privilege('<schema>.<table>', 'SELECT') as can_select,
+     has_table_privilege('<schema>.<table>', 'INSERT') as can_insert,
+     has_table_privilege('<schema>.<table>', 'UPDATE') as can_update,
+     has_table_privilege('<schema>.<table>', 'DELETE') as can_delete
+   ```
+3. Cache permissions per table
+
+**Files to Create:**
+- `internal/tigerfs/db/permissions.go`
+- `internal/tigerfs/db/permissions_test.go`
+
+**Verification:**
+```bash
+# Create read-only user
+psql -c "CREATE USER readonly_user WITH PASSWORD 'test';"
+psql -c "GRANT SELECT ON users TO readonly_user;"
+
+# Test permission query
+go test -v ./internal/tigerfs/db/ -run TestGetTablePermissions
+```
+
+**Completion Criteria:**
+- [ ] Permissions queried correctly
+- [ ] All 4 privileges checked
+- [ ] Permissions cached
+- [ ] Tests pass
+
+---
+
+### Task 4.10: Implement Permission Mapping
+
+**Objective:** Map PostgreSQL privileges to filesystem permissions
+
+**Steps:**
+1. Create `internal/tigerfs/util/permissions.go`
+2. Implement `MapPermissions(canSelect, canUpdate, canInsert, canDelete bool) os.FileMode`:
+   - SELECT → read (0400)
+   - UPDATE/INSERT → write (0200)
+   - Combine appropriately
+3. Update `internal/tigerfs/fuse/row.go` and `column.go`:
+   - Use permissions in `Getattr()`
+   - Return appropriate mode bits
+
+**Files to Create:**
+- `internal/tigerfs/util/permissions.go`
+- `internal/tigerfs/util/permissions_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/row.go`
+- `internal/tigerfs/fuse/column.go`
+
+**Verification:**
+```bash
+# Test with read-only user
+go run ./cmd/tigerfs postgres://readonly_user:test@localhost/postgres /tmp/testmount
+
+ls -l /tmp/testmount/users/1
+# Should show: -r--r--r-- (read-only)
+
+echo 'test' > /tmp/testmount/users/1/email
+# Should fail: Permission denied
+```
+
+**Completion Criteria:**
+- [ ] Permissions mapped correctly
+- [ ] File modes accurate
+- [ ] Write attempts fail for read-only
+- [ ] Tests pass
+
+---
+
+### Task 4.11: Implement Timestamps
+
+**Objective:** Show file modification times based on table columns
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/row.go`:
+   - Detect `updated_at` or `modified_at` column
+   - Query timestamp column value
+   - Return as mtime in `Getattr()`
+   - Fallback to current time if no timestamp column
+2. Cache timestamp column detection per table
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/row.go`
+
+**Verification:**
+```bash
+# Add timestamp column
+psql -c "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP DEFAULT NOW();"
+psql -c "UPDATE users SET updated_at='2026-01-15 10:00:00' WHERE id=1;"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls -l /tmp/testmount/users/1
+# Should show modification time: Jan 15 10:00
+```
+
+**Completion Criteria:**
+- [ ] Timestamps from updated_at column
+- [ ] Fallback to current time
+- [ ] Shown in ls -l
+- [ ] Tests pass
+
+---
+
+### Task 4.12: Implement File Sizes
+
+**Objective:** Calculate and return accurate file sizes
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/row.go`:
+   - Calculate row file size (byte length of TSV/CSV/JSON)
+   - Return size in `Getattr()`
+2. Update `internal/tigerfs/fuse/column.go`:
+   - Calculate column file size (text representation length)
+   - Return size in `Getattr()`
+3. Optimize by caching sizes
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/row.go`
+- `internal/tigerfs/fuse/column.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls -lh /tmp/testmount/users/1
+# Should show accurate file size
+
+ls -lh /tmp/testmount/users/1/email
+# Should show email length
+```
+
+**Completion Criteria:**
+- [ ] File sizes accurate
+- [ ] Shown in ls -lh
+- [ ] Sizes cached for performance
+- [ ] Tests pass
+
+---
+
+### Task 4.13: Implement Schema Flattening
+
+**Objective:** Show public schema tables at root, other schemas with prefix
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/root.go`:
+   - In `ReadDir()`, list tables from default schema (config.DefaultSchema)
+   - Also show other schemas as directories
+   - Add `.schemas/` directory for explicit access
+2. Update path parsing to handle schema prefixes:
+   - `/users/` → public.users
+   - `/analytics/reports/` → analytics.reports
+   - `/.schemas/public/users/` → public.users (explicit)
+3. Make default schema configurable via config
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/root.go`
+- Path parsing logic in various files
+
+**Verification:**
+```bash
+# Create table in different schema
+psql -c "CREATE SCHEMA analytics;"
+psql -c "CREATE TABLE analytics.reports (id serial);"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls /tmp/testmount/
+# Should show: users (from public), analytics (schema directory)
+
+ls /tmp/testmount/analytics/
+# Should show: reports
+
+ls /tmp/testmount/.schemas/
+# Should show: public, analytics
+
+ls /tmp/testmount/.schemas/public/
+# Should show: users
+```
+
+**Completion Criteria:**
+- [ ] Public schema tables at root
+- [ ] Other schemas accessible with prefix
+- [ ] `.schemas/` provides explicit access
+- [ ] Configurable default schema
+- [ ] Tests pass
+
+---
+
+### Task 4.14: Support Non-SERIAL Primary Keys
+
+**Objective:** Support tables with primary keys that aren't SERIAL/auto-incrementing integers
+
+**Steps:**
+1. Update `internal/tigerfs/db/keys.go`:
+   - Handle UUID primary keys
+   - Handle text/varchar primary keys
+   - Handle composite primary keys (with configurable delimiter)
+   - Detect PK data type from information_schema
+2. Update `internal/tigerfs/fuse/table.go`:
+   - Parse PK values according to detected type
+   - Handle URL-safe encoding for special characters in PKs
+3. Update `internal/tigerfs/fuse/row.go`:
+   - Generate correct WHERE clauses for non-integer PKs
+4. Add configuration option for composite PK delimiter (default: `_`)
+
+**Files to Modify:**
+- `internal/tigerfs/db/keys.go`
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/row.go`
+
+**Verification:**
+```bash
+# Create table with UUID PK
+psql -c "CREATE TABLE documents (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title TEXT);"
+psql -c "INSERT INTO documents (title) VALUES ('Doc 1'), ('Doc 2');"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls /tmp/testmount/documents/
+# Should show UUIDs
+
+# Create table with text PK
+psql -c "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);"
+psql -c "INSERT INTO settings VALUES ('theme', 'dark'), ('language', 'en');"
+
+ls /tmp/testmount/settings/
+# Should show: theme, language
+
+cat /tmp/testmount/settings/theme/value
+# Should show: dark
+```
+
+**Completion Criteria:**
+- [ ] UUID primary keys work
+- [ ] Text primary keys work
+- [ ] Composite primary keys work with delimiter
+- [ ] Special characters handled (URL encoding)
+- [ ] Tests pass
+
+---
+
+### Task 4.15: Support Tables Without Primary Keys
+
+**Objective:** Allow read-only access to tables without primary keys using ctid
+
+**Steps:**
+1. Update `internal/tigerfs/db/keys.go`:
+   - Detect tables without primary keys
+   - Fall back to using `ctid` (physical row identifier)
+   - Warn user that ctid-based access is unstable (changes after VACUUM)
+2. Update `internal/tigerfs/fuse/table.go`:
+   - List rows using ctid when no PK exists
+   - Mark table directory as read-only in Getattr
+3. Update `internal/tigerfs/fuse/row.go`:
+   - Query rows by ctid
+   - Disable write operations for ctid-based access
+4. Add `.no_pk_warning` metadata file explaining the limitation
+
+**Files to Modify:**
+- `internal/tigerfs/db/keys.go`
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/row.go`
+- `internal/tigerfs/fuse/metadata.go`
+
+**Verification:**
+```bash
+# Create table without PK
+psql -c "CREATE TABLE logs (message TEXT, created_at TIMESTAMP);"
+psql -c "INSERT INTO logs VALUES ('Log 1', NOW()), ('Log 2', NOW());"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+ls /tmp/testmount/logs/
+# Should show ctid-based identifiers (e.g., 0_1, 0_2)
+
+cat /tmp/testmount/logs/0_1
+# Should show row data
+
+cat /tmp/testmount/logs/.no_pk_warning
+# Should explain ctid limitations
+
+# Write should fail
+echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
+# Should fail: Read-only table (no primary key)
+```
+
+**Completion Criteria:**
+- [ ] Tables without PK are accessible (read-only)
+- [ ] ctid used as row identifier
+- [ ] Warning file explains limitations
+- [ ] Write operations blocked
+- [ ] Tests pass
+
+---
+
+### Task 4.16: Support TimescaleDB Hypertables
+
+**Objective:** Proper support for TimescaleDB hypertables with time-based access
+
+**Steps:**
+1. Create `internal/tigerfs/db/timescale.go`:
+   - Detect TimescaleDB extension
+   - Detect hypertables: `SELECT * FROM timescaledb_information.hypertables`
+   - Get time column for hypertable
+   - Get chunk information
+2. Update `internal/tigerfs/fuse/table.go`:
+   - For hypertables, add `.chunks/` virtual directory
+   - Add time-based access paths: `.time/2026-01-01/` to `.time/2026-01-31/`
+3. Create `internal/tigerfs/fuse/hypertable.go`:
+   - Implement time-range navigation
+   - Implement chunk-based navigation
+   - Support continuous aggregates as virtual tables
+
+**Files to Create:**
+- `internal/tigerfs/db/timescale.go`
+- `internal/tigerfs/db/timescale_test.go`
+- `internal/tigerfs/fuse/hypertable.go`
+- `internal/tigerfs/fuse/hypertable_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+# Create hypertable (requires TimescaleDB)
+psql -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
+psql -c "CREATE TABLE metrics (time TIMESTAMPTZ NOT NULL, device_id INT, value DOUBLE PRECISION);"
+psql -c "SELECT create_hypertable('metrics', 'time');"
+psql -c "INSERT INTO metrics SELECT generate_series('2026-01-01'::timestamptz, '2026-01-10'::timestamptz, '1 hour'), 1, random();"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# Access via time range
+ls /tmp/testmount/metrics/.time/
+# Should show date ranges
+
+ls /tmp/testmount/metrics/.time/2026-01-01/
+# Should show rows from that day
+
+# Access via chunks
+ls /tmp/testmount/metrics/.chunks/
+# Should show chunk names
+```
+
+**Completion Criteria:**
+- [ ] Hypertables detected
+- [ ] Time-based navigation works
+- [ ] Chunk navigation works
+- [ ] Continuous aggregates accessible
+- [ ] Tests pass
+
+---
+
+### Task 4.17: Example Workflows for Advanced Features
+
+**Objective:** Create documentation with real-world examples for advanced TigerFS features
+
+**Steps:**
+1. Create `docs/examples-advanced.md`
+2. Write examples:
+   - **Example 1:** Navigating large tables with .first/, .last/, .sample/
+   - **Example 2:** Index-based lookups for efficient queries
+   - **Example 3:** Working with composite indexes
+   - **Example 4:** Accessing tables without primary keys
+   - **Example 5:** Working with UUID and text primary keys
+   - **Example 6:** TimescaleDB hypertable time-based navigation
+   - **Example 7:** Multi-schema database navigation
+   - **Example 8:** Permission-based access patterns
+3. Each example should include:
+   - Scenario description
+   - Complete commands
+   - Expected output
+   - Explanation
+
+**Files to Create:**
+- `docs/examples-advanced.md`
+
+**Verification:**
+```bash
+# Run through each example
+# Verify commands work as documented
+```
+
+**Completion Criteria:**
+- [ ] At least 8 examples documented
+- [ ] Each example tested and works
+- [ ] Clear explanations provided
+- [ ] Output shown
+
+---
+
+## Phase 5: Distribution & Release
+
+### Task 5.1: Create Unix Install Script
 
 **Objective:** Write install.sh for Unix/Linux/macOS
 
@@ -2559,7 +2815,7 @@ bash scripts/install.sh
 
 ---
 
-### Task 4.8: Create Windows Install Script
+### Task 5.2: Create Windows Install Script
 
 **Objective:** Write install.ps1 for Windows
 
@@ -2598,7 +2854,7 @@ tigerfs version
 
 ---
 
-### Task 4.9: Finalize GoReleaser Configuration
+### Task 5.3: Finalize GoReleaser Configuration
 
 **Objective:** Complete .goreleaser.yaml for releases
 
@@ -2641,7 +2897,7 @@ ls dist/
 
 ---
 
-### Task 4.10: Test Release Workflow
+### Task 5.4: Test Release Workflow
 
 **Objective:** Verify GitHub Actions release workflow
 
@@ -2687,7 +2943,7 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 4.11: Write Documentation
+### Task 5.5: Write Documentation
 
 **Objective:** Expand README and create guides
 
@@ -2734,43 +2990,7 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 4.12: Write Example Workflows
-
-**Objective:** Create docs/examples.md with real-world examples
-
-**Steps:**
-1. Create `docs/examples.md`
-2. Write examples:
-   - **Example 1:** Exploring a database with TigerFS and Claude Code
-   - **Example 2:** Data migration using shell scripts
-   - **Example 3:** Database backup via filesystem copy
-   - **Example 4:** Querying with grep and awk
-   - **Example 5:** Tiger Cloud integration workflow
-   - **Example 6:** Scripting with TigerFS
-3. Each example should include:
-   - Scenario description
-   - Complete commands
-   - Expected output
-   - Explanation
-
-**Files to Create:**
-- `docs/examples.md`
-
-**Verification:**
-```bash
-# Run through each example
-# Verify commands work as documented
-```
-
-**Completion Criteria:**
-- [ ] At least 5 examples documented
-- [ ] Each example tested and works
-- [ ] Clear explanations provided
-- [ ] Output shown
-
----
-
-### Task 4.13: Performance Testing
+### Task 5.6: Performance Testing
 
 **Objective:** Benchmark operations, document performance
 
@@ -2809,7 +3029,7 @@ go test -bench=. ./test/benchmark/
 
 ---
 
-### Task 4.14: Bug Fixes and Polish
+### Task 5.7: Bug Fixes and Polish
 
 **Objective:** Fix remaining issues, improve UX
 
@@ -2842,9 +3062,9 @@ grep -r "TODO" internal/
 
 ---
 
-### Task 4.15: Final Testing and v1.0.0 Release
+### Task 5.8: Final Testing and v0.1 Release
 
-**Objective:** Release v1.0.0
+**Objective:** Release v0.1
 
 **Steps:**
 1. Run full test suite:
@@ -2858,8 +3078,8 @@ grep -r "TODO" internal/
 4. Test install scripts on each platform
 5. Update version in code
 6. Create release checklist in GitHub issue
-7. Tag release: `git tag v1.0.0`
-8. Push tag: `git push origin v1.0.0`
+7. Tag release: `git tag v0.1.0`
+8. Push tag: `git push origin v0.1.0`
 9. Monitor GitHub Actions
 10. Verify release artifacts
 11. Write release announcement
@@ -2876,18 +3096,18 @@ go tool cover -func=coverage.txt | grep total
 # >80%
 
 # Create release
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.1.0
+git push origin v0.1.0
 
 # Verify release
-# https://github.com/timescale/tigerfs/releases/tag/v1.0.0
+# https://github.com/timescale/tigerfs/releases/tag/v0.1.0
 ```
 
 **Completion Criteria:**
 - [ ] All tests pass
 - [ ] Coverage >80%
 - [ ] Tested on all platforms
-- [ ] v1.0.0 tag pushed
+- [ ] v0.1.0 tag pushed
 - [ ] Release published
 - [ ] Binaries available
 - [ ] Documentation updated
@@ -2934,7 +3154,7 @@ git push origin v1.0.0
 ## Success Criteria for Implementation
 
 ### Functional Requirements
-- [ ] All 15 Phase 4 tasks completed
+- [ ] All Phase 5 tasks completed
 - [ ] All CLI commands functional
 - [ ] CRUD operations working
 - [ ] Index navigation operational
@@ -2956,7 +3176,7 @@ git push origin v1.0.0
 - [ ] Performance documented
 
 ### Release Requirements
-- [ ] v1.0.0 tagged and pushed
+- [ ] v0.1.0 tagged and pushed
 - [ ] Binaries built for all platforms
 - [ ] Install scripts working
 - [ ] GitHub Release published
@@ -2973,4 +3193,4 @@ git push origin v1.0.0
 - **Commit after each task** - Keep git history clean and logical
 - **Ask questions when blocked** - Don't guess or skip ahead
 
-**Ready to begin! Start with Task 1.1: Evaluate and Select FUSE Library** 🚀
+**Ready to begin! Start with Task 1.1: Evaluate and Select FUSE Library**
