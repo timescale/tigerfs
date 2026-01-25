@@ -14,12 +14,12 @@ import (
 
 // FS represents a mounted TigerFS filesystem
 type FS struct {
-	cfg           *config.Config
-	db            *db.Client
-	mountpoint    string
-	server        *fuse.Server
-	root          *RootNode
-	partialRows   *PartialRowTracker
+	cfg         *config.Config
+	db          *db.Client
+	mountpoint  string
+	server      *fuse.Server
+	root        *RootNode
+	partialRows *PartialRowTracker
 }
 
 // Mount creates and mounts a new TigerFS filesystem

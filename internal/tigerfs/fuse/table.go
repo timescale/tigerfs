@@ -19,11 +19,11 @@ import (
 type TableNode struct {
 	fs.Inode
 
-	cfg          *config.Config
-	db           *db.Client
-	tableName    string
-	schema       string
-	partialRows  *PartialRowTracker
+	cfg         *config.Config
+	db          *db.Client
+	tableName   string
+	schema      string
+	partialRows *PartialRowTracker
 }
 
 var _ fs.InodeEmbedder = (*TableNode)(nil)

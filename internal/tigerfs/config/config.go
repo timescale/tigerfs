@@ -11,22 +11,22 @@ import (
 
 type Config struct {
 	// Connection
-	Host            string        `mapstructure:"host"`
-	Port            int           `mapstructure:"port"`
-	User            string        `mapstructure:"user"`
-	Database        string        `mapstructure:"database"`
-	Password        string        `mapstructure:"password"`
-	DefaultSchema   string        `mapstructure:"default_schema"`
-	PoolSize        int           `mapstructure:"pool_size"`
-	PoolMaxIdle     int           `mapstructure:"pool_max_idle"`
-	PasswordCommand string        `mapstructure:"password_command"`
-	TigerServiceID  string        `mapstructure:"tiger_service_id"`
+	Host            string `mapstructure:"host"`
+	Port            int    `mapstructure:"port"`
+	User            string `mapstructure:"user"`
+	Database        string `mapstructure:"database"`
+	Password        string `mapstructure:"password"`
+	DefaultSchema   string `mapstructure:"default_schema"`
+	PoolSize        int    `mapstructure:"pool_size"`
+	PoolMaxIdle     int    `mapstructure:"pool_max_idle"`
+	PasswordCommand string `mapstructure:"password_command"`
+	TigerServiceID  string `mapstructure:"tiger_service_id"`
 
 	// Filesystem
 	MaxLsRows        int           `mapstructure:"max_ls_rows"`
 	TrailingNewlines bool          `mapstructure:"trailing_newlines"`
 	AttrTimeout      time.Duration `mapstructure:"attr_timeout"`
-	EntryTimeout time.Duration `mapstructure:"entry_timeout"`
+	EntryTimeout     time.Duration `mapstructure:"entry_timeout"`
 
 	// Metadata
 	MetadataRefreshInterval time.Duration `mapstructure:"metadata_refresh_interval"`

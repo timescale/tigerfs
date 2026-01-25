@@ -82,12 +82,12 @@ func TestNewRowFileNode_DifferentPKTypes(t *testing.T) {
 		pkColumn string
 		pkValue  string
 	}{
-		{"id", "1"},                              // Integer PK
-		{"id", "12345678901234567890"},           // Large integer
+		{"id", "1"},                    // Integer PK
+		{"id", "12345678901234567890"}, // Large integer
 		{"uuid", "550e8400-e29b-41d4-a716-446655440000"}, // UUID
-		{"email", "user@example.com"},            // String PK
-		{"code", "ABC-123"},                      // Alphanumeric code
-		{"composite", "part1_part2"},             // Composite-like
+		{"email", "user@example.com"},                    // String PK
+		{"code", "ABC-123"},                              // Alphanumeric code
+		{"composite", "part1_part2"},                     // Composite-like
 	}
 
 	for _, tc := range testCases {

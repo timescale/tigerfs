@@ -6,6 +6,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      run_integration:
+        description: 'Run integration tests'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   test:
@@ -36,8 +42,14 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.txt ./...
+      - name: Run unit tests
+        run: |
+          PACKAGES=$(go list ./... | grep -v /test/integration)
+          go test -v -race -coverprofile=coverage.txt $PACKAGES
+
+      - name: Run integration tests
+        if: inputs.run_integration == true
+        run: go test -v -race ./test/integration/...
 
       - name: Generate coverage report
         run: go tool cover -html=coverage.txt -o coverage.html

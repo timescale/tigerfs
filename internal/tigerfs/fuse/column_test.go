@@ -585,14 +585,14 @@ func TestColumnFileNode_DifferentColumnTypes(t *testing.T) {
 		columnName string
 		data       []byte
 	}{
-		{"id", []byte("12345")},                           // Integer
-		{"email", []byte("user@example.com")},             // Varchar
-		{"created_at", []byte("2024-01-01T00:00:00Z")},    // Timestamp
-		{"is_active", []byte("true")},                     // Boolean
-		{"metadata", []byte(`{"key":"value"}`)},           // JSONB
-		{"tags", []byte(`["tag1","tag2"]`)},               // Array
-		{"balance", []byte("12345.67")},                   // Numeric
-		{"description", []byte("")},                       // NULL (empty)
+		{"id", []byte("12345")},                        // Integer
+		{"email", []byte("user@example.com")},          // Varchar
+		{"created_at", []byte("2024-01-01T00:00:00Z")}, // Timestamp
+		{"is_active", []byte("true")},                  // Boolean
+		{"metadata", []byte(`{"key":"value"}`)},        // JSONB
+		{"tags", []byte(`["tag1","tag2"]`)},            // Array
+		{"balance", []byte("12345.67")},                // Numeric
+		{"description", []byte("")},                    // NULL (empty)
 	}
 
 	for _, tc := range testCases {

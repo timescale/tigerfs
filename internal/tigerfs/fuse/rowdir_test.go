@@ -329,15 +329,15 @@ func TestRowDirectoryNode_SpecialCharacterPKValues(t *testing.T) {
 	cfg := &config.Config{}
 
 	testCases := []string{
-		"user@example.com",           // Email
-		"path/to/resource",           // Slashes
-		"name with spaces",           // Spaces
-		"special!@#$%^&*()",          // Special chars
-		"unicode-日本語",             // Unicode
-		"",                           // Empty
-		"123",                        // Numeric string
-		"true",                       // Boolean-like
-		"null",                       // SQL keyword-like
+		"user@example.com",  // Email
+		"path/to/resource",  // Slashes
+		"name with spaces",  // Spaces
+		"special!@#$%^&*()", // Special chars
+		"unicode-日本語",       // Unicode
+		"",                  // Empty
+		"123",               // Numeric string
+		"true",              // Boolean-like
+		"null",              // SQL keyword-like
 	}
 
 	for _, pk := range testCases {

@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# Pre-commit hook: runs unit tests before allowing commit
+# Skip with: git commit --no-verify
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Format check
+echo "Checking formatting..."
+if [ -n "$(gofmt -l .)" ]; then
+    echo "Error: Go files are not formatted. Run 'go fmt ./...'"
+    exit 1
+fi
+
+# Vet
+echo "Running go vet..."
+go vet ./...
+
+# Unit tests only (exclude integration tests)
+echo "Running unit tests..."
+PACKAGES=$(go list ./... | grep -v /test/integration)
+go test -race $PACKAGES
+
+echo "Pre-commit checks passed!"
