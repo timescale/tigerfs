@@ -28,7 +28,7 @@ func TestNewClient_ValidConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if client.pool == nil {
 		t.Error("Expected non-nil connection pool")
@@ -52,7 +52,7 @@ func TestNewClient_InvalidConnection(t *testing.T) {
 	client, err := NewClient(ctx, cfg, "postgres://invalid:invalid@nonexistent:9999/invalid")
 	if err == nil {
 		if client != nil {
-			client.Close()
+			_ = client.Close()
 		}
 		t.Fatal("Expected error for invalid connection, got nil")
 	}
@@ -74,7 +74,7 @@ func TestNewClient_InvalidConnectionString(t *testing.T) {
 	client, err := NewClient(ctx, cfg, "not-a-valid-connection-string")
 	if err == nil {
 		if client != nil {
-			client.Close()
+			_ = client.Close()
 		}
 		t.Fatal("Expected error for malformed connection string, got nil")
 	}
@@ -103,7 +103,7 @@ func TestNewClient_PoolConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Verify pool stats
 	stats := client.pool.Stat()

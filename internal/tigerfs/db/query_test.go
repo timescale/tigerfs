@@ -26,7 +26,7 @@ func TestGetRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table and insert data
 	_, err = client.pool.Exec(ctx, `
@@ -40,7 +40,7 @@ func TestGetRow(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row")
 	}()
 
 	// Insert test data
@@ -101,7 +101,7 @@ func TestGetRow_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table (empty)
 	_, err = client.pool.Exec(ctx, `
@@ -114,7 +114,7 @@ func TestGetRow_NotFound(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row_notfound")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row_notfound")
 	}()
 
 	// Try to get non-existent row
@@ -145,7 +145,7 @@ func TestGetRow_WithNULL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table with nullable columns
 	_, err = client.pool.Exec(ctx, `
@@ -159,7 +159,7 @@ func TestGetRow_WithNULL(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row_null")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row_null")
 	}()
 
 	// Insert row with NULL email
@@ -224,7 +224,7 @@ func TestGetColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.pool.Exec(ctx, `
@@ -323,7 +323,7 @@ func TestGetColumn_NonExistentRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.pool.Exec(ctx, `
@@ -367,7 +367,7 @@ func TestGetColumn_NonExistentColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.pool.Exec(ctx, `
@@ -436,7 +436,7 @@ func TestUpdateColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -451,7 +451,7 @@ func TestUpdateColumn(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_column")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_column")
 	}()
 
 	// Insert test data
@@ -505,7 +505,7 @@ func TestUpdateColumn_SetNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -519,7 +519,7 @@ func TestUpdateColumn_SetNull(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_null")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_null")
 	}()
 
 	// Insert test data
@@ -568,7 +568,7 @@ func TestUpdateColumn_NonExistentRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -581,7 +581,7 @@ func TestUpdateColumn_NonExistentRow(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_notfound")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_notfound")
 	}()
 
 	// Try to update non-existent row
@@ -636,7 +636,7 @@ func TestInsertRow_ExplicitPK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -650,7 +650,7 @@ func TestInsertRow_ExplicitPK(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_explicit")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_explicit")
 	}()
 
 	// Insert row with explicit PK
@@ -697,7 +697,7 @@ func TestInsertRow_AutoGeneratedPK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table with SERIAL PK
 	_, err = client.pool.Exec(ctx, `
@@ -711,7 +711,7 @@ func TestInsertRow_AutoGeneratedPK(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_serial")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_serial")
 	}()
 
 	// Insert row without PK (auto-generated)
@@ -765,7 +765,7 @@ func TestInsertRow_NullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -780,7 +780,7 @@ func TestInsertRow_NullValues(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_null")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_null")
 	}()
 
 	// Insert row with NULL values
@@ -827,7 +827,7 @@ func TestInsertRow_DuplicatePK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -840,7 +840,7 @@ func TestInsertRow_DuplicatePK(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_dup")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_insert_dup")
 	}()
 
 	// Insert first row
@@ -880,7 +880,7 @@ func TestInsertRow_NoColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Try to insert with no columns
 	_, err = client.InsertRow(ctx, "public", "test_table", []string{}, []interface{}{})
@@ -911,7 +911,7 @@ func TestInsertRow_ColumnValueMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Try to insert with mismatched columns/values
 	columns := []string{"id", "name", "email"}
@@ -964,7 +964,7 @@ func TestUpdateRow_PartialUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -979,7 +979,7 @@ func TestUpdateRow_PartialUpdate(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_partial")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_partial")
 	}()
 
 	// Insert test data
@@ -1037,7 +1037,7 @@ func TestUpdateRow_AllColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -1052,7 +1052,7 @@ func TestUpdateRow_AllColumns(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_all")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_all")
 	}()
 
 	// Insert test data
@@ -1110,7 +1110,7 @@ func TestUpdateRow_SetToNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -1124,7 +1124,7 @@ func TestUpdateRow_SetToNull(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_tonull")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_tonull")
 	}()
 
 	// Insert test data
@@ -1176,7 +1176,7 @@ func TestUpdateRow_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -1189,7 +1189,7 @@ func TestUpdateRow_NotFound(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_notfound")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_notfound")
 	}()
 
 	// Try to update non-existent row
@@ -1226,7 +1226,7 @@ func TestUpdateRow_NoColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Try to update with no columns
 	err = client.UpdateRow(ctx, "public", "test_table", "id", "1", []string{}, []interface{}{})
@@ -1278,7 +1278,7 @@ func TestDeleteRow_Simple(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -1291,7 +1291,7 @@ func TestDeleteRow_Simple(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_simple")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_simple")
 	}()
 
 	// Insert test data
@@ -1341,7 +1341,7 @@ func TestDeleteRow_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -1354,7 +1354,7 @@ func TestDeleteRow_NotFound(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_notfound")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_notfound")
 	}()
 
 	// Try to delete non-existent row
@@ -1388,7 +1388,7 @@ func TestDeleteRow_MultipleDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -1401,7 +1401,7 @@ func TestDeleteRow_MultipleDeletes(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_multi")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_multi")
 	}()
 
 	// Insert test data

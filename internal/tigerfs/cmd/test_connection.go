@@ -66,7 +66,11 @@ Examples:
 				logging.Error("Connection failed", zap.Error(err))
 				return fmt.Errorf("connection failed: %w", err)
 			}
-			defer client.Close()
+			defer func() {
+				if err := client.Close(); err != nil {
+					logging.Warn("Failed to close client", zap.Error(err))
+				}
+			}()
 
 			logging.Info("Connection successful!")
 			fmt.Println("✓ Database connection successful")

@@ -200,7 +200,7 @@ func TestRootNode_Readdir_ManyTables(t *testing.T) {
 
 	var count int
 	for dirStream.HasNext() {
-		dirStream.Next()
+		_, _ = dirStream.Next()
 		count++
 	}
 

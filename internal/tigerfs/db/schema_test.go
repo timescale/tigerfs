@@ -26,7 +26,7 @@ func TestGetSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	schemas, err := client.GetSchemas(ctx)
 	if err != nil {
@@ -79,7 +79,7 @@ func TestGetTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.pool.Exec(ctx, `
@@ -136,7 +136,7 @@ func TestGetTables_NonexistentSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Query tables in nonexistent schema
 	tables, err := client.GetTables(ctx, "nonexistent_schema")
@@ -202,7 +202,7 @@ func TestGetColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.pool.Exec(ctx, `
@@ -300,7 +300,7 @@ func TestGetColumns_OrderedByOrdinalPosition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create table with columns in non-alphabetical order
 	_, err = client.pool.Exec(ctx, `
@@ -355,7 +355,7 @@ func TestGetColumns_NonexistentTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test GetColumns on non-existent table
 	columns, err := client.GetColumns(ctx, "public", "nonexistent_table")

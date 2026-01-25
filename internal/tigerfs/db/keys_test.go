@@ -27,7 +27,7 @@ func TestGetPrimaryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table with single-column primary key
 	_, err = client.pool.Exec(ctx, `
@@ -40,7 +40,7 @@ func TestGetPrimaryKey(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_pk_single")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_pk_single")
 	}()
 
 	// Test single-column primary key
@@ -78,7 +78,7 @@ func TestGetPrimaryKey_Composite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table with composite primary key
 	_, err = client.pool.Exec(ctx, `
@@ -92,7 +92,7 @@ func TestGetPrimaryKey_Composite(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_pk_composite")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_pk_composite")
 	}()
 
 	// Test composite primary key (should return error)
@@ -123,7 +123,7 @@ func TestGetPrimaryKey_NoPrimaryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table without primary key
 	_, err = client.pool.Exec(ctx, `
@@ -136,7 +136,7 @@ func TestGetPrimaryKey_NoPrimaryKey(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_no_pk")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_no_pk")
 	}()
 
 	// Test table without primary key (should return error)
@@ -166,7 +166,7 @@ func TestListRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table and insert data
 	_, err = client.pool.Exec(ctx, `
@@ -179,7 +179,7 @@ func TestListRows(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows")
 	}()
 
 	// Insert test data
@@ -230,7 +230,7 @@ func TestListRows_WithLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table and insert data
 	_, err = client.pool.Exec(ctx, `
@@ -243,7 +243,7 @@ func TestListRows_WithLimit(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows_limit")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows_limit")
 	}()
 
 	// Insert 5 rows
@@ -286,7 +286,7 @@ func TestListRows_EmptyTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create empty test table
 	_, err = client.pool.Exec(ctx, `
@@ -298,7 +298,7 @@ func TestListRows_EmptyTable(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows_empty")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows_empty")
 	}()
 
 	// List rows from empty table

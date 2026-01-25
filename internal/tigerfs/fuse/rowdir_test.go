@@ -45,8 +45,8 @@ func TestRowDirectoryNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
 
-	// Verify we can use rowDirNode as various interface types
-	_ = interface{}(rowDirNode).(interface{})
+	// Mark as used (compiler will verify types)
+	_ = rowDirNode
 }
 
 // TestNewRowDirectoryNode_DifferentPKTypes tests creation with various primary key values

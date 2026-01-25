@@ -128,7 +128,7 @@ func TestMetadataCache_GetTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.Query(ctx, `
@@ -140,7 +140,7 @@ func TestMetadataCache_GetTables(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.Exec(context.Background(), "DROP TABLE IF EXISTS test_cache_table")
+		_ = client.Exec(context.Background(), "DROP TABLE IF EXISTS test_cache_table")
 	}()
 
 	// Create cache
@@ -199,7 +199,7 @@ func TestMetadataCache_HasTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create a test table
 	_, err = client.Query(ctx, `
@@ -211,7 +211,7 @@ func TestMetadataCache_HasTable(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.Exec(context.Background(), "DROP TABLE IF EXISTS test_has_table")
+		_ = client.Exec(context.Background(), "DROP TABLE IF EXISTS test_has_table")
 	}()
 
 	// Create cache
@@ -258,7 +258,7 @@ func TestMetadataCache_Refresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create cache
 	cache := NewMetadataCache(cfg, client)

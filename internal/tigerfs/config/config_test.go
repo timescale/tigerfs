@@ -20,13 +20,13 @@ func TestGetDefaultConfigDir_XDGConfigHome(t *testing.T) {
 	origXDG := os.Getenv("XDG_CONFIG_HOME")
 	origAppData := os.Getenv("APPDATA")
 	defer func() {
-		os.Setenv("XDG_CONFIG_HOME", origXDG)
-		os.Setenv("APPDATA", origAppData)
+		_ = os.Setenv("XDG_CONFIG_HOME", origXDG)
+		_ = os.Setenv("APPDATA", origAppData)
 	}()
 
 	// Set XDG_CONFIG_HOME
-	os.Setenv("XDG_CONFIG_HOME", "/custom/xdg")
-	os.Unsetenv("APPDATA")
+	_ = os.Setenv("XDG_CONFIG_HOME", "/custom/xdg")
+	_ = os.Unsetenv("APPDATA")
 
 	result := GetDefaultConfigDir()
 	expected := "/custom/xdg/tigerfs"
@@ -42,13 +42,13 @@ func TestGetDefaultConfigDir_APPDATA(t *testing.T) {
 	origXDG := os.Getenv("XDG_CONFIG_HOME")
 	origAppData := os.Getenv("APPDATA")
 	defer func() {
-		os.Setenv("XDG_CONFIG_HOME", origXDG)
-		os.Setenv("APPDATA", origAppData)
+		_ = os.Setenv("XDG_CONFIG_HOME", origXDG)
+		_ = os.Setenv("APPDATA", origAppData)
 	}()
 
 	// Unset XDG, set APPDATA
-	os.Unsetenv("XDG_CONFIG_HOME")
-	os.Setenv("APPDATA", "C:\\Users\\Test\\AppData\\Roaming")
+	_ = os.Unsetenv("XDG_CONFIG_HOME")
+	_ = os.Setenv("APPDATA", "C:\\Users\\Test\\AppData\\Roaming")
 
 	result := GetDefaultConfigDir()
 	expected := filepath.Join("C:\\Users\\Test\\AppData\\Roaming", "tigerfs")
@@ -64,13 +64,13 @@ func TestGetDefaultConfigDir_HomeDir(t *testing.T) {
 	origXDG := os.Getenv("XDG_CONFIG_HOME")
 	origAppData := os.Getenv("APPDATA")
 	defer func() {
-		os.Setenv("XDG_CONFIG_HOME", origXDG)
-		os.Setenv("APPDATA", origAppData)
+		_ = os.Setenv("XDG_CONFIG_HOME", origXDG)
+		_ = os.Setenv("APPDATA", origAppData)
 	}()
 
 	// Unset both
-	os.Unsetenv("XDG_CONFIG_HOME")
-	os.Unsetenv("APPDATA")
+	_ = os.Unsetenv("XDG_CONFIG_HOME")
+	_ = os.Unsetenv("APPDATA")
 
 	result := GetDefaultConfigDir()
 
@@ -135,8 +135,8 @@ func TestInit_ConfigFileNotFound(t *testing.T) {
 
 	// Point to non-existent directory
 	origXDG := os.Getenv("XDG_CONFIG_HOME")
-	defer os.Setenv("XDG_CONFIG_HOME", origXDG)
-	os.Setenv("XDG_CONFIG_HOME", "/nonexistent/path/that/does/not/exist")
+	defer func() { _ = os.Setenv("XDG_CONFIG_HOME", origXDG) }()
+	_ = os.Setenv("XDG_CONFIG_HOME", "/nonexistent/path/that/does/not/exist")
 
 	err := Init()
 	if err != nil {
@@ -218,18 +218,18 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 	defer func() {
 		for _, v := range envVars {
 			if origValues[v] == "" {
-				os.Unsetenv(v)
+				_ = os.Unsetenv(v)
 			} else {
-				os.Setenv(v, origValues[v])
+				_ = os.Setenv(v, origValues[v])
 			}
 		}
 	}()
 
 	// Set env vars
-	os.Setenv("TIGERFS_MAX_LS_ROWS", "5000")
-	os.Setenv("TIGERFS_LOG_LEVEL", "debug")
-	os.Setenv("TIGERFS_DEBUG", "true")
-	os.Setenv("TIGERFS_DEFAULT_FORMAT", "json")
+	_ = os.Setenv("TIGERFS_MAX_LS_ROWS", "5000")
+	_ = os.Setenv("TIGERFS_LOG_LEVEL", "debug")
+	_ = os.Setenv("TIGERFS_DEBUG", "true")
+	_ = os.Setenv("TIGERFS_DEFAULT_FORMAT", "json")
 
 	err := Init()
 	if err != nil {
@@ -268,19 +268,19 @@ func TestConfig_PostgreSQLEnvVars(t *testing.T) {
 	defer func() {
 		for _, v := range envVars {
 			if origValues[v] == "" {
-				os.Unsetenv(v)
+				_ = os.Unsetenv(v)
 			} else {
-				os.Setenv(v, origValues[v])
+				_ = os.Setenv(v, origValues[v])
 			}
 		}
 	}()
 
 	// Set PostgreSQL env vars
-	os.Setenv("PGHOST", "db.example.com")
-	os.Setenv("PGPORT", "5433")
-	os.Setenv("PGUSER", "testuser")
-	os.Setenv("PGDATABASE", "testdb")
-	os.Setenv("PGPASSWORD", "secret123")
+	_ = os.Setenv("PGHOST", "db.example.com")
+	_ = os.Setenv("PGPORT", "5433")
+	_ = os.Setenv("PGUSER", "testuser")
+	_ = os.Setenv("PGDATABASE", "testdb")
+	_ = os.Setenv("PGPASSWORD", "secret123")
 
 	err := Init()
 	if err != nil {
@@ -317,13 +317,13 @@ func TestConfig_TigerServiceIDEnv(t *testing.T) {
 	origValue := os.Getenv("TIGER_SERVICE_ID")
 	defer func() {
 		if origValue == "" {
-			os.Unsetenv("TIGER_SERVICE_ID")
+			_ = os.Unsetenv("TIGER_SERVICE_ID")
 		} else {
-			os.Setenv("TIGER_SERVICE_ID", origValue)
+			_ = os.Setenv("TIGER_SERVICE_ID", origValue)
 		}
 	}()
 
-	os.Setenv("TIGER_SERVICE_ID", "e6ue9697jf")
+	_ = os.Setenv("TIGER_SERVICE_ID", "e6ue9697jf")
 
 	err := Init()
 	if err != nil {
@@ -348,14 +348,14 @@ func TestConfig_Precedence_EnvOverridesDefault(t *testing.T) {
 	origValue := os.Getenv("TIGERFS_PORT")
 	defer func() {
 		if origValue == "" {
-			os.Unsetenv("TIGERFS_PORT")
+			_ = os.Unsetenv("TIGERFS_PORT")
 		} else {
-			os.Setenv("TIGERFS_PORT", origValue)
+			_ = os.Setenv("TIGERFS_PORT", origValue)
 		}
 	}()
 
 	// Set env var that overrides default
-	os.Setenv("TIGERFS_PORT", "6543")
+	_ = os.Setenv("TIGERFS_PORT", "6543")
 
 	err := Init()
 	if err != nil {
@@ -383,20 +383,20 @@ func TestConfig_Precedence_TigerFSEnvOverridesPGEnv(t *testing.T) {
 	origTiger := os.Getenv("TIGERFS_PORT")
 	defer func() {
 		if origPG == "" {
-			os.Unsetenv("PGPORT")
+			_ = os.Unsetenv("PGPORT")
 		} else {
-			os.Setenv("PGPORT", origPG)
+			_ = os.Setenv("PGPORT", origPG)
 		}
 		if origTiger == "" {
-			os.Unsetenv("TIGERFS_PORT")
+			_ = os.Unsetenv("TIGERFS_PORT")
 		} else {
-			os.Setenv("TIGERFS_PORT", origTiger)
+			_ = os.Setenv("TIGERFS_PORT", origTiger)
 		}
 	}()
 
 	// Set both - TIGERFS_PORT wins due to AutomaticEnv with TIGERFS prefix
-	os.Setenv("PGPORT", "5434")
-	os.Setenv("TIGERFS_PORT", "6543")
+	_ = os.Setenv("PGPORT", "5434")
+	_ = os.Setenv("TIGERFS_PORT", "6543")
 
 	err := Init()
 	if err != nil {
@@ -423,20 +423,20 @@ func TestConfig_Precedence_PGEnvWhenNoTigerFS(t *testing.T) {
 	origTiger := os.Getenv("TIGERFS_PORT")
 	defer func() {
 		if origPG == "" {
-			os.Unsetenv("PGPORT")
+			_ = os.Unsetenv("PGPORT")
 		} else {
-			os.Setenv("PGPORT", origPG)
+			_ = os.Setenv("PGPORT", origPG)
 		}
 		if origTiger == "" {
-			os.Unsetenv("TIGERFS_PORT")
+			_ = os.Unsetenv("TIGERFS_PORT")
 		} else {
-			os.Setenv("TIGERFS_PORT", origTiger)
+			_ = os.Setenv("TIGERFS_PORT", origTiger)
 		}
 	}()
 
 	// Set only PGPORT
-	os.Setenv("PGPORT", "5434")
-	os.Unsetenv("TIGERFS_PORT")
+	_ = os.Setenv("PGPORT", "5434")
+	_ = os.Unsetenv("TIGERFS_PORT")
 
 	err := Init()
 	if err != nil {
@@ -462,14 +462,14 @@ func TestConfig_EmptyEnvVars(t *testing.T) {
 	origValue := os.Getenv("TIGERFS_LOG_LEVEL")
 	defer func() {
 		if origValue == "" {
-			os.Unsetenv("TIGERFS_LOG_LEVEL")
+			_ = os.Unsetenv("TIGERFS_LOG_LEVEL")
 		} else {
-			os.Setenv("TIGERFS_LOG_LEVEL", origValue)
+			_ = os.Setenv("TIGERFS_LOG_LEVEL", origValue)
 		}
 	}()
 
 	// Set empty env var - should use default
-	os.Setenv("TIGERFS_LOG_LEVEL", "")
+	_ = os.Setenv("TIGERFS_LOG_LEVEL", "")
 
 	err := Init()
 	if err != nil {

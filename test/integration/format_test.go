@@ -218,9 +218,7 @@ func TestFormats_TSV_Default(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -291,9 +289,7 @@ func TestFormats_TSV_Explicit(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -350,9 +346,7 @@ func TestFormats_CSV(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -417,9 +411,7 @@ func TestFormats_CSV_WithCommas(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -476,9 +468,7 @@ func TestFormats_JSON(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -561,9 +551,7 @@ func TestFormats_NULL_TSV(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -621,9 +609,7 @@ func TestFormats_NULL_CSV(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -681,9 +667,7 @@ func TestFormats_NULL_JSON(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -752,9 +736,7 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -815,9 +797,7 @@ func TestFormats_SpecialCharacters_JSON(t *testing.T) {
 
 	// Mount filesystem with timeout
 	filesystem := mountWithTimeout(t, cfg, connStr, mountpoint, 5*time.Second)
-	defer filesystem.Close()
-
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)

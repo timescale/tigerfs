@@ -44,7 +44,7 @@ func TestMount_ListTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -105,7 +105,7 @@ func TestMount_ListRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -170,7 +170,7 @@ func TestMount_ReadRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
@@ -255,7 +255,7 @@ func TestMount_ReadNonExistentRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)

@@ -53,8 +53,8 @@ func TestRowFileNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
 
-	// Verify we can use rowNode as various interface types
-	_ = interface{}(rowNode).(interface{})
+	// Mark as used (compiler will verify types)
+	_ = rowNode
 }
 
 // TestNewRowFileNode_DifferentFormats tests creation with different formats
@@ -500,7 +500,7 @@ func TestRowFileHandle_Write_Overwrite(t *testing.T) {
 	}
 
 	// Write initial data
-	fh.Write(context.Background(), []byte("AAAAAAAAAA"), 0)
+	_, _ = fh.Write(context.Background(), []byte("AAAAAAAAAA"), 0)
 
 	// Overwrite at offset 3 (partial overwrite)
 	written, errno := fh.Write(context.Background(), []byte("BBB"), 3)
@@ -543,7 +543,7 @@ func TestRowFileHandle_ReadWrite_Cycle(t *testing.T) {
 
 	// Simulate modify: write new data
 	newData := []byte("1\tJane\tjane@example.com\n")
-	fh.Write(context.Background(), newData, 0)
+	_, _ = fh.Write(context.Background(), newData, 0)
 
 	if string(fh.data) != string(newData) {
 		t.Errorf("Write data mismatch: expected %q, got %q", newData, fh.data)

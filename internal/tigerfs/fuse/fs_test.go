@@ -93,7 +93,7 @@ func TestMount_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount failed: %v", err)
 	}
-	defer filesystem.Close()
+	defer func() { _ = filesystem.Close() }()
 
 	// Verify filesystem struct is populated
 	if filesystem.cfg != cfg {
@@ -203,6 +203,6 @@ func TestRootNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	root := NewRootNode(cfg, nil, nil)
 
-	// Verify we can use root as various interface types
-	_ = interface{}(root).(interface{})
+	// Mark as used (compiler will verify types)
+	_ = root
 }

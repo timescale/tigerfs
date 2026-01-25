@@ -27,7 +27,7 @@ func TestGetRowCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -40,7 +40,7 @@ func TestGetRowCount(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_row_count")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_row_count")
 	}()
 
 	// Insert test data
@@ -85,7 +85,7 @@ func TestGetRowCount_EmptyTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create empty test table
 	_, err = client.pool.Exec(ctx, `
@@ -98,7 +98,7 @@ func TestGetRowCount_EmptyTable(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_row_count_empty")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_row_count_empty")
 	}()
 
 	// Get row count
@@ -130,7 +130,7 @@ func TestGetTableDDL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table
 	_, err = client.pool.Exec(ctx, `
@@ -145,7 +145,7 @@ func TestGetTableDDL(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_table_ddl")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_table_ddl")
 	}()
 
 	// Get table DDL
@@ -208,7 +208,7 @@ func TestGetTableDDL_CompositePrimaryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table with composite primary key
 	_, err = client.pool.Exec(ctx, `
@@ -223,7 +223,7 @@ func TestGetTableDDL_CompositePrimaryKey(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_composite_pk")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_composite_pk")
 	}()
 
 	// Get table DDL
@@ -263,7 +263,7 @@ func TestGetTableDDL_NoPrimaryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() failed: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Create test table without primary key
 	_, err = client.pool.Exec(ctx, `
@@ -276,7 +276,7 @@ func TestGetTableDDL_NoPrimaryKey(t *testing.T) {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 	defer func() {
-		client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_no_pk")
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_no_pk")
 	}()
 
 	// Get table DDL

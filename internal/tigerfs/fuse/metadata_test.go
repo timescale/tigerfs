@@ -55,8 +55,8 @@ func TestMetadataFileNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	node := NewMetadataFileNode(cfg, nil, "public", "users", "columns")
 
-	// Verify we can use node as various interface types
-	_ = interface{}(node).(interface{})
+	// Mark as used (compiler will verify types)
+	_ = node
 }
 
 func TestMetadataFileTypes(t *testing.T) {

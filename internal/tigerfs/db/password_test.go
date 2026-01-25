@@ -13,13 +13,13 @@ func TestResolvePassword_FromPGPASSWORD(t *testing.T) {
 	originalValue := os.Getenv("PGPASSWORD")
 	defer func() {
 		if originalValue != "" {
-			os.Setenv("PGPASSWORD", originalValue)
+			_ = os.Setenv("PGPASSWORD", originalValue)
 		} else {
-			os.Unsetenv("PGPASSWORD")
+			_ = os.Unsetenv("PGPASSWORD")
 		}
 	}()
 
-	os.Setenv("PGPASSWORD", "test_password")
+	_ = os.Setenv("PGPASSWORD", "test_password")
 
 	cfg := &config.Config{}
 	ctx := context.Background()
@@ -40,19 +40,19 @@ func TestResolvePassword_FromTIGERFS_PASSWORD(t *testing.T) {
 	originalTIGERFS := os.Getenv("TIGERFS_PASSWORD")
 	defer func() {
 		if originalPGPASSWORD != "" {
-			os.Setenv("PGPASSWORD", originalPGPASSWORD)
+			_ = os.Setenv("PGPASSWORD", originalPGPASSWORD)
 		} else {
-			os.Unsetenv("PGPASSWORD")
+			_ = os.Unsetenv("PGPASSWORD")
 		}
 		if originalTIGERFS != "" {
-			os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
+			_ = os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
 		} else {
-			os.Unsetenv("TIGERFS_PASSWORD")
+			_ = os.Unsetenv("TIGERFS_PASSWORD")
 		}
 	}()
 
-	os.Unsetenv("PGPASSWORD")
-	os.Setenv("TIGERFS_PASSWORD", "tigerfs_test_password")
+	_ = os.Unsetenv("PGPASSWORD")
+	_ = os.Setenv("TIGERFS_PASSWORD", "tigerfs_test_password")
 
 	cfg := &config.Config{}
 	ctx := context.Background()
@@ -73,19 +73,19 @@ func TestResolvePassword_PGPASSWORD_HasPrecedence(t *testing.T) {
 	originalTIGERFS := os.Getenv("TIGERFS_PASSWORD")
 	defer func() {
 		if originalPGPASSWORD != "" {
-			os.Setenv("PGPASSWORD", originalPGPASSWORD)
+			_ = os.Setenv("PGPASSWORD", originalPGPASSWORD)
 		} else {
-			os.Unsetenv("PGPASSWORD")
+			_ = os.Unsetenv("PGPASSWORD")
 		}
 		if originalTIGERFS != "" {
-			os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
+			_ = os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
 		} else {
-			os.Unsetenv("TIGERFS_PASSWORD")
+			_ = os.Unsetenv("TIGERFS_PASSWORD")
 		}
 	}()
 
-	os.Setenv("PGPASSWORD", "pgpassword_wins")
-	os.Setenv("TIGERFS_PASSWORD", "tigerfs_loses")
+	_ = os.Setenv("PGPASSWORD", "pgpassword_wins")
+	_ = os.Setenv("TIGERFS_PASSWORD", "tigerfs_loses")
 
 	cfg := &config.Config{}
 	ctx := context.Background()
@@ -106,15 +106,15 @@ func TestResolvePassword_NoPasswordSource(t *testing.T) {
 	originalTIGERFS := os.Getenv("TIGERFS_PASSWORD")
 	defer func() {
 		if originalPGPASSWORD != "" {
-			os.Setenv("PGPASSWORD", originalPGPASSWORD)
+			_ = os.Setenv("PGPASSWORD", originalPGPASSWORD)
 		}
 		if originalTIGERFS != "" {
-			os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
+			_ = os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
 		}
 	}()
 
-	os.Unsetenv("PGPASSWORD")
-	os.Unsetenv("TIGERFS_PASSWORD")
+	_ = os.Unsetenv("PGPASSWORD")
+	_ = os.Unsetenv("TIGERFS_PASSWORD")
 
 	cfg := &config.Config{}
 	ctx := context.Background()
@@ -136,15 +136,15 @@ func TestResolvePassword_PasswordCommand(t *testing.T) {
 	originalTIGERFS := os.Getenv("TIGERFS_PASSWORD")
 	defer func() {
 		if originalPGPASSWORD != "" {
-			os.Setenv("PGPASSWORD", originalPGPASSWORD)
+			_ = os.Setenv("PGPASSWORD", originalPGPASSWORD)
 		}
 		if originalTIGERFS != "" {
-			os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
+			_ = os.Setenv("TIGERFS_PASSWORD", originalTIGERFS)
 		}
 	}()
 
-	os.Unsetenv("PGPASSWORD")
-	os.Unsetenv("TIGERFS_PASSWORD")
+	_ = os.Unsetenv("PGPASSWORD")
+	_ = os.Unsetenv("TIGERFS_PASSWORD")
 
 	// Use echo command to simulate password_command
 	cfg := &config.Config{
@@ -167,13 +167,13 @@ func TestResolvePassword_PasswordCommand_EnvVarHasPrecedence(t *testing.T) {
 	originalPGPASSWORD := os.Getenv("PGPASSWORD")
 	defer func() {
 		if originalPGPASSWORD != "" {
-			os.Setenv("PGPASSWORD", originalPGPASSWORD)
+			_ = os.Setenv("PGPASSWORD", originalPGPASSWORD)
 		} else {
-			os.Unsetenv("PGPASSWORD")
+			_ = os.Unsetenv("PGPASSWORD")
 		}
 	}()
 
-	os.Setenv("PGPASSWORD", "env_var_wins")
+	_ = os.Setenv("PGPASSWORD", "env_var_wins")
 
 	cfg := &config.Config{
 		PasswordCommand: "echo command_loses",

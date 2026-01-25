@@ -25,7 +25,7 @@ func TestInit_DebugMode(t *testing.T) {
 	}
 
 	// Clean up
-	Sync()
+	_ = Sync()
 }
 
 // TestInit_ProductionMode tests initialization in production mode
@@ -42,7 +42,7 @@ func TestInit_ProductionMode(t *testing.T) {
 	}
 
 	// Clean up
-	Sync()
+	_ = Sync()
 }
 
 // TestInit_Multiple tests calling Init multiple times
@@ -65,20 +65,20 @@ func TestInit_Multiple(t *testing.T) {
 		t.Error("Expected logger to be initialized after multiple inits")
 	}
 
-	Sync()
+	_ = Sync()
 }
 
 // TestDebug_WithInitializedLogger tests Debug with an initialized logger
 func TestDebug_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	Init(true) // Debug mode to actually log debug messages
+	_ = Init(true) // Debug mode to actually log debug messages
 
 	// Should not panic
 	Debug("test debug message")
 	Debug("test with field", zap.String("key", "value"))
 	Debug("test with multiple fields", zap.Int("count", 42), zap.Bool("active", true))
 
-	Sync()
+	_ = Sync()
 }
 
 // TestDebug_WithNilLogger tests Debug with nil logger (before Init)
@@ -93,14 +93,14 @@ func TestDebug_WithNilLogger(t *testing.T) {
 // TestInfo_WithInitializedLogger tests Info with an initialized logger
 func TestInfo_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	// Should not panic
 	Info("test info message")
 	Info("test with field", zap.String("key", "value"))
 	Info("test with multiple fields", zap.Int("count", 42), zap.Bool("active", true))
 
-	Sync()
+	_ = Sync()
 }
 
 // TestInfo_WithNilLogger tests Info with nil logger (before Init)
@@ -115,14 +115,14 @@ func TestInfo_WithNilLogger(t *testing.T) {
 // TestWarn_WithInitializedLogger tests Warn with an initialized logger
 func TestWarn_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	Init(false) // Production mode still logs warn
+	_ = Init(false) // Production mode still logs warn
 
 	// Should not panic
 	Warn("test warn message")
 	Warn("test with field", zap.String("key", "value"))
 	Warn("test with error", zap.Error(nil))
 
-	Sync()
+	_ = Sync()
 }
 
 // TestWarn_WithNilLogger tests Warn with nil logger (before Init)
@@ -137,14 +137,14 @@ func TestWarn_WithNilLogger(t *testing.T) {
 // TestError_WithInitializedLogger tests Error with an initialized logger
 func TestError_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	Init(false)
+	_ = Init(false)
 
 	// Should not panic
 	Error("test error message")
 	Error("test with field", zap.String("key", "value"))
 	Error("test with error", zap.Error(nil))
 
-	Sync()
+	_ = Sync()
 }
 
 // TestError_WithNilLogger tests Error with nil logger (before Init)
@@ -162,7 +162,7 @@ func TestError_WithNilLogger(t *testing.T) {
 // TestSync_WithInitializedLogger tests Sync with an initialized logger
 func TestSync_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	err := Sync()
 	// Note: Sync may return an error on some systems due to stderr
@@ -183,7 +183,7 @@ func TestSync_WithNilLogger(t *testing.T) {
 // TestLogging_AllLevels tests all logging levels in sequence
 func TestLogging_AllLevels(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	// Log at all levels
 	Debug("debug message")
@@ -191,13 +191,13 @@ func TestLogging_AllLevels(t *testing.T) {
 	Warn("warn message")
 	Error("error message")
 
-	Sync()
+	_ = Sync()
 }
 
 // TestLogging_VariousFieldTypes tests logging with various field types
 func TestLogging_VariousFieldTypes(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	Debug("test",
 		zap.String("string", "value"),
@@ -209,7 +209,7 @@ func TestLogging_VariousFieldTypes(t *testing.T) {
 		zap.Error(nil),
 	)
 
-	Sync()
+	_ = Sync()
 }
 
 // TestInit_DebugModeConfiguration tests that debug mode is configured correctly
@@ -226,7 +226,7 @@ func TestInit_DebugModeConfiguration(t *testing.T) {
 		t.Error("Logger should be initialized in debug mode")
 	}
 
-	Sync()
+	_ = Sync()
 }
 
 // TestInit_ProductionModeConfiguration tests that production mode is configured correctly
@@ -243,13 +243,13 @@ func TestInit_ProductionModeConfiguration(t *testing.T) {
 		t.Error("Logger should be initialized in production mode")
 	}
 
-	Sync()
+	_ = Sync()
 }
 
 // TestLogging_EmptyMessage tests logging empty messages
 func TestLogging_EmptyMessage(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	// Should not panic with empty messages
 	Debug("")
@@ -257,13 +257,13 @@ func TestLogging_EmptyMessage(t *testing.T) {
 	Warn("")
 	Error("")
 
-	Sync()
+	_ = Sync()
 }
 
 // TestLogging_LongMessage tests logging very long messages
 func TestLogging_LongMessage(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	// Create a long message
 	longMsg := ""
@@ -274,26 +274,26 @@ func TestLogging_LongMessage(t *testing.T) {
 	// Should not panic with long messages
 	Debug(longMsg)
 
-	Sync()
+	_ = Sync()
 }
 
 // TestLogging_SpecialCharacters tests logging messages with special characters
 func TestLogging_SpecialCharacters(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	// Should not panic with special characters
 	Debug("Tab:\t Newline:\n Quote:\"")
 	Debug("Unicode: 日本語 emoji: 🎉")
 	Debug("Backslash: \\ Null: \x00")
 
-	Sync()
+	_ = Sync()
 }
 
 // TestLogging_ConcurrentAccess tests concurrent logging
 func TestLogging_ConcurrentAccess(t *testing.T) {
 	resetLogger()
-	Init(true)
+	_ = Init(true)
 
 	done := make(chan bool, 10)
 
@@ -312,5 +312,5 @@ func TestLogging_ConcurrentAccess(t *testing.T) {
 		<-done
 	}
 
-	Sync()
+	_ = Sync()
 }

@@ -33,7 +33,7 @@ func SetupTestDB(t *testing.T) (string, func()) {
 	// Get connection string
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to get connection string: %v", err)
 	}
 
@@ -42,7 +42,7 @@ func SetupTestDB(t *testing.T) (string, func()) {
 
 	// Create test schema and seed data
 	if err := seedTestData(ctx, connStr); err != nil {
-		pgContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
 		t.Fatalf("Failed to seed test data: %v", err)
 	}
 

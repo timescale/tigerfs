@@ -53,8 +53,8 @@ func TestColumnFileNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
 
-	// Verify we can use colNode as various interface types
-	_ = interface{}(colNode).(interface{})
+	// Mark as used (compiler will verify types)
+	_ = colNode
 }
 
 // TestNewColumnFileNode_DifferentColumns tests creation with various column names
@@ -542,7 +542,7 @@ func TestColumnFileHandle_ReadWrite_Cycle(t *testing.T) {
 
 	// Simulate modify: write new data
 	newData := []byte("new@example.com")
-	fh.Write(context.Background(), newData, 0)
+	_, _ = fh.Write(context.Background(), newData, 0)
 
 	if string(fh.data) != string(newData) {
 		t.Errorf("Write data mismatch: expected %q, got %q", newData, fh.data)
