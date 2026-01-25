@@ -1,14 +1,19 @@
 # TigerFS
 
-TigerFS is a FUSE-based filesystem that exposes PostgreSQL database contents as mountable directories. Users interact with tables, rows, and columns using standard Unix tools (`ls`, `cat`, `grep`, `rm`) instead of SQL queries.
+TigerFS is a FUSE-based filesystem that exposes PostgreSQL database contents as mountable directories, mapping tables, rows, and columns onto files and paths. This allows users, agents, and developer tools to inspect and modify data using standard Unix tools (`ls`, `cat`, `grep`, `rm`) instead of writing SQL. Unlike a traditional disk, the backing store is transactional and supports snapshots and sharing across environments, making the same mount useful as both persistent sandbox state and shared state.
 
 ## Overview
 
-**Primary Use Case:** Enable Claude Code and developer tools to explore and manipulate database-backed data using familiar Read/Glob/Grep filesystem operations.
+TigerFS lets tools and agents work with database state the same way they work with files. Present structured data as a directory tree, and any tool that reads file can now query your database.
 
-**Key Features:**
+For example, `cat /mnt/db/users/123/email` reads a column value, and `echo 'new@example.com' > /mnt/db/users/123/email` updates it.
+
+The filesystem interface is simple and predictable. The database handles durability, consistency, and access control. The mount provides a stable interface that works across local development, sandboxed execution, and shared environments.
+
+**Key features:**
 - Mount PostgreSQL databases as filesystem directories
 - Navigate schemas, tables, rows, and columns like files
+- Read and write data using standard Unix tools
 - Multiple data formats (TSV, CSV, JSON)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
