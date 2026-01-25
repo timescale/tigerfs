@@ -410,7 +410,7 @@ Two main options under consideration:
 - Lower-level control
 - Production-proven in large projects
 
-**Decision Point:** Phase 1, Week 1 - Evaluate both libraries with basic benchmarks.
+**Decision Point:** Task 1.1 - Evaluate both libraries with basic benchmarks.
 
 ### FUSE Operations to Implement
 
@@ -784,6 +784,7 @@ Keep all documentation files in sync when making changes to commands, configurat
 ### Internal Documentation
 
 - **Complete Specification**: `specs/spec.md` (2,900+ lines)
+- **Implementation Tasks**: `docs/implementation-tasks.md` (step-by-step tasks for Claude Code)
 - **Design Plans**: `docs/.plans/`
 - **Tiger CLI Reference**: `/Users/mfreed/Documents/tmp/tiger-cli/` (for patterns)
 
@@ -811,4 +812,4 @@ Keep all documentation files in sync when making changes to commands, configurat
 - 📋 Performance optimization
 - 📋 Production deployment patterns
 
-See `specs/spec.md` for the complete 12-week implementation plan.
+See `docs/implementation-tasks.md` for the complete implementation plan.

@@ -3018,109 +3018,76 @@ Deferred:
 
 ## Implementation Priorities
 
-### Phase 1: Core Foundation (Weeks 1-3)
+See `docs/implementation-tasks.md` for detailed step-by-step tasks.
 
-**Week 1: Project Setup**
+### Phase 1: Core Foundation
+
 - Initialize Go project structure
-- Set up FUSE library (bazil.org/fuse or jacobsa/fuse)
+- Set up FUSE library (hanwen/go-fuse)
 - Basic mount/unmount functionality
 - CLI framework (Cobra) with version command
 - Configuration system (Viper) with basic config loading
 - Logging infrastructure (Zap)
-
-**Week 2: Basic Read Operations**
-- PostgreSQL connection with pgx
-- Connection pooling
+- PostgreSQL connection with pgx and connection pooling
 - Schema/table discovery
-- Row-as-file read (TSV format only)
+- Row-as-file read (TSV, CSV, JSON formats)
 - Directory listing (small tables only)
-- Basic SQL generation
+- Unit test framework and testcontainers-go setup
 
-**Week 3: Testing Foundation**
-- Unit test framework
-- testcontainers-go setup
-- Integration test infrastructure
-- First 5 integration tests passing
-- Basic documentation (README)
+### Phase 2: Full CRUD
 
-### Phase 2: Full CRUD (Weeks 4-6)
-
-**Week 4: Complete Read Operations**
 - Row-as-directory read (column files)
-- Multiple formats (CSV, JSON)
 - NULL handling
-- Metadata files (.schema, .columns, .indexes)
-- Integration tests for reads
-
-**Week 5: Write Operations**
+- Metadata files (.schema, .columns, .count)
 - Row-as-file write (INSERT/UPDATE)
 - Row-as-directory write (column-level)
 - Constraint enforcement
-- Error handling and logging
-- Integration tests for writes
-
-**Week 6: DELETE Operations**
 - Row deletion (rm files/directories)
 - Column deletion (set to NULL)
-- Permission checks
-- Integration tests for deletes
 - Complete CRUD test coverage
 
-### Phase 3: Advanced Features (Weeks 7-9)
+### Phase 3: CLI Commands
 
-**Week 7: Index Navigation**
+- Unmount command
+- Status command
+- List mounts command
+- Test connection command
+- Config subcommands (show, validate, path)
+- Tiger Cloud integration (--tiger-service-id)
+
+### Phase 4: Advanced Features
+
 - Index discovery from pg_indexes
-- Single-column index paths
-- Composite index paths
+- Single-column and composite index paths
 - Index-based queries
-- Integration tests for indexes
-
-**Week 8: Large Tables**
-- max_ls_rows enforcement
-- `.first/N/` implementation
-- `.sample/N/` implementation (TABLESAMPLE)
-- `.count` file
-- Integration tests for large tables
-
-**Week 9: Permissions and Metadata**
+- Large table handling (max_ls_rows enforcement)
+- `.first/N/` and `.last/N/` pagination
+- `.sample/N/` random sampling (TABLESAMPLE)
 - Permission mapping (table grants → file permissions)
 - Timestamps (updated_at detection)
 - File sizes
-- Complete metadata exposure
-- Default schema flattening
+- Schema flattening
+- Support for non-SERIAL primary keys (UUID, text)
+- Support for tables without primary keys (read-only via ctid)
+- TimescaleDB hypertable support
 
-### Phase 4: Polish and Release (Weeks 10-12)
+### Phase 5: Distribution & Release
 
-**Week 10: CLI and Configuration**
-- All CLI subcommands (unmount, status, list, test-connection, config)
-- Complete configuration system
-- Password handling (all methods)
-- Environment variable support
-
-**Week 11: Distribution**
-- GoReleaser setup
 - Install scripts (install.sh, install.ps1)
+- GoReleaser setup
 - GitHub Actions release workflow
-- S3/CloudFront setup
-- First release (v0.1.0)
-
-**Week 12: Documentation and Testing**
-- Complete Phase 1 documentation
+- Documentation (README, getting-started, installation guides)
 - Performance testing
-- Bug fixes
-- User testing feedback incorporation
+- Bug fixes and polish
 - v1.0.0 release
 
-### Phase 5: Post-MVP Enhancements
+### Post-MVP Enhancements
 
-**Later (Prioritize Based on Feedback):**
-- Special PostgreSQL types (JSONB, arrays, BYTEA)
+**Prioritize Based on Feedback:**
 - Views and sequences
 - Performance monitoring (`.stats`)
-- Comprehensive documentation (Phase 2)
 - Additional distribution methods (Homebrew, apt, yum)
 - Windows support polish
-- Claude Code integration guide
 - Advanced features (custom views, full-text search)
 
 ---
