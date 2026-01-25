@@ -16,7 +16,7 @@ tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db
 
 # Explore!
 ls /mnt/db
-cat /mnt/db/users/1
+cat /mnt/db/users/1.tsv
 cat /mnt/db/users/1.json
 ```
 
@@ -46,7 +46,7 @@ ls /mnt/db
 ls /mnt/db/users
 
 # Read a user row (TSV format)
-cat /mnt/db/users/1
+cat /mnt/db/users/1.tsv
 
 # Read as JSON
 cat /mnt/db/users/1.json
@@ -59,7 +59,7 @@ cat /mnt/db/products/2.json
 
 # Check orders
 ls /mnt/db/orders
-cat /mnt/db/orders/1
+cat /mnt/db/orders/1.tsv
 ```
 
 ## Cleanup

@@ -89,7 +89,7 @@ ls /mnt/db/
 ls /mnt/db/users/
 
 # Read entire row (TSV format)
-cat /mnt/db/users/123
+cat /mnt/db/users/123.tsv
 
 # Read entire row (JSON format)
 cat /mnt/db/users/123.json

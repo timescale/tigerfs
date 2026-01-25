@@ -58,7 +58,10 @@ func (r *RowDirectoryNode) Getattr(ctx context.Context, fh fs.FileHandle, out *f
 	return 0
 }
 
-// Readdir lists the column names in the row
+// Format files available in row directories for reading full row in different formats
+var rowFormatFiles = []string{".json", ".csv", ".tsv"}
+
+// Readdir lists the column names in the row plus format files
 func (r *RowDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("RowDirectoryNode.Readdir called",
 		zap.String("table", r.tableName),
@@ -74,7 +77,7 @@ func (r *RowDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.E
 	}
 
 	// Convert columns to directory entries
-	entries := make([]fuse.DirEntry, 0, len(columns))
+	entries := make([]fuse.DirEntry, 0, len(columns)+len(rowFormatFiles))
 	for _, column := range columns {
 		entries = append(entries, fuse.DirEntry{
 			Name: column.Name,
@@ -82,22 +85,41 @@ func (r *RowDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.E
 		})
 	}
 
+	// Add format files (.json, .csv, .tsv) for reading full row
+	for _, formatFile := range rowFormatFiles {
+		entries = append(entries, fuse.DirEntry{
+			Name: formatFile,
+			Mode: syscall.S_IFREG,
+		})
+	}
+
 	logging.Debug("Row directory listing",
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue),
-		zap.Int("column_count", len(entries)))
+		zap.Int("column_count", len(columns)),
+		zap.Int("total_entries", len(entries)))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a column file by name
+// Lookup looks up a column file or format file by name
 func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("RowDirectoryNode.Lookup called",
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue),
-		zap.String("column", name))
+		zap.String("name", name))
 
-	// Get columns for table to validate column exists
+	// Check if this is a format file (.json, .csv, .tsv)
+	switch name {
+	case ".json":
+		return r.createFormatFileNode(ctx, "json")
+	case ".csv":
+		return r.createFormatFileNode(ctx, "csv")
+	case ".tsv":
+		return r.createFormatFileNode(ctx, "tsv")
+	}
+
+	// Otherwise, look up as a column name
 	columns, err := r.db.GetColumns(ctx, r.schema, r.tableName)
 	if err != nil {
 		logging.Error("Failed to get columns",
@@ -138,6 +160,22 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 	columnNode := NewColumnFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, name, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
+	return child, 0
+}
+
+// createFormatFileNode creates a RowFileNode for reading the full row in a specific format
+func (r *RowDirectoryNode) createFormatFileNode(ctx context.Context, format string) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Creating format file node",
+		zap.String("table", r.tableName),
+		zap.String("pk", r.pkValue),
+		zap.String("format", format))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFREG,
+	}
+
+	rowNode := NewRowFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, format)
+	child := r.NewPersistentInode(ctx, rowNode, stableAttr)
 	return child, 0
 }
 
