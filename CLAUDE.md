@@ -345,6 +345,19 @@ func badMount() {
 }
 ```
 
+### Configuration Documentation
+
+**Important:** All configuration options must be documented in `specs/spec.md` in the Configuration System section. This is the single source of truth for:
+- Config file format and all available options
+- Environment variables
+- Default values
+- Option descriptions
+
+When adding new config options:
+1. Add the field to `internal/tigerfs/config/config.go`
+2. Add the default in `Init()`
+3. Document in `specs/spec.md` with a comment explaining the option
+
 ## Logging Architecture
 
 TigerFS uses zap for structured logging with two modes:

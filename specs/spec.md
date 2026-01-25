@@ -819,38 +819,41 @@ cat /mnt/db/users/123456789/email
 ```yaml
 # Connection defaults
 connection:
-  host: localhost
-  port: 5432
-  user: myuser
-  database: mydb
+  host: localhost              # Database hostname
+  port: 5432                   # Database port
+  user: myuser                 # Database username
+  database: mydb               # Database name
   # NO password field (use .pgpass, env vars, or password_command)
-  default_schema: public
-  pool_size: 10
-  pool_max_idle: 5
-  password_command: "vault kv get -field=password secret/dbfs/prod"
+  default_schema: public       # Schema to flatten to mount root
+  pool_size: 10                # Max open connections
+  pool_max_idle: 5             # Max idle connections
+  password_command: "..."      # Command to retrieve password
+  tiger_service_id: abc123     # Tiger Cloud service ID (alternative to connection params)
 
 # Filesystem behavior
 filesystem:
-  max_ls_rows: 10000
-  attr_timeout: 1           # FUSE attribute cache (seconds)
-  entry_timeout: 1          # FUSE entry cache (seconds)
+  max_ls_rows: 10000           # Max rows returned by ls (prevents huge listings)
+  trailing_newlines: true      # Add \n to column and .count file reads
+  attr_timeout: 1              # FUSE attribute cache (seconds)
+  entry_timeout: 1             # FUSE entry cache (seconds)
 
 # Metadata refresh
 metadata:
-  refresh_interval: 30      # Seconds between automatic refreshes
+  refresh_interval: 30         # Seconds between schema/column cache refreshes
 
 # Logging
 logging:
-  level: info               # debug, info, warn, error
+  level: info                  # debug, info, warn, error
   file: ~/.local/share/tigerfs/tigerfs.log
-  format: json              # json, text
-  rotate_size_mb: 10
-  rotate_keep: 5
+  format: json                 # json, text
 
 # Formats
 formats:
-  default: tsv              # tsv, csv, json
-  binary_encoding: raw      # raw, hex, base64 (for BYTEA)
+  default: tsv                 # Default row format: tsv, csv, json
+  binary_encoding: raw         # BYTEA encoding: raw, hex, base64
+
+# Debug
+debug: false                   # Enable debug mode (verbose logging)
 ```
 
 ### Environment Variables
@@ -866,6 +869,7 @@ formats:
 - `TIGERFS_CONFIG_DIR` - Config directory (default: `~/.config/tigerfs`)
 - `TIGERFS_DEFAULT_SCHEMA` - Default schema to flatten
 - `TIGERFS_MAX_LS_ROWS` - Large table threshold
+- `TIGERFS_TRAILING_NEWLINES` - Add trailing newlines to column/count reads (default: true)
 - `TIGERFS_ATTR_TIMEOUT` - FUSE attribute cache timeout
 - `TIGERFS_ENTRY_TIMEOUT` - FUSE entry cache timeout
 - `TIGERFS_METADATA_REFRESH_INTERVAL` - Metadata refresh interval
@@ -875,7 +879,10 @@ formats:
 - `TIGERFS_DEFAULT_FORMAT` - Default row-as-file format
 - `TIGERFS_BINARY_ENCODING` - BYTEA encoding
 - `TIGERFS_POOL_SIZE` - Connection pool size
+- `TIGERFS_POOL_MAX_IDLE` - Max idle connections in pool
 - `TIGERFS_PASSWORD` - Database password (alternative to PGPASSWORD)
+- `TIGERFS_DEBUG` - Enable debug mode
+- `TIGER_SERVICE_ID` - Tiger Cloud service ID
 
 ### Command-Line Flags
 
