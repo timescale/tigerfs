@@ -26,5 +26,6 @@ services:
       PGUSER: demo
       PGPASSWORD: demo
       PGDATABASE: demo
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     stdin_open: true
     tty: true

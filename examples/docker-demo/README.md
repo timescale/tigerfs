@@ -6,6 +6,9 @@ A self-contained demo environment to try TigerFS with PostgreSQL.
 
 ```bash
 # From this directory
+# Optional: set API key if you want to use Claude Code inside the container
+export ANTHROPIC_API_KEY=sk-ant-...
+
 docker-compose up -d --build
 
 # Connect to the TigerFS container
@@ -65,6 +68,15 @@ cat /mnt/db/products/50.json
 # Check orders for a user
 ls /mnt/db/orders
 cat /mnt/db/orders/100.tsv
+```
+
+## Using Claude Code
+
+The demo image includes Claude Code. If you set `ANTHROPIC_API_KEY` before starting, you can use it to explore the mounted filesystem:
+
+```bash
+docker-compose exec tigerfs bash
+claude
 ```
 
 ## Cleanup

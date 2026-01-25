@@ -15,7 +15,18 @@ RUN apt-get update && apt-get install -y \
     fuse3 \
     postgresql-client \
     less \
+    jq \
+    tree \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js for Claude Code
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code
+RUN npm install -g @anthropic-ai/claude-code
 
 COPY --from=builder /build/tigerfs /usr/local/bin/tigerfs
 
