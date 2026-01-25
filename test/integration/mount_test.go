@@ -1,28 +1,24 @@
 package integration
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
-	"github.com/timescale/tigerfs/internal/tigerfs/fuse"
 )
 
 func TestMount_ListTables(t *testing.T) {
+	// Check FUSE availability (skips if not available)
+	checkFUSEMountCapability(t)
+
 	// Get test database (tries local first, falls back to Docker)
 	dbResult := GetTestDB(t)
 	if dbResult == nil {
 		return
 	}
 	defer dbResult.Cleanup()
-
-	// Check FUSE availability
-	if !isFUSEAvailable() {
-		t.Skip("FUSE not available on this system")
-	}
 
 	// Create config
 	cfg := &config.Config{
@@ -39,13 +35,10 @@ func TestMount_ListTables(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
+	// Mount filesystem with timeout (skips if FUSE unavailable)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
 	}
 	defer func() { _ = filesystem.Close() }()
 
@@ -76,17 +69,15 @@ func TestMount_ListTables(t *testing.T) {
 }
 
 func TestMount_ListRows(t *testing.T) {
+	// Check FUSE availability (skips if not available)
+	checkFUSEMountCapability(t)
+
 	// Get test database (tries local first, falls back to Docker)
 	dbResult := GetTestDB(t)
 	if dbResult == nil {
 		return
 	}
 	defer dbResult.Cleanup()
-
-	// Check FUSE availability
-	if !isFUSEAvailable() {
-		t.Skip("FUSE not available on this system")
-	}
 
 	// Create config
 	cfg := &config.Config{
@@ -103,13 +94,10 @@ func TestMount_ListRows(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
+	// Mount filesystem with timeout (skips if FUSE unavailable)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
 	}
 	defer func() { _ = filesystem.Close() }()
 
@@ -144,17 +132,15 @@ func TestMount_ListRows(t *testing.T) {
 }
 
 func TestMount_ReadRow(t *testing.T) {
+	// Check FUSE availability (skips if not available)
+	checkFUSEMountCapability(t)
+
 	// Get test database (tries local first, falls back to Docker)
 	dbResult := GetTestDB(t)
 	if dbResult == nil {
 		return
 	}
 	defer dbResult.Cleanup()
-
-	// Check FUSE availability
-	if !isFUSEAvailable() {
-		t.Skip("FUSE not available on this system")
-	}
 
 	// Create config
 	cfg := &config.Config{
@@ -171,13 +157,10 @@ func TestMount_ReadRow(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
+	// Mount filesystem with timeout (skips if FUSE unavailable)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
 	}
 	defer func() { _ = filesystem.Close() }()
 
@@ -232,17 +215,15 @@ func TestMount_ReadRow(t *testing.T) {
 }
 
 func TestMount_ReadNonExistentRow(t *testing.T) {
+	// Check FUSE availability (skips if not available)
+	checkFUSEMountCapability(t)
+
 	// Get test database (tries local first, falls back to Docker)
 	dbResult := GetTestDB(t)
 	if dbResult == nil {
 		return
 	}
 	defer dbResult.Cleanup()
-
-	// Check FUSE availability
-	if !isFUSEAvailable() {
-		t.Skip("FUSE not available on this system")
-	}
 
 	// Create config
 	cfg := &config.Config{
@@ -259,13 +240,10 @@ func TestMount_ReadNonExistentRow(t *testing.T) {
 	// Create mountpoint
 	mountpoint := t.TempDir()
 
-	// Mount filesystem
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	filesystem, err := fuse.Mount(ctx, cfg, dbResult.ConnStr, mountpoint)
-	if err != nil {
-		t.Fatalf("Mount failed: %v", err)
+	// Mount filesystem with timeout (skips if FUSE unavailable)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
 	}
 	defer func() { _ = filesystem.Close() }()
 
@@ -274,7 +252,7 @@ func TestMount_ReadNonExistentRow(t *testing.T) {
 
 	// Try to read non-existent row
 	rowFile := mountpoint + "/users/999"
-	_, err = os.ReadFile(rowFile)
+	_, err := os.ReadFile(rowFile)
 	if err == nil {
 		t.Fatal("Expected error reading non-existent row, got nil")
 	}
