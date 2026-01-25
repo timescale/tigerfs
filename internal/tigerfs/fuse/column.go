@@ -151,7 +151,11 @@ func (c *ColumnFileNode) fetchData(ctx context.Context) error {
 				return err
 			}
 
-			c.data = []byte(str)
+			if c.cfg.TrailingNewlines {
+				c.data = []byte(str + "\n")
+			} else {
+				c.data = []byte(str)
+			}
 			return nil
 		}
 
@@ -178,7 +182,11 @@ func (c *ColumnFileNode) fetchData(ctx context.Context) error {
 		return err
 	}
 
-	c.data = []byte(str)
+	if c.cfg.TrailingNewlines {
+		c.data = []byte(str + "\n")
+	} else {
+		c.data = []byte(str)
+	}
 	return nil
 }
 

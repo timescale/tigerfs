@@ -23,8 +23,9 @@ type Config struct {
 	TigerServiceID  string        `mapstructure:"tiger_service_id"`
 
 	// Filesystem
-	MaxLsRows    int           `mapstructure:"max_ls_rows"`
-	AttrTimeout  time.Duration `mapstructure:"attr_timeout"`
+	MaxLsRows        int           `mapstructure:"max_ls_rows"`
+	TrailingNewlines bool          `mapstructure:"trailing_newlines"`
+	AttrTimeout      time.Duration `mapstructure:"attr_timeout"`
 	EntryTimeout time.Duration `mapstructure:"entry_timeout"`
 
 	// Metadata
@@ -53,6 +54,7 @@ func Init() error {
 	viper.SetDefault("pool_size", 10)
 	viper.SetDefault("pool_max_idle", 5)
 	viper.SetDefault("max_ls_rows", 10000)
+	viper.SetDefault("trailing_newlines", true)
 	viper.SetDefault("attr_timeout", 1*time.Second)
 	viper.SetDefault("entry_timeout", 1*time.Second)
 	viper.SetDefault("metadata_refresh_interval", 30*time.Second)

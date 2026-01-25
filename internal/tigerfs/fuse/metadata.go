@@ -141,7 +141,11 @@ func (m *MetadataFileNode) fetchCount(ctx context.Context) error {
 		return fmt.Errorf("failed to get row count: %w", err)
 	}
 
-	m.data = []byte(fmt.Sprintf("%d\n", count))
+	if m.cfg.TrailingNewlines {
+		m.data = []byte(fmt.Sprintf("%d\n", count))
+	} else {
+		m.data = []byte(fmt.Sprintf("%d", count))
+	}
 	return nil
 }
 
