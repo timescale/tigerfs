@@ -22,18 +22,18 @@ cat /mnt/db/users/1.json
 
 ## Demo Data
 
-The demo includes three tables:
+The demo includes ~9,200 rows across three tables:
 
-**users** (5 rows)
-- Alice, Bob, Charlie, Diana, Eve
+**users** (1,000 rows)
+- Generated users with varied ages, bios, and activity status
 - Fields: id, name, email, age, active, bio, created_at
 
-**products** (4 rows)
-- Widget, Gadget, Doohickey, Thingamajig
-- Fields: id, name, price, in_stock, description
+**products** (200 rows)
+- Widgets, Gadgets, Gizmos, Devices, Tools across 4 categories
+- Fields: id, name, price, in_stock, description, category
 
-**orders** (4 rows)
-- Sample orders linking users to products
+**orders** (8,000 rows)
+- Realistic order distribution with power users and varied statuses
 - Fields: id, user_id, product_id, quantity, total, status, created_at
 
 ## Example Commands
@@ -42,24 +42,29 @@ The demo includes three tables:
 # List all tables
 ls /mnt/db
 
-# List users by ID
+# Check row counts
+cat /mnt/db/users/.count      # 1000
+cat /mnt/db/products/.count   # 200
+cat /mnt/db/orders/.count     # 8000
+
+# List users by ID (shows first 10000 by default)
 ls /mnt/db/users
 
 # Read a user row (TSV format)
 cat /mnt/db/users/1.tsv
 
 # Read as JSON
-cat /mnt/db/users/1.json
+cat /mnt/db/users/500.json
 
 # Read single column
 cat /mnt/db/users/1/email
 
-# View products
-cat /mnt/db/products/2.json
+# View products by category
+cat /mnt/db/products/50.json
 
-# Check orders
+# Check orders for a user
 ls /mnt/db/orders
-cat /mnt/db/orders/1.tsv
+cat /mnt/db/orders/100.tsv
 ```
 
 ## Cleanup
