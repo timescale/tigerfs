@@ -8,18 +8,62 @@ This guide demonstrates common TigerFS workflows using real-world scenarios.
 - PostgreSQL database with data
 - FUSE support (macFUSE on macOS, native on Linux)
 
-For testing, use the Docker demo which includes sample data:
+---
+
+## Example 1: Using the Docker Demo (Recommended for Testing)
+
+**Scenario:** You want to try TigerFS without setting up a local database.
+
+The Docker demo provides a pre-configured environment with TigerFS, PostgreSQL, and sample data.
+
+### Commands
+
 ```bash
+# From the TigerFS repository root
 cd examples/docker-demo
+
+# Build and start containers
 docker-compose up -d --build
+
+# Connect to the TigerFS container
 docker-compose exec tigerfs bash
+
+# Inside the container: mount the demo database
+# Note: Use 'postgres' as hostname (the Docker service name), not 'localhost'
+tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &
+
+# Verify the mount
+ls /mnt/db
+```
+
+### Expected Output
+
+```
+orders/
+products/
+users/
+```
+
+### Explanation
+
+The Docker demo runs two containers: PostgreSQL with sample data (users, products, orders) and TigerFS. Inside the TigerFS container, PostgreSQL is reachable at hostname `postgres` (the Docker Compose service name), not `localhost`.
+
+### Cleanup
+
+```bash
+# Inside container: unmount
+tigerfs unmount /mnt/db
+
+# Exit container and stop services
+exit
+docker-compose down
 ```
 
 ---
 
-## Example 1: First Mount - Connecting to a Local PostgreSQL Database
+## Example 2: Connecting to a Local PostgreSQL Database
 
-**Scenario:** You have a PostgreSQL database running locally and want to explore it using filesystem tools.
+**Scenario:** You have PostgreSQL running directly on your machine (not in Docker) and want to explore it.
 
 ### Commands
 
@@ -45,9 +89,9 @@ ls /mnt/db
 ### Expected Output
 
 ```
-orders/
-products/
-users/
+your_table1/
+your_table2/
+...
 ```
 
 ### Explanation
@@ -65,7 +109,7 @@ tigerfs unmount /mnt/db
 
 ---
 
-## Example 2: Exploring Database Schema with ls and cat
+## Example 3: Exploring Database Schema with ls and cat
 
 **Scenario:** You've connected to an unfamiliar database and want to understand its structure without writing SQL.
 
@@ -153,7 +197,7 @@ Dotfiles are hidden by default with `ls` but visible with `ls -a` or `ls -la`. T
 
 ---
 
-## Example 3: Reading Data in Different Formats
+## Example 4: Reading Data in Different Formats
 
 **Scenario:** You need to read row data and want to choose the most convenient format for your use case.
 
@@ -218,7 +262,7 @@ Both representations exist simultaneously for every row.
 
 ---
 
-## Example 4: Basic Data Modification
+## Example 5: Basic Data Modification
 
 **Scenario:** You need to update a user's email address and insert a new product.
 
@@ -272,7 +316,7 @@ TigerFS translates filesystem operations to SQL:
 
 ---
 
-## Example 5: Using grep and awk to Query Data
+## Example 6: Using grep and awk to Query Data
 
 **Scenario:** You want to find specific records and analyze data using familiar Unix tools.
 
@@ -348,7 +392,7 @@ TigerFS enables database queries using standard Unix tools:
 
 ---
 
-## Example 6: Mounting a Tiger Cloud Service
+## Example 7: Mounting a Tiger Cloud Service
 
 **Scenario:** You have a database running on Tiger Cloud and want to mount it without managing connection strings.
 
