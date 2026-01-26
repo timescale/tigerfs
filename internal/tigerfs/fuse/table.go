@@ -148,6 +148,10 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Name: ".last",
 			Mode: syscall.S_IFDIR,
 		},
+		fuse.DirEntry{
+			Name: ".sample",
+			Mode: syscall.S_IFDIR,
+		},
 	)
 
 	// Add single-column index directories (e.g., .email/, .category/)
@@ -218,6 +222,11 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return t.lookupPaginationDirectory(ctx, PaginationLast)
 	}
 
+	// Check if this is a sample directory (.sample)
+	if name == ".sample" {
+		return t.lookupSampleDirectory(ctx)
+	}
+
 	// Check if this is an index directory lookup (e.g., .email)
 	if strings.HasPrefix(name, ".") && len(name) > 1 {
 		return t.lookupIndexDirectory(ctx, name)
@@ -280,6 +289,24 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
+	return child, 0
+}
+
+// lookupSampleDirectory handles lookup for the .sample directory.
+func (t *TableNode) lookupSampleDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .sample directory",
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	sampleNode := NewSampleNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	child := t.NewPersistentInode(ctx, sampleNode, stableAttr)
+
+	logging.Debug("Created .sample directory node",
+		zap.String("table", t.tableName))
+
 	return child, 0
 }
 

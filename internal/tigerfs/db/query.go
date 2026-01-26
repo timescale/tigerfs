@@ -475,3 +475,90 @@ func (c *Client) GetLastNRows(ctx context.Context, schema, table, pkColumn strin
 	}
 	return GetLastNRows(ctx, c.pool, schema, table, pkColumn, limit)
 }
+
+// GetRandomSampleRows returns approximately N random primary key values.
+// Used by .sample/N/ paths for random sampling of large tables.
+//
+// For tables with estimated row count available, uses TABLESAMPLE BERNOULLI
+// for efficient block-level sampling. Falls back to ORDER BY RANDOM() for
+// small tables or when row count is unknown.
+//
+// Parameters:
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//   - pkColumn: Primary key column name
+//   - limit: Target number of rows to return (approximate)
+//   - estimatedRows: Estimated total row count (-1 if unknown)
+//
+// Returns primary keys as strings. The actual count may vary from the
+// requested limit due to the probabilistic nature of TABLESAMPLE.
+func GetRandomSampleRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+	logging.Debug("Getting random sample rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.Int("limit", limit),
+		zap.Int64("estimated_rows", estimatedRows))
+
+	var query string
+
+	// Use TABLESAMPLE for large tables (more efficient than ORDER BY RANDOM())
+	// BERNOULLI samples at the row level with given percentage
+	if estimatedRows > 1000 {
+		// Calculate percentage to get approximately 'limit' rows
+		// Add 20% buffer since BERNOULLI is probabilistic
+		percentage := float64(limit) * 1.2 / float64(estimatedRows) * 100.0
+		if percentage > 100 {
+			percentage = 100
+		}
+		if percentage < 0.001 {
+			percentage = 0.001 // Minimum percentage to avoid empty results
+		}
+
+		query = fmt.Sprintf(
+			`SELECT "%s" FROM "%s"."%s" TABLESAMPLE BERNOULLI(%f) LIMIT $1`,
+			pkColumn, schema, table, percentage,
+		)
+	} else {
+		// For small tables or unknown size, use ORDER BY RANDOM()
+		query = fmt.Sprintf(
+			`SELECT "%s" FROM "%s"."%s" ORDER BY RANDOM() LIMIT $1`,
+			pkColumn, schema, table,
+		)
+	}
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query random sample: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Got random sample rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int("requested", limit),
+		zap.Int("returned", len(pks)))
+
+	return pks, nil
+}
+
+// GetRandomSampleRows is a convenience wrapper for Client
+func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetRandomSampleRows(ctx, c.pool, schema, table, pkColumn, limit, estimatedRows)
+}
