@@ -136,6 +136,10 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Name: ".count",
 			Mode: syscall.S_IFREG,
 		},
+		fuse.DirEntry{
+			Name: ".all",
+			Mode: syscall.S_IFDIR,
+		},
 	)
 
 	// Add single-column index directories (e.g., .email/, .category/)
@@ -191,6 +195,11 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Check if this is a metadata file lookup
 	if name == ".columns" || name == ".schema" || name == ".count" {
 		return t.lookupMetadataFile(ctx, name)
+	}
+
+	// Check if this is the .all directory (bypass max_ls_rows)
+	if name == ".all" {
+		return t.lookupAllDirectory(ctx)
 	}
 
 	// Check if this is an index directory lookup (e.g., .email)
@@ -255,6 +264,24 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
+	return child, 0
+}
+
+// lookupAllDirectory handles lookup for the .all directory that bypasses max_ls_rows
+func (t *TableNode) lookupAllDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .all directory",
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	allNode := NewAllRowsNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	child := t.NewPersistentInode(ctx, allNode, stableAttr)
+
+	logging.Debug("Created .all directory node",
+		zap.String("table", t.tableName))
+
 	return child, 0
 }
 

@@ -131,3 +131,55 @@ func (c *Client) ListRows(ctx context.Context, schema, table, pkColumn string, l
 	}
 	return ListRows(ctx, c.pool, schema, table, pkColumn, limit)
 }
+
+// ListAllRows returns all primary key values from a table without any limit.
+// Used by .all/ paths to explicitly bypass max_ls_rows restriction.
+func ListAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string) ([]string, error) {
+	logging.Debug("Listing all rows (no limit)",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn))
+
+	// Build query without LIMIT
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s"`,
+		pkColumn, schema, table, pkColumn,
+	)
+
+	rows, err := pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list all rows: %w", err)
+	}
+	defer rows.Close()
+
+	var pkValues []string
+	for rows.Next() {
+		var pkValue interface{}
+		if err := rows.Scan(&pkValue); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key value: %w", err)
+		}
+
+		// Convert PK value to string
+		pkStr := fmt.Sprintf("%v", pkValue)
+		pkValues = append(pkValues, pkStr)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Listed all rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int("count", len(pkValues)))
+
+	return pkValues, nil
+}
+
+// ListAllRows is a convenience wrapper for Client
+func (c *Client) ListAllRows(ctx context.Context, schema, table, pkColumn string) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return ListAllRows(ctx, c.pool, schema, table, pkColumn)
+}

@@ -2254,7 +2254,59 @@ ls /tmp/testmount/users/
 
 ---
 
-### Task 4.6: Implement .first/N/ and .last/N/ Pagination
+### Task 4.6: Implement .all/ Escape Hatch for Large Tables
+
+**Objective:** Allow users to explicitly bypass max_ls_rows limit via .all/ path
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/all.go`:
+   - Implement `AllRowsNode` struct
+   - Implement `Readdir()` that:
+     - Checks row count estimate from cache
+     - Logs Warn if table exceeds max_ls_rows
+     - Lists ALL rows without limit
+   - Implement `Lookup()` for accessing rows within .all/
+2. Add `ListAllRows()` to `internal/tigerfs/db/keys.go`:
+   - Same as `ListRows()` but without LIMIT clause
+3. Update `internal/tigerfs/fuse/table.go`:
+   - Add `.all` directory entry in `Readdir()`
+   - Handle `.all` lookup in `Lookup()`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/all.go`
+- `internal/tigerfs/fuse/all_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/keys.go`
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# Test .all/ on small table (no warning)
+ls /tmp/testmount/users/.all/
+# Should list all rows
+
+# Test .all/ on large table (warning in logs)
+ls /tmp/testmount/large_table/.all/
+# Log should show: Warn: Listing all rows for large table 'large_table' (~N rows) via .all/ path
+
+# Access row within .all/
+cat /tmp/testmount/users/.all/1.json
+# Should return row data
+```
+
+**Completion Criteria:**
+- [ ] `.all/` directory listed in table directory
+- [ ] `.all/` bypasses max_ls_rows limit
+- [ ] Warn logged for large tables
+- [ ] Rows accessible within .all/
+- [ ] Tests pass
+
+---
+
+### Task 4.7: Implement .first/N/ and .last/N/ Pagination
 
 **Objective:** Access first N or last N rows via .first/N/ and .last/N/ paths
 
@@ -2306,7 +2358,7 @@ cat /tmp/testmount/users/.last/50/14999/email
 
 ---
 
-### Task 4.7: Implement .sample/N/ Random Sampling
+### Task 4.8: Implement .sample/N/ Random Sampling
 
 **Objective:** Access random N rows via .sample/N/ path
 
@@ -2343,7 +2395,7 @@ ls /tmp/testmount/users/.sample/100/
 
 ---
 
-### Task 4.8: Implement .count File
+### Task 4.9: Implement .count File
 
 **Objective:** Show table row count in .count file
 
@@ -2373,7 +2425,7 @@ cat /tmp/testmount/users/.count
 
 ---
 
-### Task 4.9: Implement Permission Discovery
+### Task 4.10: Implement Permission Discovery
 
 **Objective:** Query PostgreSQL table privileges
 
@@ -2411,7 +2463,7 @@ go test -v ./internal/tigerfs/db/ -run TestGetTablePermissions
 
 ---
 
-### Task 4.10: Implement Permission Mapping
+### Task 4.11: Implement Permission Mapping
 
 **Objective:** Map PostgreSQL privileges to filesystem permissions
 
@@ -2453,7 +2505,7 @@ echo 'test' > /tmp/testmount/users/1/email
 
 ---
 
-### Task 4.11: Implement Timestamps
+### Task 4.12: Implement Timestamps
 
 **Objective:** Show file modification times based on table columns
 
@@ -2487,7 +2539,7 @@ ls -l /tmp/testmount/users/1
 
 ---
 
-### Task 4.12: Implement File Sizes
+### Task 4.13: Implement File Sizes
 
 **Objective:** Calculate and return accurate file sizes
 
@@ -2522,7 +2574,7 @@ ls -lh /tmp/testmount/users/1/email
 
 ---
 
-### Task 4.13: Implement Schema Flattening
+### Task 4.14: Implement Schema Flattening
 
 **Objective:** Show public schema tables at root, other schemas with prefix
 
@@ -2570,7 +2622,7 @@ ls /tmp/testmount/.schemas/public/
 
 ---
 
-### Task 4.14: Support Non-SERIAL Primary Keys
+### Task 4.15: Support Non-SERIAL Primary Keys
 
 **Objective:** Support tables with primary keys that aren't SERIAL/auto-incrementing integers
 
@@ -2622,7 +2674,7 @@ cat /tmp/testmount/settings/theme/value
 
 ---
 
-### Task 4.15: Support Tables Without Primary Keys
+### Task 4.16: Support Tables Without Primary Keys
 
 **Objective:** Allow read-only access to tables without primary keys using ctid
 
@@ -2675,7 +2727,7 @@ echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
 
 ---
 
-### Task 4.16: Support Database Views
+### Task 4.17: Support Database Views
 
 **Objective:** Expose PostgreSQL views alongside tables with appropriate read/write behavior
 
@@ -2686,7 +2738,7 @@ Updatable views support writes (PostgreSQL handles); non-updatable views return 
 **Key Design Points:**
 - Simple single-table views may have a primary key and be updatable
 - JOIN views typically have no primary key, so they:
-  - Use `ctid` for row identification (like Task 4.15)
+  - Use `ctid` for row identification (like Task 4.16)
   - Are read-only (JOINs are generally non-updatable)
   - Can be browsed via `.first/N/` or `.sample/N/` paths
 
@@ -2705,7 +2757,7 @@ Updatable views support writes (PostgreSQL handles); non-updatable views return 
    - Updatable views: writes work (PostgreSQL handles)
    - Non-updatable views: return EACCES with clear error message
 4. Ensure JOIN views work:
-   - No PK → falls back to ctid-based access (Task 4.15)
+   - No PK → falls back to ctid-based access (Task 4.16)
    - Read-only browsing via `.first/N/`, `.sample/N/`
 
 **Files to Modify:**
@@ -2755,7 +2807,7 @@ echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
 
 ---
 
-### Task 4.17: Support TimescaleDB Hypertables
+### Task 4.18: Support TimescaleDB Hypertables
 
 **Objective:** Proper support for TimescaleDB hypertables with time-based access
 
@@ -2813,7 +2865,7 @@ ls /tmp/testmount/metrics/.chunks/
 
 ---
 
-### Task 4.18: Example Workflows for Advanced Features
+### Task 4.19: Example Workflows for Advanced Features
 
 **Objective:** Create documentation with real-world examples for advanced TigerFS features
 
