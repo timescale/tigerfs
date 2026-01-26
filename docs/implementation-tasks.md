@@ -2943,7 +2943,76 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 5.5: Write Documentation
+### Task 5.5: Daemon Mode Support
+
+**Objective:** Add `--daemon` flag for proper background execution with PID file management
+
+**Background:** Currently `tigerfs mount` runs in foreground (blocking), which is correct for containers and process managers. However, for traditional deployment, a `--daemon` flag provides cleaner backgrounding than shell `&`.
+
+**Steps:**
+1. Add flags to mount command in `internal/tigerfs/cmd/mount.go`:
+   - `--daemon` - Fork to background, write PID file
+   - `--foreground` / `-f` - Explicit foreground (default, for clarity in scripts)
+   - `--pid-file` - Custom PID file location (default: `~/.tigerfs/<mountpoint-hash>.pid`)
+2. Implement daemonization in `internal/tigerfs/daemon/daemon.go`:
+   - Fork process (platform-specific)
+   - Detach from terminal (setsid on Unix)
+   - Write PID to file
+   - Redirect stdout/stderr to log file
+3. Update `unmount` command to read PID file:
+   - If FUSE unmount fails, can signal process via PID
+   - Clean up PID file after unmount
+4. Handle platform differences:
+   - Unix: fork + setsid
+   - Windows: Different approach or skip daemon mode
+5. Update `status` command to show daemon status from PID file
+
+**Files to Create:**
+- `internal/tigerfs/daemon/daemon.go`
+- `internal/tigerfs/daemon/daemon_unix.go` (build-tagged)
+- `internal/tigerfs/daemon/daemon_windows.go` (stub or alternative)
+- `internal/tigerfs/daemon/pidfile.go`
+
+**Files to Modify:**
+- `internal/tigerfs/cmd/mount.go`
+- `internal/tigerfs/cmd/unmount.go`
+- `internal/tigerfs/cmd/status.go`
+
+**Verification:**
+```bash
+# Start as daemon
+tigerfs mount --daemon postgres://... /mnt/db
+# Should return immediately, mount in background
+
+# Check PID file
+cat ~/.tigerfs/*.pid
+# Should show PID
+
+# Verify mount
+ls /mnt/db
+# Should work
+
+# Check status
+tigerfs status
+# Should show mount with PID
+
+# Stop daemon
+tigerfs unmount /mnt/db
+# Should unmount and clean up PID file
+```
+
+**Completion Criteria:**
+- [ ] `--daemon` flag forks to background
+- [ ] PID file written and cleaned up
+- [ ] `--foreground` flag works (explicit default)
+- [ ] `unmount` cleans up PID file
+- [ ] `status` shows daemon info
+- [ ] Works on Linux and macOS
+- [ ] Windows handled gracefully (skip or alternative)
+
+---
+
+### Task 5.6: Write Documentation
 
 **Objective:** Expand README and create guides
 
@@ -2990,7 +3059,7 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 5.6: Performance Testing
+### Task 5.7: Performance Testing
 
 **Objective:** Benchmark operations, document performance
 
@@ -3029,7 +3098,7 @@ go test -bench=. ./test/benchmark/
 
 ---
 
-### Task 5.7: Bug Fixes and Polish
+### Task 5.8: Bug Fixes and Polish
 
 **Objective:** Fix remaining issues, improve UX
 
@@ -3062,7 +3131,7 @@ grep -r "TODO" internal/
 
 ---
 
-### Task 5.8: Final Testing and v0.1 Release
+### Task 5.9: Final Testing and v0.1 Release
 
 **Objective:** Release v0.1
 
