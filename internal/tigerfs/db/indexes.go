@@ -222,3 +222,132 @@ func (c *Client) GetCompositeIndexes(ctx context.Context, schema, table string) 
 	}
 	return GetCompositeIndexes(ctx, c.pool, schema, table)
 }
+
+// GetDistinctValues retrieves distinct values for an indexed column.
+// Used by the FUSE layer to list contents of index directories (e.g., ls .email/).
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - pool: Database connection pool
+//   - schema: Schema name
+//   - table: Table name
+//   - column: Column name to get distinct values for
+//   - limit: Maximum number of values to return (prevents huge listings)
+//
+// Returns values as strings. NULL values are excluded.
+// Values are ordered for consistent directory listings.
+func GetDistinctValues(ctx context.Context, pool *pgxpool.Pool, schema, table, column string, limit int) ([]string, error) {
+	logging.Debug("Querying distinct values",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", column),
+		zap.Int("limit", limit))
+
+	// Query distinct non-null values, ordered for consistent listings
+	query := fmt.Sprintf(
+		`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE "%s" IS NOT NULL ORDER BY "%s" LIMIT $1`,
+		column, schema, table, column, column,
+	)
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct values: %w", err)
+	}
+	defer rows.Close()
+
+	var values []string
+	for rows.Next() {
+		var value interface{}
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("failed to scan distinct value: %w", err)
+		}
+		// Convert to string representation
+		values = append(values, fmt.Sprintf("%v", value))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating distinct values: %w", err)
+	}
+
+	logging.Debug("Found distinct values",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", column),
+		zap.Int("count", len(values)))
+
+	return values, nil
+}
+
+// GetDistinctValues is a convenience wrapper for Client.
+func (c *Client) GetDistinctValues(ctx context.Context, schema, table, column string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetDistinctValues(ctx, c.pool, schema, table, column, limit)
+}
+
+// GetRowsByIndexValue retrieves primary keys of rows matching an indexed column value.
+// Used by the FUSE layer to resolve index paths like .email/foo@x.com/.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - pool: Database connection pool
+//   - schema: Schema name
+//   - table: Table name
+//   - column: Indexed column to query
+//   - value: Value to match
+//   - pkColumn: Primary key column to return
+//   - limit: Maximum number of rows to return
+//
+// Returns primary key values as strings. If no rows match, returns empty slice (not error).
+func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value, pkColumn string, limit int) ([]string, error) {
+	logging.Debug("Querying rows by index value",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", column),
+		zap.String("value", value),
+		zap.String("pk_column", pkColumn),
+		zap.Int("limit", limit))
+
+	// Query rows matching the index value, returning PKs
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" WHERE "%s" = $1 ORDER BY "%s" LIMIT $2`,
+		pkColumn, schema, table, column, pkColumn,
+	)
+
+	rows, err := pool.Query(ctx, query, value, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query by index value: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Found rows by index value",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", column),
+		zap.String("value", value),
+		zap.Int("count", len(pks)))
+
+	return pks, nil
+}
+
+// GetRowsByIndexValue is a convenience wrapper for Client.
+func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column, value, pkColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetRowsByIndexValue(ctx, c.pool, schema, table, column, value, pkColumn, limit)
+}

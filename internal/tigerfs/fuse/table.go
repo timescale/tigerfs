@@ -82,8 +82,17 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
+	// Get indexes for index directory entries
+	indexes, err := t.db.GetSingleColumnIndexes(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Warn("Failed to get indexes, continuing without index directories",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		indexes = nil // Continue without index directories
+	}
+
 	// Convert rows to directory entries
-	entries := make([]fuse.DirEntry, 0, len(rows)+3) // +3 for metadata files
+	entries := make([]fuse.DirEntry, 0, len(rows)+len(indexes)+3)
 
 	// Add metadata files first
 	entries = append(entries,
@@ -101,6 +110,21 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		},
 	)
 
+	// Add index directories (e.g., .email/, .category/)
+	// Skip primary key index since rows are already accessible by PK
+	for _, idx := range indexes {
+		if idx.IsPrimary {
+			continue
+		}
+		if len(idx.Columns) > 0 {
+			// Index directory name is dotfile version of column name
+			entries = append(entries, fuse.DirEntry{
+				Name: "." + idx.Columns[0],
+				Mode: syscall.S_IFDIR,
+			})
+		}
+	}
+
 	// Add rows
 	for _, rowPK := range rows {
 		entries = append(entries, fuse.DirEntry{
@@ -112,13 +136,14 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("Table directory listing",
 		zap.String("table", t.tableName),
 		zap.Int("row_count", len(rows)),
+		zap.Int("index_count", len(indexes)),
 		zap.Int("total_entries", len(entries)),
 		zap.Int("max_ls_rows", t.cfg.MaxLsRows))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a row by primary key value or metadata file
+// Lookup looks up a row by primary key value, metadata file, or index directory
 func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("TableNode.Lookup called",
 		zap.String("table", t.tableName),
@@ -127,6 +152,11 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Check if this is a metadata file lookup
 	if name == ".columns" || name == ".schema" || name == ".count" {
 		return t.lookupMetadataFile(ctx, name)
+	}
+
+	// Check if this is an index directory lookup (e.g., .email)
+	if strings.HasPrefix(name, ".") && len(name) > 1 {
+		return t.lookupIndexDirectory(ctx, name)
 	}
 
 	// Parse filename to extract PK value and format
@@ -224,6 +254,66 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string) (*fs.In
 		zap.String("table", t.tableName),
 		zap.String("file", name),
 		zap.String("type", fileType))
+
+	return child, 0
+}
+
+// lookupIndexDirectory handles lookups for index directories (e.g., .email/).
+// Index directories provide an alternative navigation path using indexed columns,
+// enabling efficient lookups like: ls /mnt/db/users/.email/foo@example.com/
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - name: The dotfile name being looked up (e.g., ".email")
+//
+// Returns an IndexNode if the column has an index, ENOENT otherwise.
+// Primary key indexes are excluded since rows are already accessible by PK directly.
+//
+// The column name is extracted by stripping the leading dot from the name.
+func (t *TableNode) lookupIndexDirectory(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+	// Extract column name from dotfile name (e.g., ".email" -> "email")
+	columnName := name[1:]
+
+	logging.Debug("Looking up index directory",
+		zap.String("table", t.tableName),
+		zap.String("column", columnName))
+
+	// Check if this column has an index (must be leading column)
+	idx, err := t.db.GetIndexByColumn(ctx, t.schema, t.tableName, columnName)
+	if err != nil {
+		logging.Error("Failed to check for index",
+			zap.String("table", t.tableName),
+			zap.String("column", columnName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	if idx == nil {
+		logging.Debug("No index found for column",
+			zap.String("table", t.tableName),
+			zap.String("column", columnName))
+		return nil, syscall.ENOENT
+	}
+
+	// Primary key indexes are excluded - rows already accessible via PK
+	if idx.IsPrimary {
+		logging.Debug("Skipping primary key index",
+			zap.String("table", t.tableName),
+			zap.String("column", columnName))
+		return nil, syscall.ENOENT
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	indexNode := NewIndexNode(t.cfg, t.db, t.schema, t.tableName, columnName, idx, t.partialRows)
+	child := t.NewPersistentInode(ctx, indexNode, stableAttr)
+
+	logging.Debug("Created index directory node",
+		zap.String("table", t.tableName),
+		zap.String("column", columnName),
+		zap.String("index", idx.Name))
 
 	return child, 0
 }

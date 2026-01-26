@@ -422,3 +422,208 @@ func TestClient_GetCompositeIndexes_NilPool(t *testing.T) {
 		t.Error("Expected error for nil pool")
 	}
 }
+
+// TestGetDistinctValues verifies retrieval of distinct column values.
+func TestGetDistinctValues(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test table with some data
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_distinct_values (
+			id serial PRIMARY KEY,
+			category text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Insert test data with duplicate categories
+	_, _ = client.pool.Exec(ctx, `
+		INSERT INTO test_distinct_values (category) VALUES
+		('electronics'), ('books'), ('electronics'), ('clothing'), ('books'), (NULL)
+	`)
+
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_distinct_values")
+	}()
+
+	values, err := client.GetDistinctValues(ctx, "public", "test_distinct_values", "category", 100)
+	if err != nil {
+		t.Fatalf("GetDistinctValues() failed: %v", err)
+	}
+
+	// Should have 3 distinct non-null values
+	if len(values) != 3 {
+		t.Errorf("Expected 3 distinct values, got %d: %v", len(values), values)
+	}
+
+	// Verify expected values present
+	expected := map[string]bool{"electronics": false, "books": false, "clothing": false}
+	for _, v := range values {
+		expected[v] = true
+	}
+	for k, found := range expected {
+		if !found {
+			t.Errorf("Expected value '%s' not found", k)
+		}
+	}
+
+	t.Logf("Found %d distinct values: %v", len(values), values)
+}
+
+// TestGetDistinctValues_Limit verifies limit is respected.
+func TestGetDistinctValues_Limit(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test table with many distinct values
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_distinct_limit (
+			id serial PRIMARY KEY,
+			value text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Insert 10 distinct values
+	for i := 0; i < 10; i++ {
+		_, _ = client.pool.Exec(ctx, `INSERT INTO test_distinct_limit (value) VALUES ($1)`,
+			string(rune('A'+i)))
+	}
+
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_distinct_limit")
+	}()
+
+	// Request only 3
+	values, err := client.GetDistinctValues(ctx, "public", "test_distinct_limit", "value", 3)
+	if err != nil {
+		t.Fatalf("GetDistinctValues() failed: %v", err)
+	}
+
+	if len(values) != 3 {
+		t.Errorf("Expected 3 values (limit), got %d", len(values))
+	}
+}
+
+// TestGetRowsByIndexValue verifies retrieval of rows by index value.
+func TestGetRowsByIndexValue(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test table
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_rows_by_index (
+			id serial PRIMARY KEY,
+			category text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Insert test data
+	_, _ = client.pool.Exec(ctx, `
+		INSERT INTO test_rows_by_index (category) VALUES
+		('electronics'), ('books'), ('electronics'), ('books')
+	`)
+
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_rows_by_index")
+	}()
+
+	// Query rows with category='electronics'
+	pks, err := client.GetRowsByIndexValue(ctx, "public", "test_rows_by_index", "category", "electronics", "id", 100)
+	if err != nil {
+		t.Fatalf("GetRowsByIndexValue() failed: %v", err)
+	}
+
+	// Should have 2 rows with 'electronics'
+	if len(pks) != 2 {
+		t.Errorf("Expected 2 rows, got %d: %v", len(pks), pks)
+	}
+
+	// Query non-existent value
+	pks, err = client.GetRowsByIndexValue(ctx, "public", "test_rows_by_index", "category", "nonexistent", "id", 100)
+	if err != nil {
+		t.Fatalf("GetRowsByIndexValue() failed: %v", err)
+	}
+
+	if len(pks) != 0 {
+		t.Errorf("Expected 0 rows for nonexistent value, got %d", len(pks))
+	}
+}
+
+// TestClient_GetDistinctValues_NilPool verifies error on uninitialized client.
+func TestClient_GetDistinctValues_NilPool(t *testing.T) {
+	client := &Client{cfg: &config.Config{}}
+	ctx := context.Background()
+
+	_, err := client.GetDistinctValues(ctx, "public", "test", "col", 100)
+	if err == nil {
+		t.Error("Expected error for nil pool")
+	}
+}
+
+// TestClient_GetRowsByIndexValue_NilPool verifies error on uninitialized client.
+func TestClient_GetRowsByIndexValue_NilPool(t *testing.T) {
+	client := &Client{cfg: &config.Config{}}
+	ctx := context.Background()
+
+	_, err := client.GetRowsByIndexValue(ctx, "public", "test", "col", "val", "id", 100)
+	if err == nil {
+		t.Error("Expected error for nil pool")
+	}
+}
