@@ -731,6 +731,153 @@ return syscall.EIO
 4. Write unit tests for each layer
 5. Write integration test for end-to-end flow
 
+## Code Documentation Standards
+
+This project follows specific commenting standards to ensure code is maintainable and self-documenting. Comments should explain "why" not just "what" - the code itself shows what it does.
+
+### Comment Levels
+
+We define four levels of documentation verbosity:
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| **Level 1 - Minimal** | Exported symbols only, brief one-line descriptions | Internal utilities, obvious code |
+| **Level 2 - Standard** | Adds parameter/return docs, brief inline comments | Tests, simple internal code |
+| **Level 3 - Thorough** | Full function docs, all fields documented, explains "why" | Most production code |
+| **Level 4 - Comprehensive** | Package docs with examples, design rationale, edge cases | Core packages, public APIs |
+
+### Level Assignment by Code Type
+
+| Code Type | Level | Notes |
+|-----------|-------|-------|
+| Core packages (`db`, `fuse`, `mount`) | Level 3-4 | These are complex and need full documentation |
+| Utility packages (`format`, `util`) | Level 3 | Important but simpler logic |
+| Commands (`cmd`) | Level 3 | User-facing, needs clear documentation |
+| Configuration (`config`) | Level 3 | Must document all options |
+| Unit tests | Level 2 | Test names should be self-documenting |
+| Integration tests | Level 2-3 | May need more context for complex setup |
+
+### Level Examples
+
+**Level 2 (Tests):**
+```go
+// TestRegistryUnregisterIdempotent verifies that unregistering a non-existent
+// mountpoint doesn't cause an error.
+func TestRegistryUnregisterIdempotent(t *testing.T) {
+    tmpDir := t.TempDir()
+    registry, err := NewRegistry(filepath.Join(tmpDir, "mounts.json"))
+    if err != nil {
+        t.Fatalf("NewRegistry failed: %v", err)
+    }
+
+    // Unregister something that doesn't exist - should not error
+    if err := registry.Unregister("/mnt/nonexistent"); err != nil {
+        t.Errorf("Unregister of non-existent entry should not error, got: %v", err)
+    }
+}
+```
+
+**Level 3 (Production Code):**
+```go
+// Registry manages the collection of active TigerFS mounts.
+//
+// The registry persists mount information to a JSON file, enabling commands
+// like `unmount`, `status`, and `list` to discover and interact with running
+// TigerFS instances.
+//
+// Registry is safe for concurrent use.
+type Registry struct {
+    // path is the filesystem path to the JSON registry file.
+    path string
+
+    // mu protects concurrent access to the registry file.
+    // RLock for read operations, Lock for write operations.
+    mu sync.RWMutex
+}
+
+// NewRegistry creates a new Registry instance.
+//
+// Parameters:
+//   - path: The filesystem path for the registry file. If empty, uses DefaultRegistryPath().
+//
+// The function creates the parent directory if it doesn't exist (with mode 0700
+// for privacy, since the registry may contain connection details).
+//
+// Returns an error if:
+//   - path is empty and DefaultRegistryPath() fails
+//   - The parent directory cannot be created
+func NewRegistry(path string) (*Registry, error) {
+    // ... implementation
+}
+```
+
+**Level 4 (Core Package Header):**
+```go
+// Package mount provides mount state tracking for TigerFS filesystem instances.
+//
+// TigerFS mounts run as long-lived processes. To support commands like `unmount`,
+// `status`, and `list`, we need to track which mounts are active. This package
+// provides a Registry that persists mount information to a JSON file in the
+// user's config directory (typically ~/.config/tigerfs/mounts.json).
+//
+// The registry stores:
+//   - Mountpoint path (the directory where the filesystem is mounted)
+//   - Process ID (PID) of the TigerFS process serving the mount
+//   - Database connection info (sanitized - no passwords)
+//   - Start time of the mount
+//
+// Typical usage:
+//
+//     registry, err := mount.NewRegistry("")
+//     if err != nil {
+//         return err
+//     }
+//     err = registry.Register(mount.Entry{
+//         Mountpoint: "/mnt/db",
+//         PID:        os.Getpid(),
+//         Database:   "postgres://localhost/mydb",
+//         StartTime:  time.Now(),
+//     })
+package mount
+```
+
+### Documentation Checklist
+
+When writing new code, ensure:
+
+- [ ] Package has a doc comment explaining its purpose (Level 3+)
+- [ ] All exported types have doc comments
+- [ ] All exported functions document parameters and return values (Level 3+)
+- [ ] All struct fields have comments explaining their purpose (Level 3+)
+- [ ] Non-obvious logic has inline comments explaining "why"
+- [ ] Error conditions are documented
+- [ ] Edge cases and assumptions are noted (Level 4)
+
+### Comment-Code Consistency
+
+**When reading or writing code, always check for inconsistencies between comments and code.** Stale or incorrect comments are worse than no comments because they actively mislead readers.
+
+Common inconsistencies to watch for:
+- Function comments that don't match the actual parameters or return values
+- Comments describing behavior that the code no longer implements
+- TODO comments for work that has been completed
+- Example code in comments that doesn't match the current API
+- Inline comments that describe what the *previous* line did (after refactoring)
+
+**If you find inconsistencies:**
+1. Flag them to the user before making changes
+2. Propose correcting either the comment or the code (depending on which is wrong)
+3. If unclear which is correct, ask for clarification
+
+This applies when:
+- Writing new code (ensure comments match implementation)
+- Modifying existing code (update comments to reflect changes)
+- Reviewing code (flag any mismatches found)
+
+### Note on Existing Code
+
+Existing code in this repository may not yet meet these standards. Backfilling documentation is a separate task. When modifying existing files, update comments for the code you touch but don't feel obligated to document the entire file.
+
 ## Contribution Guidelines
 
 ### Before Committing
