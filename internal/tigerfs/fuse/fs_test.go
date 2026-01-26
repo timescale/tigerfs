@@ -156,6 +156,27 @@ func TestClose_SafeWhenNil(t *testing.T) {
 	}
 }
 
+func TestIsMounted(t *testing.T) {
+	// Test empty mountpoint
+	if isMounted("") {
+		t.Error("isMounted('') should return false")
+	}
+
+	// Test non-existent path (should return false on Linux, true on other systems as fallback)
+	result := isMounted("/nonexistent/path/that/should/not/exist")
+	// On Linux with /proc/mounts, this should be false
+	// On other systems, it may return true as a fallback
+	t.Logf("isMounted for non-existent path: %v", result)
+
+	// Test a known mount point (root is always mounted)
+	// On Linux, "/" should be in /proc/mounts
+	if _, err := os.Stat("/proc/mounts"); err == nil {
+		if !isMounted("/") {
+			t.Error("isMounted('/') should return true on Linux")
+		}
+	}
+}
+
 // Helper functions
 
 func isFUSEAvailable(t *testing.T) bool {

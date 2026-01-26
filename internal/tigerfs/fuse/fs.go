@@ -1,8 +1,11 @@
 package fuse
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -120,12 +123,14 @@ func (f *FS) Close() error {
 	var lastErr error
 
 	// 1. Unmount filesystem if still mounted
-	if f.server != nil {
+	if f.server != nil && isMounted(f.mountpoint) {
 		logging.Debug("Unmounting filesystem")
 		if err := f.server.Unmount(); err != nil {
 			logging.Warn("Failed to unmount filesystem", zap.Error(err))
 			lastErr = err
 		}
+	} else if f.server != nil {
+		logging.Debug("Filesystem already unmounted, skipping unmount")
 	}
 
 	// 2. Close database connection
@@ -143,4 +148,31 @@ func (f *FS) Close() error {
 
 	logging.Info("Filesystem closed successfully")
 	return nil
+}
+
+// isMounted checks if the given path is currently a FUSE mount point.
+// This is used to avoid trying to unmount an already-unmounted filesystem.
+func isMounted(mountpoint string) bool {
+	if mountpoint == "" {
+		return false
+	}
+
+	// Check /proc/mounts on Linux
+	file, err := os.Open("/proc/mounts")
+	if err != nil {
+		// On non-Linux systems (macOS), assume mounted if we can't check
+		// The unmount will fail gracefully if already unmounted
+		return true
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) >= 2 && fields[1] == mountpoint {
+			return true
+		}
+	}
+
+	return false
 }
