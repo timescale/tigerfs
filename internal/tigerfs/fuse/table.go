@@ -82,17 +82,26 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
-	// Get indexes for index directory entries
-	indexes, err := t.db.GetSingleColumnIndexes(ctx, t.schema, t.tableName)
+	// Get single-column indexes for index directory entries
+	singleIndexes, err := t.db.GetSingleColumnIndexes(ctx, t.schema, t.tableName)
 	if err != nil {
-		logging.Warn("Failed to get indexes, continuing without index directories",
+		logging.Warn("Failed to get single-column indexes, continuing without",
 			zap.String("table", t.tableName),
 			zap.Error(err))
-		indexes = nil // Continue without index directories
+		singleIndexes = nil
+	}
+
+	// Get composite indexes for multi-column navigation
+	compositeIndexes, err := t.db.GetCompositeIndexes(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Warn("Failed to get composite indexes, continuing without",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		compositeIndexes = nil
 	}
 
 	// Convert rows to directory entries
-	entries := make([]fuse.DirEntry, 0, len(rows)+len(indexes)+3)
+	entries := make([]fuse.DirEntry, 0, len(rows)+len(singleIndexes)+len(compositeIndexes)+3)
 
 	// Add metadata files first
 	entries = append(entries,
@@ -110,19 +119,29 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		},
 	)
 
-	// Add index directories (e.g., .email/, .category/)
+	// Add single-column index directories (e.g., .email/, .category/)
 	// Skip primary key index since rows are already accessible by PK
-	for _, idx := range indexes {
+	for _, idx := range singleIndexes {
 		if idx.IsPrimary {
 			continue
 		}
 		if len(idx.Columns) > 0 {
-			// Index directory name is dotfile version of column name
 			entries = append(entries, fuse.DirEntry{
 				Name: "." + idx.Columns[0],
 				Mode: syscall.S_IFDIR,
 			})
 		}
+	}
+
+	// Add composite index directories (e.g., .last_name.first_name/)
+	for _, idx := range compositeIndexes {
+		if idx.IsPrimary {
+			continue
+		}
+		entries = append(entries, fuse.DirEntry{
+			Name: FormatCompositeIndexName(idx.Columns),
+			Mode: syscall.S_IFDIR,
+		})
 	}
 
 	// Add rows
@@ -136,7 +155,8 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("Table directory listing",
 		zap.String("table", t.tableName),
 		zap.Int("row_count", len(rows)),
-		zap.Int("index_count", len(indexes)),
+		zap.Int("single_index_count", len(singleIndexes)),
+		zap.Int("composite_index_count", len(compositeIndexes)),
 		zap.Int("total_entries", len(entries)),
 		zap.Int("max_ls_rows", t.cfg.MaxLsRows))
 
@@ -258,23 +278,28 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string) (*fs.In
 	return child, 0
 }
 
-// lookupIndexDirectory handles lookups for index directories (e.g., .email/).
-// Index directories provide an alternative navigation path using indexed columns,
-// enabling efficient lookups like: ls /mnt/db/users/.email/foo@example.com/
+// lookupIndexDirectory handles lookups for index directories.
+// Supports both single-column indexes (e.g., .email/) and composite indexes
+// (e.g., .last_name.first_name/). Index directories provide alternative navigation
+// paths using indexed columns for efficient lookups.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - name: The dotfile name being looked up (e.g., ".email")
+//   - name: The dotfile name being looked up (e.g., ".email" or ".last_name.first_name")
 //
-// Returns an IndexNode if the column has an index, ENOENT otherwise.
+// Returns an IndexNode for single-column indexes or CompositeIndexNode for multi-column.
 // Primary key indexes are excluded since rows are already accessible by PK directly.
-//
-// The column name is extracted by stripping the leading dot from the name.
 func (t *TableNode) lookupIndexDirectory(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
-	// Extract column name from dotfile name (e.g., ".email" -> "email")
+	// Check if this is a composite index name (e.g., ".last_name.first_name")
+	compositeColumns := ParseCompositeIndexName(name)
+	if compositeColumns != nil {
+		return t.lookupCompositeIndexDirectory(ctx, name, compositeColumns)
+	}
+
+	// Single-column index: extract column name from dotfile name (e.g., ".email" -> "email")
 	columnName := name[1:]
 
-	logging.Debug("Looking up index directory",
+	logging.Debug("Looking up single-column index directory",
 		zap.String("table", t.tableName),
 		zap.String("column", columnName))
 
@@ -316,6 +341,78 @@ func (t *TableNode) lookupIndexDirectory(ctx context.Context, name string) (*fs.
 		zap.String("index", idx.Name))
 
 	return child, 0
+}
+
+// lookupCompositeIndexDirectory handles lookups for composite index directories.
+// Composite indexes span multiple columns and use dot-separated names like .last_name.first_name/.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - name: The full dotfile name (e.g., ".last_name.first_name")
+//   - columns: The parsed column names (e.g., ["last_name", "first_name"])
+//
+// Verifies that a composite index exists with exactly these columns in this order.
+// Returns ENOENT if no matching composite index is found.
+func (t *TableNode) lookupCompositeIndexDirectory(ctx context.Context, name string, columns []string) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up composite index directory",
+		zap.String("table", t.tableName),
+		zap.Strings("columns", columns))
+
+	// Get all composite indexes and find one that matches these columns exactly
+	compositeIndexes, err := t.db.GetCompositeIndexes(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get composite indexes",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	// Find index with matching columns
+	var matchingIdx *db.Index
+	for i := range compositeIndexes {
+		idx := &compositeIndexes[i]
+		if idx.IsPrimary {
+			continue
+		}
+		if columnsMatch(idx.Columns, columns) {
+			matchingIdx = idx
+			break
+		}
+	}
+
+	if matchingIdx == nil {
+		logging.Debug("No composite index found for columns",
+			zap.String("table", t.tableName),
+			zap.Strings("columns", columns))
+		return nil, syscall.ENOENT
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	compositeNode := NewCompositeIndexNode(t.cfg, t.db, t.schema, t.tableName, columns, matchingIdx, t.partialRows)
+	child := t.NewPersistentInode(ctx, compositeNode, stableAttr)
+
+	logging.Debug("Created composite index directory node",
+		zap.String("table", t.tableName),
+		zap.Strings("columns", columns),
+		zap.String("index", matchingIdx.Name))
+
+	return child, 0
+}
+
+// columnsMatch checks if two column slices are equal (same length and elements).
+func columnsMatch(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Unlink deletes a row file (rm /users/123.csv)

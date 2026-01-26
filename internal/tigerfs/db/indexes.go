@@ -351,3 +351,188 @@ func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column,
 	}
 	return GetRowsByIndexValue(ctx, c.pool, schema, table, column, value, pkColumn, limit)
 }
+
+// GetDistinctValuesFiltered retrieves distinct values for a column filtered by conditions on other columns.
+// Used by the FUSE layer to navigate composite indexes (e.g., ls .last_name.first_name/Smith/).
+//
+// For example, when navigating .last_name.first_name/Smith/, this function retrieves distinct
+// first_name values where last_name='Smith'. DISTINCT is used because the directory listing
+// should show each possible "next value" once, even if multiple rows share that value.
+// With 50 users named "Smith, John" and 30 named "Smith, Alice", the directory shows
+// just ["Alice", "John"], not 80 duplicate entries.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - pool: Database connection pool
+//   - schema: Schema name
+//   - table: Table name
+//   - targetColumn: Column to get distinct values for (the "next" column in navigation)
+//   - filterColumns: Column names for WHERE conditions (previous columns in navigation)
+//   - filterValues: Values to match for each filter column (must match filterColumns length)
+//   - limit: Maximum number of values to return
+//
+// Returns values as strings. NULL values are excluded.
+// filterColumns and filterValues must have the same length.
+func GetDistinctValuesFiltered(ctx context.Context, pool *pgxpool.Pool, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error) {
+	if len(filterColumns) != len(filterValues) {
+		return nil, fmt.Errorf("filterColumns and filterValues length mismatch: %d vs %d", len(filterColumns), len(filterValues))
+	}
+
+	logging.Debug("Querying filtered distinct values",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("target_column", targetColumn),
+		zap.Strings("filter_columns", filterColumns),
+		zap.Int("limit", limit))
+
+	// Build WHERE clause with conditions for each filter column
+	// Start with the target column IS NOT NULL condition
+	whereParts := []string{fmt.Sprintf(`"%s" IS NOT NULL`, targetColumn)}
+	args := make([]interface{}, 0, len(filterValues)+1)
+
+	for i, col := range filterColumns {
+		whereParts = append(whereParts, fmt.Sprintf(`"%s" = $%d`, col, i+1))
+		args = append(args, filterValues[i])
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(
+		`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE %s ORDER BY "%s" LIMIT $%d`,
+		targetColumn, schema, table,
+		joinStrings(whereParts, " AND "),
+		targetColumn, len(args),
+	)
+
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query filtered distinct values: %w", err)
+	}
+	defer rows.Close()
+
+	var values []string
+	for rows.Next() {
+		var value interface{}
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("failed to scan filtered distinct value: %w", err)
+		}
+		values = append(values, fmt.Sprintf("%v", value))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating filtered distinct values: %w", err)
+	}
+
+	logging.Debug("Found filtered distinct values",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("target_column", targetColumn),
+		zap.Int("count", len(values)))
+
+	return values, nil
+}
+
+// GetDistinctValuesFiltered is a convenience wrapper for Client.
+func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetDistinctValuesFiltered(ctx, c.pool, schema, table, targetColumn, filterColumns, filterValues, limit)
+}
+
+// GetRowsByCompositeIndex retrieves primary keys of rows matching multiple column conditions.
+// Used by the FUSE layer to resolve composite index paths like .last_name.first_name/Smith/John/.
+//
+// Unlike GetDistinctValuesFiltered, this returns actual row PKs (no DISTINCT) because at the
+// final navigation level we want to list all matching rows, not collapse them.
+//
+// Generates a query with multiple WHERE conditions:
+//
+//	SELECT pk FROM table WHERE col1=$1 AND col2=$2 ... ORDER BY pk LIMIT $n
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - pool: Database connection pool
+//   - schema: Schema name
+//   - table: Table name
+//   - columns: Indexed columns to query (in index order)
+//   - values: Values to match for each column (must match columns length)
+//   - pkColumn: Primary key column to return
+//   - limit: Maximum number of rows to return
+//
+// Returns primary key values as strings. If no rows match, returns empty slice (not error).
+func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+	if len(columns) != len(values) {
+		return nil, fmt.Errorf("columns and values length mismatch: %d vs %d", len(columns), len(values))
+	}
+
+	logging.Debug("Querying rows by composite index",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Strings("columns", columns),
+		zap.String("pk_column", pkColumn),
+		zap.Int("limit", limit))
+
+	// Build WHERE clause with conditions for each column
+	whereParts := make([]string, len(columns))
+	args := make([]interface{}, 0, len(values)+1)
+
+	for i, col := range columns {
+		whereParts[i] = fmt.Sprintf(`"%s" = $%d`, col, i+1)
+		args = append(args, values[i])
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" WHERE %s ORDER BY "%s" LIMIT $%d`,
+		pkColumn, schema, table,
+		joinStrings(whereParts, " AND "),
+		pkColumn, len(args),
+	)
+
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query by composite index: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Found rows by composite index",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Strings("columns", columns),
+		zap.Int("count", len(pks)))
+
+	return pks, nil
+}
+
+// GetRowsByCompositeIndex is a convenience wrapper for Client.
+func (c *Client) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetRowsByCompositeIndex(ctx, c.pool, schema, table, columns, values, pkColumn, limit)
+}
+
+// joinStrings joins strings with a separator (helper to avoid importing strings package).
+func joinStrings(parts []string, sep string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	result := parts[0]
+	for _, p := range parts[1:] {
+		result += sep + p
+	}
+	return result
+}
