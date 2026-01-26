@@ -363,23 +363,23 @@ func TestRegistryPersistence(t *testing.T) {
 // TestIsProcessRunning verifies the process detection logic.
 func TestIsProcessRunning(t *testing.T) {
 	t.Run("current process is running", func(t *testing.T) {
-		if !isProcessRunning(os.Getpid()) {
-			t.Error("isProcessRunning returned false for current process")
+		if !IsProcessRunning(os.Getpid()) {
+			t.Error("IsProcessRunning returned false for current process")
 		}
 	})
 
 	t.Run("invalid PID", func(t *testing.T) {
-		if isProcessRunning(0) {
-			t.Error("isProcessRunning returned true for PID 0")
+		if IsProcessRunning(0) {
+			t.Error("IsProcessRunning returned true for PID 0")
 		}
-		if isProcessRunning(-1) {
-			t.Error("isProcessRunning returned true for negative PID")
+		if IsProcessRunning(-1) {
+			t.Error("IsProcessRunning returned true for negative PID")
 		}
 	})
 
 	t.Run("non-existent PID", func(t *testing.T) {
 		// PID 999999 is unlikely to exist
-		if isProcessRunning(999999) {
+		if IsProcessRunning(999999) {
 			t.Skip("PID 999999 unexpectedly exists, skipping test")
 		}
 	})

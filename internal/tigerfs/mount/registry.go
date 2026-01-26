@@ -273,7 +273,7 @@ func (r *Registry) ListActive() ([]Entry, error) {
 	// Filter to only include entries with running processes.
 	var active []Entry
 	for _, e := range entries {
-		if isProcessRunning(e.PID) {
+		if IsProcessRunning(e.PID) {
 			active = append(active, e)
 		}
 	}
@@ -309,7 +309,7 @@ func (r *Registry) Cleanup() (int, error) {
 	var active []Entry
 	removed := 0
 	for _, e := range entries {
-		if isProcessRunning(e.PID) {
+		if IsProcessRunning(e.PID) {
 			active = append(active, e)
 		} else {
 			removed++
@@ -417,7 +417,7 @@ func filterMountpoint(entries []Entry, mountpoint string) []Entry {
 	return result
 }
 
-// isProcessRunning checks if a process with the given PID is still alive.
+// IsProcessRunning checks if a process with the given PID is still alive.
 //
 // On Unix systems, this works by sending signal 0 to the process. Signal 0
 // doesn't actually send a signal, but the kernel still checks if the process
@@ -429,7 +429,7 @@ func filterMountpoint(entries []Entry, mountpoint string) []Entry {
 // Returns:
 //   - true if the process exists and we can signal it.
 //   - false if the process doesn't exist, pid is invalid, or we lack permission.
-func isProcessRunning(pid int) bool {
+func IsProcessRunning(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
