@@ -361,3 +361,117 @@ func (c *Client) DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue
 	}
 	return DeleteRow(ctx, c.pool, schema, table, pkColumn, pkValue)
 }
+
+// GetFirstNRows returns the first N primary key values ordered by PK ascending.
+// Used by .first/N/ pagination paths.
+//
+// Parameters:
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//   - pkColumn: Primary key column name
+//   - limit: Maximum number of rows to return
+//
+// Returns primary keys as strings, or error on database failure.
+func GetFirstNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int) ([]string, error) {
+	logging.Debug("Getting first N rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.Int("limit", limit))
+
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" ASC LIMIT $1`,
+		pkColumn, schema, table, pkColumn,
+	)
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query first N rows: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Got first N rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int("count", len(pks)))
+
+	return pks, nil
+}
+
+// GetFirstNRows is a convenience wrapper for Client
+func (c *Client) GetFirstNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetFirstNRows(ctx, c.pool, schema, table, pkColumn, limit)
+}
+
+// GetLastNRows returns the last N primary key values ordered by PK descending.
+// Used by .last/N/ pagination paths.
+//
+// Parameters:
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//   - pkColumn: Primary key column name
+//   - limit: Maximum number of rows to return
+//
+// Returns primary keys as strings (highest values first), or error on database failure.
+func GetLastNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int) ([]string, error) {
+	logging.Debug("Getting last N rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.Int("limit", limit))
+
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" DESC LIMIT $1`,
+		pkColumn, schema, table, pkColumn,
+	)
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query last N rows: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Got last N rows",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int("count", len(pks)))
+
+	return pks, nil
+}
+
+// GetLastNRows is a convenience wrapper for Client
+func (c *Client) GetLastNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetLastNRows(ctx, c.pool, schema, table, pkColumn, limit)
+}

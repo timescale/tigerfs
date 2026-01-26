@@ -140,6 +140,14 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Name: ".all",
 			Mode: syscall.S_IFDIR,
 		},
+		fuse.DirEntry{
+			Name: ".first",
+			Mode: syscall.S_IFDIR,
+		},
+		fuse.DirEntry{
+			Name: ".last",
+			Mode: syscall.S_IFDIR,
+		},
 	)
 
 	// Add single-column index directories (e.g., .email/, .category/)
@@ -200,6 +208,14 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Check if this is the .all directory (bypass dir_listing_limit)
 	if name == ".all" {
 		return t.lookupAllDirectory(ctx)
+	}
+
+	// Check if this is a pagination directory (.first or .last)
+	if name == ".first" {
+		return t.lookupPaginationDirectory(ctx, PaginationFirst)
+	}
+	if name == ".last" {
+		return t.lookupPaginationDirectory(ctx, PaginationLast)
 	}
 
 	// Check if this is an index directory lookup (e.g., .email)
@@ -264,6 +280,26 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
+	return child, 0
+}
+
+// lookupPaginationDirectory handles lookup for .first and .last directories
+func (t *TableNode) lookupPaginationDirectory(ctx context.Context, paginationType PaginationType) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up pagination directory",
+		zap.String("table", t.tableName),
+		zap.String("type", string(paginationType)))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	paginationNode := NewPaginationNode(t.cfg, t.db, t.schema, t.tableName, paginationType, t.partialRows)
+	child := t.NewPersistentInode(ctx, paginationNode, stableAttr)
+
+	logging.Debug("Created pagination directory node",
+		zap.String("table", t.tableName),
+		zap.String("type", string(paginationType)))
+
 	return child, 0
 }
 
