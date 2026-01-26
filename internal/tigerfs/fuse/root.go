@@ -103,8 +103,8 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		Mode: syscall.S_IFDIR,
 	}
 
-	// Create table node with database client and partial row tracker
-	tableNode := NewTableNode(r.cfg, r.db, r.cfg.DefaultSchema, name, r.partialRows)
+	// Create table node with database client, cache, and partial row tracker
+	tableNode := NewTableNode(r.cfg, r.db, r.cache, r.cfg.DefaultSchema, name, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, tableNode, stableAttr)
 	return child, 0

@@ -21,6 +21,7 @@ type TableNode struct {
 
 	cfg         *config.Config
 	db          *db.Client
+	cache       *MetadataCache
 	tableName   string
 	schema      string
 	partialRows *PartialRowTracker
@@ -35,10 +36,11 @@ var _ fs.NodeRmdirer = (*TableNode)(nil)
 var _ fs.NodeMkdirer = (*TableNode)(nil)
 
 // NewTableNode creates a new table directory node
-func NewTableNode(cfg *config.Config, dbClient *db.Client, schema, tableName string, partialRows *PartialRowTracker) *TableNode {
+func NewTableNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *TableNode {
 	return &TableNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		tableName:   tableName,
 		schema:      schema,
 		partialRows: partialRows,
@@ -59,6 +61,23 @@ func (t *TableNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 // Readdir lists the contents of the table directory (row primary keys)
 func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("TableNode.Readdir called", zap.String("table", t.tableName))
+
+	// Check if table exceeds max_ls_rows using cached estimate
+	if t.cache != nil {
+		estimate, err := t.cache.GetRowCountEstimate(ctx, t.tableName)
+		if err != nil {
+			logging.Warn("Failed to get row count estimate, continuing",
+				zap.String("table", t.tableName),
+				zap.Error(err))
+		} else if estimate > int64(t.cfg.MaxLsRows) {
+			logging.Error("Table too large for directory listing",
+				zap.String("table", t.tableName),
+				zap.Int64("estimated_rows", estimate),
+				zap.Int("max_ls_rows", t.cfg.MaxLsRows),
+				zap.String("suggestion", "Use .first/N/, .sample/N/, or index paths like .column/value/"))
+			return nil, syscall.EIO
+		}
+	}
 
 	// Get primary key for table
 	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)

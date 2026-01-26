@@ -16,7 +16,7 @@ func TestNewTableNode(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	tableNode := NewTableNode(cfg, nil, "myschema", "users", partialRows)
+	tableNode := NewTableNode(cfg, nil, nil, "myschema", "users", partialRows)
 
 	if tableNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -42,7 +42,7 @@ func TestNewTableNode(t *testing.T) {
 // TestTableNode_Interfaces verifies that TableNode implements required interfaces
 func TestTableNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
-	tableNode := NewTableNode(cfg, nil, "public", "users", nil)
+	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil)
 
 	// Verify interface assertions compile (checked at compile time via var _ declarations)
 	_ = tableNode
@@ -55,7 +55,7 @@ func TestTableNode_Getattr(t *testing.T) {
 		MaxLsRows:     10000,
 	}
 
-	tableNode := NewTableNode(cfg, nil, "public", "users", nil)
+	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil)
 	ctx := context.Background()
 
 	var out fuse.AttrOut
@@ -91,7 +91,7 @@ func TestTableNode_Getattr_DifferentTables(t *testing.T) {
 
 	for _, tableName := range tables {
 		t.Run(tableName, func(t *testing.T) {
-			tableNode := NewTableNode(cfg, nil, "public", tableName, nil)
+			tableNode := NewTableNode(cfg, nil, nil, "public", tableName, nil)
 
 			var out fuse.AttrOut
 			errno := tableNode.Getattr(ctx, nil, &out)
@@ -124,7 +124,7 @@ func TestTableNode_MultipleSchemas(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.schema+"_"+tc.tableName, func(t *testing.T) {
-			node := NewTableNode(cfg, nil, tc.schema, tc.tableName, nil)
+			node := NewTableNode(cfg, nil, nil, tc.schema, tc.tableName, nil)
 
 			if node.schema != tc.schema {
 				t.Errorf("Expected schema=%q, got %q", tc.schema, node.schema)

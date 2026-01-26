@@ -20,8 +20,9 @@ type MetadataCache struct {
 	db  *db.Client
 
 	// Cached data
-	tables    []string
-	lastFetch time.Time
+	tables         []string
+	tableRowCounts map[string]int64 // table name -> estimated row count
+	lastFetch      time.Time
 
 	// Default schema for flattening (typically "public")
 	defaultSchema string
@@ -30,10 +31,11 @@ type MetadataCache struct {
 // NewMetadataCache creates a new metadata cache
 func NewMetadataCache(cfg *config.Config, dbClient *db.Client) *MetadataCache {
 	return &MetadataCache{
-		cfg:           cfg,
-		db:            dbClient,
-		defaultSchema: cfg.DefaultSchema,
-		tables:        []string{},
+		cfg:            cfg,
+		db:             dbClient,
+		defaultSchema:  cfg.DefaultSchema,
+		tables:         []string{},
+		tableRowCounts: make(map[string]int64),
 	}
 }
 
@@ -71,8 +73,18 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 		return err
 	}
 
+	// Query row count estimates for all tables
+	rowCounts, err := c.db.GetRowCountEstimates(ctx, c.defaultSchema, tables)
+	if err != nil {
+		// Log warning but don't fail - row counts are optional
+		logging.Warn("Failed to get row count estimates, continuing without",
+			zap.Error(err))
+		rowCounts = make(map[string]int64)
+	}
+
 	c.mu.Lock()
 	c.tables = tables
+	c.tableRowCounts = rowCounts
 	c.lastFetch = time.Now()
 	c.mu.Unlock()
 
@@ -112,6 +124,29 @@ func (c *MetadataCache) needsRefresh() bool {
 	return age > c.cfg.MetadataRefreshInterval
 }
 
+// GetRowCountEstimate returns the cached row count estimate for a table.
+// Returns -1 if the table is not in cache (caller should treat as unknown).
+func (c *MetadataCache) GetRowCountEstimate(ctx context.Context, tableName string) (int64, error) {
+	// Ensure cache is fresh
+	c.mu.RLock()
+	needsRefresh := c.needsRefresh()
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		if err := c.Refresh(ctx); err != nil {
+			return -1, err
+		}
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if count, ok := c.tableRowCounts[tableName]; ok {
+		return count, nil
+	}
+	return -1, nil
+}
+
 // Invalidate clears the cache, forcing a refresh on next access
 func (c *MetadataCache) Invalidate() {
 	c.mu.Lock()
@@ -119,5 +154,6 @@ func (c *MetadataCache) Invalidate() {
 
 	logging.Debug("Invalidating metadata cache")
 	c.tables = []string{}
+	c.tableRowCounts = make(map[string]int64)
 	c.lastFetch = time.Time{}
 }

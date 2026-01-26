@@ -190,6 +190,60 @@ func (c *Client) GetRowCount(ctx context.Context, schema, table string) (int64, 
 	return GetRowCount(ctx, c.pool, schema, table)
 }
 
+// GetRowCountEstimates returns fast row count estimates for multiple tables using pg_class.
+// Uses reltuples from PostgreSQL statistics, avoiding full table scans.
+// Returns a map of table name to estimated row count.
+func GetRowCountEstimates(ctx context.Context, pool *pgxpool.Pool, schema string, tables []string) (map[string]int64, error) {
+	if len(tables) == 0 {
+		return make(map[string]int64), nil
+	}
+
+	logging.Debug("Getting row count estimates",
+		zap.String("schema", schema),
+		zap.Int("table_count", len(tables)))
+
+	query := `
+		SELECT c.relname, COALESCE(c.reltuples::bigint, 0)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = ANY($2)
+	`
+
+	rows, err := pool.Query(ctx, query, schema, tables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get row count estimates: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64)
+	for rows.Next() {
+		var tableName string
+		var count int64
+		if err := rows.Scan(&tableName, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan row count estimate: %w", err)
+		}
+		result[tableName] = count
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating row count estimates: %w", err)
+	}
+
+	logging.Debug("Got row count estimates",
+		zap.String("schema", schema),
+		zap.Int("table_count", len(result)))
+
+	return result, nil
+}
+
+// GetRowCountEstimates is a convenience wrapper for Client.
+func (c *Client) GetRowCountEstimates(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetRowCountEstimates(ctx, c.pool, schema, tables)
+}
+
 // GetTableDDL returns the CREATE TABLE statement for a table
 // Constructs DDL from information_schema
 func GetTableDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
