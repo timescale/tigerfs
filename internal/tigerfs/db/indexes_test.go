@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -625,5 +626,93 @@ func TestClient_GetRowsByIndexValue_NilPool(t *testing.T) {
 	_, err := client.GetRowsByIndexValue(ctx, "public", "test", "col", "val", "id", 100)
 	if err == nil {
 		t.Error("Expected error for nil pool")
+	}
+}
+
+// TestGetRowsByIndexValue_UsesIndex verifies PostgreSQL uses the index for lookups.
+// This is an integration test that requires a real database connection.
+func TestGetRowsByIndexValue_UsesIndex(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test table with index
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_explain_index (
+			id serial PRIMARY KEY,
+			email text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Create index on email column
+	_, _ = client.pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_test_explain_email ON test_explain_index(email)`)
+
+	// Insert enough data to make index usage worthwhile
+	// PostgreSQL may choose seq scan for very small tables
+	for i := 0; i < 100; i++ {
+		_, _ = client.pool.Exec(ctx, `INSERT INTO test_explain_index (email) VALUES ($1)`,
+			"user"+string(rune('0'+i%10))+"@example.com")
+	}
+
+	// Analyze table to update statistics
+	_, _ = client.pool.Exec(ctx, `ANALYZE test_explain_index`)
+
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_explain_index")
+	}()
+
+	// Run EXPLAIN on our query pattern
+	query := `EXPLAIN SELECT "id" FROM "public"."test_explain_index" WHERE "email" = $1 ORDER BY "id" LIMIT $2`
+	rows, err := client.pool.Query(ctx, query, "user1@example.com", 100)
+	if err != nil {
+		t.Fatalf("EXPLAIN query failed: %v", err)
+	}
+	defer rows.Close()
+
+	// Collect EXPLAIN output
+	var explainOutput []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("Failed to scan EXPLAIN output: %v", err)
+		}
+		explainOutput = append(explainOutput, line)
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("Error iterating EXPLAIN output: %v", err)
+	}
+
+	// Check that index is used (look for "Index Scan" or "Bitmap Index Scan")
+	indexUsed := false
+	for _, line := range explainOutput {
+		if strings.Contains(line, "Index Scan") || strings.Contains(line, "Bitmap Index Scan") {
+			indexUsed = true
+			break
+		}
+	}
+
+	if !indexUsed {
+		t.Errorf("Expected index scan, but EXPLAIN output shows:\n%s", strings.Join(explainOutput, "\n"))
+	} else {
+		t.Logf("Verified index usage. EXPLAIN output:\n%s", strings.Join(explainOutput, "\n"))
 	}
 }
