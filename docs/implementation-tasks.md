@@ -2020,7 +2020,7 @@ mv /tmp/tiger.bak $(which tiger)
 **Objective:** Create documentation with real-world examples for basic TigerFS usage
 
 **Steps:**
-1. Create `docs/examples-basic.md`
+1. Create `docs/quickstart.md`
 2. Write examples:
    - **Example 1:** First mount - connecting to a local PostgreSQL database
    - **Example 2:** Exploring database schema with ls and cat
@@ -2035,7 +2035,7 @@ mv /tmp/tiger.bak $(which tiger)
    - Explanation
 
 **Files to Create:**
-- `docs/examples-basic.md`
+- `docs/quickstart.md`
 
 **Verification:**
 ```bash
