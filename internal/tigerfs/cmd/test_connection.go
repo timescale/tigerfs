@@ -35,47 +35,48 @@ func buildTestConnectionCmd() *cobra.Command {
 Verifies credentials and shows PostgreSQL version and accessible tables.
 Useful for troubleshooting before mounting.
 
+Connection sources (in order of precedence):
+  1. Explicit connection string argument
+  2. Tiger Cloud service (TIGER_SERVICE_ID)
+  3. PostgreSQL config (PGHOST, PGUSER, etc.)
+
 Examples:
   # Test connection using connection string
   tigerfs test-connection postgres://localhost/mydb
 
-  # Test connection using config file / env vars
+  # Test connection using Tiger Cloud service
+  # export TIGER_SERVICE_ID=<your-service-id>
+  tigerfs test-connection
+
+  # Test connection using PostgreSQL env vars
+  export PGHOST=localhost PGDATABASE=mydb
   tigerfs test-connection`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 
-			// Get connection string from args or environment
-			var connStr string
-			if len(args) > 0 {
-				connStr = args[0]
-			} else {
-				// Build connection string from environment/config
-				cfg, err := config.Load()
-				if err != nil {
-					return fmt.Errorf("failed to load config: %w", err)
-				}
-
-				if cfg.Host == "" {
-					return fmt.Errorf("no connection string provided and PGHOST not set")
-				}
-
-				// Build basic connection string from config
-				connStr = fmt.Sprintf("postgres://%s@%s:%d/%s",
-					cfg.User, cfg.Host, cfg.Port, cfg.Database)
-			}
-
-			logging.Debug("Testing database connection", zap.String("connection", connStr))
-
 			// Create context with timeout for all operations
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			// Load config for client creation
+			// Load config
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
+
+			// Resolve connection string from args, Tiger Cloud, or PG config
+			var explicitConnStr string
+			if len(args) > 0 {
+				explicitConnStr = args[0]
+			}
+
+			connStr, err := db.ResolveConnectionString(ctx, cfg, explicitConnStr)
+			if err != nil {
+				return err
+			}
+
+			logging.Debug("Testing database connection", zap.String("connection", connStr))
 
 			// Attempt connection (this also pings the database)
 			client, err := db.NewClient(ctx, cfg, connStr)

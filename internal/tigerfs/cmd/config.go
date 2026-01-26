@@ -87,7 +87,8 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		PoolSize                int    `yaml:"pool_size"`
 		PoolMaxIdle             int    `yaml:"pool_max_idle"`
 		PasswordCommand         string `yaml:"password_command,omitempty"`
-		TigerServiceID          string `yaml:"tiger_service_id,omitempty"`
+		TigerCloudServiceID     string `yaml:"tiger_service_id,omitempty"`
+		TigerCloudProjectID     string `yaml:"tiger_project_id,omitempty"`
 		MaxLsRows               int    `yaml:"max_ls_rows"`
 		TrailingNewlines        bool   `yaml:"trailing_newlines"`
 		AttrTimeout             string `yaml:"attr_timeout"`
@@ -110,7 +111,8 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		PoolSize:                cfg.PoolSize,
 		PoolMaxIdle:             cfg.PoolMaxIdle,
 		PasswordCommand:         cfg.PasswordCommand,
-		TigerServiceID:          cfg.TigerServiceID,
+		TigerCloudServiceID:     cfg.TigerCloudServiceID,
+		TigerCloudProjectID:     cfg.TigerCloudProjectID,
 		MaxLsRows:               cfg.MaxLsRows,
 		TrailingNewlines:        cfg.TrailingNewlines,
 		AttrTimeout:             cfg.AttrTimeout.String(),

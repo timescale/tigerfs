@@ -309,8 +309,8 @@ func TestConfig_PostgreSQLEnvVars(t *testing.T) {
 	}
 }
 
-// TestConfig_TigerServiceIDEnv tests TIGER_SERVICE_ID environment variable
-func TestConfig_TigerServiceIDEnv(t *testing.T) {
+// TestConfig_TigerCloudServiceIDEnv tests TIGER_SERVICE_ID environment variable.
+func TestConfig_TigerCloudServiceIDEnv(t *testing.T) {
 	resetViper()
 
 	// Save and restore env
@@ -335,8 +335,8 @@ func TestConfig_TigerServiceIDEnv(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.TigerServiceID != "e6ue9697jf" {
-		t.Errorf("Expected TigerServiceID='e6ue9697jf' from env, got %q", cfg.TigerServiceID)
+	if cfg.TigerCloudServiceID != "e6ue9697jf" {
+		t.Errorf("Expected TigerCloudServiceID='e6ue9697jf' from env, got %q", cfg.TigerCloudServiceID)
 	}
 }
 
@@ -525,8 +525,8 @@ func TestConfig_ConnectionFields(t *testing.T) {
 	if cfg.PasswordCommand != "" {
 		t.Errorf("Expected empty PasswordCommand by default, got %q", cfg.PasswordCommand)
 	}
-	if cfg.TigerServiceID != "" {
-		t.Errorf("Expected empty TigerServiceID by default, got %q", cfg.TigerServiceID)
+	if cfg.TigerCloudServiceID != "" {
+		t.Errorf("Expected empty TigerCloudServiceID by default, got %q", cfg.TigerCloudServiceID)
 	}
 }
 

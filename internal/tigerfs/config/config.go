@@ -11,16 +11,19 @@ import (
 
 type Config struct {
 	// Connection
-	Host            string `mapstructure:"host"`
-	Port            int    `mapstructure:"port"`
-	User            string `mapstructure:"user"`
-	Database        string `mapstructure:"database"`
-	Password        string `mapstructure:"password"`
-	DefaultSchema   string `mapstructure:"default_schema"`
-	PoolSize        int    `mapstructure:"pool_size"`
-	PoolMaxIdle     int    `mapstructure:"pool_max_idle"`
-	PasswordCommand string `mapstructure:"password_command"`
-	TigerServiceID  string `mapstructure:"tiger_service_id"`
+	Host                string `mapstructure:"host"`
+	Port                int    `mapstructure:"port"`
+	User                string `mapstructure:"user"`
+	Database            string `mapstructure:"database"`
+	Password            string `mapstructure:"password"`
+	DefaultSchema       string `mapstructure:"default_schema"`
+	PoolSize            int    `mapstructure:"pool_size"`
+	PoolMaxIdle         int    `mapstructure:"pool_max_idle"`
+	PasswordCommand     string `mapstructure:"password_command"`
+	TigerCloudServiceID string `mapstructure:"tiger_service_id"`
+	TigerCloudPublicKey string `mapstructure:"tiger_public_key"`
+	TigerCloudSecretKey string `mapstructure:"tiger_secret_key"`
+	TigerCloudProjectID string `mapstructure:"tiger_project_id"`
 
 	// Filesystem
 	MaxLsRows        int           `mapstructure:"max_ls_rows"`
@@ -81,8 +84,12 @@ func Init() error {
 		viper.BindEnv("user", "PGUSER"),
 		viper.BindEnv("database", "PGDATABASE"),
 		viper.BindEnv("password", "PGPASSWORD"),
-		// Tiger Cloud env var
+		// Tiger Cloud env vars (for headless/Docker authentication)
+		// Use with: tiger auth login (reads these automatically)
 		viper.BindEnv("tiger_service_id", "TIGER_SERVICE_ID"),
+		viper.BindEnv("tiger_public_key", "TIGER_PUBLIC_KEY"),
+		viper.BindEnv("tiger_secret_key", "TIGER_SECRET_KEY"),
+		viper.BindEnv("tiger_project_id", "TIGER_PROJECT_ID"),
 	); err != nil {
 		return err
 	}

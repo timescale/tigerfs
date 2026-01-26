@@ -883,6 +883,9 @@ debug: false                   # Enable debug mode (verbose logging)
 - `TIGERFS_PASSWORD` - Database password (alternative to PGPASSWORD)
 - `TIGERFS_DEBUG` - Enable debug mode
 - `TIGER_SERVICE_ID` - Tiger Cloud service ID
+- `TIGER_PUBLIC_KEY` - Tiger Cloud client credential public key (for headless auth)
+- `TIGER_SECRET_KEY` - Tiger Cloud client credential secret key (for headless auth)
+- `TIGER_PROJECT_ID` - Tiger Cloud project ID (for headless auth)
 
 ### Command-Line Flags
 
@@ -1572,6 +1575,62 @@ tigerfs --tiger-service-id=u8me885b93 /mnt/staging
 # Access each independently
 cat /mnt/prod/users/123/email
 cat /mnt/staging/users/456/email
+```
+
+#### Flow 4: Headless/Docker Authentication
+
+For environments without browser access (Docker containers, CI/CD pipelines, servers), use client credentials instead of OAuth:
+
+```bash
+# 1. Create client credentials in Tiger Cloud Console
+#    Go to: Console → Settings → Create credentials
+#    Save the public key and secret key
+
+# 2. Set environment variables
+export TIGER_PUBLIC_KEY=<your-public-key>
+export TIGER_SECRET_KEY=<your-secret-key>
+export TIGER_PROJECT_ID=<your-project-id>
+
+# 3. Authenticate (uses env vars, no browser needed)
+tiger auth login
+
+# 4. Mount using service ID
+export TIGER_SERVICE_ID=<your-service-id>
+tigerfs /mnt/db
+```
+
+**Docker Example:**
+```dockerfile
+FROM ubuntu:22.04
+
+# Install Tiger CLI and TigerFS
+RUN curl -fsSL https://cli.tigerdata.com | sh
+RUN curl -fsSL https://tigerfs.tigerdata.com | sh
+
+# Set credentials (use secrets in production)
+ENV TIGER_PUBLIC_KEY=${TIGER_PUBLIC_KEY}
+ENV TIGER_SECRET_KEY=${TIGER_SECRET_KEY}
+ENV TIGER_PROJECT_ID=${TIGER_PROJECT_ID}
+ENV TIGER_SERVICE_ID=${TIGER_SERVICE_ID}
+
+# Authenticate on startup
+RUN tiger auth login
+
+CMD ["tigerfs", "/mnt/db"]
+```
+
+**CI/CD Example (GitHub Actions):**
+```yaml
+- name: Mount Tiger Cloud database
+  env:
+    TIGER_PUBLIC_KEY: ${{ secrets.TIGER_PUBLIC_KEY }}
+    TIGER_SECRET_KEY: ${{ secrets.TIGER_SECRET_KEY }}
+    TIGER_PROJECT_ID: ${{ secrets.TIGER_PROJECT_ID }}
+    TIGER_SERVICE_ID: ${{ secrets.TIGER_SERVICE_ID }}
+  run: |
+    tiger auth login
+    tigerfs /mnt/db &
+    # Use mounted database...
 ```
 
 ### Documentation Examples
