@@ -190,6 +190,89 @@ func (c *Client) GetRowCount(ctx context.Context, schema, table string) (int64, 
 	return GetRowCount(ctx, c.pool, schema, table)
 }
 
+// SmallTableThreshold is the row count below which exact COUNT(*) is used.
+// For tables with more rows, pg_class.reltuples estimate is returned instead
+// to avoid expensive full table scans.
+const SmallTableThreshold = 100000
+
+// GetRowCountSmart returns the row count using an adaptive strategy.
+// For small tables (< 100K rows estimated), performs exact COUNT(*).
+// For large tables (>= 100K rows estimated), returns the pg_class.reltuples estimate.
+//
+// This provides accurate counts for small tables while avoiding expensive
+// full table scans on large tables. The estimate from reltuples is updated
+// by VACUUM and ANALYZE operations.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - pool: PostgreSQL connection pool
+//   - schema: PostgreSQL schema name
+//   - table: Table name to count
+//
+// Returns the row count (exact or estimated), or error on database failure.
+func GetRowCountSmart(ctx context.Context, pool *pgxpool.Pool, schema, table string) (int64, error) {
+	logging.Debug("Getting smart row count",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	// First, get the pg_class.reltuples estimate
+	estimateQuery := `
+		SELECT COALESCE(c.reltuples::bigint, 0)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2
+	`
+
+	var estimate int64
+	err := pool.QueryRow(ctx, estimateQuery, schema, table).Scan(&estimate)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Table not found in pg_class - fall back to exact count
+			logging.Debug("Table not found in pg_class, using exact count",
+				zap.String("schema", schema),
+				zap.String("table", table))
+			return GetRowCount(ctx, pool, schema, table)
+		}
+		return 0, fmt.Errorf("failed to get row count estimate: %w", err)
+	}
+
+	logging.Debug("Got row count estimate from pg_class",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int64("estimate", estimate))
+
+	// For small tables, use exact count for accuracy
+	if estimate < SmallTableThreshold {
+		logging.Debug("Small table detected, using exact count",
+			zap.String("table", table),
+			zap.Int64("estimate", estimate),
+			zap.Int64("threshold", SmallTableThreshold))
+		return GetRowCount(ctx, pool, schema, table)
+	}
+
+	// For large tables, return the estimate to avoid expensive full scan
+	logging.Debug("Large table detected, returning estimate",
+		zap.String("table", table),
+		zap.Int64("estimate", estimate),
+		zap.Int64("threshold", SmallTableThreshold))
+	return estimate, nil
+}
+
+// GetRowCountSmart is a convenience wrapper for Client.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - schema: PostgreSQL schema name
+//   - table: Table name to count
+//
+// Returns the row count (exact or estimated), or error on database failure.
+func (c *Client) GetRowCountSmart(ctx context.Context, schema, table string) (int64, error) {
+	if c.pool == nil {
+		return 0, fmt.Errorf("database connection not initialized")
+	}
+	return GetRowCountSmart(ctx, c.pool, schema, table)
+}
+
 // GetRowCountEstimates returns fast row count estimates for multiple tables using pg_class.
 // Uses reltuples from PostgreSQL statistics, avoiding full table scans.
 // Returns a map of table name to estimated row count.
