@@ -75,8 +75,8 @@ ls /mnt/db
 The local PostgreSQL demo includes ~9,200 rows across three tables:
 
 **users** (1,000 rows)
-- Generated users with varied ages, bios, and activity status
-- Fields: id, name, email, age, active, bio, created_at
+- Generated users with realistic name distributions
+- Fields: id, name, first_name, last_name, email, age, active, bio, created_at
 
 **products** (200 rows)
 - Widgets, Gadgets, Gizmos, Devices, Tools across 4 categories
@@ -85,6 +85,10 @@ The local PostgreSQL demo includes ~9,200 rows across three tables:
 **orders** (8,000 rows)
 - Realistic order distribution with power users and varied statuses
 - Fields: id, user_id, product_id, quantity, total, status, created_at
+
+**Indexes** (for index-based navigation)
+- Single-column: `.email/`, `.category/`, `.user_id/`, `.created_at/`
+- Composite: `.last_name.first_name/`, `.status.created_at/`
 
 ## Example Commands
 
@@ -120,6 +124,16 @@ cat /mnt/db/orders/100.tsv
 for i in $(ls /mnt/db/users | head -20); do
   cat /mnt/db/users/$i.json
 done | jq -s 'sort_by(.age)'
+
+# Index-based navigation (single-column)
+ls /mnt/db/users/.email/                    # List distinct emails
+ls /mnt/db/products/.category/              # List: Electronics, Home, Office, Outdoor
+ls /mnt/db/products/.category/Electronics/  # Products in Electronics category
+
+# Composite index navigation
+ls /mnt/db/users/.last_name.first_name/           # List distinct last names
+ls /mnt/db/users/.last_name.first_name/Smith/     # First names for last_name='Smith'
+ls /mnt/db/users/.last_name.first_name/Smith/Alice/  # Users named Alice Smith
 ```
 
 ## Using Claude Code

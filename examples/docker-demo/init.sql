@@ -4,6 +4,8 @@
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     age INTEGER,
     active BOOLEAN DEFAULT true,
@@ -12,9 +14,12 @@ CREATE TABLE users (
 );
 
 -- Generate 1,000 users with varied data
-INSERT INTO users (name, email, age, active, bio, created_at)
+-- Uses realistic name distributions for composite index testing
+INSERT INTO users (name, first_name, last_name, email, age, active, bio, created_at)
 SELECT
-    'User ' || i AS name,
+    first_names[(i % 20) + 1] || ' ' || last_names[(i % 25) + 1] AS name,
+    first_names[(i % 20) + 1] AS first_name,
+    last_names[(i % 25) + 1] AS last_name,
     'user' || i || '@example.com' AS email,
     18 + (i % 50) AS age,
     (i % 10 != 0) AS active,  -- 10% inactive
@@ -26,7 +31,14 @@ SELECT
         ELSE 'Designer'
     END AS bio,
     NOW() - (i || ' days')::INTERVAL AS created_at
-FROM generate_series(1, 1000) AS i;
+FROM generate_series(1, 1000) AS i,
+     (SELECT ARRAY['Alice', 'Bob', 'Charlie', 'Diana', 'Eve', 'Frank', 'Grace', 'Henry',
+                   'Iris', 'Jack', 'Kate', 'Leo', 'Mia', 'Noah', 'Olivia', 'Paul',
+                   'Quinn', 'Rose', 'Sam', 'Tina'] AS first_names,
+             ARRAY['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller',
+                   'Davis', 'Rodriguez', 'Martinez', 'Anderson', 'Taylor', 'Thomas',
+                   'Moore', 'Jackson', 'Martin', 'Lee', 'Thompson', 'White', 'Harris',
+                   'Clark', 'Lewis', 'Walker', 'Hall', 'Young'] AS last_names) AS names;
 
 CREATE TABLE products (
     id SERIAL PRIMARY KEY,
@@ -103,11 +115,13 @@ SELECT
     NOW() - ((i % 365) || ' days')::INTERVAL - ((i % 24) || ' hours')::INTERVAL AS created_at
 FROM generate_series(1, 8000) AS i;
 
--- Create indexes for common queries
-CREATE INDEX idx_users_active ON users(active);
+-- Single-column indexes
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_products_category ON products(category);
-CREATE INDEX idx_products_in_stock ON products(in_stock);
 CREATE INDEX idx_orders_user_id ON orders(user_id);
-CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_orders_created_at ON orders(created_at);
+
+-- Composite indexes for multi-column navigation
+-- Example: ls /mnt/db/users/.last_name.first_name/Smith/Alice/
+CREATE INDEX idx_users_name ON users(last_name, first_name);
+CREATE INDEX idx_orders_status_date ON orders(status, created_at);
