@@ -133,7 +133,7 @@ func (c *Client) ListRows(ctx context.Context, schema, table, pkColumn string, l
 }
 
 // ListAllRows returns all primary key values from a table without any limit.
-// Used by .all/ paths to explicitly bypass max_ls_rows restriction.
+// Used by .all/ paths to explicitly bypass dir_listing_limit restriction.
 func ListAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string) ([]string, error) {
 	logging.Debug("Listing all rows (no limit)",
 		zap.String("schema", schema),

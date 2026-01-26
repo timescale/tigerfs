@@ -13,9 +13,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// AllRowsNode represents the .all/ directory that bypasses max_ls_rows limit.
+// AllRowsNode represents the .all/ directory that bypasses dir_listing_limit.
 // Users can access this directory to explicitly list all rows in a large table.
-// A warning is logged when accessing .all/ on tables exceeding max_ls_rows.
+// A warning is logged when accessing .all/ on tables exceeding dir_listing_limit.
 type AllRowsNode struct {
 	fs.Inode
 
@@ -55,8 +55,8 @@ func (a *AllRowsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.A
 	return 0
 }
 
-// Readdir lists all rows without the max_ls_rows limit.
-// Logs a warning if the table exceeds max_ls_rows.
+// Readdir lists all rows without the dir_listing_limit.
+// Logs a warning if the table exceeds dir_listing_limit.
 func (a *AllRowsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("AllRowsNode.Readdir called", zap.String("table", a.tableName))
 
@@ -67,11 +67,11 @@ func (a *AllRowsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 			logging.Warn("Failed to get row count estimate",
 				zap.String("table", a.tableName),
 				zap.Error(err))
-		} else if estimate > int64(a.cfg.MaxLsRows) {
+		} else if estimate > int64(a.cfg.DirListingLimit) {
 			logging.Warn("Listing all rows for large table via .all/ path",
 				zap.String("table", a.tableName),
 				zap.Int64("estimated_rows", estimate),
-				zap.Int("max_ls_rows", a.cfg.MaxLsRows))
+				zap.Int("dir_listing_limit", a.cfg.DirListingLimit))
 		}
 	}
 

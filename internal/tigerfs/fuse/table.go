@@ -62,18 +62,18 @@ func (t *TableNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("TableNode.Readdir called", zap.String("table", t.tableName))
 
-	// Check if table exceeds max_ls_rows using cached estimate
+	// Check if table exceeds dir_listing_limit using cached estimate
 	if t.cache != nil {
 		estimate, err := t.cache.GetRowCountEstimate(ctx, t.tableName)
 		if err != nil {
 			logging.Warn("Failed to get row count estimate, continuing",
 				zap.String("table", t.tableName),
 				zap.Error(err))
-		} else if estimate > int64(t.cfg.MaxLsRows) {
+		} else if estimate > int64(t.cfg.DirListingLimit) {
 			logging.Error("Table too large for directory listing",
 				zap.String("table", t.tableName),
 				zap.Int64("estimated_rows", estimate),
-				zap.Int("max_ls_rows", t.cfg.MaxLsRows),
+				zap.Int("dir_listing_limit", t.cfg.DirListingLimit),
 				zap.String("suggestion", "Use .first/N/, .sample/N/, or index paths like .column/value/"))
 			return nil, syscall.EIO
 		}
@@ -91,8 +91,8 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Get first column of primary key (only single-column PKs supported in MVP)
 	pkColumn := pk.Columns[0]
 
-	// List rows (limited by max_ls_rows)
-	rows, err := t.db.ListRows(ctx, t.schema, t.tableName, pkColumn, t.cfg.MaxLsRows)
+	// List rows (limited by dir_listing_limit)
+	rows, err := t.db.ListRows(ctx, t.schema, t.tableName, pkColumn, t.cfg.DirListingLimit)
 	if err != nil {
 		logging.Error("Failed to list rows",
 			zap.String("table", t.tableName),
@@ -181,7 +181,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		zap.Int("single_index_count", len(singleIndexes)),
 		zap.Int("composite_index_count", len(compositeIndexes)),
 		zap.Int("total_entries", len(entries)),
-		zap.Int("max_ls_rows", t.cfg.MaxLsRows))
+		zap.Int("dir_listing_limit", t.cfg.DirListingLimit))
 
 	return fs.NewListDirStream(entries), 0
 }
@@ -197,7 +197,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return t.lookupMetadataFile(ctx, name)
 	}
 
-	// Check if this is the .all directory (bypass max_ls_rows)
+	// Check if this is the .all directory (bypass dir_listing_limit)
 	if name == ".all" {
 		return t.lookupAllDirectory(ctx)
 	}
@@ -267,7 +267,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	return child, 0
 }
 
-// lookupAllDirectory handles lookup for the .all directory that bypasses max_ls_rows
+// lookupAllDirectory handles lookup for the .all directory that bypasses dir_listing_limit
 func (t *TableNode) lookupAllDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
 	logging.Debug("Looking up .all directory",
 		zap.String("table", t.tableName))

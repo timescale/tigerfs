@@ -12,7 +12,7 @@ import (
 func TestNewAllRowsNode(t *testing.T) {
 	cfg := &config.Config{
 		DefaultSchema: "public",
-		MaxLsRows:     10000,
+		DirListingLimit:     10000,
 	}
 
 	partialRows := NewPartialRowTracker(nil)
@@ -46,7 +46,7 @@ func TestNewAllRowsNode(t *testing.T) {
 func TestAllRowsNode_Getattr(t *testing.T) {
 	cfg := &config.Config{
 		DefaultSchema: "public",
-		MaxLsRows:     10000,
+		DirListingLimit:     10000,
 	}
 
 	allNode := NewAllRowsNode(cfg, nil, nil, "public", "users", nil)

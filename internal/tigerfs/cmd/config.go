@@ -89,7 +89,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		PasswordCommand         string `yaml:"password_command,omitempty"`
 		TigerCloudServiceID     string `yaml:"tiger_service_id,omitempty"`
 		TigerCloudProjectID     string `yaml:"tiger_project_id,omitempty"`
-		MaxLsRows               int    `yaml:"max_ls_rows"`
+		DirListingLimit               int    `yaml:"dir_listing_limit"`
 		TrailingNewlines        bool   `yaml:"trailing_newlines"`
 		AttrTimeout             string `yaml:"attr_timeout"`
 		EntryTimeout            string `yaml:"entry_timeout"`
@@ -113,7 +113,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		PasswordCommand:         cfg.PasswordCommand,
 		TigerCloudServiceID:     cfg.TigerCloudServiceID,
 		TigerCloudProjectID:     cfg.TigerCloudProjectID,
-		MaxLsRows:               cfg.MaxLsRows,
+		DirListingLimit:               cfg.DirListingLimit,
 		TrailingNewlines:        cfg.TrailingNewlines,
 		AttrTimeout:             cfg.AttrTimeout.String(),
 		EntryTimeout:            cfg.EntryTimeout.String(),
@@ -227,8 +227,8 @@ func validateConfigValues(cfg *config.Config) error {
 		return fmt.Errorf("invalid pool_max_idle: %d (must be non-negative)", cfg.PoolMaxIdle)
 	}
 
-	if cfg.MaxLsRows < 1 {
-		return fmt.Errorf("invalid max_ls_rows: %d (must be at least 1)", cfg.MaxLsRows)
+	if cfg.DirListingLimit < 1 {
+		return fmt.Errorf("invalid dir_listing_limit: %d (must be at least 1)", cfg.DirListingLimit)
 	}
 
 	validFormats := map[string]bool{"tsv": true, "csv": true, "json": true}

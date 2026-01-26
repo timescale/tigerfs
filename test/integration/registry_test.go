@@ -25,7 +25,7 @@ func TestRegistry_MountUnmountRoundTrip(t *testing.T) {
 		PoolSize:                5,
 		PoolMaxIdle:             2,
 		DefaultSchema:           "public",
-		MaxLsRows:               10000,
+		DirListingLimit:               10000,
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,

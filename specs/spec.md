@@ -423,7 +423,7 @@ SELECT id FROM users ORDER BY id;
 
 **Output:** List of primary key values (one per line)
 
-**Constraint:** Tables > `max_ls_rows` (default: 10,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
+**Constraint:** Tables > `dir_listing_limit` (default: 10,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
 
 #### Indexed Lookups
 
@@ -701,12 +701,12 @@ Tables with millions of rows make `ls /mount/users/` unusable:
 **Configuration:**
 ```yaml
 filesystem:
-  max_ls_rows: 10000  # Default threshold
+  dir_listing_limit: 10000  # Default threshold
 ```
 
 **Behavior:**
-- Tables with ≤ `max_ls_rows` rows: `ls` returns all PKs
-- Tables with > `max_ls_rows` rows: `ls` returns EIO
+- Tables with ≤ `dir_listing_limit` rows: `ls` returns all PKs
+- Tables with > `dir_listing_limit` rows: `ls` returns EIO
 - Error log message: "Table too large (10M rows). Use .first/, .sample/, or index paths"
 
 **Override:**
@@ -832,7 +832,7 @@ connection:
 
 # Filesystem behavior
 filesystem:
-  max_ls_rows: 10000           # Max rows returned by ls (prevents huge listings)
+  dir_listing_limit: 10000           # Max rows returned by ls (prevents huge listings)
   trailing_newlines: true      # Add \n to column and .count file reads
   attr_timeout: 1              # FUSE attribute cache (seconds)
   entry_timeout: 1             # FUSE entry cache (seconds)
@@ -1144,7 +1144,7 @@ connection:
   user: myuser             [env: PGUSER]
   database: mydb           [env: PGDATABASE]
 filesystem:
-  max_ls_rows: 50000       [config file]
+  dir_listing_limit: 50000       [config file]
   default_schema: public   [default]
 logging:
   level: info              [config file]
@@ -2734,7 +2734,7 @@ curl http://localhost:9090/metrics
 8. Read by composite index (`.last_name.first_name/Smith/Johnson/`)
 
 **Large Tables:**
-9. Direct `ls` on large table (should error with max_ls_rows)
+9. Direct `ls` on large table (should error with dir_listing_limit)
 10. Read via `.first/N/` (first N rows)
 11. Read via `.sample/N/` (random sample)
 
@@ -3119,7 +3119,7 @@ See `docs/implementation-tasks.md` for detailed step-by-step tasks.
 - Index discovery from pg_indexes
 - Single-column and composite index paths
 - Index-based queries
-- Large table handling (max_ls_rows enforcement)
+- Large table handling (dir_listing_limit enforcement)
 - `.first/N/` and `.last/N/` pagination
 - `.sample/N/` random sampling (TABLESAMPLE)
 - Permission mapping (table grants → file permissions)

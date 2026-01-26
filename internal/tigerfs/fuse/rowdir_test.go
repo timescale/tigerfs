@@ -287,7 +287,7 @@ func TestRowDirectoryNode_RowDirectoryVsRowFile(t *testing.T) {
 func TestRowDirectoryNode_AllFieldsSet(t *testing.T) {
 	cfg := &config.Config{
 		DefaultSchema: "test_schema",
-		MaxLsRows:     5000,
+		DirListingLimit:     5000,
 	}
 	tracker := NewPartialRowTracker(nil)
 

@@ -26,7 +26,7 @@ type Config struct {
 	TigerCloudProjectID string `mapstructure:"tiger_project_id"`
 
 	// Filesystem
-	MaxLsRows        int           `mapstructure:"max_ls_rows"`
+	DirListingLimit  int           `mapstructure:"dir_listing_limit"`
 	TrailingNewlines bool          `mapstructure:"trailing_newlines"`
 	AttrTimeout      time.Duration `mapstructure:"attr_timeout"`
 	EntryTimeout     time.Duration `mapstructure:"entry_timeout"`
@@ -56,7 +56,7 @@ func Init() error {
 	viper.SetDefault("default_schema", "public")
 	viper.SetDefault("pool_size", 10)
 	viper.SetDefault("pool_max_idle", 5)
-	viper.SetDefault("max_ls_rows", 10000)
+	viper.SetDefault("dir_listing_limit", 10000)
 	viper.SetDefault("trailing_newlines", true)
 	viper.SetDefault("attr_timeout", 1*time.Second)
 	viper.SetDefault("entry_timeout", 1*time.Second)

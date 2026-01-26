@@ -107,7 +107,7 @@ func TestInit_SetsDefaults(t *testing.T) {
 		{"default_schema", "public"},
 		{"pool_size", 10},
 		{"pool_max_idle", 5},
-		{"max_ls_rows", 10000},
+		{"dir_listing_limit", 10000},
 		{"attr_timeout", 1 * time.Second},
 		{"entry_timeout", 1 * time.Second},
 		{"metadata_refresh_interval", 30 * time.Second},
@@ -171,8 +171,8 @@ func TestLoad_UnmarshalConfig(t *testing.T) {
 	if cfg.PoolMaxIdle != 5 {
 		t.Errorf("Expected PoolMaxIdle=5, got %d", cfg.PoolMaxIdle)
 	}
-	if cfg.MaxLsRows != 10000 {
-		t.Errorf("Expected MaxLsRows=10000, got %d", cfg.MaxLsRows)
+	if cfg.DirListingLimit != 10000 {
+		t.Errorf("Expected DirListingLimit=10000, got %d", cfg.DirListingLimit)
 	}
 	if cfg.AttrTimeout != 1*time.Second {
 		t.Errorf("Expected AttrTimeout=1s, got %v", cfg.AttrTimeout)
@@ -206,7 +206,7 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 
 	// Save and restore env
 	envVars := []string{
-		"TIGERFS_MAX_LS_ROWS",
+		"TIGERFS_DIR_LISTING_LIMIT",
 		"TIGERFS_LOG_LEVEL",
 		"TIGERFS_DEBUG",
 		"TIGERFS_DEFAULT_FORMAT",
@@ -226,7 +226,7 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 	}()
 
 	// Set env vars
-	_ = os.Setenv("TIGERFS_MAX_LS_ROWS", "5000")
+	_ = os.Setenv("TIGERFS_DIR_LISTING_LIMIT", "5000")
 	_ = os.Setenv("TIGERFS_LOG_LEVEL", "debug")
 	_ = os.Setenv("TIGERFS_DEBUG", "true")
 	_ = os.Setenv("TIGERFS_DEFAULT_FORMAT", "json")
@@ -241,8 +241,8 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.MaxLsRows != 5000 {
-		t.Errorf("Expected MaxLsRows=5000 from env, got %d", cfg.MaxLsRows)
+	if cfg.DirListingLimit != 5000 {
+		t.Errorf("Expected DirListingLimit=5000 from env, got %d", cfg.DirListingLimit)
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("Expected LogLevel='debug' from env, got %q", cfg.LogLevel)
@@ -544,8 +544,8 @@ func TestConfig_FilesystemFields(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.MaxLsRows != 10000 {
-		t.Errorf("Expected MaxLsRows=10000, got %d", cfg.MaxLsRows)
+	if cfg.DirListingLimit != 10000 {
+		t.Errorf("Expected DirListingLimit=10000, got %d", cfg.DirListingLimit)
 	}
 	if cfg.AttrTimeout != 1*time.Second {
 		t.Errorf("Expected AttrTimeout=1s, got %v", cfg.AttrTimeout)

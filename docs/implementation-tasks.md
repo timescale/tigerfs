@@ -293,7 +293,7 @@ umount /tmp/testmount
 - [ ] Table directories navigable
 - [ ] Primary key discovered
 - [ ] `ls /mnt/db/users/` lists row PKs
-- [ ] max_ls_rows enforced (return error if exceeded)
+- [ ] dir_listing_limit enforced (return error if exceeded)
 - [ ] Tests pass
 
 ---
@@ -1184,7 +1184,7 @@ go test -race ./internal/tigerfs/fuse/ -run TestPartialRowTracker_Concurrent
    - `TestConfig_Precedence_DefaultsLowest` - Defaults only if nothing else
 6. Test all config fields:
    - `TestConfig_ConnectionFields` - Host, Port, User, Database, etc.
-   - `TestConfig_FilesystemFields` - MaxLsRows, timeouts
+   - `TestConfig_FilesystemFields` - DirListingLimit, timeouts
    - `TestConfig_LoggingFields` - LogLevel, LogFile, Debug
 
 **Files to Create:**
@@ -2215,7 +2215,7 @@ cat /tmp/testmount/users/.last_name.first_name/Smith/John/email
 
 ### Task 4.5: Implement Large Table Detection
 
-**Objective:** Detect large tables, enforce max_ls_rows limit
+**Objective:** Detect large tables, enforce dir_listing_limit limit
 
 **Steps:**
 1. Update `internal/tigerfs/db/schema.go`:
@@ -2228,7 +2228,7 @@ cat /tmp/testmount/users/.last_name.first_name/Smith/John/email
    - Use estimate for speed
 2. Update `internal/tigerfs/fuse/table.go`:
    - In `ReadDir()`, check row count before listing
-   - If count > max_ls_rows: return EIO
+   - If count > dir_listing_limit: return EIO
    - Log helpful message: "Table too large (N rows). Use .first/, .last/, .sample/, or index paths"
 
 **Files to Modify:**
@@ -2248,7 +2248,7 @@ ls /tmp/testmount/users/
 
 **Completion Criteria:**
 - [ ] Large tables detected
-- [ ] max_ls_rows enforced
+- [ ] dir_listing_limit enforced
 - [ ] Helpful error message logged
 - [ ] Tests pass
 
@@ -2256,14 +2256,14 @@ ls /tmp/testmount/users/
 
 ### Task 4.6: Implement .all/ Escape Hatch for Large Tables
 
-**Objective:** Allow users to explicitly bypass max_ls_rows limit via .all/ path
+**Objective:** Allow users to explicitly bypass dir_listing_limit limit via .all/ path
 
 **Steps:**
 1. Create `internal/tigerfs/fuse/all.go`:
    - Implement `AllRowsNode` struct
    - Implement `Readdir()` that:
      - Checks row count estimate from cache
-     - Logs Warn if table exceeds max_ls_rows
+     - Logs Warn if table exceeds dir_listing_limit
      - Lists ALL rows without limit
    - Implement `Lookup()` for accessing rows within .all/
 2. Add `ListAllRows()` to `internal/tigerfs/db/keys.go`:
@@ -2299,7 +2299,7 @@ cat /tmp/testmount/users/.all/1.json
 
 **Completion Criteria:**
 - [ ] `.all/` directory listed in table directory
-- [ ] `.all/` bypasses max_ls_rows limit
+- [ ] `.all/` bypasses dir_listing_limit limit
 - [ ] Warn logged for large tables
 - [ ] Rows accessible within .all/
 - [ ] Tests pass

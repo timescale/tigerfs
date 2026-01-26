@@ -48,7 +48,7 @@ func TestValidateConfigValues(t *testing.T) {
 			Port:           5432,
 			PoolSize:       10,
 			PoolMaxIdle:    5,
-			MaxLsRows:      10000,
+			DirListingLimit:      10000,
 			DefaultFormat:  "tsv",
 			BinaryEncoding: "raw",
 			LogLevel:       "info",
@@ -91,10 +91,10 @@ func TestValidateConfigValues(t *testing.T) {
 			errMsg:  "invalid pool_max_idle",
 		},
 		{
-			name:    "max_ls_rows zero",
-			modify:  func(c *config.Config) { c.MaxLsRows = 0 },
+			name:    "dir_listing_limit zero",
+			modify:  func(c *config.Config) { c.DirListingLimit = 0 },
 			wantErr: true,
-			errMsg:  "invalid max_ls_rows",
+			errMsg:  "invalid dir_listing_limit",
 		},
 		{
 			name:    "invalid default_format",

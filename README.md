@@ -175,7 +175,7 @@ connection:
   pool_size: 10
 
 filesystem:
-  max_ls_rows: 10000
+  dir_listing_limit: 10000
   attr_timeout: 1
   entry_timeout: 1
 
