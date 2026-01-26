@@ -616,6 +616,12 @@ func setupTestDB(t *testing.T) (string, func()) {
 - **Mock external dependencies** (database, FUSE) when appropriate
 - **Test concurrent access** with `-race` flag
 
+### Testing Requirements for Tasks
+
+For each implementation task:
+1. **Write unit tests** for all new functions (required)
+2. **Propose integration tests** for end-to-end workflows (ask user before implementing)
+
 ### Running Tests
 
 ```bash
