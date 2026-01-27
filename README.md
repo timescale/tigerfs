@@ -251,7 +251,7 @@ logging:
 All configuration options support environment variables with `TIGERFS_` prefix:
 
 ```bash
-export TIGERFS_MAX_LS_ROWS=50000
+export TIGERFS_DIR_LISTING_LIMIT=50000
 export TIGERFS_LOG_LEVEL=debug
 export TIGERFS_NO_FILENAME_EXTENSIONS=true  # Disable .txt/.json extensions
 ```

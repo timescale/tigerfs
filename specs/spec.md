@@ -978,7 +978,7 @@ debug: false                   # Enable debug mode (verbose logging)
 **TigerFS-Specific:**
 - `TIGERFS_CONFIG_DIR` - Config directory (default: `~/.config/tigerfs`)
 - `TIGERFS_DEFAULT_SCHEMA` - Default schema to flatten
-- `TIGERFS_MAX_LS_ROWS` - Large table threshold
+- `TIGERFS_DIR_LISTING_LIMIT` - Large table threshold
 - `TIGERFS_TRAILING_NEWLINES` - Add trailing newlines to column/count reads (default: true)
 - `TIGERFS_NO_FILENAME_EXTENSIONS` - Disable type-based file extensions (default: false)
 - `TIGERFS_ATTR_TIMEOUT` - FUSE attribute cache timeout
@@ -992,6 +992,7 @@ debug: false                   # Enable debug mode (verbose logging)
 - `TIGERFS_POOL_SIZE` - Connection pool size
 - `TIGERFS_POOL_MAX_IDLE` - Max idle connections in pool
 - `TIGERFS_PASSWORD` - Database password (alternative to PGPASSWORD)
+- `TIGERFS_PASSWORD_COMMAND` - Command to retrieve password (e.g., from secrets manager)
 - `TIGERFS_DEBUG` - Enable debug mode
 - `TIGER_SERVICE_ID` - Tiger Cloud service ID
 - `TIGER_PUBLIC_KEY` - Tiger Cloud client credential public key (for headless auth)
