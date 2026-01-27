@@ -265,6 +265,105 @@ func TestMount_ReadNonExistentRow(t *testing.T) {
 	t.Logf("Got expected error: %v", err)
 }
 
+func TestMount_FileSizes(t *testing.T) {
+	// Check FUSE availability (skips if not available)
+	checkFUSEMountCapability(t)
+
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout (skips if FUSE unavailable)
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test 1: Verify column file size matches content
+	columnPath := mountpoint + "/users/1/email"
+	columnContent, err := os.ReadFile(columnPath)
+	if err != nil {
+		t.Fatalf("Failed to read column file: %v", err)
+	}
+
+	columnStat, err := os.Stat(columnPath)
+	if err != nil {
+		t.Fatalf("Failed to stat column file: %v", err)
+	}
+
+	if columnStat.Size() != int64(len(columnContent)) {
+		t.Errorf("Column file size mismatch: stat=%d, content=%d", columnStat.Size(), len(columnContent))
+	}
+	t.Logf("Column file size: %d bytes (content=%q)", columnStat.Size(), string(columnContent))
+
+	// Test 2: Verify row file (.json) size matches content
+	rowPath := mountpoint + "/users/1/.json"
+	rowContent, err := os.ReadFile(rowPath)
+	if err != nil {
+		t.Fatalf("Failed to read row file: %v", err)
+	}
+
+	rowStat, err := os.Stat(rowPath)
+	if err != nil {
+		t.Fatalf("Failed to stat row file: %v", err)
+	}
+
+	if rowStat.Size() != int64(len(rowContent)) {
+		t.Errorf("Row file size mismatch: stat=%d, content=%d", rowStat.Size(), len(rowContent))
+	}
+	t.Logf("Row file size: %d bytes", rowStat.Size())
+
+	// Test 3: Verify metadata file (.count) size matches content
+	countPath := mountpoint + "/users/.count"
+	countContent, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatalf("Failed to read .count file: %v", err)
+	}
+
+	countStat, err := os.Stat(countPath)
+	if err != nil {
+		t.Fatalf("Failed to stat .count file: %v", err)
+	}
+
+	if countStat.Size() != int64(len(countContent)) {
+		t.Errorf(".count file size mismatch: stat=%d, content=%d", countStat.Size(), len(countContent))
+	}
+	t.Logf(".count file size: %d bytes (content=%q)", countStat.Size(), strings.TrimSpace(string(countContent)))
+
+	// Test 4: Verify all file sizes are non-zero for non-empty data
+	if columnStat.Size() == 0 && len(columnContent) > 0 {
+		t.Error("Column file reported size 0 but has content - Lookup not populating out.Attr")
+	}
+	if rowStat.Size() == 0 && len(rowContent) > 0 {
+		t.Error("Row file reported size 0 but has content - Lookup not populating out.Attr")
+	}
+	if countStat.Size() == 0 && len(countContent) > 0 {
+		t.Error(".count file reported size 0 but has content - Lookup not populating out.Attr")
+	}
+}
+
 // Helper functions
 
 func contains(slice []string, item string) bool {

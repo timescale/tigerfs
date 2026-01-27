@@ -125,11 +125,11 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 	// Check if this is a format file (.json, .csv, .tsv)
 	switch name {
 	case ".json":
-		return r.createFormatFileNode(ctx, "json")
+		return r.createFormatFileNode(ctx, "json", out)
 	case ".csv":
-		return r.createFormatFileNode(ctx, "csv")
+		return r.createFormatFileNode(ctx, "csv", out)
 	case ".tsv":
-		return r.createFormatFileNode(ctx, "tsv")
+		return r.createFormatFileNode(ctx, "tsv", out)
 	}
 
 	// Otherwise, look up as a column name
@@ -173,11 +173,19 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 	columnNode := NewColumnFileNode(r.cfg, r.db, r.cache, r.schema, r.tableName, r.pkColumn, r.pkValue, name, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
+
+	// Fill in entry attributes (size, permissions, etc.) so they're cached correctly
+	var attrOut fuse.AttrOut
+	if errno := columnNode.Getattr(ctx, nil, &attrOut); errno != 0 {
+		return nil, errno
+	}
+	out.Attr = attrOut.Attr
+
 	return child, 0
 }
 
 // createFormatFileNode creates a RowFileNode for reading the full row in a specific format
-func (r *RowDirectoryNode) createFormatFileNode(ctx context.Context, format string) (*fs.Inode, syscall.Errno) {
+func (r *RowDirectoryNode) createFormatFileNode(ctx context.Context, format string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("Creating format file node",
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue),
@@ -189,6 +197,14 @@ func (r *RowDirectoryNode) createFormatFileNode(ctx context.Context, format stri
 
 	rowNode := NewRowFileNode(r.cfg, r.db, r.cache, r.schema, r.tableName, r.pkColumn, r.pkValue, format)
 	child := r.NewPersistentInode(ctx, rowNode, stableAttr)
+
+	// Fill in entry attributes (size, permissions, etc.) so they're cached correctly
+	var attrOut fuse.AttrOut
+	if errno := rowNode.Getattr(ctx, nil, &attrOut); errno != 0 {
+		return nil, errno
+	}
+	out.Attr = attrOut.Attr
+
 	return child, 0
 }
 

@@ -206,7 +206,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	// Check if this is a metadata file lookup
 	if name == ".columns" || name == ".schema" || name == ".count" {
-		return t.lookupMetadataFile(ctx, name)
+		return t.lookupMetadataFile(ctx, name, out)
 	}
 
 	// Check if this is the .all directory (bypass dir_listing_limit)
@@ -279,6 +279,14 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 		rowNode := NewRowFileNode(t.cfg, t.db, t.cache, t.schema, t.tableName, pkColumn, pkValue, format)
 		child := t.NewPersistentInode(ctx, rowNode, stableAttr)
+
+		// Fill in entry attributes (size, permissions, etc.) so they're cached correctly
+		var attrOut fuse.AttrOut
+		if errno := rowNode.Getattr(ctx, nil, &attrOut); errno != 0 {
+			return nil, errno
+		}
+		out.Attr = attrOut.Attr
+
 		return child, 0
 	}
 
@@ -349,7 +357,7 @@ func (t *TableNode) lookupAllDirectory(ctx context.Context) (*fs.Inode, syscall.
 }
 
 // lookupMetadataFile handles lookups for metadata files (.columns, .schema, .count)
-func (t *TableNode) lookupMetadataFile(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+func (t *TableNode) lookupMetadataFile(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("Looking up metadata file",
 		zap.String("table", t.tableName),
 		zap.String("file", name))
@@ -378,6 +386,13 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string) (*fs.In
 	// Create metadata file node
 	metadataNode := NewMetadataFileNode(t.cfg, t.db, t.schema, t.tableName, fileType)
 	child := t.NewPersistentInode(ctx, metadataNode, stableAttr)
+
+	// Fill in entry attributes (size, permissions, etc.) so they're cached correctly
+	var attrOut fuse.AttrOut
+	if errno := metadataNode.Getattr(ctx, nil, &attrOut); errno != 0 {
+		return nil, errno
+	}
+	out.Attr = attrOut.Attr
 
 	logging.Debug("Created metadata file node",
 		zap.String("table", t.tableName),

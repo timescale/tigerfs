@@ -2507,7 +2507,7 @@ echo 'test' > /tmp/testmount/users/1/email
 
 ### Task 4.12: Implement File Sizes (Complete)
 
-**Status:** Already implemented as part of earlier work.
+**Status:** Complete
 
 **Objective:** Calculate and return accurate file sizes
 
@@ -2515,11 +2515,15 @@ echo 'test' > /tmp/testmount/users/1/email
 - `internal/tigerfs/fuse/row.go:93` returns `len(r.data)` for row file sizes
 - `internal/tigerfs/fuse/column.go:97` returns `len(c.data)` for column file sizes
 - Sizes are calculated from the actual data content after fetching
+- `Lookup` methods must populate `out.Attr` so the kernel caches correct sizes:
+  - `rowdir.go`: Column files and format files (.json, .csv, .tsv)
+  - `table.go`: Row files and metadata files (.columns, .schema, .count)
 
 **Completion Criteria:**
 - [x] File sizes accurate
 - [x] Shown in ls -lh
 - [x] Sizes derived from data content
+- [x] Lookup methods populate out.Attr for correct caching
 - [x] Tests pass
 
 ---
