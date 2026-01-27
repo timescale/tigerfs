@@ -58,10 +58,16 @@ func ConvertValueToText(value interface{}) (string, error) {
 		return string(data), nil
 
 	default:
-		// For other types (including custom types), try JSON encoding first
-		// This handles nested structures, slices, maps, etc.
+		// Check if the value implements fmt.Stringer (e.g., pgtype.UUID)
+		if s, ok := value.(fmt.Stringer); ok {
+			return s.String(), nil
+		}
+
+		// For other types (including pgtype.Numeric), try JSON encoding.
+		// pgtype.Numeric doesn't implement fmt.Stringer, but it has MarshalJSON
+		// which json.Marshal calls to get the proper decimal representation
+		// (e.g., "175.00" instead of the struct internals "{17500 -2 ...}")
 		if data, err := json.Marshal(v); err == nil {
-			// Successfully encoded as JSON
 			return string(data), nil
 		}
 

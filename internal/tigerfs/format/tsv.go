@@ -3,7 +3,6 @@ package format
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 // RowToTSV converts a database row to TSV format
@@ -30,33 +29,14 @@ func RowToTSV(columns []string, values []interface{}) ([]byte, error) {
 // ValueToString converts a database value to its string representation
 // NULL values become empty strings
 // This is a public function used by TSV, CSV, and column file formatting
+//
+// Delegates to ConvertValueToText for consistent type handling across all formats,
+// including proper serialization of PostgreSQL types like numeric, UUID, etc.
 func ValueToString(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-
-	switch v := value.(type) {
-	case string:
-		return v
-	case []byte:
-		// BYTEA or text data
-		return string(v)
-	case int, int8, int16, int32, int64:
-		return fmt.Sprintf("%d", v)
-	case uint, uint8, uint16, uint32, uint64:
-		return fmt.Sprintf("%d", v)
-	case float32, float64:
-		return fmt.Sprintf("%g", v)
-	case bool:
-		if v {
-			return "t"
-		}
-		return "f"
-	case time.Time:
-		// ISO 8601 format
-		return v.Format(time.RFC3339)
-	default:
+	str, err := ConvertValueToText(value)
+	if err != nil {
 		// Fallback: use fmt to convert to string
-		return fmt.Sprintf("%v", v)
+		return fmt.Sprintf("%v", value)
 	}
+	return str
 }
