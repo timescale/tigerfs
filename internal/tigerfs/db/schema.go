@@ -460,3 +460,360 @@ func (c *Client) GetTableDDL(ctx context.Context, schema, table string) (string,
 	}
 	return GetTableDDL(ctx, c.pool, schema, table)
 }
+
+// GetIndexDDL returns CREATE INDEX statements for a table.
+// Includes both regular and unique indexes, excluding primary key constraints
+// (which are already shown in the CREATE TABLE statement).
+func GetIndexDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+	logging.Debug("Getting index DDL",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	// Query index definitions from pg_indexes
+	// Exclude primary key indexes (they're part of CREATE TABLE)
+	query := `
+		SELECT indexdef
+		FROM pg_indexes
+		WHERE schemaname = $1 AND tablename = $2
+		AND indexname NOT IN (
+			SELECT conname FROM pg_constraint
+			WHERE conrelid = (quote_ident($1) || '.' || quote_ident($2))::regclass
+			AND contype = 'p'
+		)
+		ORDER BY indexname
+	`
+
+	rows, err := pool.Query(ctx, query, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to query indexes: %w", err)
+	}
+	defer rows.Close()
+
+	var ddl strings.Builder
+	for rows.Next() {
+		var indexDef string
+		if err := rows.Scan(&indexDef); err != nil {
+			return "", fmt.Errorf("failed to scan index definition: %w", err)
+		}
+		ddl.WriteString(indexDef)
+		ddl.WriteString(";\n")
+	}
+
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("error reading index rows: %w", err)
+	}
+
+	return ddl.String(), nil
+}
+
+// GetIndexDDL is a convenience wrapper for Client
+func (c *Client) GetIndexDDL(ctx context.Context, schema, table string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetIndexDDL(ctx, c.pool, schema, table)
+}
+
+// GetForeignKeyDDL returns ALTER TABLE statements for foreign key constraints.
+func GetForeignKeyDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+	logging.Debug("Getting foreign key DDL",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	query := `
+		SELECT
+			'ALTER TABLE "' || nsp.nspname || '"."' || cls.relname || '" ADD CONSTRAINT "' || con.conname || '" ' ||
+			pg_get_constraintdef(con.oid) || ';' AS fk_ddl
+		FROM pg_constraint con
+		JOIN pg_class cls ON con.conrelid = cls.oid
+		JOIN pg_namespace nsp ON cls.relnamespace = nsp.oid
+		WHERE nsp.nspname = $1
+		AND cls.relname = $2
+		AND con.contype = 'f'
+		ORDER BY con.conname
+	`
+
+	rows, err := pool.Query(ctx, query, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to query foreign keys: %w", err)
+	}
+	defer rows.Close()
+
+	var ddl strings.Builder
+	for rows.Next() {
+		var fkDef string
+		if err := rows.Scan(&fkDef); err != nil {
+			return "", fmt.Errorf("failed to scan foreign key definition: %w", err)
+		}
+		ddl.WriteString(fkDef)
+		ddl.WriteString("\n")
+	}
+
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("error reading foreign key rows: %w", err)
+	}
+
+	return ddl.String(), nil
+}
+
+// GetForeignKeyDDL is a convenience wrapper for Client
+func (c *Client) GetForeignKeyDDL(ctx context.Context, schema, table string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetForeignKeyDDL(ctx, c.pool, schema, table)
+}
+
+// GetCheckConstraintDDL returns ALTER TABLE statements for check constraints.
+func GetCheckConstraintDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+	logging.Debug("Getting check constraint DDL",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	query := `
+		SELECT
+			'ALTER TABLE "' || nsp.nspname || '"."' || cls.relname || '" ADD CONSTRAINT "' || con.conname || '" ' ||
+			pg_get_constraintdef(con.oid) || ';' AS check_ddl
+		FROM pg_constraint con
+		JOIN pg_class cls ON con.conrelid = cls.oid
+		JOIN pg_namespace nsp ON cls.relnamespace = nsp.oid
+		WHERE nsp.nspname = $1
+		AND cls.relname = $2
+		AND con.contype = 'c'
+		ORDER BY con.conname
+	`
+
+	rows, err := pool.Query(ctx, query, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to query check constraints: %w", err)
+	}
+	defer rows.Close()
+
+	var ddl strings.Builder
+	for rows.Next() {
+		var checkDef string
+		if err := rows.Scan(&checkDef); err != nil {
+			return "", fmt.Errorf("failed to scan check constraint definition: %w", err)
+		}
+		ddl.WriteString(checkDef)
+		ddl.WriteString("\n")
+	}
+
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("error reading check constraint rows: %w", err)
+	}
+
+	return ddl.String(), nil
+}
+
+// GetCheckConstraintDDL is a convenience wrapper for Client
+func (c *Client) GetCheckConstraintDDL(ctx context.Context, schema, table string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetCheckConstraintDDL(ctx, c.pool, schema, table)
+}
+
+// GetTriggerDDL returns CREATE TRIGGER statements for a table.
+func GetTriggerDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+	logging.Debug("Getting trigger DDL",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	query := `
+		SELECT pg_get_triggerdef(t.oid, true) || ';' AS trigger_ddl
+		FROM pg_trigger t
+		JOIN pg_class cls ON t.tgrelid = cls.oid
+		JOIN pg_namespace nsp ON cls.relnamespace = nsp.oid
+		WHERE nsp.nspname = $1
+		AND cls.relname = $2
+		AND NOT t.tgisinternal
+		ORDER BY t.tgname
+	`
+
+	rows, err := pool.Query(ctx, query, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to query triggers: %w", err)
+	}
+	defer rows.Close()
+
+	var ddl strings.Builder
+	for rows.Next() {
+		var triggerDef string
+		if err := rows.Scan(&triggerDef); err != nil {
+			return "", fmt.Errorf("failed to scan trigger definition: %w", err)
+		}
+		ddl.WriteString(triggerDef)
+		ddl.WriteString("\n")
+	}
+
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("error reading trigger rows: %w", err)
+	}
+
+	return ddl.String(), nil
+}
+
+// GetTriggerDDL is a convenience wrapper for Client
+func (c *Client) GetTriggerDDL(ctx context.Context, schema, table string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetTriggerDDL(ctx, c.pool, schema, table)
+}
+
+// GetTableComments returns COMMENT statements for table and columns.
+func GetTableComments(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+	logging.Debug("Getting table comments",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	var ddl strings.Builder
+
+	// Get table comment
+	tableCommentQuery := `
+		SELECT obj_description((quote_ident($1) || '.' || quote_ident($2))::regclass, 'pg_class')
+	`
+	var tableComment *string
+	err := pool.QueryRow(ctx, tableCommentQuery, schema, table).Scan(&tableComment)
+	if err != nil {
+		return "", fmt.Errorf("failed to query table comment: %w", err)
+	}
+
+	if tableComment != nil && *tableComment != "" {
+		ddl.WriteString(fmt.Sprintf("COMMENT ON TABLE \"%s\".\"%s\" IS '%s';\n",
+			schema, table, strings.ReplaceAll(*tableComment, "'", "''")))
+	}
+
+	// Get column comments
+	columnCommentQuery := `
+		SELECT a.attname, d.description
+		FROM pg_class c
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		JOIN pg_attribute a ON a.attrelid = c.oid
+		JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = a.attnum
+		WHERE n.nspname = $1
+		AND c.relname = $2
+		AND a.attnum > 0
+		AND NOT a.attisdropped
+		ORDER BY a.attnum
+	`
+
+	rows, err := pool.Query(ctx, columnCommentQuery, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to query column comments: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var colName, comment string
+		if err := rows.Scan(&colName, &comment); err != nil {
+			return "", fmt.Errorf("failed to scan column comment: %w", err)
+		}
+		ddl.WriteString(fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\".\"%s\" IS '%s';\n",
+			schema, table, colName, strings.ReplaceAll(comment, "'", "''")))
+	}
+
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("error reading column comment rows: %w", err)
+	}
+
+	return ddl.String(), nil
+}
+
+// GetTableComments is a convenience wrapper for Client
+func (c *Client) GetTableComments(ctx context.Context, schema, table string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetTableComments(ctx, c.pool, schema, table)
+}
+
+// GetFullDDL returns complete DDL for a table including:
+// - CREATE TABLE statement
+// - Indexes
+// - Foreign keys
+// - Check constraints
+// - Triggers
+// - Comments
+// Sections are only included if they have content.
+func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+	logging.Debug("Getting full DDL",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	var ddl strings.Builder
+
+	// Table definition
+	tableDDL, err := GetTableDDL(ctx, pool, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to get table DDL: %w", err)
+	}
+	ddl.WriteString("-- Table\n")
+	ddl.WriteString(tableDDL)
+	ddl.WriteString("\n")
+
+	// Indexes
+	indexDDL, err := GetIndexDDL(ctx, pool, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to get index DDL: %w", err)
+	}
+	if indexDDL != "" {
+		ddl.WriteString("-- Indexes\n")
+		ddl.WriteString(indexDDL)
+		ddl.WriteString("\n")
+	}
+
+	// Foreign keys
+	fkDDL, err := GetForeignKeyDDL(ctx, pool, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to get foreign key DDL: %w", err)
+	}
+	if fkDDL != "" {
+		ddl.WriteString("-- Foreign Keys\n")
+		ddl.WriteString(fkDDL)
+		ddl.WriteString("\n")
+	}
+
+	// Check constraints
+	checkDDL, err := GetCheckConstraintDDL(ctx, pool, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to get check constraint DDL: %w", err)
+	}
+	if checkDDL != "" {
+		ddl.WriteString("-- Check Constraints\n")
+		ddl.WriteString(checkDDL)
+		ddl.WriteString("\n")
+	}
+
+	// Triggers
+	triggerDDL, err := GetTriggerDDL(ctx, pool, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to get trigger DDL: %w", err)
+	}
+	if triggerDDL != "" {
+		ddl.WriteString("-- Triggers\n")
+		ddl.WriteString(triggerDDL)
+		ddl.WriteString("\n")
+	}
+
+	// Comments
+	commentsDDL, err := GetTableComments(ctx, pool, schema, table)
+	if err != nil {
+		return "", fmt.Errorf("failed to get table comments: %w", err)
+	}
+	if commentsDDL != "" {
+		ddl.WriteString("-- Comments\n")
+		ddl.WriteString(commentsDDL)
+	}
+
+	return ddl.String(), nil
+}
+
+// GetFullDDL is a convenience wrapper for Client
+func (c *Client) GetFullDDL(ctx context.Context, schema, table string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetFullDDL(ctx, c.pool, schema, table)
+}

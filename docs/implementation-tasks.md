@@ -2933,6 +2933,93 @@ ls /tmp/testmount2/users/1/
 
 ---
 
+### Task 4.20: Implement .ddl Extended Schema File
+
+**Objective:** Add a `.ddl` metadata file that shows complete table DDL including indexes, constraints, triggers, and comments.
+
+**Background:** The existing `.schema` file shows only the CREATE TABLE statement, which is fast but incomplete. For understanding a table's full definition, users need to see indexes, foreign keys, check constraints, triggers, and documentation comments. The `.ddl` file provides this comprehensive view.
+
+**Output Format:**
+```sql
+-- Table
+CREATE TABLE "public"."users" (
+  ...
+);
+
+-- Indexes
+CREATE INDEX "users_email_idx" ON "public"."users" ("email");
+CREATE UNIQUE INDEX "users_pkey" ON "public"."users" ("id");
+
+-- Foreign Keys
+ALTER TABLE "public"."orders" ADD CONSTRAINT "orders_user_id_fkey"
+  FOREIGN KEY ("user_id") REFERENCES "public"."users" ("id");
+
+-- Check Constraints
+ALTER TABLE "public"."users" ADD CONSTRAINT "users_age_check"
+  CHECK (age >= 0 AND age <= 150);
+
+-- Triggers
+CREATE TRIGGER "update_timestamp" BEFORE UPDATE ON "public"."users"
+  FOR EACH ROW EXECUTE FUNCTION update_modified_column();
+
+-- Comments
+COMMENT ON TABLE "public"."users" IS 'User accounts';
+COMMENT ON COLUMN "public"."users"."email" IS 'Primary contact email';
+```
+
+**Steps:**
+1. Add database queries in `internal/tigerfs/db/schema.go`:
+   - `GetIndexDDL(ctx, schema, table)` - Returns CREATE INDEX statements
+   - `GetForeignKeyDDL(ctx, schema, table)` - Returns FK constraints
+   - `GetCheckConstraintDDL(ctx, schema, table)` - Returns CHECK constraints
+   - `GetTriggerDDL(ctx, schema, table)` - Returns CREATE TRIGGER statements
+   - `GetTableComments(ctx, schema, table)` - Returns COMMENT statements
+   - `GetFullDDL(ctx, schema, table)` - Combines all of the above
+2. Update `internal/tigerfs/fuse/metadata.go`:
+   - Add "ddl" as a new file type
+   - Implement `fetchDDL()` that calls `GetFullDDL`
+3. Update `internal/tigerfs/fuse/table.go`:
+   - Add `.ddl` to Readdir output
+   - Add `.ddl` to Lookup metadata file handling
+4. Write unit tests for new db functions
+5. Write integration test for `.ddl` file access
+
+**Files to Modify:**
+- `internal/tigerfs/db/schema.go`
+- `internal/tigerfs/fuse/metadata.go`
+- `internal/tigerfs/fuse/table.go`
+
+**Files to Create:**
+- None (tests go in existing `*_test.go` files)
+
+**Verification:**
+```bash
+# Mount database
+go run ./cmd/tigerfs mount postgres://... /tmp/testmount
+
+# View simple schema (fast)
+cat /tmp/testmount/users/.schema
+
+# View full DDL (comprehensive)
+cat /tmp/testmount/users/.ddl
+
+# Verify sections present
+cat /tmp/testmount/users/.ddl | grep -E "^-- (Table|Indexes|Foreign Keys|Triggers|Comments)"
+```
+
+**Completion Criteria:**
+- [ ] `.ddl` file appears in table directory listing
+- [ ] CREATE TABLE statement included
+- [ ] CREATE INDEX statements included
+- [ ] Foreign key constraints included
+- [ ] Check constraints included
+- [ ] Trigger definitions included
+- [ ] Table/column comments included (if any exist)
+- [ ] Sections omitted if empty (no "-- Indexes" header if no indexes)
+- [ ] Tests pass
+
+---
+
 ## Phase 5: Distribution & Release
 
 ### Task 5.1: Create Unix Install Script

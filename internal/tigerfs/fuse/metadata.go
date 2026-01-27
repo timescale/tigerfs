@@ -14,12 +14,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// MetadataFileNode represents a metadata file (.columns, .schema, .count).
+// MetadataFileNode represents a metadata file (.columns, .schema, .ddl, .count).
 // These read-only files provide table metadata without requiring SQL queries.
 //
 // Supported file types:
 //   - "columns": Lists column names, one per line
-//   - "schema": Shows the CREATE TABLE DDL statement
+//   - "schema": Shows the CREATE TABLE DDL statement (fast)
+//   - "ddl": Shows complete DDL (table, indexes, constraints, triggers, comments)
 //   - "count": Shows row count (exact for small tables, estimated for large)
 //
 // The .count file uses an adaptive strategy: exact COUNT(*) for tables with
@@ -139,6 +140,8 @@ func (m *MetadataFileNode) fetchData(ctx context.Context) error {
 		return m.fetchColumns(ctx)
 	case "schema":
 		return m.fetchSchema(ctx)
+	case "ddl":
+		return m.fetchDDL(ctx)
 	case "count":
 		return m.fetchCount(ctx)
 	default:
@@ -174,6 +177,25 @@ func (m *MetadataFileNode) fetchSchema(ctx context.Context) error {
 	ddl, err := m.db.GetTableDDL(ctx, m.schema, m.tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table DDL: %w", err)
+	}
+
+	m.data = []byte(ddl)
+	return nil
+}
+
+// fetchDDL retrieves the complete DDL for the table including:
+// - CREATE TABLE statement
+// - Indexes
+// - Foreign keys
+// - Check constraints
+// - Triggers
+// - Comments
+//
+// Returns error if any database query fails.
+func (m *MetadataFileNode) fetchDDL(ctx context.Context) error {
+	ddl, err := m.db.GetFullDDL(ctx, m.schema, m.tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get full DDL: %w", err)
 	}
 
 	m.data = []byte(ddl)

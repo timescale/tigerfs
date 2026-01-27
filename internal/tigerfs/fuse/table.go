@@ -133,6 +133,10 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
+			Name: ".ddl",
+			Mode: syscall.S_IFREG,
+		},
+		fuse.DirEntry{
 			Name: ".count",
 			Mode: syscall.S_IFREG,
 		},
@@ -205,7 +209,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("name", name))
 
 	// Check if this is a metadata file lookup
-	if name == ".columns" || name == ".schema" || name == ".count" {
+	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" {
 		return t.lookupMetadataFile(ctx, name, out)
 	}
 
@@ -369,6 +373,8 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string, out *fu
 		fileType = "columns"
 	case ".schema":
 		fileType = "schema"
+	case ".ddl":
+		fileType = "ddl"
 	case ".count":
 		fileType = "count"
 	default:
@@ -546,7 +552,7 @@ func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		zap.String("name", name))
 
 	// Can't delete metadata files
-	if name == ".columns" || name == ".schema" || name == ".count" {
+	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" {
 		logging.Debug("Cannot delete metadata file",
 			zap.String("table", t.tableName),
 			zap.String("file", name))
