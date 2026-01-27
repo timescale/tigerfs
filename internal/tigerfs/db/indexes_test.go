@@ -716,3 +716,183 @@ func TestGetRowsByIndexValue_UsesIndex(t *testing.T) {
 		t.Logf("Verified index usage. EXPLAIN output:\n%s", strings.Join(explainOutput, "\n"))
 	}
 }
+
+// TestGetDistinctValuesOrdered verifies ordered distinct value retrieval.
+func TestGetDistinctValuesOrdered(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test table with ordered data
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_distinct_ordered (
+			id serial PRIMARY KEY,
+			priority int
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Insert test data
+	_, _ = client.pool.Exec(ctx, `
+		INSERT INTO test_distinct_ordered (priority) VALUES
+		(5), (3), (1), (4), (2), (5), (1)
+	`)
+
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_distinct_ordered")
+	}()
+
+	// Test ascending order (first N)
+	values, err := client.GetDistinctValuesOrdered(ctx, "public", "test_distinct_ordered", "priority", 3, true)
+	if err != nil {
+		t.Fatalf("GetDistinctValuesOrdered(ASC) failed: %v", err)
+	}
+
+	if len(values) != 3 {
+		t.Errorf("Expected 3 values, got %d", len(values))
+	}
+
+	// Values should be 1, 2, 3 (first 3 in ascending order)
+	if len(values) >= 3 {
+		if values[0] != "1" || values[1] != "2" || values[2] != "3" {
+			t.Errorf("Expected [1, 2, 3] ascending, got %v", values)
+		}
+	}
+
+	// Test descending order (last N)
+	values, err = client.GetDistinctValuesOrdered(ctx, "public", "test_distinct_ordered", "priority", 3, false)
+	if err != nil {
+		t.Fatalf("GetDistinctValuesOrdered(DESC) failed: %v", err)
+	}
+
+	if len(values) != 3 {
+		t.Errorf("Expected 3 values, got %d", len(values))
+	}
+
+	// Values should be 5, 4, 3 (first 3 in descending order = last 3)
+	if len(values) >= 3 {
+		if values[0] != "5" || values[1] != "4" || values[2] != "3" {
+			t.Errorf("Expected [5, 4, 3] descending, got %v", values)
+		}
+	}
+
+	t.Logf("Ascending: %v, Descending: %v", values, values)
+}
+
+// TestGetRowsByIndexValueOrdered verifies ordered rows retrieval by index value.
+func TestGetRowsByIndexValueOrdered(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test table
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_rows_ordered (
+			id serial PRIMARY KEY,
+			category text
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+
+	// Insert test data - IDs will be 1, 2, 3, 4
+	_, _ = client.pool.Exec(ctx, `
+		INSERT INTO test_rows_ordered (category) VALUES
+		('electronics'), ('books'), ('electronics'), ('electronics')
+	`)
+
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_rows_ordered")
+	}()
+
+	// Test ascending order - first 2 electronics rows
+	pks, err := client.GetRowsByIndexValueOrdered(ctx, "public", "test_rows_ordered", "category", "electronics", "id", 2, true)
+	if err != nil {
+		t.Fatalf("GetRowsByIndexValueOrdered(ASC) failed: %v", err)
+	}
+
+	if len(pks) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(pks))
+	}
+
+	// First 2 electronics rows should be id=1 and id=3
+	if len(pks) >= 2 {
+		if pks[0] != "1" || pks[1] != "3" {
+			t.Errorf("Expected [1, 3] ascending, got %v", pks)
+		}
+	}
+
+	// Test descending order - last 2 electronics rows
+	pks, err = client.GetRowsByIndexValueOrdered(ctx, "public", "test_rows_ordered", "category", "electronics", "id", 2, false)
+	if err != nil {
+		t.Fatalf("GetRowsByIndexValueOrdered(DESC) failed: %v", err)
+	}
+
+	if len(pks) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(pks))
+	}
+
+	// Last 2 electronics rows should be id=4 and id=3
+	if len(pks) >= 2 {
+		if pks[0] != "4" || pks[1] != "3" {
+			t.Errorf("Expected [4, 3] descending, got %v", pks)
+		}
+	}
+
+	t.Logf("Ascending: %v, Descending: %v", pks, pks)
+}
+
+// TestClient_GetDistinctValuesOrdered_NilPool verifies error on uninitialized client.
+func TestClient_GetDistinctValuesOrdered_NilPool(t *testing.T) {
+	client := &Client{cfg: &config.Config{}}
+	ctx := context.Background()
+
+	_, err := client.GetDistinctValuesOrdered(ctx, "public", "test", "col", 10, true)
+	if err == nil {
+		t.Error("Expected error for nil pool")
+	}
+}
+
+// TestClient_GetRowsByIndexValueOrdered_NilPool verifies error on uninitialized client.
+func TestClient_GetRowsByIndexValueOrdered_NilPool(t *testing.T) {
+	client := &Client{cfg: &config.Config{}}
+	ctx := context.Background()
+
+	_, err := client.GetRowsByIndexValueOrdered(ctx, "public", "test", "col", "val", "id", 10, true)
+	if err == nil {
+		t.Error("Expected error for nil pool")
+	}
+}

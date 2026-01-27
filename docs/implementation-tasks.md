@@ -3073,6 +3073,72 @@ cat /tmp/testmount/users/.indexes
 
 ---
 
+### Task 4.22: Add Pagination to Index Navigation
+
+**Objective:** Support `.first/N/` and `.last/N/` within index directories for ordered access.
+
+**Background:** Indexes are often used with ORDER BY and LIMIT for efficient ordered access. Currently, `.first/N/` and `.last/N/` only work at the table level. Adding them to index navigation enables patterns like "first 10 timestamps" or "last 5 rows matching this category".
+
+**Supported Paths:**
+
+Single-column indexes:
+```
+.column/.first/N/          # First N distinct values (ordered by column)
+.column/.last/N/           # Last N distinct values
+.column/value/.first/N/    # First N rows matching value (ordered by PK)
+.column/value/.last/N/     # Last N rows matching value
+```
+
+Composite indexes:
+```
+.col1.col2/.first/N/           # First N distinct col1 values
+.col1.col2/.last/N/            # Last N distinct col1 values
+.col1.col2/val1/.first/N/      # First N distinct col2 values where col1=val1
+.col1.col2/val1/val2/.first/N/ # First N rows matching both conditions
+```
+
+**Example Usage:**
+```bash
+# First 10 order timestamps
+ls /mnt/db/orders/.created_at/.first/10/
+
+# Last 5 orders for user 42
+ls /mnt/db/orders/.user_id/42/.last/5/
+
+# First 10 users with last name "Smith"
+ls /mnt/db/users/.last_name.first_name/Smith/.first/10/
+```
+
+**Steps:**
+1. Update `IndexNode` to handle `.first` and `.last` lookups
+2. Update `IndexValueNode` to handle `.first` and `.last` lookups
+3. Update `CompositeIndexNode` to handle `.first` and `.last` lookups
+4. Update `CompositeIndexLevelNode` to handle `.first` and `.last` lookups
+5. Update db queries to support ORDER BY ASC/DESC with LIMIT
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/index.go`
+- `internal/tigerfs/db/indexes.go` (may need new query variants)
+
+**Verification:**
+```bash
+# Mount and test
+ls /mnt/db/orders/.created_at/.first/5/     # First 5 timestamps
+ls /mnt/db/orders/.created_at/.last/5/      # Last 5 timestamps
+ls /mnt/db/orders/.user_id/1/.first/3/      # First 3 orders for user 1
+cat /mnt/db/orders/.user_id/1/.first/3/*.json  # Read them
+```
+
+**Completion Criteria:**
+- [ ] `.first/N/` works in IndexNode (distinct values)
+- [ ] `.last/N/` works in IndexNode (distinct values)
+- [ ] `.first/N/` works in IndexValueNode (matching rows)
+- [ ] `.last/N/` works in IndexValueNode (matching rows)
+- [ ] Works with composite indexes at each level
+- [ ] Tests pass
+
+---
+
 ## Phase 5: Distribution & Release
 
 ### Task 5.1: Create Unix Install Script

@@ -2,6 +2,7 @@ package fuse
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -92,6 +93,7 @@ func (n *IndexNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 // Readdir lists distinct values in the indexed column.
 // Limited to prevent huge listings on high-cardinality columns.
 // Returns values as directory entries (each value can be navigated into).
+// Also includes .first and .last for ordered pagination access.
 func (n *IndexNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("IndexNode.Readdir called",
 		zap.String("table", n.tableName),
@@ -111,8 +113,14 @@ func (n *IndexNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	}
 
 	// Convert values to directory entries
+	// Start with pagination directories
+	entries := make([]fuse.DirEntry, 0, len(values)+2)
+	entries = append(entries,
+		fuse.DirEntry{Name: ".first", Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: ".last", Mode: syscall.S_IFDIR},
+	)
+
 	// Each value is shown as a directory (can navigate into it)
-	entries := make([]fuse.DirEntry, 0, len(values))
 	for _, val := range values {
 		entries = append(entries, fuse.DirEntry{
 			Name: val,
@@ -128,22 +136,22 @@ func (n *IndexNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup handles access to a specific value within the index.
-// For example, looking up "foo@example.com" within .email/.
+// Lookup handles access to a specific value within the index or pagination directories.
+// For example, looking up "foo@example.com" within .email/ or .first within .email/.
 //
 // The lookup queries for rows matching this column value:
 //   - If exactly one row matches: returns that row (as directory or file)
 //   - If multiple rows match: returns a directory listing matching PKs
-//
-// This is implemented in Task 4.3; for now returns ENOENT.
 func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("IndexNode.Lookup called",
 		zap.String("table", n.tableName),
 		zap.String("column", n.column),
 		zap.String("value", name))
 
-	// Task 4.3 will implement full index-based queries
-	// For now, just verify the value exists in the index
+	// Handle pagination directories
+	if name == ".first" || name == ".last" {
+		return n.lookupPagination(ctx, name)
+	}
 
 	// Query for rows with this value
 	pk, err := n.db.GetPrimaryKey(ctx, n.schema, n.tableName)
@@ -188,6 +196,25 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	valueNode := NewIndexValueNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.column, name, pkColumn, rows, n.partialRows)
 	child := n.NewPersistentInode(ctx, valueNode, stableAttr)
+
+	return child, 0
+}
+
+// lookupPagination handles .first and .last directory lookups within an index.
+func (n *IndexNode) lookupPagination(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+	var paginationType PaginationType
+	if name == ".first" {
+		paginationType = PaginationFirst
+	} else {
+		paginationType = PaginationLast
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	pagNode := NewIndexPaginationNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.column, paginationType, n.partialRows)
+	child := n.NewPersistentInode(ctx, pagNode, stableAttr)
 
 	return child, 0
 }
@@ -276,6 +303,7 @@ func (n *IndexValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 }
 
 // Readdir lists the primary keys of rows matching the index value.
+// Also includes .first and .last for ordered pagination access.
 func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("IndexValueNode.Readdir called",
 		zap.String("table", n.tableName),
@@ -283,8 +311,14 @@ func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		zap.String("value", n.value),
 		zap.Int("match_count", len(n.matchingPKs)))
 
-	// Convert matching PKs to directory entries
-	entries := make([]fuse.DirEntry, 0, len(n.matchingPKs))
+	// Start with pagination directories
+	entries := make([]fuse.DirEntry, 0, len(n.matchingPKs)+2)
+	entries = append(entries,
+		fuse.DirEntry{Name: ".first", Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: ".last", Mode: syscall.S_IFDIR},
+	)
+
+	// Add matching PKs as files
 	for _, pk := range n.matchingPKs {
 		entries = append(entries, fuse.DirEntry{
 			Name: pk,
@@ -296,13 +330,18 @@ func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 }
 
 // Lookup handles access to a specific row within the index value results.
-// Supports both bare PKs (returns directory) and PKs with format extensions (returns file).
+// Supports bare PKs, PKs with format extensions, and pagination directories.
 func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("IndexValueNode.Lookup called",
 		zap.String("table", n.tableName),
 		zap.String("column", n.column),
 		zap.String("value", n.value),
 		zap.String("name", name))
+
+	// Handle pagination directories
+	if name == ".first" || name == ".last" {
+		return n.lookupPagination(ctx, name)
+	}
 
 	// Parse filename to extract PK value and format
 	pkValue, format := util.ParseRowFilename(name)
@@ -345,6 +384,212 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 
 	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pkColumn, pkValue, n.partialRows)
 	child := n.NewPersistentInode(ctx, rowDirNode, stableAttr)
+
+	return child, 0
+}
+
+// lookupPagination handles .first and .last directory lookups within an index value.
+func (n *IndexValueNode) lookupPagination(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+	var paginationType PaginationType
+	if name == ".first" {
+		paginationType = PaginationFirst
+	} else {
+		paginationType = PaginationLast
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	pagNode := NewIndexValuePaginationNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.column, n.value, n.pkColumn, paginationType, n.partialRows)
+	child := n.NewPersistentInode(ctx, pagNode, stableAttr)
+
+	return child, 0
+}
+
+// IndexValuePaginationNode represents the .first/ or .last/ directory within an index value.
+type IndexValuePaginationNode struct {
+	fs.Inode
+
+	cfg            *config.Config
+	db             *db.Client
+	cache          *MetadataCache
+	schema         string
+	tableName      string
+	column         string
+	value          string
+	pkColumn       string
+	paginationType PaginationType
+	partialRows    *PartialRowTracker
+}
+
+var _ fs.InodeEmbedder = (*IndexValuePaginationNode)(nil)
+var _ fs.NodeGetattrer = (*IndexValuePaginationNode)(nil)
+var _ fs.NodeReaddirer = (*IndexValuePaginationNode)(nil)
+var _ fs.NodeLookuper = (*IndexValuePaginationNode)(nil)
+
+// NewIndexValuePaginationNode creates a new pagination node within an index value.
+func NewIndexValuePaginationNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexValuePaginationNode {
+	return &IndexValuePaginationNode{
+		cfg:            cfg,
+		db:             dbClient,
+		cache:          cache,
+		schema:         schema,
+		tableName:      tableName,
+		column:         column,
+		value:          value,
+		pkColumn:       pkColumn,
+		paginationType: paginationType,
+		partialRows:    partialRows,
+	}
+}
+
+// Getattr returns attributes for the index value pagination directory
+func (p *IndexValuePaginationNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0700 | syscall.S_IFDIR
+	out.Nlink = 2
+	out.Size = 4096
+	return 0
+}
+
+// Readdir lists the pagination directory (empty - user must specify N)
+func (p *IndexValuePaginationNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return fs.NewListDirStream([]fuse.DirEntry{}), 0
+}
+
+// Lookup looks up a number N to create an IndexValuePaginationLimitNode.
+func (p *IndexValuePaginationNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	limit, err := strconv.Atoi(name)
+	if err != nil || limit < 1 {
+		return nil, syscall.ENOENT
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	limitNode := NewIndexValuePaginationLimitNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.column, p.value, p.pkColumn, p.paginationType, limit, p.partialRows)
+	child := p.NewPersistentInode(ctx, limitNode, stableAttr)
+
+	return child, 0
+}
+
+// IndexValuePaginationLimitNode represents the .first/N/ or .last/N/ directory within an index value.
+// Lists the first or last N rows matching the index value, ordered by PK.
+type IndexValuePaginationLimitNode struct {
+	fs.Inode
+
+	cfg            *config.Config
+	db             *db.Client
+	cache          *MetadataCache
+	schema         string
+	tableName      string
+	column         string
+	value          string
+	pkColumn       string
+	paginationType PaginationType
+	limit          int
+	partialRows    *PartialRowTracker
+}
+
+var _ fs.InodeEmbedder = (*IndexValuePaginationLimitNode)(nil)
+var _ fs.NodeGetattrer = (*IndexValuePaginationLimitNode)(nil)
+var _ fs.NodeReaddirer = (*IndexValuePaginationLimitNode)(nil)
+var _ fs.NodeLookuper = (*IndexValuePaginationLimitNode)(nil)
+
+// NewIndexValuePaginationLimitNode creates a new pagination limit node within an index value.
+func NewIndexValuePaginationLimitNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexValuePaginationLimitNode {
+	return &IndexValuePaginationLimitNode{
+		cfg:            cfg,
+		db:             dbClient,
+		cache:          cache,
+		schema:         schema,
+		tableName:      tableName,
+		column:         column,
+		value:          value,
+		pkColumn:       pkColumn,
+		paginationType: paginationType,
+		limit:          limit,
+		partialRows:    partialRows,
+	}
+}
+
+// Getattr returns attributes for the index value pagination limit directory
+func (p *IndexValuePaginationLimitNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0700 | syscall.S_IFDIR
+	out.Nlink = 2
+	out.Size = 4096
+	return 0
+}
+
+// Readdir lists the first or last N rows matching the index value, ordered by PK.
+func (p *IndexValuePaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	logging.Debug("IndexValuePaginationLimitNode.Readdir called",
+		zap.String("table", p.tableName),
+		zap.String("column", p.column),
+		zap.String("value", p.value),
+		zap.String("type", string(p.paginationType)),
+		zap.Int("limit", p.limit))
+
+	var pks []string
+	var err error
+	if p.paginationType == PaginationFirst {
+		pks, err = p.db.GetRowsByIndexValueOrdered(ctx, p.schema, p.tableName, p.column, p.value, p.pkColumn, p.limit, true)
+	} else {
+		pks, err = p.db.GetRowsByIndexValueOrdered(ctx, p.schema, p.tableName, p.column, p.value, p.pkColumn, p.limit, false)
+	}
+
+	if err != nil {
+		logging.Error("Failed to get ordered rows by index value",
+			zap.String("table", p.tableName),
+			zap.String("column", p.column),
+			zap.String("value", p.value),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	entries := make([]fuse.DirEntry, 0, len(pks))
+	for _, pk := range pks {
+		entries = append(entries, fuse.DirEntry{
+			Name: pk,
+			Mode: syscall.S_IFREG,
+		})
+	}
+
+	return fs.NewListDirStream(entries), 0
+}
+
+// Lookup handles looking up a row within the paginated index value results.
+func (p *IndexValuePaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	pkValue, format := util.ParseRowFilename(name)
+
+	// Verify row exists
+	_, err := p.db.GetRow(ctx, p.schema, p.tableName, p.pkColumn, pkValue)
+	if err != nil {
+		return nil, syscall.ENOENT
+	}
+
+	if name != pkValue {
+		stableAttr := fs.StableAttr{
+			Mode: syscall.S_IFREG,
+		}
+		rowNode := NewRowFileNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.pkColumn, pkValue, format)
+		child := p.NewPersistentInode(ctx, rowNode, stableAttr)
+
+		var attrOut fuse.AttrOut
+		if errno := rowNode.Getattr(ctx, nil, &attrOut); errno != 0 {
+			return nil, errno
+		}
+		out.Attr = attrOut.Attr
+
+		return child, 0
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+	rowDirNode := NewRowDirectoryNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.pkColumn, pkValue, p.partialRows)
+	child := p.NewPersistentInode(ctx, rowDirNode, stableAttr)
 
 	return child, 0
 }
@@ -752,4 +997,181 @@ func ParseCompositeIndexName(name string) []string {
 		return nil // Single-column index, not composite
 	}
 	return parts
+}
+
+// IndexPaginationNode represents the .first/ or .last/ directory within an index.
+// When a number is looked up, it creates an IndexPaginationLimitNode.
+type IndexPaginationNode struct {
+	fs.Inode
+
+	cfg            *config.Config
+	db             *db.Client
+	cache          *MetadataCache
+	schema         string
+	tableName      string
+	column         string
+	paginationType PaginationType
+	partialRows    *PartialRowTracker
+}
+
+var _ fs.InodeEmbedder = (*IndexPaginationNode)(nil)
+var _ fs.NodeGetattrer = (*IndexPaginationNode)(nil)
+var _ fs.NodeReaddirer = (*IndexPaginationNode)(nil)
+var _ fs.NodeLookuper = (*IndexPaginationNode)(nil)
+
+// NewIndexPaginationNode creates a new .first/ or .last/ directory node within an index.
+func NewIndexPaginationNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexPaginationNode {
+	return &IndexPaginationNode{
+		cfg:            cfg,
+		db:             dbClient,
+		cache:          cache,
+		schema:         schema,
+		tableName:      tableName,
+		column:         column,
+		paginationType: paginationType,
+		partialRows:    partialRows,
+	}
+}
+
+// Getattr returns attributes for the index pagination directory
+func (p *IndexPaginationNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0700 | syscall.S_IFDIR
+	out.Nlink = 2
+	out.Size = 4096
+	return 0
+}
+
+// Readdir lists the pagination directory (empty - user must specify N)
+func (p *IndexPaginationNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	return fs.NewListDirStream([]fuse.DirEntry{}), 0
+}
+
+// Lookup looks up a number N to create an IndexPaginationLimitNode.
+func (p *IndexPaginationNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	limit, err := strconv.Atoi(name)
+	if err != nil || limit < 1 {
+		return nil, syscall.ENOENT
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	limitNode := NewIndexPaginationLimitNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.column, p.paginationType, limit, p.partialRows)
+	child := p.NewPersistentInode(ctx, limitNode, stableAttr)
+
+	return child, 0
+}
+
+// IndexPaginationLimitNode represents the .first/N/ or .last/N/ directory within an index.
+// Lists the first or last N distinct values for the indexed column.
+type IndexPaginationLimitNode struct {
+	fs.Inode
+
+	cfg            *config.Config
+	db             *db.Client
+	cache          *MetadataCache
+	schema         string
+	tableName      string
+	column         string
+	paginationType PaginationType
+	limit          int
+	partialRows    *PartialRowTracker
+}
+
+var _ fs.InodeEmbedder = (*IndexPaginationLimitNode)(nil)
+var _ fs.NodeGetattrer = (*IndexPaginationLimitNode)(nil)
+var _ fs.NodeReaddirer = (*IndexPaginationLimitNode)(nil)
+var _ fs.NodeLookuper = (*IndexPaginationLimitNode)(nil)
+
+// NewIndexPaginationLimitNode creates a new .first/N/ or .last/N/ directory node within an index.
+func NewIndexPaginationLimitNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexPaginationLimitNode {
+	return &IndexPaginationLimitNode{
+		cfg:            cfg,
+		db:             dbClient,
+		cache:          cache,
+		schema:         schema,
+		tableName:      tableName,
+		column:         column,
+		paginationType: paginationType,
+		limit:          limit,
+		partialRows:    partialRows,
+	}
+}
+
+// Getattr returns attributes for the index pagination limit directory
+func (p *IndexPaginationLimitNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0700 | syscall.S_IFDIR
+	out.Nlink = 2
+	out.Size = 4096
+	return 0
+}
+
+// Readdir lists the first or last N distinct values for the indexed column.
+func (p *IndexPaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	logging.Debug("IndexPaginationLimitNode.Readdir called",
+		zap.String("table", p.tableName),
+		zap.String("column", p.column),
+		zap.String("type", string(p.paginationType)),
+		zap.Int("limit", p.limit))
+
+	var values []string
+	var err error
+	if p.paginationType == PaginationFirst {
+		values, err = p.db.GetDistinctValuesOrdered(ctx, p.schema, p.tableName, p.column, p.limit, true)
+	} else {
+		values, err = p.db.GetDistinctValuesOrdered(ctx, p.schema, p.tableName, p.column, p.limit, false)
+	}
+
+	if err != nil {
+		logging.Error("Failed to get ordered distinct values",
+			zap.String("table", p.tableName),
+			zap.String("column", p.column),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	entries := make([]fuse.DirEntry, 0, len(values))
+	for _, val := range values {
+		entries = append(entries, fuse.DirEntry{
+			Name: val,
+			Mode: syscall.S_IFDIR,
+		})
+	}
+
+	return fs.NewListDirStream(entries), 0
+}
+
+// Lookup handles looking up a value within the paginated index results.
+func (p *IndexPaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	logging.Debug("IndexPaginationLimitNode.Lookup called",
+		zap.String("table", p.tableName),
+		zap.String("column", p.column),
+		zap.String("value", name))
+
+	// Query for rows with this value
+	pk, err := p.db.GetPrimaryKey(ctx, p.schema, p.tableName)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	rows, err := p.db.GetRowsByIndexValue(ctx, p.schema, p.tableName, p.column, name, pkColumn, 100)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	if len(rows) == 0 {
+		return nil, syscall.ENOENT
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	valueNode := NewIndexValueNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.column, name, pkColumn, rows, p.partialRows)
+	child := p.NewPersistentInode(ctx, valueNode, stableAttr)
+
+	return child, 0
 }

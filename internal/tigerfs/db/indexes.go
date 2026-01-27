@@ -292,6 +292,63 @@ func (c *Client) GetDistinctValues(ctx context.Context, schema, table, column st
 	return GetDistinctValues(ctx, c.pool, schema, table, column, limit)
 }
 
+// GetDistinctValuesOrdered retrieves distinct values with explicit ordering.
+// Used for .first/N/ and .last/N/ index navigation.
+//
+// Parameters:
+//   - ascending: true for ASC (first N), false for DESC (last N)
+func GetDistinctValuesOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, column string, limit int, ascending bool) ([]string, error) {
+	logging.Debug("Querying ordered distinct values",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", column),
+		zap.Int("limit", limit),
+		zap.Bool("ascending", ascending))
+
+	order := "ASC"
+	if !ascending {
+		order = "DESC"
+	}
+
+	query := fmt.Sprintf(
+		`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE "%s" IS NOT NULL ORDER BY "%s" %s LIMIT $1`,
+		column, schema, table, column, column, order,
+	)
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ordered distinct values: %w", err)
+	}
+	defer rows.Close()
+
+	var values []string
+	for rows.Next() {
+		var value interface{}
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("failed to scan ordered distinct value: %w", err)
+		}
+		str, err := format.ConvertValueToText(value)
+		if err != nil {
+			str = fmt.Sprintf("%v", value)
+		}
+		values = append(values, str)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating ordered distinct values: %w", err)
+	}
+
+	return values, nil
+}
+
+// GetDistinctValuesOrdered is a convenience wrapper for Client.
+func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, column string, limit int, ascending bool) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetDistinctValuesOrdered(ctx, c.pool, schema, table, column, limit, ascending)
+}
+
 // GetRowsByIndexValue retrieves primary keys of rows matching an indexed column value.
 // Used by the FUSE layer to resolve index paths like .email/foo@x.com/.
 //
@@ -356,6 +413,60 @@ func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column,
 		return nil, fmt.Errorf("database connection not initialized")
 	}
 	return GetRowsByIndexValue(ctx, c.pool, schema, table, column, value, pkColumn, limit)
+}
+
+// GetRowsByIndexValueOrdered retrieves primary keys with explicit ordering.
+// Used for .first/N/ and .last/N/ within index value navigation.
+//
+// Parameters:
+//   - ascending: true for ASC (first N), false for DESC (last N)
+func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error) {
+	logging.Debug("Querying ordered rows by index value",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("column", column),
+		zap.String("value", value),
+		zap.Int("limit", limit),
+		zap.Bool("ascending", ascending))
+
+	order := "ASC"
+	if !ascending {
+		order = "DESC"
+	}
+
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" WHERE "%s" = $1 ORDER BY "%s" %s LIMIT $2`,
+		pkColumn, schema, table, column, pkColumn, order,
+	)
+
+	rows, err := pool.Query(ctx, query, value, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query ordered rows by index value: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating ordered rows: %w", err)
+	}
+
+	return pks, nil
+}
+
+// GetRowsByIndexValueOrdered is a convenience wrapper for Client.
+func (c *Client) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetRowsByIndexValueOrdered(ctx, c.pool, schema, table, column, value, pkColumn, limit, ascending)
 }
 
 // GetDistinctValuesFiltered retrieves distinct values for a column filtered by conditions on other columns.
