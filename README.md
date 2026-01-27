@@ -154,17 +154,71 @@ echo 'User Name' > /mnt/db/users/456/name.txt
 rm -r /mnt/db/users/456/
 ```
 
-### Large Tables
+## Filesystem Navigation
+
+TigerFS provides multiple ways to access and explore your data beyond simple primary key lookups.
+
+### Row Formats
+
+Access any row as a file with different formats:
 
 ```bash
-# First N rows
-ls /mnt/db/large_table/.first/100/
+cat /mnt/db/users/123         # TSV (default)
+cat /mnt/db/users/123.tsv     # TSV (explicit)
+cat /mnt/db/users/123.json    # JSON
+cat /mnt/db/users/123.csv     # CSV
+```
 
-# Random sample
-ls /mnt/db/large_table/.sample/100/
+Or access individual columns via row-as-directory:
 
-# Row count
-cat /mnt/db/large_table/.count
+```bash
+ls /mnt/db/users/123/              # List columns
+cat /mnt/db/users/123/email.txt    # Read single column
+cat /mnt/db/users/123/.json        # Entire row as JSON
+cat /mnt/db/users/123/.csv         # Entire row as CSV
+```
+
+### Index Navigation
+
+Navigate tables using indexed columns (shown as dotfiles):
+
+```bash
+# List available indexes
+cat /mnt/db/users/.indexes
+
+# Browse by indexed column
+ls /mnt/db/users/.email/                        # List distinct values
+cat /mnt/db/users/.email/foo@example.com.json   # Get matching row
+
+# Ordered access within indexes
+ls /mnt/db/users/.created_at/.first/10/         # First 10 values (ascending)
+ls /mnt/db/users/.created_at/.last/10/          # Last 10 values (descending)
+
+# Pagination within a specific value
+ls /mnt/db/users/.status/active/.first/50/      # First 50 active users
+ls /mnt/db/users/.status/active/.last/50/       # Last 50 active users
+```
+
+### Table Pagination
+
+Handle large tables without loading everything:
+
+```bash
+ls /mnt/db/events/.first/100/    # First 100 rows by primary key
+ls /mnt/db/events/.last/100/     # Last 100 rows by primary key
+ls /mnt/db/events/.sample/100/   # Random sample of 100 rows
+cat /mnt/db/events/.count        # Total row count
+```
+
+### Table Metadata
+
+Inspect table structure without querying the database directly:
+
+```bash
+cat /mnt/db/users/.ddl           # Full CREATE TABLE statement
+cat /mnt/db/users/.indexes       # Index names (one per line)
+cat /mnt/db/users/.columns       # Column names (one per line)
+cat /mnt/db/users/.schema        # Column details (name, type, nullable)
 ```
 
 ## Configuration
@@ -240,23 +294,30 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 
 **Completed:**
 - FUSE filesystem with full CRUD operations (Read, Write, Create, Delete)
-- Row-as-file and row-as-directory access patterns
-- Column-level reads and writes
+- Row-as-file (TSV, CSV, JSON) and row-as-directory access patterns
+- Column-level reads and writes with type-based file extensions
 - PostgreSQL database layer with connection pooling (pgx/v5)
-- Data format serialization (TSV, CSV, JSON) with NULL handling
+- Data format serialization with NULL handling
 - Constraint validation (NOT NULL, UNIQUE)
 - Incremental row creation via mkdir
-- Metadata files (.schema, .columns, .count)
+- Metadata files (.schema, .columns, .count, .ddl, .indexes)
+- Index-based navigation (`.column/value/`) with `.first/N/` and `.last/N/` pagination
+- Large table handling (`.first/N/`, `.last/N/`, `.sample/N/`, `.count`)
+- Schema flattening (default schema at root, `.schemas/` for explicit access)
 - Metadata caching with configurable refresh
-- CLI with mount, unmount, status, and config commands
+- CLI with mount, unmount, status, list, and config commands
+- Tiger Cloud integration (`--tiger-service-id`)
+- Permission mapping (PostgreSQL grants → file permissions)
+- Docker testing environment
 - Comprehensive unit and integration test coverage
 
 **Planned:**
-- Index-based navigation (`.email/foo@example.com`)
-- Large table pagination (`.first/N/`, `.sample/N/`)
-- Composite primary key support
-- Permission mapping (PostgreSQL grants → file permissions)
-- Distribution (install scripts, GoReleaser packaging)
+- Table and schema creation via filesystem (mkdir, write to .ddl)
+- Non-serial primary keys (UUID, text, composite)
+- Tables without primary keys (read-only via ctid)
+- Database views (read-only for JOINs, updatable for simple views)
+- TimescaleDB hypertables (time-based and chunk navigation)
+- Distribution (install scripts, GoReleaser packaging, daemon mode)
 
 ## Contributing
 
