@@ -174,19 +174,26 @@
 ├── .stats/json                           # Stats in JSON format
 ├── table1/                               # Default schema (public) - flattened to root
 │   ├── .schema                           # CREATE TABLE statement
+│   ├── .ddl                              # Complete DDL (indexes, constraints, etc.)
 │   ├── .columns                          # Column list
-│   ├── .indexes                          # Index definitions
+│   ├── .indexes                          # Index navigation paths
 │   ├── .count                            # Total row count
 │   ├── .sample/                          # Random samples
 │   │   └── 100/                          # 100 random rows
 │   │       ├── 47392/                    # Actual PKs (row-as-directory)
 │   │       └── 103847.json               # Actual PK (row-as-file)
-│   ├── .first/                           # First N rows
+│   ├── .first/                           # First N rows (ascending)
 │   │   └── 50/                           # First 50 rows by PK
 │   │       ├── 1/
 │   │       └── 2/
+│   ├── .last/                            # Last N rows (descending)
+│   │   └── 50/                           # Last 50 rows by PK
+│   │       ├── 99999/
+│   │       └── 99998/
 │   ├── .email/                           # Single-column index (dotfile)
-│   │   └── foo@example.com/              # Indexed lookup
+│   │   ├── foo@example.com/              # Indexed lookup
+│   │   ├── .first/10/                    # First 10 distinct values
+│   │   └── .last/10/                     # Last 10 distinct values
 │   ├── .last_name.first_name/            # Composite index
 │   │   └── Smith/
 │   │       └── Johnson/
@@ -228,11 +235,13 @@
 **Dotfiles (Hidden by Default):**
 - `.email/` - Index-based navigation
 - `.sample/` - Random row samples
-- `.first/` - First N rows
+- `.first/` - First N rows (ascending by PK)
+- `.last/` - Last N rows (descending by PK)
 - `.count` - Row count file
-- `.schema` - DDL file
-- `.columns` - Column list
-- `.indexes` - Index list
+- `.schema` - CREATE TABLE statement
+- `.ddl` - Complete DDL (indexes, constraints, triggers, comments)
+- `.columns` - Column list (one per line)
+- `.indexes` - Index navigation paths (one per line)
 - `.information_schema/` - Global metadata
 - `.schemas/` - Explicit schema access
 - `.refresh` - Cache refresh trigger
@@ -306,7 +315,18 @@ Row represented as directory with individual column files.
 ├── name.txt        # Contains: Foo Bar
 ├── age             # Contains: 25 (integer, no extension)
 ├── metadata.json   # Contains: {"role":"admin"}
-└── avatar.bin      # Contains: (binary data)
+├── avatar.bin      # Contains: (binary data)
+├── .json           # Entire row as JSON
+├── .csv            # Entire row as CSV
+└── .tsv            # Entire row as TSV
+```
+
+**Row Format Files:**
+Within a row directory, `.json`, `.csv`, and `.tsv` provide the entire row in that format:
+```bash
+cat /mnt/db/users/123/.json    # {"id":123,"email":"foo@example.com",...}
+cat /mnt/db/users/123/.csv     # 123,foo@example.com,Foo Bar,25
+cat /mnt/db/users/123/.tsv     # 123	foo@example.com	Foo Bar	25
 ```
 
 **Filename Extensions:**
@@ -678,6 +698,58 @@ ls /mount/users/.last_name.first_name/Smith/
 - PostgreSQL query planner handles index selection
 - Filesystem provides discovery ("what's fast?")
 
+### Index Pagination
+
+Indexes support `.first/N/` and `.last/N/` pagination at two levels:
+
+#### Pagination of Distinct Values
+
+**Usage:**
+```bash
+# First 10 distinct values (ascending order)
+ls /mnt/db/users/.created_at/.first/10/
+# 2024-01-01T00:00:00Z  2024-01-02T00:00:00Z  ...
+
+# Last 10 distinct values (descending order)
+ls /mnt/db/users/.created_at/.last/10/
+# 2026-01-27T00:00:00Z  2026-01-26T00:00:00Z  ...
+```
+
+**SQL Generated:**
+```sql
+-- .first/10/
+SELECT DISTINCT created_at FROM users WHERE created_at IS NOT NULL ORDER BY created_at ASC LIMIT 10;
+
+-- .last/10/
+SELECT DISTINCT created_at FROM users WHERE created_at IS NOT NULL ORDER BY created_at DESC LIMIT 10;
+```
+
+#### Pagination Within a Value
+
+**Usage:**
+```bash
+# First 50 rows with status='active' (by PK ascending)
+ls /mnt/db/users/.status/active/.first/50/
+
+# Last 50 rows with status='active' (by PK descending)
+ls /mnt/db/users/.status/active/.last/50/
+```
+
+**SQL Generated:**
+```sql
+-- .status/active/.first/50/
+SELECT id FROM users WHERE status = 'active' ORDER BY id ASC LIMIT 50;
+
+-- .status/active/.last/50/
+SELECT id FROM users WHERE status = 'active' ORDER BY id DESC LIMIT 50;
+```
+
+**Rationale:**
+- Enables ordered exploration of indexed data
+- `.first/` shows oldest/smallest values first
+- `.last/` shows newest/largest values first
+- Useful for time-based indexes (see recent data)
+
 ### Non-Indexed Search
 
 **Option 1: Glob with Optimization**
@@ -752,13 +824,31 @@ ls /mnt/db/users/.first/50/
 
 **SQL Generated:**
 ```sql
-SELECT id FROM users ORDER BY id LIMIT 50;
+SELECT id FROM users ORDER BY id ASC LIMIT 50;
 ```
 
 **Rationale:**
 - Fast (indexed lookup by PK)
 - Predictable (always same rows)
 - Good for "show me some data"
+
+#### `.last/N/` - Last N Rows by Primary Key
+
+**Usage:**
+```bash
+ls /mnt/db/users/.last/50/
+# 99951  99952  99953  ...  (last 50 PKs)
+```
+
+**SQL Generated:**
+```sql
+SELECT id FROM users ORDER BY id DESC LIMIT 50;
+```
+
+**Rationale:**
+- Fast (indexed lookup by PK)
+- Shows most recent data (for auto-increment PKs)
+- Complement to `.first/N/`
 
 #### `.sample/N/` - Random N Rows
 
@@ -1900,7 +1990,7 @@ ORDER BY ordinal_position;
 
 ---
 
-#### `.indexes` - Index Definitions
+#### `.indexes` - Index Navigation Paths
 
 **Usage:**
 ```bash
@@ -1909,15 +1999,71 @@ cat /mnt/db/users/.indexes
 
 **Output:**
 ```
-users_pkey PRIMARY KEY (id)
-users_email_idx UNIQUE (email)
-users_name_idx (last_name, first_name)
+.email/                    (unique)
+.created_at/
+.last_name.first_name/                    (composite, unique)
 ```
 
-**SQL Generated:**
-```sql
-SELECT * FROM pg_indexes WHERE tablename = 'users';
+Lists available index navigation paths (dotfile directories) with annotations:
+- `(unique)` - unique index
+- `(composite)` - multi-column index
+- `(composite, unique)` - both
+
+Primary key indexes are excluded (accessed directly via row paths).
+
+If no non-primary indexes exist:
 ```
+(no indexes)
+```
+
+---
+
+#### `.ddl` - Complete DDL
+
+**Usage:**
+```bash
+cat /mnt/db/users/.ddl
+```
+
+**Output:**
+```sql
+-- Table
+CREATE TABLE public.users (
+    id integer NOT NULL,
+    email text NOT NULL,
+    name text,
+    created_at timestamp with time zone DEFAULT now()
+);
+
+-- Primary Key
+ALTER TABLE ONLY public.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+-- Indexes
+CREATE UNIQUE INDEX users_email_idx ON public.users USING btree (email);
+CREATE INDEX users_created_at_idx ON public.users USING btree (created_at);
+
+-- Foreign Keys
+ALTER TABLE ONLY public.orders
+    ADD CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
+
+-- Comments
+COMMENT ON TABLE public.users IS 'User accounts';
+COMMENT ON COLUMN public.users.email IS 'Primary contact email';
+```
+
+**Includes:**
+- CREATE TABLE statement
+- Primary key constraint
+- All indexes
+- Foreign key constraints (both directions)
+- Check constraints
+- Triggers
+- Column and table comments
+
+**Difference from `.schema`:**
+- `.schema` - Just the CREATE TABLE statement (fast, minimal)
+- `.ddl` - Complete DDL including indexes, constraints, triggers, comments
 
 ---
 
