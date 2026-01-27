@@ -88,29 +88,46 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
-## Phase 5: Distribution & Release
+## Phase 5: DDL Operations via Filesystem
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 5.1 | Create Unix Install Script | 3144 |
-| ⬜ | 5.2 | Create Windows Install Script | 3186 |
-| ⬜ | 5.3 | Finalize GoReleaser Configuration | 3225 |
-| ⬜ | 5.4 | Test Release Workflow | 3268 |
-| ⬜ | 5.5 | Daemon Mode Support | 3314 |
-| ⬜ | 5.6 | Write Documentation | 3383 |
-| ⬜ | 5.7 | Performance Testing | 3430 |
-| ⬜ | 5.8 | Bug Fixes and Polish | 3469 |
-| ⬜ | 5.9 | Final Testing and v0.1 Release | 3502 |
+| ⬜ | 5.1 | Implement Core Staging Infrastructure | 3156 |
+| ⬜ | 5.2 | Implement Template Generation Framework | 3251 |
+| ⬜ | 5.3 | Implement Schema Create/Delete Operations | 3387 |
+| ⬜ | 5.4 | Implement Index Create/Delete Operations | 3447 |
+| ⬜ | 5.5 | Implement Table Create Operations | 3507 |
+| ⬜ | 5.6 | Implement Table Modify Operations | 3567 |
+| ⬜ | 5.7 | Implement Table Delete Operations | 3611 |
+| ⬜ | 5.8 | Implement View Create/Delete Operations | 3656 |
+| ⬜ | 5.9 | Integration Tests for DDL Operations | 3717 |
+| ⬜ | 5.10 | Documentation for DDL Operations | 3758 |
 
 ---
 
-## Phase 6: Performance & Scalability
+## Phase 6: Distribution & Release
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1 | Implement Hybrid Metadata Caching | 3557 |
-| ⬜ | 6.2 | Evaluate Multi-User Mount Support (allow_other) | 3624 |
-| ⬜ | 6.3 | Row Timestamps from Database Columns (Optional) | 3662 |
+| ⬜ | 6.1 | Create Unix Install Script | 3800 |
+| ⬜ | 6.2 | Create Windows Install Script | 3842 |
+| ⬜ | 6.3 | Finalize GoReleaser Configuration | 3881 |
+| ⬜ | 6.4 | Test Release Workflow | 3924 |
+| ⬜ | 6.5 | Daemon Mode Support | 3970 |
+| ⬜ | 6.6 | Write Documentation | 4039 |
+| ⬜ | 6.7 | Performance Testing | 4086 |
+| ⬜ | 6.8 | Bug Fixes and Polish | 4125 |
+| ⬜ | 6.9 | Final Testing and v0.1 Release | 4158 |
+
+---
+
+## Phase 7: Performance & Scalability
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 7.1 | Implement Hybrid Metadata Caching | 4213 |
+| ⬜ | 7.2 | Evaluate Multi-User Mount Support (allow_other) | 4280 |
+| ⬜ | 7.3 | Row Timestamps from Database Columns (Optional) | 4318 |
 
 ---
 
@@ -122,6 +139,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 18 | 22 | 82% |
-| Phase 5: Distribution | 0 | 9 | 0% |
-| Phase 6: Performance | 0 | 3 | 0% |
-| **Total** | **50** | **66** | **76%** |
+| Phase 5: DDL Operations | 0 | 10 | 0% |
+| Phase 6: Distribution | 0 | 9 | 0% |
+| Phase 7: Performance | 0 | 3 | 0% |
+| **Total** | **50** | **76** | **66%** |

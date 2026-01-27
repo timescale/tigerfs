@@ -3139,9 +3139,665 @@ cat /mnt/db/orders/.user_id/1/.first/3/*.json  # Read them
 
 ---
 
-## Phase 5: Distribution & Release
+## Phase 5: DDL Operations via Filesystem
 
-### Task 5.1: Create Unix Install Script
+### Overview
+
+Add ability to create, modify, and delete tables, indexes, schemas, and views via TigerFS filesystem operations using a unified staging pattern.
+
+**Core Pattern:** All DDL operations follow the same flow:
+1. **Read `.schema`** → see dynamically-generated template
+2. **Write `.schema`** → stage DDL (stored in daemon memory)
+3. **Touch `.test`** → validate via BEGIN/ROLLBACK (optional)
+4. **Touch `.commit`** → execute, or **`.abort`** → cancel
+
+---
+
+### Task 5.1: Implement Core Staging Infrastructure
+
+**Objective:** Create the foundational staging system for DDL operations
+
+**Background:**
+All DDL operations share common infrastructure: staging tracker (in-memory storage), control files (`.schema`, `.test`, `.commit`, `.abort`), and template generation. This task builds that foundation.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/staging.go`:
+   - Define `StagingTracker` struct with mutex-protected map:
+     ```go
+     type StagingTracker struct {
+         mu      sync.RWMutex
+         entries map[string]*StagingEntry  // keyed by path
+     }
+
+     type StagingEntry struct {
+         Content    string    // User-provided DDL
+         TestResult string    // Last test result
+         CreatedAt  time.Time
+     }
+     ```
+   - Implement `GetOrCreate(path string) *StagingEntry`
+   - Implement `Get(path string) *StagingEntry` (returns nil if not exists)
+   - Implement `Set(path string, content string)`
+   - Implement `Delete(path string)`
+   - Implement `HasContent(path string) bool` (checks for non-empty, non-comment content)
+
+2. Create `internal/tigerfs/fuse/staging_node.go`:
+   - Define `StagingDirNode` for staging directories (`.create/<name>/`, `.modify/`, `.delete/`)
+   - Implement `Readdir()` to list control files: `.schema`, `.test`, `.commit`, `.abort`
+   - Implement `Lookup()` for control files
+   - Implement `Mkdir()` for creating new staging entries (e.g., `mkdir .create/orders`)
+
+3. Create `internal/tigerfs/fuse/control_files.go`:
+   - Define `SchemaFileNode` for `.schema` files:
+     - `Read()`: Return staged content if exists, else generate template
+     - `Write()`: Store content in StagingTracker
+     - `Getattr()`: Mode 0644 (writable)
+   - Define `TestFileNode` for `.test` files:
+     - `Open()` with O_WRONLY or `Setattr()` (touch): Execute BEGIN/DDL/ROLLBACK
+     - `Read()`: Return last test result
+     - Return error if `.schema` is empty/commented
+   - Define `CommitFileNode` for `.commit` files:
+     - `Open()` with O_WRONLY or `Setattr()` (touch): Execute DDL
+     - Return error if `.schema` is empty/commented
+     - Clear staging entry on success
+   - Define `AbortFileNode` for `.abort` files:
+     - `Open()` with O_WRONLY or `Setattr()` (touch): Clear staging entry
+
+4. Implement `db.Exec()` in `internal/tigerfs/db/client.go`:
+   - Remove stub implementation
+   - Execute DDL using `pool.Exec(ctx, sql)`
+   - Return error from PostgreSQL if DDL fails
+
+5. Implement `db.ExecInTransaction()` for testing:
+   - `BEGIN`
+   - Execute DDL
+   - `ROLLBACK`
+   - Return success/error without persisting
+
+6. Add helper to detect empty/commented DDL:
+   ```go
+   func IsEmptyOrCommented(content string) bool {
+       // Strip comments (-- and /* */), trim whitespace
+       // Return true if nothing remains
+   }
+   ```
+
+**Files to Create:**
+- `internal/tigerfs/fuse/staging.go`
+- `internal/tigerfs/fuse/staging_node.go`
+- `internal/tigerfs/fuse/control_files.go`
+- `internal/tigerfs/fuse/staging_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/client.go`
+- `internal/tigerfs/fuse/fs.go` (add StagingTracker to FS struct)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v -run TestStaging
+go test ./internal/tigerfs/db/... -v -run TestExec
+```
+
+**Completion Criteria:**
+- StagingTracker stores/retrieves content by path
+- Control file nodes handle read/write correctly
+- `db.Exec()` executes DDL
+- `db.ExecInTransaction()` tests DDL without persisting
+- Empty/commented detection works
+- Unit tests pass
+
+---
+
+### Task 5.2: Implement Template Generation Framework
+
+**Objective:** Generate context-aware DDL templates for each operation type
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/templates.go`:
+   - Define template generator interface:
+     ```go
+     type TemplateGenerator interface {
+         Generate(ctx context.Context) (string, error)
+     }
+     ```
+
+2. Implement `CreateTableTemplate`:
+   ```go
+   func (g *CreateTableTemplate) Generate(ctx context.Context) (string, error) {
+       return fmt.Sprintf(`CREATE TABLE %s (
+       -- add columns here
+       -- id SERIAL PRIMARY KEY,
+       -- name TEXT NOT NULL,
+   );`, g.tableName), nil
+   }
+   ```
+
+3. Implement `ModifyTableTemplate`:
+   - Fetch current schema via `db.GetTableDDL()`
+   - Format as comment block
+   - Add ALTER TABLE examples and stub:
+   ```
+   -- Current schema:
+   -- CREATE TABLE users (
+   --     id serial PRIMARY KEY,
+   --     name text NOT NULL
+   -- );
+
+   -- Examples:
+   -- ADD COLUMN column_name type
+   -- DROP COLUMN column_name
+   -- ALTER COLUMN column_name TYPE new_type
+
+   ALTER TABLE users
+   ```
+
+4. Implement `DeleteTableTemplate`:
+   - Fetch table info: column count, row count estimate
+   - Fetch FK references via new `db.GetReferencingForeignKeys()`
+   - Format with/without CASCADE based on dependencies:
+
+   **No dependencies:**
+   ```
+   -- Table: users
+   -- Columns: id, name, email
+   -- Rows: ~42
+
+   -- Uncomment to delete:
+   -- DROP TABLE users;
+   ```
+
+   **With dependencies:**
+   ```
+   -- Table: users
+   -- Columns: id, name, email
+   -- Rows: ~42
+
+   -- Foreign keys referencing this table:
+   --   orders.user_id -> users.id (3,847 rows)
+
+   -- Uncomment to delete:
+   -- DROP TABLE users RESTRICT;
+   -- DROP TABLE users CASCADE;
+   ```
+
+5. Implement `CreateIndexTemplate`:
+   ```
+   CREATE INDEX idx_name ON table_name (
+       -- column(s) here
+   );
+   ```
+
+6. Implement `DeleteIndexTemplate`:
+   - Fetch index info via `db.GetIndexInfo()`
+   ```
+   -- Index: email_idx
+   -- Table: users
+   -- Columns: email
+   -- Type: btree, unique
+
+   -- Uncomment to delete:
+   -- DROP INDEX email_idx;
+   ```
+
+7. Implement `CreateSchemaTemplate`:
+   ```
+   CREATE SCHEMA schema_name;
+   ```
+
+8. Implement `DeleteSchemaTemplate`:
+   - Fetch table count in schema
+   - With/without CASCADE based on contents
+
+9. Implement `CreateViewTemplate`:
+   ```
+   CREATE VIEW view_name AS
+   SELECT
+       -- columns
+   FROM
+       -- table(s)
+   WHERE
+       -- conditions
+   ;
+   ```
+
+10. Implement `DeleteViewTemplate`:
+    - Fetch view definition
+    - Check for dependent views
+
+**Files to Create:**
+- `internal/tigerfs/fuse/templates.go`
+- `internal/tigerfs/fuse/templates_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/schema.go` (add `GetReferencingForeignKeys()`, `GetIndexInfo()`)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v -run TestTemplate
+```
+
+**Completion Criteria:**
+- All template types generate correct DDL
+- Templates include relevant context (row counts, FKs)
+- CASCADE/RESTRICT shown only when dependencies exist
+- Unit tests pass
+
+---
+
+### Task 5.3: Implement Schema Create/Delete Operations
+
+**Objective:** Enable `mkdir .schemas/.create/name` and `.schemas/name/.delete/`
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/schemas.go` (SchemasNode):
+   - Add `.create/` to `Readdir()` entries
+   - Add `Lookup()` handling for `.create`
+   - Return new `SchemaCreateDirNode`
+
+2. Create `SchemaCreateDirNode` in `internal/tigerfs/fuse/schema_create.go`:
+   - `Readdir()`: List pending schema creations from StagingTracker
+   - `Lookup(name)`: Return `StagingDirNode` for that schema
+   - `Mkdir(name)`: Create staging entry, return `StagingDirNode`
+
+3. Update `internal/tigerfs/fuse/schema.go` (SchemaNode for existing schemas):
+   - Add `.delete/` to `Readdir()` entries
+   - Add `.create/` to `Readdir()` entries (for creating tables in this schema)
+   - Add `Lookup()` handling for `.delete` and `.create`
+
+4. Implement schema-specific template generators
+
+5. Wire up commit handlers:
+   - Schema create: Execute `CREATE SCHEMA name`
+   - Schema delete: Execute `DROP SCHEMA name [CASCADE]`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/schema_create.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/schemas.go`
+- `internal/tigerfs/fuse/schema.go`
+
+**Verification:**
+```bash
+# Mount and test
+mkdir /mnt/db/.schemas/.create/test_schema
+cat /mnt/db/.schemas/.create/test_schema/.schema
+# Shows: CREATE SCHEMA test_schema;
+
+touch /mnt/db/.schemas/.create/test_schema/.commit
+ls /mnt/db/.schemas/
+# Shows: test_schema
+
+echo "DROP SCHEMA test_schema" > /mnt/db/.schemas/test_schema/.delete/.schema
+touch /mnt/db/.schemas/test_schema/.delete/.commit
+ls /mnt/db/.schemas/
+# test_schema gone
+```
+
+**Completion Criteria:**
+- `mkdir .schemas/.create/name` creates staging
+- Template shows `CREATE SCHEMA name;`
+- `.commit` executes schema creation
+- `.delete/` available on existing schemas
+- Delete template shows dependencies if any
+- Tests pass
+
+---
+
+### Task 5.4: Implement Index Create/Delete Operations
+
+**Objective:** Enable `mkdir table/.indexes/.create/idx` and `table/.indexes/idx/.delete/`
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/index.go` (IndexesNode - the `.indexes` directory):
+   - Add `.create/` to `Readdir()` entries
+   - Add `Lookup()` handling for `.create`
+   - Return new `IndexCreateDirNode`
+
+2. Create `IndexCreateDirNode`:
+   - `Readdir()`: List pending index creations from StagingTracker
+   - `Lookup(name)`: Return `StagingDirNode` for that index
+   - `Mkdir(name)`: Create staging entry with table context
+
+3. Update existing index nodes to include `.delete/`:
+   - Add `.delete/` to index directory `Readdir()`
+   - Add `Lookup()` handling for `.delete`
+
+4. Implement index-specific template generators (pass table name for context)
+
+5. Wire up commit handlers:
+   - Index create: Execute user-provided `CREATE INDEX` DDL
+   - Index delete: Execute `DROP INDEX name`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/index_create.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/index.go`
+
+**Verification:**
+```bash
+# Create index
+mkdir /mnt/db/users/.indexes/.create/email_idx
+cat /mnt/db/users/.indexes/.create/email_idx/.schema
+# Shows template
+
+echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.schema
+touch /mnt/db/users/.indexes/.create/email_idx/.test
+# Exit 0
+
+touch /mnt/db/users/.indexes/.create/email_idx/.commit
+ls /mnt/db/users/.indexes/
+# Shows: email_idx
+
+# Delete index
+echo "DROP INDEX email_idx" > /mnt/db/users/.indexes/email_idx/.delete/.schema
+touch /mnt/db/users/.indexes/email_idx/.delete/.commit
+```
+
+**Completion Criteria:**
+- `mkdir .indexes/.create/name` creates staging
+- Template shows CREATE INDEX with table name
+- `.commit` executes index creation
+- `.delete/` available on existing indexes
+- Tests pass
+
+---
+
+### Task 5.5: Implement Table Create Operations
+
+**Objective:** Enable `mkdir .create/tablename` at root and schema levels
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/root.go` (RootNode):
+   - Add `.create/` to `Readdir()` entries
+   - Add `Lookup()` handling for `.create`
+   - Return `TableCreateDirNode` (creates in default schema)
+
+2. Create `TableCreateDirNode` in `internal/tigerfs/fuse/table_create.go`:
+   - Store target schema name
+   - `Readdir()`: List pending table creations from StagingTracker
+   - `Lookup(name)`: Return `StagingDirNode` for that table
+   - `Mkdir(name)`: Create staging entry
+
+3. Also support direct write (no mkdir):
+   - Writing to `.create/tablename/.schema` should create staging entry if not exists
+
+4. Update SchemaNode to include `.create/` for tables in that schema
+
+5. Wire up commit handler:
+   - Execute user-provided `CREATE TABLE` DDL
+   - Validate DDL starts with `CREATE TABLE`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/table_create.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/root.go`
+- `internal/tigerfs/fuse/schema.go`
+
+**Verification:**
+```bash
+# Create in default schema
+mkdir /mnt/db/.create/orders
+cat /mnt/db/.create/orders/.schema
+# Shows template
+
+echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.schema
+touch /mnt/db/.create/orders/.test
+touch /mnt/db/.create/orders/.commit
+ls /mnt/db/
+# Shows: orders
+
+# Create in specific schema
+echo "CREATE TABLE foo (id serial PRIMARY KEY)" > /mnt/db/.schemas/public/.create/foo/.schema
+touch /mnt/db/.schemas/public/.create/foo/.commit
+```
+
+**Completion Criteria:**
+- `mkdir .create/name` creates staging at root
+- `mkdir .schemas/schema/.create/name` creates staging in schema
+- Direct write to `.schema` also creates staging
+- Template shows CREATE TABLE scaffold
+- `.commit` executes table creation
+- Tests pass
+
+---
+
+### Task 5.6: Implement Table Modify Operations
+
+**Objective:** Enable `table/.modify/` for ALTER TABLE operations
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/table.go` (TableNode):
+   - Add `.modify/` to `Readdir()` entries
+   - Add `Lookup()` handling for `.modify`
+   - Return `StagingDirNode` with modify context
+
+2. Implement modify-specific template:
+   - Show current schema as comment (via `db.GetTableDDL()`)
+   - Show ALTER TABLE examples
+   - Provide `ALTER TABLE tablename` stub
+
+3. Wire up commit handler:
+   - Execute user-provided ALTER statement(s)
+   - Support multiple statements separated by semicolons
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+cat /mnt/db/users/.modify/.schema
+# Shows current schema + examples + stub
+
+echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/.schema
+touch /mnt/db/users/.modify/.test
+touch /mnt/db/users/.modify/.commit
+
+cat /mnt/db/users/.schema
+# Shows new column
+```
+
+**Completion Criteria:**
+- `.modify/` directory appears in table listings
+- Template shows current schema and examples
+- `.commit` executes ALTER statements
+- Multiple statements work
+- Tests pass
+
+---
+
+### Task 5.7: Implement Table Delete Operations
+
+**Objective:** Enable `table/.delete/` for DROP TABLE operations
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/table.go` (TableNode):
+   - Add `.delete/` to `Readdir()` entries
+   - Add `Lookup()` handling for `.delete`
+   - Return `StagingDirNode` with delete context
+
+2. Implement delete-specific template:
+   - Show table info (columns, row count)
+   - Query for referencing foreign keys
+   - Show CASCADE/RESTRICT only if dependencies exist
+
+3. Wire up commit handler:
+   - Execute user-provided DROP TABLE statement
+   - Must be explicit (user writes the DROP)
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/db/schema.go` (add `GetReferencingForeignKeys()` if not done)
+
+**Verification:**
+```bash
+cat /mnt/db/users/.delete/.schema
+# Shows table info, FKs if any, DROP options
+
+echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/.schema
+touch /mnt/db/users/.delete/.test
+touch /mnt/db/users/.delete/.commit
+
+ls /mnt/db/
+# users gone
+```
+
+**Completion Criteria:**
+- `.delete/` directory appears in table listings
+- Template shows table info and dependencies
+- CASCADE/RESTRICT shown only when needed
+- `.commit` executes DROP TABLE
+- Tests pass
+
+---
+
+### Task 5.8: Implement View Create/Delete Operations
+
+**Objective:** Enable `.views/.create/name` and `.views/name/.delete/`
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/views.go`:
+   - Define `ViewsNode` for `.views/` directory
+   - `Readdir()`: List existing views + `.create/`
+   - `Lookup()`: Handle `.create` and view names
+
+2. Create `ViewCreateDirNode`:
+   - `Readdir()`: List pending view creations
+   - `Mkdir(name)`: Create staging entry
+   - `Lookup(name)`: Return `StagingDirNode`
+
+3. Create `ViewNode` for existing views:
+   - `Readdir()`: List `.schema` (read-only), `.delete/`, row PKs
+   - `Lookup()`: Handle `.schema`, `.delete`, row access
+   - Make view `.schema` read-only (mode 0444)
+
+4. Update `internal/tigerfs/fuse/root.go`:
+   - Add `.views/` to `Readdir()` entries
+   - Add `Lookup()` handling for `.views`
+
+5. Implement view templates
+
+6. Wire up commit handlers
+
+**Files to Create:**
+- `internal/tigerfs/fuse/views.go`
+- `internal/tigerfs/fuse/view_node.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/root.go`
+- `internal/tigerfs/db/schema.go` (add `GetViews()`, `GetViewDefinition()`)
+
+**Verification:**
+```bash
+ls /mnt/db/.views/
+# Shows existing views + .create/
+
+mkdir /mnt/db/.views/.create/active_users
+echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.schema
+touch /mnt/db/.views/.create/active_users/.commit
+
+ls /mnt/db/.views/active_users/
+# Shows rows from view
+
+echo "DROP VIEW active_users" > /mnt/db/.views/active_users/.delete/.schema
+touch /mnt/db/.views/active_users/.delete/.commit
+```
+
+**Completion Criteria:**
+- `.views/` directory appears at root
+- View creation works via staging
+- Views queryable like tables
+- View deletion works
+- Tests pass
+
+---
+
+### Task 5.9: Integration Tests for DDL Operations
+
+**Objective:** Comprehensive integration tests for all DDL operations
+
+**Steps:**
+1. Create `test/integration/ddl_test.go`:
+   - Test schema create/delete cycle
+   - Test table create/modify/delete cycle
+   - Test index create/delete cycle
+   - Test view create/delete cycle
+   - Test `.test` validation (success and failure)
+   - Test `.abort` clears staging
+   - Test empty `.schema` returns error
+   - Test CASCADE vs RESTRICT behavior
+
+2. Test human workflow (mkdir + edit + commit)
+
+3. Test script workflow (direct write + commit)
+
+4. Test error cases:
+   - Invalid DDL
+   - Permission denied
+   - Object already exists
+   - Object doesn't exist
+
+**Files to Create:**
+- `test/integration/ddl_test.go`
+
+**Verification:**
+```bash
+go test ./test/integration/... -v -run TestDDL
+```
+
+**Completion Criteria:**
+- All DDL operations tested end-to-end
+- Both human and script workflows tested
+- Error cases handled correctly
+- Tests pass
+
+---
+
+### Task 5.10: Documentation for DDL Operations
+
+**Objective:** Document DDL operations in README and spec
+
+**Steps:**
+1. Update `README.md`:
+   - Add "Schema Management" section
+   - Show create/modify/delete examples for tables
+   - Show index and view examples
+   - Explain staging pattern (read template, write DDL, commit)
+
+2. Update `specs/spec.md`:
+   - Add "DDL Operations" section
+   - Document directory structure
+   - Document control files (`.schema`, `.test`, `.commit`, `.abort`)
+   - Document template formats
+   - Document error handling
+
+3. Add examples to `examples/` directory:
+   - `examples/ddl/create-table.sh`
+   - `examples/ddl/modify-table.sh`
+   - `examples/ddl/delete-table.sh`
+
+**Files to Modify:**
+- `README.md`
+- `specs/spec.md`
+
+**Files to Create:**
+- `examples/ddl/create-table.sh`
+- `examples/ddl/modify-table.sh`
+- `examples/ddl/delete-table.sh`
+
+**Completion Criteria:**
+- README shows DDL examples
+- Spec documents full DDL behavior
+- Example scripts work
+- Documentation clear for both humans and scripts
+
+---
+
+## Phase 6: Distribution & Release
+
+### Task 6.1: Create Unix Install Script
 
 **Objective:** Write install.sh for Unix/Linux/macOS
 
@@ -3183,7 +3839,7 @@ bash scripts/install.sh
 
 ---
 
-### Task 5.2: Create Windows Install Script
+### Task 6.2: Create Windows Install Script
 
 **Objective:** Write install.ps1 for Windows
 
@@ -3222,7 +3878,7 @@ tigerfs version
 
 ---
 
-### Task 5.3: Finalize GoReleaser Configuration
+### Task 6.3: Finalize GoReleaser Configuration
 
 **Objective:** Complete .goreleaser.yaml for releases
 
@@ -3265,7 +3921,7 @@ ls dist/
 
 ---
 
-### Task 5.4: Test Release Workflow
+### Task 6.4: Test Release Workflow
 
 **Objective:** Verify GitHub Actions release workflow
 
@@ -3311,7 +3967,7 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 5.5: Daemon Mode Support
+### Task 6.5: Daemon Mode Support
 
 **Objective:** Add `--daemon` flag for proper background execution with PID file management
 
@@ -3380,7 +4036,7 @@ tigerfs unmount /mnt/db
 
 ---
 
-### Task 5.6: Write Documentation
+### Task 6.6: Write Documentation
 
 **Objective:** Expand README and create guides
 
@@ -3427,7 +4083,7 @@ tigerfs unmount /mnt/db
 
 ---
 
-### Task 5.7: Performance Testing
+### Task 6.7: Performance Testing
 
 **Objective:** Benchmark operations, document performance
 
@@ -3466,7 +4122,7 @@ go test -bench=. ./test/benchmark/
 
 ---
 
-### Task 5.8: Bug Fixes and Polish
+### Task 6.8: Bug Fixes and Polish
 
 **Objective:** Fix remaining issues, improve UX
 
@@ -3499,7 +4155,7 @@ grep -r "TODO" internal/
 
 ---
 
-### Task 5.9: Final Testing and v0.1 Release
+### Task 6.9: Final Testing and v0.1 Release
 
 **Objective:** Release v0.1
 
@@ -3552,9 +4208,9 @@ git push origin v0.1.0
 
 ---
 
-## Phase 6: Performance & Scalability
+## Phase 7: Performance & Scalability
 
-### Task 6.1: Implement Hybrid Metadata Caching
+### Task 7.1: Implement Hybrid Metadata Caching
 
 **Objective:** Optimize metadata caching for databases with many tables (100s-1000s)
 
@@ -3621,7 +4277,7 @@ TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
 
 ---
 
-### Task 6.2: Evaluate Multi-User Mount Support (allow_other)
+### Task 7.2: Evaluate Multi-User Mount Support (allow_other)
 
 **Objective:** Research and potentially implement `--allow-other` flag for multi-user mount access
 
@@ -3659,7 +4315,7 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 
 ---
 
-### Task 6.3: Row Timestamps from Database Columns (Optional)
+### Task 7.3: Row Timestamps from Database Columns (Optional)
 
 **Objective:** Show file modification times based on table timestamp columns
 
