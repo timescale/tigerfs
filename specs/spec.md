@@ -301,17 +301,36 @@ Row represented as directory with individual column files.
 **Structure:**
 ```
 /mount/users/123/
-├── id           # Contains: 123
-├── email        # Contains: foo@example.com
-├── name         # Contains: Foo Bar
-└── age          # Contains: 25
+├── id              # Contains: 123 (integer, no extension)
+├── email.txt       # Contains: foo@example.com
+├── name.txt        # Contains: Foo Bar
+├── age             # Contains: 25 (integer, no extension)
+├── metadata.json   # Contains: {"role":"admin"}
+└── avatar.bin      # Contains: (binary data)
 ```
+
+**Filename Extensions:**
+
+Column files have extensions based on PostgreSQL data type:
+
+| PostgreSQL Type | Extension | Example |
+|-----------------|-----------|---------|
+| TEXT, VARCHAR, CHAR | `.txt` | `name.txt` |
+| JSON, JSONB | `.json` | `metadata.json` |
+| XML | `.xml` | `config.xml` |
+| BYTEA | `.bin` | `avatar.bin` |
+| GEOMETRY, GEOGRAPHY | `.wkb` | `location.wkb` |
+| INTEGER, NUMERIC, BOOLEAN, DATE, etc. | (none) | `age`, `active` |
+| Arrays (all types) | (none) | `tags` |
+
+Both the extended filename (`name.txt`) and bare column name (`name`) work for lookups.
+Use `--no-filename-extensions` to disable extensions entirely.
 
 **Column File Contents:**
 - Plain text representation of value
 - Empty file (0 bytes) = NULL
 - JSONB/JSON = compact JSON
-- Arrays = JSON array
+- Arrays = PostgreSQL array format `{a,b,c}`
 - BYTEA = raw binary bytes
 
 **When to Use:**
@@ -833,9 +852,10 @@ connection:
 # Filesystem behavior
 filesystem:
   dir_listing_limit: 10000           # Max rows returned by ls (prevents huge listings)
-  trailing_newlines: true      # Add \n to column and .count file reads
-  attr_timeout: 1              # FUSE attribute cache (seconds)
-  entry_timeout: 1             # FUSE entry cache (seconds)
+  trailing_newlines: true            # Add \n to column and .count file reads
+  no_filename_extensions: false      # Disable type-based extensions (.txt, .json, etc.)
+  attr_timeout: 1                    # FUSE attribute cache (seconds)
+  entry_timeout: 1                   # FUSE entry cache (seconds)
 
 # Metadata refresh
 metadata:
@@ -870,6 +890,7 @@ debug: false                   # Enable debug mode (verbose logging)
 - `TIGERFS_DEFAULT_SCHEMA` - Default schema to flatten
 - `TIGERFS_MAX_LS_ROWS` - Large table threshold
 - `TIGERFS_TRAILING_NEWLINES` - Add trailing newlines to column/count reads (default: true)
+- `TIGERFS_NO_FILENAME_EXTENSIONS` - Disable type-based file extensions (default: false)
 - `TIGERFS_ATTR_TIMEOUT` - FUSE attribute cache timeout
 - `TIGERFS_ENTRY_TIMEOUT` - FUSE entry cache timeout
 - `TIGERFS_METADATA_REFRESH_INTERVAL` - Metadata refresh interval

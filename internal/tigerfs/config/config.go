@@ -26,10 +26,11 @@ type Config struct {
 	TigerCloudProjectID string `mapstructure:"tiger_project_id"`
 
 	// Filesystem
-	DirListingLimit  int           `mapstructure:"dir_listing_limit"`
-	TrailingNewlines bool          `mapstructure:"trailing_newlines"`
-	AttrTimeout      time.Duration `mapstructure:"attr_timeout"`
-	EntryTimeout     time.Duration `mapstructure:"entry_timeout"`
+	DirListingLimit      int           `mapstructure:"dir_listing_limit"`
+	TrailingNewlines     bool          `mapstructure:"trailing_newlines"`
+	NoFilenameExtensions bool          `mapstructure:"no_filename_extensions"`
+	AttrTimeout          time.Duration `mapstructure:"attr_timeout"`
+	EntryTimeout         time.Duration `mapstructure:"entry_timeout"`
 
 	// Metadata
 	MetadataRefreshInterval time.Duration `mapstructure:"metadata_refresh_interval"`
@@ -58,6 +59,7 @@ func Init() error {
 	viper.SetDefault("pool_max_idle", 5)
 	viper.SetDefault("dir_listing_limit", 10000)
 	viper.SetDefault("trailing_newlines", true)
+	viper.SetDefault("no_filename_extensions", false)
 	viper.SetDefault("attr_timeout", 1*time.Second)
 	viper.SetDefault("entry_timeout", 1*time.Second)
 	viper.SetDefault("metadata_refresh_interval", 30*time.Second)

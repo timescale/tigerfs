@@ -92,8 +92,13 @@ func (r *RowDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.E
 	// Convert columns to directory entries
 	entries := make([]fuse.DirEntry, 0, len(columns)+len(rowFormatFiles))
 	for _, column := range columns {
+		// Add extension based on column type unless disabled
+		filename := column.Name
+		if !r.cfg.NoFilenameExtensions {
+			filename = AddExtensionToColumn(column.Name, column.DataType)
+		}
 		entries = append(entries, fuse.DirEntry{
-			Name: column.Name,
+			Name: filename,
 			Mode: syscall.S_IFREG, // Columns are files
 		})
 	}
@@ -141,20 +146,29 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 		return nil, syscall.EIO
 	}
 
-	// Check if column exists
-	found := false
-	for _, col := range columns {
-		if col.Name == name {
-			found = true
-			break
+	// Find the column - supports both exact match and extension-based match
+	var columnName string
+	if r.cfg.NoFilenameExtensions {
+		// Extensions disabled - exact match only
+		for _, col := range columns {
+			if col.Name == name {
+				columnName = col.Name
+				break
+			}
+		}
+	} else {
+		// Extensions enabled - use smart matching
+		col, found := FindColumnByFilename(columns, name)
+		if found {
+			columnName = col.Name
 		}
 	}
 
-	if !found {
+	if columnName == "" {
 		logging.Debug("Column not found",
 			zap.String("table", r.tableName),
 			zap.String("pk", r.pkValue),
-			zap.String("column", name))
+			zap.String("filename", name))
 		return nil, syscall.ENOENT
 	}
 
@@ -162,7 +176,8 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 	logging.Debug("Column found",
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue),
-		zap.String("column", name))
+		zap.String("filename", name),
+		zap.String("column", columnName))
 
 	// Create stable inode for the column file
 	stableAttr := fs.StableAttr{
@@ -170,7 +185,8 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 	}
 
 	// Create column file node with cache for permissions and partial row tracker
-	columnNode := NewColumnFileNode(r.cfg, r.db, r.cache, r.schema, r.tableName, r.pkColumn, r.pkValue, name, r.partialRows)
+	// Use the actual column name (without extension) for database operations
+	columnNode := NewColumnFileNode(r.cfg, r.db, r.cache, r.schema, r.tableName, r.pkColumn, r.pkValue, columnName, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
 
@@ -208,12 +224,12 @@ func (r *RowDirectoryNode) createFormatFileNode(ctx context.Context, format stri
 	return child, 0
 }
 
-// Unlink deletes a column file (rm /users/123/email) by setting column to NULL
+// Unlink deletes a column file (rm /users/123/email.txt) by setting column to NULL
 func (r *RowDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	logging.Debug("RowDirectoryNode.Unlink called",
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue),
-		zap.String("column", name))
+		zap.String("filename", name))
 
 	// Get column information to validate it's nullable
 	columns, err := r.db.GetColumns(ctx, r.schema, r.tableName)
@@ -224,20 +240,26 @@ func (r *RowDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errn
 		return syscall.EIO
 	}
 
-	// Find the column being deleted
+	// Find the column being deleted - supports both exact match and extension-based match
 	var targetColumn *db.Column
-	for i := range columns {
-		if columns[i].Name == name {
-			targetColumn = &columns[i]
-			break
+	if r.cfg.NoFilenameExtensions {
+		// Extensions disabled - exact match only
+		for i := range columns {
+			if columns[i].Name == name {
+				targetColumn = &columns[i]
+				break
+			}
 		}
+	} else {
+		// Extensions enabled - use smart matching
+		targetColumn, _ = FindColumnByFilename(columns, name)
 	}
 
 	if targetColumn == nil {
 		logging.Debug("Column not found",
 			zap.String("table", r.tableName),
 			zap.String("pk", r.pkValue),
-			zap.String("column", name))
+			zap.String("filename", name))
 		return syscall.ENOENT
 	}
 
@@ -247,17 +269,17 @@ func (r *RowDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errn
 		logging.Debug("Cannot delete NOT NULL column without default",
 			zap.String("table", r.tableName),
 			zap.String("pk", r.pkValue),
-			zap.String("column", name))
+			zap.String("column", targetColumn.Name))
 		return syscall.EACCES
 	}
 
 	// Set column to NULL via UPDATE (empty string is converted to NULL)
-	err = r.db.UpdateColumn(ctx, r.schema, r.tableName, r.pkColumn, r.pkValue, name, "")
+	err = r.db.UpdateColumn(ctx, r.schema, r.tableName, r.pkColumn, r.pkValue, targetColumn.Name, "")
 	if err != nil {
 		logging.Error("Failed to set column to NULL",
 			zap.String("table", r.tableName),
 			zap.String("pk", r.pkValue),
-			zap.String("column", name),
+			zap.String("column", targetColumn.Name),
 			zap.Error(err))
 		return syscall.EIO
 	}
@@ -265,7 +287,7 @@ func (r *RowDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errn
 	logging.Debug("Column set to NULL successfully",
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue),
-		zap.String("column", name))
+		zap.String("column", targetColumn.Name))
 
 	return 0
 }

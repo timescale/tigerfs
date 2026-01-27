@@ -6,7 +6,7 @@ TigerFS is a FUSE-based filesystem that exposes PostgreSQL database contents as 
 
 TigerFS lets tools and agents work with database state the same way they work with files. Present structured data as a directory tree, and any tool that reads files can now query your database.
 
-For example, `cat /mnt/db/users/123/email` reads a column value, and `echo 'new@example.com' > /mnt/db/users/123/email` updates it.
+For example, `cat /mnt/db/users/123/email.txt` reads a column value, and `echo 'new@example.com' > /mnt/db/users/123/email.txt` updates it.
 
 The filesystem interface is simple and predictable. The database handles durability, consistency, and access control. The mount provides a stable interface that works across local development, sandboxed execution, and shared environments.
 
@@ -14,6 +14,7 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Mount PostgreSQL databases as filesystem directories
 - Navigate schemas, tables, rows, and columns like files
 - Read and write data using standard Unix tools
+- Automatic file extensions based on column type (.txt, .json, .bin)
 - Multiple data formats (TSV, CSV, JSON)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
@@ -33,13 +34,18 @@ The filesystem interface is simple and predictable. The database handles durabil
 TigerFS maps filesystem paths to database queries:
 
 ```
-  Filesystem                    Database
-  ──────────                    ────────
-  /mnt/db/                  →   schemas
-  /mnt/db/public/           →   tables
-  /mnt/db/public/users/     →   rows (by PK)
-  /mnt/db/public/users/123  →   SELECT * FROM users WHERE id=123
-  /mnt/db/public/users/123/ →   columns as files
+  Filesystem                       Database
+  ──────────                       ────────
+  /mnt/db/                     →   schemas
+  /mnt/db/public/              →   tables
+  /mnt/db/public/users/        →   rows (by PK)
+  /mnt/db/public/users/123     →   SELECT * FROM users WHERE id=123
+  /mnt/db/public/users/123/    →   columns as files
+  /mnt/db/public/users/123/
+    ├── id                     →   integer (no extension)
+    ├── email.txt              →   text column
+    ├── metadata.json          →   jsonb column
+    └── avatar.bin             →   bytea column
 ```
 
 **Components:**
@@ -60,8 +66,8 @@ tigerfs postgres://localhost/mydb /mnt/db
 
 # Use standard Unix tools
 ls /mnt/db/public/users/
-cat /mnt/db/public/users/123/email
-echo 'new@example.com' > /mnt/db/public/users/123/email
+cat /mnt/db/public/users/123/email.txt
+echo 'new@example.com' > /mnt/db/public/users/123/email.txt
 rm /mnt/db/public/users/456
 
 # Unmount
@@ -123,26 +129,26 @@ cat /mnt/db/users/123.tsv
 # Read entire row (JSON format)
 cat /mnt/db/users/123.json
 
-# Read specific column
-cat /mnt/db/users/123/email
+# Read specific column (text columns have .txt extension)
+cat /mnt/db/users/123/email.txt
 
 # Navigate by index
-cat /mnt/db/users/.email/foo@example.com/name
+cat /mnt/db/users/.email/foo@example.com/name.txt
 ```
 
 ### Modify Data
 
 ```bash
 # Update a column
-echo 'newemail@example.com' > /mnt/db/users/123/email
+echo 'newemail@example.com' > /mnt/db/users/123/email.txt
 
 # Update entire row (JSON)
 echo '{"email":"new@example.com","name":"New Name"}' > /mnt/db/users/123.json
 
 # Create new row
 mkdir /mnt/db/users/456
-echo 'user@example.com' > /mnt/db/users/456/email
-echo 'User Name' > /mnt/db/users/456/name
+echo 'user@example.com' > /mnt/db/users/456/email.txt
+echo 'User Name' > /mnt/db/users/456/name.txt
 
 # Delete row
 rm -r /mnt/db/users/456/
@@ -176,6 +182,7 @@ connection:
 
 filesystem:
   dir_listing_limit: 10000
+  no_filename_extensions: false  # Set true to disable .txt/.json/.bin extensions
   attr_timeout: 1
   entry_timeout: 1
 
@@ -192,6 +199,7 @@ All configuration options support environment variables with `TIGERFS_` prefix:
 ```bash
 export TIGERFS_MAX_LS_ROWS=50000
 export TIGERFS_LOG_LEVEL=debug
+export TIGERFS_NO_FILENAME_EXTENSIONS=true  # Disable .txt/.json extensions
 ```
 
 PostgreSQL standard environment variables are also supported:

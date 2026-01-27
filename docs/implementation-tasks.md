@@ -2857,6 +2857,82 @@ ls /tmp/testmount/metrics/.chunks/
 
 ---
 
+### Task 4.19: Synthesize Filename Extensions from Column Types
+
+**Objective:** Automatically add file extensions to column files based on PostgreSQL data type
+
+**Background:** When Claude Code (or users) interact with TigerFS, file extensions provide immediate context about content type and enable proper syntax highlighting/tooling. Extensions should be synthesized on-demand based on the column's PostgreSQL type.
+
+**Type → Extension Mapping:**
+
+| PostgreSQL Type | Extension |
+|-----------------|-----------|
+| `TEXT`, `VARCHAR`, `CHAR` | `.txt` |
+| `JSON`, `JSONB` | `.json` |
+| `XML` | `.xml` |
+| `BYTEA` | `.bin` |
+| `GEOMETRY`, `GEOGRAPHY` (PostGIS) | `.wkb` |
+| Arrays (all types, including pgvector) | (none) |
+| Everything else (numbers, dates, booleans, etc.) | (none) |
+
+**Steps:**
+1. Update `internal/tigerfs/db/query.go`:
+   - Modify column metadata query to include `data_type` from `information_schema.columns`
+   - Create type → extension mapping function
+2. Update `internal/tigerfs/fuse/`:
+   - `ReadDir()`: Append extension to column filenames based on type
+   - `Lookup()`: Accept both `column` and `column.ext` forms, strip known extensions to find actual column
+   - `Getattr()`: Handle extended filenames
+3. Add configuration option:
+   - Config field: `no_filename_extensions` (bool, default false)
+   - Flag: `--no-filename-extensions`
+   - Environment: `TIGERFS_NO_FILENAME_EXTENSIONS`
+4. Write unit tests for extension mapping and stripping
+
+**Files to Modify:**
+- `internal/tigerfs/db/query.go`
+- `internal/tigerfs/fuse/fs.go` (or relevant FUSE files)
+- `internal/tigerfs/config/config.go`
+- `internal/tigerfs/cmd/mount.go`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/extensions.go`
+- `internal/tigerfs/fuse/extensions_test.go`
+
+**Verification:**
+```bash
+# Mount database
+go run ./cmd/tigerfs mount postgres://... /tmp/testmount
+
+# Check column files have extensions
+ls /tmp/testmount/users/1/
+# Should show: id  name.txt  email.txt  metadata.json  avatar.bin
+
+# Read via extended name
+cat /tmp/testmount/users/1/name.txt
+# Should return the name value
+
+# Test with flag disabled
+go run ./cmd/tigerfs mount --no-filename-extensions postgres://... /tmp/testmount2
+ls /tmp/testmount2/users/1/
+# Should show: id  name  email  metadata  avatar
+```
+
+**Completion Criteria:**
+- [ ] Column types queried from information_schema
+- [ ] Extensions added to TEXT/VARCHAR/CHAR → .txt
+- [ ] Extensions added to JSON/JSONB → .json
+- [ ] Extensions added to XML → .xml
+- [ ] Extensions added to BYTEA → .bin
+- [ ] Extensions added to PostGIS types → .wkb
+- [ ] Lookup strips extensions to find column
+- [ ] --no-filename-extensions flag works
+- [ ] Config file option works
+- [ ] Environment variable works
+- [ ] Tests pass
+
+---
+
 ## Phase 5: Distribution & Release
 
 ### Task 5.1: Create Unix Install Script
