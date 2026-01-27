@@ -43,8 +43,10 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var readOnly bool
 	var maxLsRows int
 	var foreground bool
-	var allowOther bool
-	var allowRoot bool
+	// TODO: allow-other support has inconsistent cross-platform behavior
+	// (works on Linux, limited on macOS, different model on Windows).
+	// Revisit in Phase 6 Task 6.2. For now, mounts are single-user only.
+	// var allowOther bool
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] MOUNTPOINT",
@@ -147,8 +149,6 @@ Examples:
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount as read-only")
 	cmd.Flags().IntVar(&maxLsRows, "max-ls-rows", 10000, "large table threshold")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run in foreground (don't daemonize)")
-	cmd.Flags().BoolVar(&allowOther, "allow-other", false, "allow other users to access mount")
-	cmd.Flags().BoolVar(&allowRoot, "allow-root", false, "allow root to access mount")
 
 	return cmd
 }

@@ -3385,6 +3385,42 @@ TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
 
 ---
 
+### Task 6.2: Evaluate Multi-User Mount Support (allow_other)
+
+**Objective:** Research and potentially implement `--allow-other` flag for multi-user mount access
+
+**Background:**
+FUSE's `allow_other` option allows users other than the mounting user to access the filesystem. Currently TigerFS mounts are single-user only. Cross-platform support varies:
+- Linux: Full support (requires `user_allow_other` in `/etc/fuse.conf`)
+- macOS: Limited support (macFUSE, may require SIP adjustments)
+- Windows: Different model (WinFsp uses ACLs, not Unix permissions)
+
+**Questions to Address:**
+1. Should TigerFS support multi-user mounts at all?
+2. If yes, how to handle the single PostgreSQL connection shared across Unix users?
+3. Should permission bits change from 0400/0600 (owner-only) to 0444/0644 (world-readable)?
+4. Platform-specific implementation requirements?
+
+**Steps:**
+1. Research current macFUSE `allow_other` support on modern macOS
+2. Test `allow_other` behavior with go-fuse library on Linux
+3. Decide on permission model if `allow_other` is enabled
+4. If proceeding: wire up the commented-out flag in `cmd/mount.go`
+5. Document platform-specific behavior and limitations
+
+**Files to Modify:**
+- `internal/tigerfs/cmd/mount.go` (uncomment and wire up flag)
+- `internal/tigerfs/fuse/fs.go` (pass AllowOther to mount options)
+- `specs/spec.md` (document behavior)
+
+**Completion Criteria:**
+- [ ] Decision made on whether to support allow_other
+- [ ] If yes: flag wired up and working on Linux
+- [ ] Platform limitations documented
+- [ ] Permission model documented (0400/0600 vs 0444/0644)
+
+---
+
 ## Task Execution Guidelines
 
 ### Before Starting Each Task

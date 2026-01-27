@@ -137,8 +137,6 @@ func TestBuildMountCmd_Flags(t *testing.T) {
 		{"read-only", ""},
 		{"max-ls-rows", ""},
 		{"foreground", ""},
-		{"allow-other", ""},
-		{"allow-root", ""},
 	}
 
 	for _, expected := range expectedFlags {
