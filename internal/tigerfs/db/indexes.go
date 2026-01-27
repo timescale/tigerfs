@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -261,8 +262,13 @@ func GetDistinctValues(ctx context.Context, pool *pgxpool.Pool, schema, table, c
 		if err := rows.Scan(&value); err != nil {
 			return nil, fmt.Errorf("failed to scan distinct value: %w", err)
 		}
-		// Convert to string representation
-		values = append(values, fmt.Sprintf("%v", value))
+		// Convert to string representation using format package
+		// This ensures timestamps use RFC3339 format that PostgreSQL can parse back
+		str, err := format.ConvertValueToText(value)
+		if err != nil {
+			str = fmt.Sprintf("%v", value)
+		}
+		values = append(values, str)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -415,7 +421,12 @@ func GetDistinctValuesFiltered(ctx context.Context, pool *pgxpool.Pool, schema, 
 		if err := rows.Scan(&value); err != nil {
 			return nil, fmt.Errorf("failed to scan filtered distinct value: %w", err)
 		}
-		values = append(values, fmt.Sprintf("%v", value))
+		// Convert to string representation using format package
+		str, err := format.ConvertValueToText(value)
+		if err != nil {
+			str = fmt.Sprintf("%v", value)
+		}
+		values = append(values, str)
 	}
 
 	if err := rows.Err(); err != nil {
