@@ -15,10 +15,11 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Navigate schemas, tables, rows, and columns like files
 - Read and write data using standard Unix tools
 - Automatic file extensions based on column type (.txt, .json, .bin)
-- Multiple data formats (TSV, CSV, JSON)
+- Multiple data formats for row-based exploration (TSV, CSV, JSON)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
 - Respects database constraints and permissions
+- Multi-user access, across local dev, containers, and in the cloud
 - Cross-platform support (Linux, macOS, Windows)
 
 ## Architecture
