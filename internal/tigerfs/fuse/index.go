@@ -296,6 +296,7 @@ func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 }
 
 // Lookup handles access to a specific row within the index value results.
+// Supports both bare PKs (returns directory) and PKs with format extensions (returns file).
 func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("IndexValueNode.Lookup called",
 		zap.String("table", n.tableName),
@@ -303,10 +304,13 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		zap.String("value", n.value),
 		zap.String("name", name))
 
-	// Check if name is one of the matching PKs
+	// Parse filename to extract PK value and format
+	pkValue, format := util.ParseRowFilename(name)
+
+	// Check if pkValue is one of the matching PKs
 	found := false
 	for _, pk := range n.matchingPKs {
-		if pk == name {
+		if pk == pkValue {
 			found = true
 			break
 		}
@@ -316,12 +320,30 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return nil, syscall.ENOENT
 	}
 
-	// Create a row directory node for this PK
+	// If name has format extension, create row file node
+	if name != pkValue {
+		stableAttr := fs.StableAttr{
+			Mode: syscall.S_IFREG,
+		}
+		rowNode := NewRowFileNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pkColumn, pkValue, format)
+		child := n.NewPersistentInode(ctx, rowNode, stableAttr)
+
+		// Fill in entry attributes
+		var attrOut fuse.AttrOut
+		if errno := rowNode.Getattr(ctx, nil, &attrOut); errno != 0 {
+			return nil, errno
+		}
+		out.Attr = attrOut.Attr
+
+		return child, 0
+	}
+
+	// No extension, create a row directory node for this PK
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pkColumn, name, n.partialRows)
+	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pkColumn, pkValue, n.partialRows)
 	child := n.NewPersistentInode(ctx, rowDirNode, stableAttr)
 
 	return child, 0
