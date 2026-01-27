@@ -225,5 +225,5 @@ test: add integration tests for index navigation
 
 Keep `docs/implementation-tasks-checklist.md` in sync with `docs/implementation-tasks.md`:
 
-- **Task completed:** Mark `[ ]` → `[X]` and update Summary table
+- **Task completed:** Mark ⬜ → ✅ and update Summary table
 - **Tasks modified:** New tasks added, tasks removed, or tasks renumbered
