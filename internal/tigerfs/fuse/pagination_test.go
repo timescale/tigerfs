@@ -75,7 +75,7 @@ func TestPaginationNode_Getattr(t *testing.T) {
 				t.Errorf("Expected errno=0, got %d", errno)
 			}
 
-			expectedMode := uint32(0755 | syscall.S_IFDIR)
+			expectedMode := uint32(0700 | syscall.S_IFDIR)
 			if out.Mode != expectedMode {
 				t.Errorf("Expected Mode=0x%x, got 0x%x", expectedMode, out.Mode)
 			}
@@ -152,7 +152,7 @@ func TestPaginationLimitNode_Getattr(t *testing.T) {
 		t.Errorf("Expected errno=0, got %d", errno)
 	}
 
-	expectedMode := uint32(0755 | syscall.S_IFDIR)
+	expectedMode := uint32(0700 | syscall.S_IFDIR)
 	if out.Mode != expectedMode {
 		t.Errorf("Expected Mode=0x%x, got 0x%x", expectedMode, out.Mode)
 	}

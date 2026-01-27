@@ -82,7 +82,7 @@ func (n *IndexNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 		zap.String("table", n.tableName),
 		zap.String("column", n.column))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 
@@ -268,7 +268,7 @@ func (n *IndexValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 		zap.String("column", n.column),
 		zap.String("value", n.value))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 
@@ -398,7 +398,7 @@ func (n *CompositeIndexNode) Getattr(ctx context.Context, fh fs.FileHandle, out 
 		zap.String("table", n.tableName),
 		zap.Strings("columns", n.columns))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 
@@ -537,7 +537,7 @@ func (n *CompositeIndexLevelNode) Getattr(ctx context.Context, fh fs.FileHandle,
 		zap.Strings("columns", n.columns),
 		zap.Strings("values", n.values))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 

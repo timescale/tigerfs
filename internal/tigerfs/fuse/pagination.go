@@ -70,7 +70,7 @@ func (p *PaginationNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 		zap.String("table", p.tableName),
 		zap.String("type", string(p.paginationType)))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 
@@ -170,7 +170,7 @@ func (p *PaginationLimitNode) Getattr(ctx context.Context, fh fs.FileHandle, out
 		zap.String("type", string(p.paginationType)),
 		zap.Int("limit", p.limit))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 

@@ -3352,7 +3352,9 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 **Questions to Address:**
 1. Should TigerFS support multi-user mounts at all?
 2. If yes, how to handle the single PostgreSQL connection shared across Unix users?
-3. Should permission bits change from 0400/0600 (owner-only) to 0444/0644 (world-readable)?
+3. Should permission bits change for multi-user access?
+   - Files: 0600 (owner rw) → 0644 (world-readable) or 0444 (read-only)
+   - Directories: 0700 (owner rwx) → 0755 (world-traversable) or 0555 (read-only)
 4. Platform-specific implementation requirements?
 
 **Steps:**
@@ -3371,7 +3373,7 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 - [ ] Decision made on whether to support allow_other
 - [ ] If yes: flag wired up and working on Linux
 - [ ] Platform limitations documented
-- [ ] Permission model documented (0400/0600 vs 0444/0644)
+- [ ] Permission model documented (files: 0600 vs 0644; directories: 0700 vs 0755)
 
 ---
 

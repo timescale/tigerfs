@@ -48,7 +48,7 @@ func NewAllRowsNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCach
 func (a *AllRowsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("AllRowsNode.Getattr called", zap.String("table", a.tableName))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 

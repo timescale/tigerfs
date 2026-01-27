@@ -64,7 +64,7 @@ func (r *RowDirectoryNode) Getattr(ctx context.Context, fh fs.FileHandle, out *f
 		zap.String("table", r.tableName),
 		zap.String("pk", r.pkValue))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 

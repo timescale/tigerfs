@@ -58,7 +58,7 @@ func NewSampleNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache
 func (s *SampleNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("SampleNode.Getattr called", zap.String("table", s.tableName))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 
@@ -151,7 +151,7 @@ func (s *SampleLimitNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fu
 		zap.String("table", s.tableName),
 		zap.Int("sample_size", s.sampleSize))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 

@@ -51,7 +51,7 @@ func NewTableNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache,
 func (t *TableNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("TableNode.Getattr called", zap.String("table", t.tableName))
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 

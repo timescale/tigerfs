@@ -140,7 +140,7 @@ func TestRowDirectoryNode_Getattr(t *testing.T) {
 	}
 
 	// Check mode is directory with 755 permissions
-	expectedMode := uint32(0755 | syscall.S_IFDIR)
+	expectedMode := uint32(0700 | syscall.S_IFDIR)
 	if out.Mode != expectedMode {
 		t.Errorf("Expected Mode=0x%x, got 0x%x", expectedMode, out.Mode)
 	}
@@ -183,7 +183,7 @@ func TestRowDirectoryNode_Getattr_DifferentRows(t *testing.T) {
 			}
 
 			// All row directories should have same attributes
-			if out.Mode != uint32(0755|syscall.S_IFDIR) {
+			if out.Mode != uint32(0700|syscall.S_IFDIR) {
 				t.Errorf("Expected directory mode for %s/%s", tc.table, tc.pkValue)
 			}
 		})

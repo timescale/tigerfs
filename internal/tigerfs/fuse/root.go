@@ -44,7 +44,7 @@ func NewRootNode(cfg *config.Config, dbClient *db.Client, partialRows *PartialRo
 func (r *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("RootNode.Getattr called")
 
-	out.Mode = 0755 | syscall.S_IFDIR
+	out.Mode = 0700 | syscall.S_IFDIR
 	out.Nlink = 2
 	out.Size = 4096
 
