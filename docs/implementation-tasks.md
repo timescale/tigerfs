@@ -2505,76 +2505,26 @@ echo 'test' > /tmp/testmount/users/1/email
 
 ---
 
-### Task 4.12: Implement Timestamps
+### Task 4.12: Implement File Sizes (Complete)
 
-**Objective:** Show file modification times based on table columns
-
-**Steps:**
-1. Update `internal/tigerfs/fuse/row.go`:
-   - Detect `updated_at` or `modified_at` column
-   - Query timestamp column value
-   - Return as mtime in `Getattr()`
-   - Fallback to current time if no timestamp column
-2. Cache timestamp column detection per table
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/row.go`
-
-**Verification:**
-```bash
-# Add timestamp column
-psql -c "ALTER TABLE users ADD COLUMN updated_at TIMESTAMP DEFAULT NOW();"
-psql -c "UPDATE users SET updated_at='2026-01-15 10:00:00' WHERE id=1;"
-
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls -l /tmp/testmount/users/1
-# Should show modification time: Jan 15 10:00
-```
-
-**Completion Criteria:**
-- [ ] Timestamps from updated_at column
-- [ ] Fallback to current time
-- [ ] Shown in ls -l
-- [ ] Tests pass
-
----
-
-### Task 4.13: Implement File Sizes
+**Status:** Already implemented as part of earlier work.
 
 **Objective:** Calculate and return accurate file sizes
 
-**Steps:**
-1. Update `internal/tigerfs/fuse/row.go`:
-   - Calculate row file size (byte length of TSV/CSV/JSON)
-   - Return size in `Getattr()`
-2. Update `internal/tigerfs/fuse/column.go`:
-   - Calculate column file size (text representation length)
-   - Return size in `Getattr()`
-3. Optimize by caching sizes
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/row.go`
-- `internal/tigerfs/fuse/column.go`
-
-**Verification:**
-```bash
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-ls -lh /tmp/testmount/users/1
-# Should show accurate file size
-
-ls -lh /tmp/testmount/users/1/email
-# Should show email length
-```
+**Implementation Notes:**
+- `internal/tigerfs/fuse/row.go:93` returns `len(r.data)` for row file sizes
+- `internal/tigerfs/fuse/column.go:97` returns `len(c.data)` for column file sizes
+- Sizes are calculated from the actual data content after fetching
 
 **Completion Criteria:**
-- [ ] File sizes accurate
-- [ ] Shown in ls -lh
-- [ ] Sizes cached for performance
-- [ ] Tests pass
+- [x] File sizes accurate
+- [x] Shown in ls -lh
+- [x] Sizes derived from data content
+- [x] Tests pass
 
 ---
 
-### Task 4.14: Implement Schema Flattening
+### Task 4.13: Implement Schema Flattening
 
 **Objective:** Show public schema tables at root, other schemas with prefix
 
@@ -2622,7 +2572,7 @@ ls /tmp/testmount/.schemas/public/
 
 ---
 
-### Task 4.15: Support Non-SERIAL Primary Keys
+### Task 4.14: Support Non-SERIAL Primary Keys
 
 **Objective:** Support tables with primary keys that aren't SERIAL/auto-incrementing integers
 
@@ -2674,7 +2624,7 @@ cat /tmp/testmount/settings/theme/value
 
 ---
 
-### Task 4.16: Support Tables Without Primary Keys
+### Task 4.15: Support Tables Without Primary Keys
 
 **Objective:** Allow read-only access to tables without primary keys using ctid
 
@@ -2727,7 +2677,7 @@ echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
 
 ---
 
-### Task 4.17: Support Database Views
+### Task 4.16: Support Database Views
 
 **Objective:** Expose PostgreSQL views alongside tables with appropriate read/write behavior
 
@@ -2738,7 +2688,7 @@ Updatable views support writes (PostgreSQL handles); non-updatable views return 
 **Key Design Points:**
 - Simple single-table views may have a primary key and be updatable
 - JOIN views typically have no primary key, so they:
-  - Use `ctid` for row identification (like Task 4.16)
+  - Use `ctid` for row identification (like Task 4.15)
   - Are read-only (JOINs are generally non-updatable)
   - Can be browsed via `.first/N/` or `.sample/N/` paths
 
@@ -2757,7 +2707,7 @@ Updatable views support writes (PostgreSQL handles); non-updatable views return 
    - Updatable views: writes work (PostgreSQL handles)
    - Non-updatable views: return EACCES with clear error message
 4. Ensure JOIN views work:
-   - No PK → falls back to ctid-based access (Task 4.16)
+   - No PK → falls back to ctid-based access (Task 4.15)
    - Read-only browsing via `.first/N/`, `.sample/N/`
 
 **Files to Modify:**
@@ -2807,7 +2757,7 @@ echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
 
 ---
 
-### Task 4.18: Support TimescaleDB Hypertables
+### Task 4.17: Support TimescaleDB Hypertables
 
 **Objective:** Proper support for TimescaleDB hypertables with time-based access
 
@@ -2865,7 +2815,7 @@ ls /tmp/testmount/metrics/.chunks/
 
 ---
 
-### Task 4.19: Example Workflows for Advanced Features
+### Task 4.18: Example Workflows for Advanced Features
 
 **Objective:** Create documentation with real-world examples for advanced TigerFS features
 
@@ -3418,6 +3368,55 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 - [ ] If yes: flag wired up and working on Linux
 - [ ] Platform limitations documented
 - [ ] Permission model documented (0400/0600 vs 0444/0644)
+
+---
+
+### Task 6.3: Row Timestamps from Database Columns (Optional)
+
+**Objective:** Show file modification times based on table timestamp columns
+
+**Status:** Optional - to be reconsidered based on user feedback
+
+**Background:**
+FUSE filesystems can report mtime (modification time) for files. For row files, this could come from a timestamp column in the table (e.g., `updated_at`). Currently, rows show epoch time (1970) or mount time.
+
+**Limitations to Consider:**
+
+1. **No standard column naming**: Unlike Rails/Django conventions (`updated_at`, `modified_at`), many databases use arbitrary names or have no timestamp column at all.
+
+2. **Configuration complexity**: Making the column name configurable adds user burden:
+   - Global config doesn't work for mixed schemas
+   - Per-table config is verbose for large databases
+
+3. **Type ambiguity**: Tables may have multiple timestamp columns (`created_at`, `updated_at`, `deleted_at`, `processed_at`). Choosing the "right" one requires domain knowledge.
+
+4. **NULL handling**: Timestamp columns are often nullable. Fallback behavior (mount time? epoch?) may confuse users.
+
+5. **Marginal benefit**: Most filesystem tools don't rely on mtime for database exploration. The primary use case (sorting by modification) may not apply to database rows.
+
+**If Proceeding:**
+
+1. Add config option `timestamp_columns` with ordered list of column names to try:
+   ```yaml
+   timestamp_columns: ["updated_at", "modified_at", "last_modified", "mtime"]
+   ```
+
+2. During metadata refresh, check each table for first matching column name
+
+3. Parse timestamp from row data in `fetchData()`, store as `mtime` field
+
+4. Set `out.Mtime` in `Getattr()`, fallback to mount time if no column or NULL
+
+**Files to Modify:**
+- `internal/tigerfs/config/config.go` (add timestamp_columns option)
+- `internal/tigerfs/fuse/cache.go` (detect timestamp column per table)
+- `internal/tigerfs/fuse/row.go` (parse and return mtime)
+
+**Completion Criteria:**
+- [ ] Decision made on whether to implement
+- [ ] If yes: configurable column name list
+- [ ] If yes: fallback behavior documented
+- [ ] If yes: works with common conventions (updated_at, modified_at)
 
 ---
 
