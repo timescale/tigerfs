@@ -66,7 +66,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.1 | Implement Index Discovery | 2056 |
 | ✅ | 4.2 | Implement Single-Column Index Paths | 2095 |
 | ✅ | 4.3 | Implement Index-Based Queries | 2129 |
-| ⬜ | 4.4 | Implement Composite Index Paths | 2169 |
+| ✅ | 4.4 | Implement Composite Index Paths | 2169 |
 | ✅ | 4.5 | Implement Large Table Detection | 2216 |
 | ✅ | 4.6 | Implement .all/ Escape Hatch for Large Tables | 2257 |
 | ✅ | 4.7 | Implement .first/N/ and .last/N/ Pagination | 2309 |
@@ -121,7 +121,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 17 | 22 | 77% |
+| Phase 4: Advanced Features | 18 | 22 | 82% |
 | Phase 5: Distribution | 0 | 9 | 0% |
 | Phase 6: Performance | 0 | 3 | 0% |
-| **Total** | **49** | **66** | **74%** |
+| **Total** | **50** | **66** | **76%** |

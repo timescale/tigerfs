@@ -44,10 +44,10 @@ go mod tidy
 ```
 
 **Completion Criteria:**
-- [ ] Both libraries tested with basic operations
-- [ ] Decision documented with rationale
-- [ ] Chosen library added to go.mod
-- [ ] Benchmark code removed
+- Both libraries tested with basic operations
+- Decision documented with rationale
+- Chosen library added to go.mod
+- Benchmark code removed
 
 ---
 
@@ -86,10 +86,10 @@ go run ./cmd/tigerfs test-connection
 ```
 
 **Completion Criteria:**
-- [ ] `NewClient()` successfully connects to PostgreSQL
-- [ ] Connection pool configured from config
-- [ ] Unit tests pass
-- [ ] Ping verifies connection
+- `NewClient()` successfully connects to PostgreSQL
+- Connection pool configured from config
+- Unit tests pass
+- Ping verifies connection
 
 ---
 
@@ -128,11 +128,11 @@ go run ./cmd/tigerfs test-connection
 ```
 
 **Completion Criteria:**
-- [ ] Passwords resolved from multiple sources
-- [ ] .pgpass file works (via pgx)
-- [ ] Environment variables work
-- [ ] password_command support added
-- [ ] Tests pass
+- Passwords resolved from multiple sources
+- .pgpass file works (via pgx)
+- Environment variables work
+- password_command support added
+- Tests pass
 
 ---
 
@@ -180,10 +180,10 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] FUSE filesystem mounts successfully
-- [ ] Root directory accessible
-- [ ] `ls /tmp/testmount/` returns empty list (no tables yet)
-- [ ] Unmount works cleanly
+- FUSE filesystem mounts successfully
+- Root directory accessible
+- `ls /tmp/testmount/` returns empty list (no tables yet)
+- Unmount works cleanly
 
 ---
 
@@ -235,11 +235,11 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] Schema query working
-- [ ] Table query working
-- [ ] `ls /mnt/db/` lists tables from public schema
-- [ ] Metadata cached
-- [ ] Tests pass
+- Schema query working
+- Table query working
+- `ls /mnt/db/` lists tables from public schema
+- Metadata cached
+- Tests pass
 
 ---
 
@@ -290,11 +290,11 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] Table directories navigable
-- [ ] Primary key discovered
-- [ ] `ls /mnt/db/users/` lists row PKs
-- [ ] dir_listing_limit enforced (return error if exceeded)
-- [ ] Tests pass
+- Table directories navigable
+- Primary key discovered
+- `ls /mnt/db/users/` lists row PKs
+- dir_listing_limit enforced (return error if exceeded)
+- Tests pass
 
 ---
 
@@ -344,11 +344,11 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] Row files readable
-- [ ] TSV format correct (tabs, no header)
-- [ ] NULL values shown as empty fields
-- [ ] Non-existent rows return ENOENT
-- [ ] Tests pass
+- Row files readable
+- TSV format correct (tabs, no header)
+- NULL values shown as empty fields
+- Non-existent rows return ENOENT
+- Tests pass
 
 ---
 
@@ -388,10 +388,10 @@ go test -v ./test/integration/
 ```
 
 **Completion Criteria:**
-- [ ] testcontainers-go working
-- [ ] Test database created and seeded
-- [ ] Integration tests pass
-- [ ] Cleanup works properly
+- testcontainers-go working
+- Test database created and seeded
+- Integration tests pass
+- Cleanup works properly
 
 ---
 
@@ -436,10 +436,10 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] CSV format works
-- [ ] Quoting correct per RFC 4180
-- [ ] NULL values as empty fields
-- [ ] Tests pass
+- CSV format works
+- Quoting correct per RFC 4180
+- NULL values as empty fields
+- Tests pass
 
 ---
 
@@ -483,10 +483,10 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] JSON format works
-- [ ] Valid JSON syntax
-- [ ] NULL values as `null`
-- [ ] Tests pass
+- JSON format works
+- Valid JSON syntax
+- NULL values as `null`
+- Tests pass
 
 ---
 
@@ -516,10 +516,10 @@ go test -v ./test/integration/ -run TestFormats
 ```
 
 **Completion Criteria:**
-- [ ] All 3 formats tested
-- [ ] NULL handling verified
-- [ ] Special characters handled
-- [ ] All tests pass
+- All 3 formats tested
+- NULL handling verified
+- Special characters handled
+- All tests pass
 
 ---
 
@@ -558,10 +558,10 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] Row directories navigable
-- [ ] `ls /mnt/db/users/1/` lists column names
-- [ ] Column metadata cached
-- [ ] Tests pass
+- Row directories navigable
+- `ls /mnt/db/users/1/` lists column names
+- Column metadata cached
+- Tests pass
 
 ---
 
@@ -603,10 +603,10 @@ umount /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] Column files readable
-- [ ] Individual columns queried efficiently
-- [ ] NULL values return empty file
-- [ ] Tests pass
+- Column files readable
+- Individual columns queried efficiently
+- NULL values return empty file
+- Tests pass
 
 ---
 
@@ -656,11 +656,11 @@ cat /tmp/testmount/test_types/1/array_col # ["a","b"]
 ```
 
 **Completion Criteria:**
-- [ ] All common types convert correctly
-- [ ] JSONB returns valid JSON
-- [ ] Arrays return JSON arrays
-- [ ] Timestamps in ISO 8601
-- [ ] Tests pass
+- All common types convert correctly
+- JSONB returns valid JSON
+- Arrays return JSON arrays
+- Timestamps in ISO 8601
+- Tests pass
 
 ---
 
@@ -703,10 +703,10 @@ cat /tmp/testmount/users/.schema
 ```
 
 **Completion Criteria:**
-- [ ] `.columns` file works
-- [ ] `.schema` file returns DDL
-- [ ] `.count` file returns count
-- [ ] Tests pass
+- `.columns` file works
+- `.schema` file returns DDL
+- `.count` file returns count
+- Tests pass
 
 ---
 
@@ -759,10 +759,10 @@ psql -c "SELECT * FROM users WHERE id=1;"
 ```
 
 **Completion Criteria:**
-- [ ] UPDATE working for all formats
-- [ ] Data parsed correctly
-- [ ] Database updated
-- [ ] Tests pass
+- UPDATE working for all formats
+- Data parsed correctly
+- Database updated
+- Tests pass
 
 ---
 
@@ -801,10 +801,10 @@ psql -c "SELECT * FROM users WHERE id=100;"
 ```
 
 **Completion Criteria:**
-- [ ] INSERT working for all formats
-- [ ] New rows created
-- [ ] Auto-generated PKs handled
-- [ ] Tests pass
+- INSERT working for all formats
+- New rows created
+- Auto-generated PKs handled
+- Tests pass
 
 ---
 
@@ -843,10 +843,10 @@ psql -c "SELECT email FROM users WHERE id=1;"
 ```
 
 **Completion Criteria:**
-- [ ] Column updates working
-- [ ] Type conversion correct
-- [ ] Single-column UPDATE generated
-- [ ] Tests pass
+- Column updates working
+- Type conversion correct
+- Single-column UPDATE generated
+- Tests pass
 
 ---
 
@@ -881,10 +881,10 @@ psql -c "SELECT * FROM users WHERE id=200;"
 ```
 
 **Completion Criteria:**
-- [ ] `mkdir` creates new row directory
-- [ ] Columns written accumulate
-- [ ] INSERT executed when constraints satisfied
-- [ ] Tests pass
+- `mkdir` creates new row directory
+- Columns written accumulate
+- INSERT executed when constraints satisfied
+- Tests pass
 
 ---
 
@@ -921,11 +921,11 @@ echo 'test' > /tmp/testmount/users/300/id
 ```
 
 **Completion Criteria:**
-- [ ] NOT NULL constraints enforced
-- [ ] UNIQUE constraints checked
-- [ ] Violations return EACCES
-- [ ] Detailed error logging
-- [ ] Tests pass
+- NOT NULL constraints enforced
+- UNIQUE constraints checked
+- Violations return EACCES
+- Detailed error logging
+- Tests pass
 
 ---
 
@@ -964,10 +964,10 @@ psql -c "SELECT * FROM users WHERE id=1;"
 ```
 
 **Completion Criteria:**
-- [ ] Row deletion working
-- [ ] Both file and directory deletion work
-- [ ] Foreign key constraints respected
-- [ ] Tests pass
+- Row deletion working
+- Both file and directory deletion work
+- Foreign key constraints respected
+- Tests pass
 
 ---
 
@@ -1006,10 +1006,10 @@ rm /tmp/testmount/users/2/email
 ```
 
 **Completion Criteria:**
-- [ ] Column deletion sets to NULL
-- [ ] NOT NULL columns rejected
-- [ ] Error messages clear
-- [ ] Tests pass
+- Column deletion sets to NULL
+- NOT NULL columns rejected
+- Error messages clear
+- Tests pass
 
 ---
 
@@ -1043,11 +1043,11 @@ go tool cover -html=coverage.txt
 ```
 
 **Completion Criteria:**
-- [ ] All CRUD operations tested
-- [ ] Error cases covered
-- [ ] Concurrent access tested
-- [ ] Coverage >85%
-- [ ] All tests pass
+- All CRUD operations tested
+- Error cases covered
+- Concurrent access tested
+- Coverage >85%
+- All tests pass
 
 ---
 
@@ -1109,11 +1109,11 @@ go test -cover ./internal/tigerfs/format/
 ```
 
 **Completion Criteria:**
-- [ ] 15+ test cases covering all parsing functions
-- [ ] Edge cases tested (empty, malformed, special characters)
-- [ ] NULL handling verified
-- [ ] Error cases return appropriate errors
-- [ ] Coverage for format package >90%
+- 15+ test cases covering all parsing functions
+- Edge cases tested (empty, malformed, special characters)
+- NULL handling verified
+- Error cases return appropriate errors
+- Coverage for format package >90%
 
 ---
 
@@ -1153,11 +1153,11 @@ go test -race ./internal/tigerfs/fuse/ -run TestPartialRowTracker_Concurrent
 ```
 
 **Completion Criteria:**
-- [ ] 12+ test cases covering all PartialRowTracker operations
-- [ ] Constraint validation tested
-- [ ] Concurrency safety verified with -race
-- [ ] Edge cases covered
-- [ ] All tests pass
+- 12+ test cases covering all PartialRowTracker operations
+- Constraint validation tested
+- Concurrency safety verified with -race
+- Edge cases covered
+- All tests pass
 
 ---
 
@@ -1204,11 +1204,11 @@ go test -cover ./internal/tigerfs/config/
 ```
 
 **Completion Criteria:**
-- [ ] 12+ test cases covering all config loading
-- [ ] All config fields tested
-- [ ] Precedence rules verified
-- [ ] Environment variable binding tested
-- [ ] Coverage for config package >80%
+- 12+ test cases covering all config loading
+- All config fields tested
+- Precedence rules verified
+- Environment variable binding tested
+- Coverage for config package >80%
 
 ---
 
@@ -1239,11 +1239,11 @@ go test -v ./internal/tigerfs/fuse/ -run TestRootNode
 ```
 
 **Completion Criteria:**
-- [ ] 6+ test cases covering RootNode operations
-- [ ] Readdir lists tables correctly
-- [ ] Lookup validates table existence
-- [ ] Cache integration tested
-- [ ] All tests pass
+- 6+ test cases covering RootNode operations
+- Readdir lists tables correctly
+- Lookup validates table existence
+- Cache integration tested
+- All tests pass
 
 ---
 
@@ -1286,11 +1286,11 @@ go test -cover ./internal/tigerfs/db/
 ```
 
 **Completion Criteria:**
-- [ ] 15+ new test cases added
-- [ ] All query functions tested
-- [ ] Edge cases covered (NULL, empty, errors)
-- [ ] Coverage for db package >50%
-- [ ] All tests pass
+- 15+ new test cases added
+- All query functions tested
+- Edge cases covered (NULL, empty, errors)
+- Coverage for db package >50%
+- All tests pass
 
 ---
 
@@ -1344,11 +1344,11 @@ go test -cover ./internal/tigerfs/fuse/
 ```
 
 **Completion Criteria:**
-- [ ] 20+ new test cases added across 4 test files
-- [ ] All existing minimal tests expanded with real functionality tests
-- [ ] Mock database interactions where needed
-- [ ] All CRUD operations covered
-- [ ] All tests pass
+- 20+ new test cases added across 4 test files
+- All existing minimal tests expanded with real functionality tests
+- Mock database interactions where needed
+- All CRUD operations covered
+- All tests pass
 
 ---
 
@@ -1384,11 +1384,11 @@ go test -cover ./internal/tigerfs/logging/
 ```
 
 **Completion Criteria:**
-- [ ] 8+ test cases covering logging setup
-- [ ] Both debug and production modes tested
-- [ ] Log level filtering verified
-- [ ] Coverage for logging package >80%
-- [ ] All tests pass
+- 8+ test cases covering logging setup
+- Both debug and production modes tested
+- Log level filtering verified
+- Coverage for logging package >80%
+- All tests pass
 
 ---
 
@@ -1428,11 +1428,11 @@ go test -cover ./internal/tigerfs/cmd/
 ```
 
 **Completion Criteria:**
-- [ ] 10+ test cases covering command builders
-- [ ] Flag presence verified
-- [ ] Subcommand registration tested
-- [ ] Coverage for cmd package >30%
-- [ ] All tests pass
+- 10+ test cases covering command builders
+- Flag presence verified
+- Subcommand registration tested
+- Coverage for cmd package >30%
+- All tests pass
 
 ---
 
@@ -1733,16 +1733,16 @@ test-coverage:
 ```
 
 **Completion Criteria:**
-- [ ] Dockerfile builds successfully
-- [ ] docker-compose starts all services
-- [ ] PostgreSQL accessible in container
-- [ ] FUSE device available in container
-- [ ] Tests run successfully in Docker
-- [ ] Auto-detection script works (local vs Docker)
-- [ ] Makefile targets functional
-- [ ] CI workflow uses Docker
-- [ ] Documentation updated (README, CLAUDE.md)
-- [ ] All tests pass in both local and Docker environments
+- Dockerfile builds successfully
+- docker-compose starts all services
+- PostgreSQL accessible in container
+- FUSE device available in container
+- Tests run successfully in Docker
+- Auto-detection script works (local vs Docker)
+- Makefile targets functional
+- CI workflow uses Docker
+- Documentation updated (README, CLAUDE.md)
+- All tests pass in both local and Docker environments
 
 **Benefits:**
 - Consistent testing environment across all machines
@@ -1792,11 +1792,11 @@ ls /tmp/testmount/
 ```
 
 **Completion Criteria:**
-- [ ] Graceful unmount working
-- [ ] Timeout handling implemented
-- [ ] Force unmount option works
-- [ ] Stale mount cleanup works
-- [ ] Tests pass
+- Graceful unmount working
+- Timeout handling implemented
+- Force unmount option works
+- Stale mount cleanup works
+- Tests pass
 
 ---
 
@@ -1836,10 +1836,10 @@ go run ./cmd/tigerfs status /tmp/testmount
 ```
 
 **Completion Criteria:**
-- [ ] Status shows mount info
-- [ ] Statistics displayed
-- [ ] Both single and list modes work
-- [ ] Tests pass
+- Status shows mount info
+- Statistics displayed
+- Both single and list modes work
+- Tests pass
 
 ---
 
@@ -1873,10 +1873,10 @@ go run ./cmd/tigerfs list
 ```
 
 **Completion Criteria:**
-- [ ] Lists all mounts
-- [ ] Simple output (one per line)
-- [ ] Stale mounts filtered
-- [ ] Tests pass
+- Lists all mounts
+- Simple output (one per line)
+- Stale mounts filtered
+- Tests pass
 
 ---
 
@@ -1914,11 +1914,11 @@ go run ./cmd/tigerfs test-connection postgres://badhost/baddb
 ```
 
 **Completion Criteria:**
-- [ ] Connection test working
-- [ ] Shows database info
-- [ ] Shows permissions
-- [ ] Error messages clear
-- [ ] Tests pass
+- Connection test working
+- Shows database info
+- Shows permissions
+- Error messages clear
+- Tests pass
 
 ---
 
@@ -1960,10 +1960,10 @@ go run ./cmd/tigerfs config path
 ```
 
 **Completion Criteria:**
-- [ ] Config show displays merged config
-- [ ] Config validate checks syntax
-- [ ] Config path shows location
-- [ ] Tests pass
+- Config show displays merged config
+- Config validate checks syntax
+- Config path shows location
+- Tests pass
 
 ---
 
@@ -2007,11 +2007,11 @@ mv /tmp/tiger.bak $(which tiger)
 ```
 
 **Completion Criteria:**
-- [ ] Tiger service ID flag working
-- [ ] Calls tiger CLI correctly
-- [ ] Connection string parsed
-- [ ] Error messages clear
-- [ ] Tests pass
+- Tiger service ID flag working
+- Calls tiger CLI correctly
+- Connection string parsed
+- Error messages clear
+- Tests pass
 
 ---
 
@@ -2044,10 +2044,10 @@ mv /tmp/tiger.bak $(which tiger)
 ```
 
 **Completion Criteria:**
-- [ ] At least 6 examples documented
-- [ ] Each example tested and works
-- [ ] Clear explanations provided
-- [ ] Output shown
+- At least 6 examples documented
+- Each example tested and works
+- Clear explanations provided
+- Output shown
 
 ---
 
@@ -2084,11 +2084,11 @@ go test -v ./internal/tigerfs/db/ -run TestGetIndexes
 ```
 
 **Completion Criteria:**
-- [ ] Indexes queried from pg_indexes
-- [ ] Single-column indexes identified
-- [ ] Composite indexes identified
-- [ ] Index metadata cached
-- [ ] Tests pass
+- Indexes queried from pg_indexes
+- Single-column indexes identified
+- Composite indexes identified
+- Index metadata cached
+- Tests pass
 
 ---
 
@@ -2119,10 +2119,10 @@ ls /tmp/testmount/users/.email/
 ```
 
 **Completion Criteria:**
-- [ ] Index paths navigable
-- [ ] Distinct values listed
-- [ ] Limited to avoid huge listings
-- [ ] Tests pass
+- Index paths navigable
+- Distinct values listed
+- Limited to avoid huge listings
+- Tests pass
 
 ---
 
@@ -2158,11 +2158,11 @@ psql -c "EXPLAIN SELECT * FROM users WHERE email='test1@example.com';"
 ```
 
 **Completion Criteria:**
-- [ ] Index-based queries working
-- [ ] Single row results accessible
-- [ ] Multiple row results listed
-- [ ] PostgreSQL uses index
-- [ ] Tests pass
+- Index-based queries working
+- Single row results accessible
+- Multiple row results listed
+- PostgreSQL uses index
+- Tests pass
 
 ---
 
@@ -2206,10 +2206,10 @@ cat /tmp/testmount/users/.last_name.first_name/Smith/John/email
 ```
 
 **Completion Criteria:**
-- [ ] Composite index paths work
-- [ ] Multi-level navigation functional
-- [ ] Prefix matching supported
-- [ ] Tests pass
+- Composite index paths work
+- Multi-level navigation functional
+- Prefix matching supported
+- Tests pass
 
 ---
 
@@ -2247,10 +2247,10 @@ ls /tmp/testmount/users/
 ```
 
 **Completion Criteria:**
-- [ ] Large tables detected
-- [ ] dir_listing_limit enforced
-- [ ] Helpful error message logged
-- [ ] Tests pass
+- Large tables detected
+- dir_listing_limit enforced
+- Helpful error message logged
+- Tests pass
 
 ---
 
@@ -2298,11 +2298,11 @@ cat /tmp/testmount/users/.all/1.json
 ```
 
 **Completion Criteria:**
-- [ ] `.all/` directory listed in table directory
-- [ ] `.all/` bypasses dir_listing_limit limit
-- [ ] Warn logged for large tables
-- [ ] Rows accessible within .all/
-- [ ] Tests pass
+- `.all/` directory listed in table directory
+- `.all/` bypasses dir_listing_limit limit
+- Warn logged for large tables
+- Rows accessible within .all/
+- Tests pass
 
 ---
 
@@ -2350,11 +2350,11 @@ cat /tmp/testmount/users/.last/50/14999/email
 ```
 
 **Completion Criteria:**
-- [ ] `.first/N/` paths work
-- [ ] `.last/N/` paths work
-- [ ] Returns first/last N rows by PK
-- [ ] Rows accessible normally
-- [ ] Tests pass
+- `.first/N/` paths work
+- `.last/N/` paths work
+- Returns first/last N rows by PK
+- Rows accessible normally
+- Tests pass
 
 ---
 
@@ -2388,10 +2388,10 @@ ls /tmp/testmount/users/.sample/100/
 ```
 
 **Completion Criteria:**
-- [ ] `.sample/N/` paths work
-- [ ] Returns approximately N random rows
-- [ ] Uses TABLESAMPLE for performance
-- [ ] Tests pass
+- `.sample/N/` paths work
+- Returns approximately N random rows
+- Uses TABLESAMPLE for performance
+- Tests pass
 
 ---
 
@@ -2418,10 +2418,10 @@ cat /tmp/testmount/users/.count
 ```
 
 **Completion Criteria:**
-- [ ] `.count` file readable
-- [ ] Accurate for small tables
-- [ ] Fast estimate for large tables
-- [ ] Tests pass
+- `.count` file readable
+- Accurate for small tables
+- Fast estimate for large tables
+- Tests pass
 
 ---
 
@@ -2456,10 +2456,10 @@ go test -v ./internal/tigerfs/db/ -run TestGetTablePermissions
 ```
 
 **Completion Criteria:**
-- [ ] Permissions queried correctly
-- [ ] All 4 privileges checked
-- [ ] Permissions cached
-- [ ] Tests pass
+- Permissions queried correctly
+- All 4 privileges checked
+- Permissions cached
+- Tests pass
 
 ---
 
@@ -2498,10 +2498,10 @@ echo 'test' > /tmp/testmount/users/1/email
 ```
 
 **Completion Criteria:**
-- [ ] Permissions mapped correctly
-- [ ] File modes accurate
-- [ ] Write attempts fail for read-only
-- [ ] Tests pass
+- Permissions mapped correctly
+- File modes accurate
+- Write attempts fail for read-only
+- Tests pass
 
 ---
 
@@ -2568,11 +2568,11 @@ ls /tmp/testmount/.schemas/public/
 ```
 
 **Completion Criteria:**
-- [ ] Public schema tables at root
-- [ ] Other schemas accessible with prefix
-- [ ] `.schemas/` provides explicit access
-- [ ] Configurable default schema
-- [ ] Tests pass
+- Public schema tables at root
+- Other schemas accessible with prefix
+- `.schemas/` provides explicit access
+- Configurable default schema
+- Tests pass
 
 ---
 
@@ -2620,11 +2620,11 @@ cat /tmp/testmount/settings/theme/value
 ```
 
 **Completion Criteria:**
-- [ ] UUID primary keys work
-- [ ] Text primary keys work
-- [ ] Composite primary keys work with delimiter
-- [ ] Special characters handled (URL encoding)
-- [ ] Tests pass
+- UUID primary keys work
+- Text primary keys work
+- Composite primary keys work with delimiter
+- Special characters handled (URL encoding)
+- Tests pass
 
 ---
 
@@ -2673,11 +2673,11 @@ echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
 ```
 
 **Completion Criteria:**
-- [ ] Tables without PK are accessible (read-only)
-- [ ] ctid used as row identifier
-- [ ] Warning file explains limitations
-- [ ] Write operations blocked
-- [ ] Tests pass
+- Tables without PK are accessible (read-only)
+- ctid used as row identifier
+- Warning file explains limitations
+- Write operations blocked
+- Tests pass
 
 ---
 
@@ -2750,14 +2750,14 @@ echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
 ```
 
 **Completion Criteria:**
-- [ ] Views discovered alongside tables
-- [ ] Simple views readable (with PK if available)
-- [ ] JOIN views readable via .first/N/ or .sample/N/
-- [ ] Updatable views support writes
-- [ ] Non-updatable views (including JOINs) return EACCES on write
-- [ ] View definition shown in .schema
-- [ ] Tests include JOIN view scenario
-- [ ] Tests pass
+- Views discovered alongside tables
+- Simple views readable (with PK if available)
+- JOIN views readable via .first/N/ or .sample/N/
+- Updatable views support writes
+- Non-updatable views (including JOINs) return EACCES on write
+- View definition shown in .schema
+- Tests include JOIN view scenario
+- Tests pass
 
 ---
 
@@ -2811,11 +2811,11 @@ ls /tmp/testmount/metrics/.chunks/
 ```
 
 **Completion Criteria:**
-- [ ] Hypertables detected
-- [ ] Time-based navigation works
-- [ ] Chunk navigation works
-- [ ] Continuous aggregates accessible
-- [ ] Tests pass
+- Hypertables detected
+- Time-based navigation works
+- Chunk navigation works
+- Continuous aggregates accessible
+- Tests pass
 
 ---
 
@@ -2850,10 +2850,10 @@ ls /tmp/testmount/metrics/.chunks/
 ```
 
 **Completion Criteria:**
-- [ ] At least 8 examples documented
-- [ ] Each example tested and works
-- [ ] Clear explanations provided
-- [ ] Output shown
+- At least 8 examples documented
+- Each example tested and works
+- Clear explanations provided
+- Output shown
 
 ---
 
@@ -2919,17 +2919,17 @@ ls /tmp/testmount2/users/1/
 ```
 
 **Completion Criteria:**
-- [ ] Column types queried from information_schema
-- [ ] Extensions added to TEXT/VARCHAR/CHAR → .txt
-- [ ] Extensions added to JSON/JSONB → .json
-- [ ] Extensions added to XML → .xml
-- [ ] Extensions added to BYTEA → .bin
-- [ ] Extensions added to PostGIS types → .wkb
-- [ ] Lookup strips extensions to find column
-- [ ] --no-filename-extensions flag works
-- [ ] Config file option works
-- [ ] Environment variable works
-- [ ] Tests pass
+- Column types queried from information_schema
+- Extensions added to TEXT/VARCHAR/CHAR → .txt
+- Extensions added to JSON/JSONB → .json
+- Extensions added to XML → .xml
+- Extensions added to BYTEA → .bin
+- Extensions added to PostGIS types → .wkb
+- Lookup strips extensions to find column
+- --no-filename-extensions flag works
+- Config file option works
+- Environment variable works
+- Tests pass
 
 ---
 
@@ -3008,15 +3008,15 @@ cat /tmp/testmount/users/.ddl | grep -E "^-- (Table|Indexes|Foreign Keys|Trigger
 ```
 
 **Completion Criteria:**
-- [ ] `.ddl` file appears in table directory listing
-- [ ] CREATE TABLE statement included
-- [ ] CREATE INDEX statements included
-- [ ] Foreign key constraints included
-- [ ] Check constraints included
-- [ ] Trigger definitions included
-- [ ] Table/column comments included (if any exist)
-- [ ] Sections omitted if empty (no "-- Indexes" header if no indexes)
-- [ ] Tests pass
+- `.ddl` file appears in table directory listing
+- CREATE TABLE statement included
+- CREATE INDEX statements included
+- Foreign key constraints included
+- Check constraints included
+- Trigger definitions included
+- Table/column comments included (if any exist)
+- Sections omitted if empty (no "-- Indexes" header if no indexes)
+- Tests pass
 
 ---
 
@@ -3064,12 +3064,12 @@ cat /tmp/testmount/users/.indexes
 ```
 
 **Completion Criteria:**
-- [ ] `.indexes` file appears in table directory listing
-- [ ] Lists all non-primary-key index directories
-- [ ] Shows `(unique)` annotation for unique indexes
-- [ ] Shows `(composite)` annotation for multi-column indexes
-- [ ] Excludes primary key (rows already accessible by PK)
-- [ ] Tests pass
+- `.indexes` file appears in table directory listing
+- Lists all non-primary-key index directories
+- Shows `(unique)` annotation for unique indexes
+- Shows `(composite)` annotation for multi-column indexes
+- Excludes primary key (rows already accessible by PK)
+- Tests pass
 
 ---
 
@@ -3130,12 +3130,12 @@ cat /mnt/db/orders/.user_id/1/.first/3/*.json  # Read them
 ```
 
 **Completion Criteria:**
-- [ ] `.first/N/` works in IndexNode (distinct values)
-- [ ] `.last/N/` works in IndexNode (distinct values)
-- [ ] `.first/N/` works in IndexValueNode (matching rows)
-- [ ] `.last/N/` works in IndexValueNode (matching rows)
-- [ ] Works with composite indexes at each level
-- [ ] Tests pass
+- `.first/N/` works in IndexNode (distinct values)
+- `.last/N/` works in IndexNode (distinct values)
+- `.first/N/` works in IndexValueNode (matching rows)
+- `.last/N/` works in IndexValueNode (matching rows)
+- Works with composite indexes at each level
+- Tests pass
 
 ---
 
@@ -3174,12 +3174,12 @@ bash scripts/install.sh
 ```
 
 **Completion Criteria:**
-- [ ] Detects platform correctly
-- [ ] Downloads appropriate binary
-- [ ] Verifies checksum
-- [ ] Installs to correct location
-- [ ] Provides PATH instructions
-- [ ] Error handling robust
+- Detects platform correctly
+- Downloads appropriate binary
+- Verifies checksum
+- Installs to correct location
+- Provides PATH instructions
+- Error handling robust
 
 ---
 
@@ -3213,12 +3213,12 @@ tigerfs version
 ```
 
 **Completion Criteria:**
-- [ ] Detects architecture
-- [ ] Downloads Windows binary
-- [ ] Verifies checksum
-- [ ] Installs correctly
-- [ ] Adds to PATH
-- [ ] Error handling robust
+- Detects architecture
+- Downloads Windows binary
+- Verifies checksum
+- Installs correctly
+- Adds to PATH
+- Error handling robust
 
 ---
 
@@ -3257,11 +3257,11 @@ ls dist/
 ```
 
 **Completion Criteria:**
-- [ ] All platforms configured
-- [ ] ldflags set correctly
-- [ ] Archives configured
-- [ ] Test build succeeds
-- [ ] All platforms have binaries
+- All platforms configured
+- ldflags set correctly
+- Archives configured
+- Test build succeeds
+- All platforms have binaries
 
 ---
 
@@ -3303,11 +3303,11 @@ git push --delete origin v0.0.1-test
 ```
 
 **Completion Criteria:**
-- [ ] Workflow triggers on tag
-- [ ] GoReleaser runs successfully
-- [ ] Release created with all binaries
-- [ ] Checksums included
-- [ ] Test cleanup complete
+- Workflow triggers on tag
+- GoReleaser runs successfully
+- Release created with all binaries
+- Checksums included
+- Test cleanup complete
 
 ---
 
@@ -3370,13 +3370,13 @@ tigerfs unmount /mnt/db
 ```
 
 **Completion Criteria:**
-- [ ] `--daemon` flag forks to background
-- [ ] PID file written and cleaned up
-- [ ] `--foreground` flag works (explicit default)
-- [ ] `unmount` cleans up PID file
-- [ ] `status` shows daemon info
-- [ ] Works on Linux and macOS
-- [ ] Windows handled gracefully (skip or alternative)
+- `--daemon` flag forks to background
+- PID file written and cleaned up
+- `--foreground` flag works (explicit default)
+- `unmount` cleans up PID file
+- `status` shows daemon info
+- Works on Linux and macOS
+- Windows handled gracefully (skip or alternative)
 
 ---
 
@@ -3419,11 +3419,11 @@ tigerfs unmount /mnt/db
 ```
 
 **Completion Criteria:**
-- [ ] README complete and accurate
-- [ ] Getting started guide clear
-- [ ] Installation guide complete
-- [ ] CLAUDE.md updated
-- [ ] No broken links
+- README complete and accurate
+- Getting started guide clear
+- Installation guide complete
+- CLAUDE.md updated
+- No broken links
 
 ---
 
@@ -3459,10 +3459,10 @@ go test -bench=. ./test/benchmark/
 ```
 
 **Completion Criteria:**
-- [ ] Benchmarks written
-- [ ] Performance documented
-- [ ] Comparison with psql included
-- [ ] Optimization opportunities identified
+- Benchmarks written
+- Performance documented
+- Comparison with psql included
+- Optimization opportunities identified
 
 ---
 
@@ -3491,11 +3491,11 @@ grep -r "TODO" internal/
 ```
 
 **Completion Criteria:**
-- [ ] No critical TODOs remain
-- [ ] All known bugs fixed
-- [ ] Error messages improved
-- [ ] Debug logging cleaned up
-- [ ] Code review complete
+- No critical TODOs remain
+- All known bugs fixed
+- Error messages improved
+- Debug logging cleaned up
+- Code review complete
 
 ---
 
@@ -3541,14 +3541,14 @@ git push origin v0.1.0
 ```
 
 **Completion Criteria:**
-- [ ] All tests pass
-- [ ] Coverage >80%
-- [ ] Tested on all platforms
-- [ ] v0.1.0 tag pushed
-- [ ] Release published
-- [ ] Binaries available
-- [ ] Documentation updated
-- [ ] Release announced
+- All tests pass
+- Coverage >80%
+- Tested on all platforms
+- v0.1.0 tag pushed
+- Release published
+- Binaries available
+- Documentation updated
+- Release announced
 
 ---
 
@@ -3612,12 +3612,12 @@ TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
 ```
 
 **Completion Criteria:**
-- [ ] Config option `metadata_preload_limit` added with default 100
-- [ ] Eager caching works for small databases
-- [ ] Lazy caching works for large databases
-- [ ] Per-table TTL respected for lazy-cached entries
-- [ ] Tests pass
-- [ ] Documented in spec.md
+- Config option `metadata_preload_limit` added with default 100
+- Eager caching works for small databases
+- Lazy caching works for large databases
+- Per-table TTL respected for lazy-cached entries
+- Tests pass
+- Documented in spec.md
 
 ---
 
@@ -3652,10 +3652,10 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 - `specs/spec.md` (document behavior)
 
 **Completion Criteria:**
-- [ ] Decision made on whether to support allow_other
-- [ ] If yes: flag wired up and working on Linux
-- [ ] Platform limitations documented
-- [ ] Permission model documented (files: 0600 vs 0644; directories: 0700 vs 0755)
+- Decision made on whether to support allow_other
+- If yes: flag wired up and working on Linux
+- Platform limitations documented
+- Permission model documented (files: 0600 vs 0644; directories: 0700 vs 0755)
 
 ---
 
@@ -3701,10 +3701,10 @@ FUSE filesystems can report mtime (modification time) for files. For row files, 
 - `internal/tigerfs/fuse/row.go` (parse and return mtime)
 
 **Completion Criteria:**
-- [ ] Decision made on whether to implement
-- [ ] If yes: configurable column name list
-- [ ] If yes: fallback behavior documented
-- [ ] If yes: works with common conventions (updated_at, modified_at)
+- Decision made on whether to implement
+- If yes: configurable column name list
+- If yes: fallback behavior documented
+- If yes: works with common conventions (updated_at, modified_at)
 
 ---
 
@@ -3747,33 +3747,33 @@ FUSE filesystems can report mtime (modification time) for files. For row files, 
 ## Success Criteria for Implementation
 
 ### Functional Requirements
-- [ ] All Phase 6 tasks completed
-- [ ] All CLI commands functional
-- [ ] CRUD operations working
-- [ ] Index navigation operational
-- [ ] Large table handling implemented
-- [ ] Tiger Cloud integration working
+- All Phase 6 tasks completed
+- All CLI commands functional
+- CRUD operations working
+- Index navigation operational
+- Large table handling implemented
+- Tiger Cloud integration working
 
 ### Quality Requirements
-- [ ] >80% test coverage
-- [ ] All unit tests pass
-- [ ] All integration tests pass
-- [ ] No race conditions (`go test -race` passes)
-- [ ] No critical bugs
+- >80% test coverage
+- All unit tests pass
+- All integration tests pass
+- No race conditions (`go test -race` passes)
+- No critical bugs
 
 ### Documentation Requirements
-- [ ] README complete
-- [ ] Getting started guide written
-- [ ] Installation guide written
-- [ ] Examples documented
-- [ ] Performance documented
+- README complete
+- Getting started guide written
+- Installation guide written
+- Examples documented
+- Performance documented
 
 ### Release Requirements
-- [ ] v0.1.0 tagged and pushed
-- [ ] Binaries built for all platforms
-- [ ] Install scripts working
-- [ ] GitHub Release published
-- [ ] Release announcement written
+- v0.1.0 tagged and pushed
+- Binaries built for all platforms
+- Install scripts working
+- GitHub Release published
+- Release announcement written
 
 ---
 
