@@ -119,6 +119,7 @@ FROM generate_series(1, 8000) AS i;
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_products_category ON products(category);
 CREATE INDEX idx_orders_user_id ON orders(user_id);
+CREATE INDEX idx_orders_product_id ON orders(product_id);
 CREATE INDEX idx_orders_created_at ON orders(created_at);
 
 -- Composite indexes for multi-column navigation
