@@ -225,6 +225,7 @@ type RowFileHandle struct {
 	node      *RowFileNode
 	data      []byte
 	rowExists bool
+	dirty     bool // true if Write was called (data needs to be flushed to DB)
 }
 
 var _ fs.FileReader = (*RowFileHandle)(nil)
@@ -256,6 +257,9 @@ func (fh *RowFileHandle) Write(ctx context.Context, data []byte, off int64) (wri
 		zap.Int64("offset", off),
 		zap.Int("size", len(data)))
 
+	// Mark as dirty - data needs to be flushed to database
+	fh.dirty = true
+
 	// For simplicity, only support writes starting at offset 0
 	if off == 0 {
 		fh.data = make([]byte, len(data))
@@ -285,7 +289,16 @@ func (fh *RowFileHandle) Flush(ctx context.Context) syscall.Errno {
 		zap.String("table", fh.node.tableName),
 		zap.String("pk", fh.node.pkValue),
 		zap.Bool("row_exists", fh.rowExists),
+		zap.Bool("dirty", fh.dirty),
 		zap.Int("data_size", len(fh.data)))
+
+	// Only write to database if data was modified
+	if !fh.dirty {
+		logging.Debug("RowFileHandle.Flush skipped (not dirty)",
+			zap.String("table", fh.node.tableName),
+			zap.String("pk", fh.node.pkValue))
+		return 0
+	}
 
 	// Parse row data based on format
 	columns, values, err := fh.parseRowData()
