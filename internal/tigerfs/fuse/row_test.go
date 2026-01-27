@@ -14,7 +14,7 @@ func TestNewRowFileNode(t *testing.T) {
 		DefaultSchema: "public",
 	}
 
-	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	rowNode := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	if rowNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -51,7 +51,7 @@ func TestRowFileNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	rowNode := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	rowNode := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	// Mark as used (compiler will verify types)
 	_ = rowNode
@@ -65,7 +65,7 @@ func TestNewRowFileNode_DifferentFormats(t *testing.T) {
 
 	for _, format := range formats {
 		t.Run(format, func(t *testing.T) {
-			node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", format)
+			node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", format)
 
 			if node.format != format {
 				t.Errorf("Expected format=%q, got %q", format, node.format)
@@ -92,7 +92,7 @@ func TestNewRowFileNode_DifferentPKTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.pkColumn+"_"+tc.pkValue, func(t *testing.T) {
-			node := NewRowFileNode(cfg, nil, "public", "table", tc.pkColumn, tc.pkValue, "tsv")
+			node := NewRowFileNode(cfg, nil, nil, "public", "table", tc.pkColumn, tc.pkValue, "tsv")
 
 			if node.pkColumn != tc.pkColumn {
 				t.Errorf("Expected pkColumn=%q, got %q", tc.pkColumn, node.pkColumn)
@@ -112,7 +112,7 @@ func TestNewRowFileNode_MultipleSchemas(t *testing.T) {
 
 	for _, schema := range schemas {
 		t.Run("schema_"+schema, func(t *testing.T) {
-			node := NewRowFileNode(cfg, nil, schema, "users", "id", "1", "tsv")
+			node := NewRowFileNode(cfg, nil, nil, schema, "users", "id", "1", "tsv")
 
 			if node.schema != schema {
 				t.Errorf("Expected schema=%q, got %q", schema, node.schema)
@@ -124,7 +124,7 @@ func TestNewRowFileNode_MultipleSchemas(t *testing.T) {
 // TestRowFileNode_Getattr_WithData tests Getattr when data is pre-populated
 func TestRowFileNode_Getattr_WithData(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	// Pre-populate data to avoid database fetch
 	testData := []byte("1\tJohn\tjohn@example.com\n")
@@ -140,7 +140,7 @@ func TestRowFileNode_Getattr_WithData(t *testing.T) {
 	}
 
 	// Check mode is regular file with 644 permissions
-	expectedMode := uint32(0644 | syscall.S_IFREG)
+	expectedMode := uint32(0600 | syscall.S_IFREG)
 	if out.Mode != expectedMode {
 		t.Errorf("Expected Mode=0x%x, got 0x%x", expectedMode, out.Mode)
 	}
@@ -175,7 +175,7 @@ func TestRowFileNode_Getattr_DifferentDataSizes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+			node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 			node.data = tc.data
 
 			var out fuse.AttrOut
@@ -195,7 +195,7 @@ func TestRowFileNode_Getattr_DifferentDataSizes(t *testing.T) {
 // TestRowFileHandle_Read tests basic read operation
 func TestRowFileHandle_Read(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	testData := []byte("1\tJohn\tjohn@example.com\n")
 
@@ -222,7 +222,7 @@ func TestRowFileHandle_Read(t *testing.T) {
 // TestRowFileHandle_Read_WithOffset tests read with offset
 func TestRowFileHandle_Read_WithOffset(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	testData := []byte("1\tJohn\tjohn@example.com\n")
 
@@ -250,7 +250,7 @@ func TestRowFileHandle_Read_WithOffset(t *testing.T) {
 // TestRowFileHandle_Read_PartialBuffer tests read with buffer smaller than remaining data
 func TestRowFileHandle_Read_PartialBuffer(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	testData := []byte("1234567890")
 
@@ -277,7 +277,7 @@ func TestRowFileHandle_Read_PartialBuffer(t *testing.T) {
 // TestRowFileHandle_Read_EOF tests read at end of file
 func TestRowFileHandle_Read_EOF(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	testData := []byte("1\tJohn\n")
 
@@ -304,7 +304,7 @@ func TestRowFileHandle_Read_EOF(t *testing.T) {
 // TestRowFileHandle_Read_ExactEOF tests read starting exactly at EOF
 func TestRowFileHandle_Read_ExactEOF(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	testData := []byte("12345")
 
@@ -331,7 +331,7 @@ func TestRowFileHandle_Read_ExactEOF(t *testing.T) {
 // TestRowFileHandle_Read_EmptyData tests read with empty data
 func TestRowFileHandle_Read_EmptyData(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	fh := &RowFileHandle{
 		node:      node,
@@ -355,7 +355,7 @@ func TestRowFileHandle_Read_EmptyData(t *testing.T) {
 // TestRowFileHandle_Write tests basic write operation
 func TestRowFileHandle_Write(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	fh := &RowFileHandle{
 		node:      node,
@@ -382,7 +382,7 @@ func TestRowFileHandle_Write(t *testing.T) {
 // TestRowFileHandle_Write_WithOffset tests write at non-zero offset
 func TestRowFileHandle_Write_WithOffset(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	// Start with existing data
 	initialData := []byte("1234567890")
@@ -414,7 +414,7 @@ func TestRowFileHandle_Write_WithOffset(t *testing.T) {
 // TestRowFileHandle_Write_Extend tests write that extends the file
 func TestRowFileHandle_Write_Extend(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	// Start with small data
 	initialData := []byte("123")
@@ -456,7 +456,7 @@ func TestRowFileHandle_Write_Extend(t *testing.T) {
 // TestRowFileHandle_Write_Multiple tests multiple sequential writes
 func TestRowFileHandle_Write_Multiple(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	fh := &RowFileHandle{
 		node:      node,
@@ -491,7 +491,7 @@ func TestRowFileHandle_Write_Multiple(t *testing.T) {
 // TestRowFileHandle_Write_Overwrite tests overwriting existing data at non-zero offset
 func TestRowFileHandle_Write_Overwrite(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	fh := &RowFileHandle{
 		node:      node,
@@ -521,7 +521,7 @@ func TestRowFileHandle_Write_Overwrite(t *testing.T) {
 // TestRowFileHandle_ReadWrite_Cycle tests a complete read-modify-write cycle
 func TestRowFileHandle_ReadWrite_Cycle(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	originalData := []byte("1\tJohn\tjohn@example.com\n")
 
@@ -557,7 +557,7 @@ func TestRowFileHandle_ReadWrite_Cycle(t *testing.T) {
 // TestRowFileHandle_NilData tests handle behavior when data is nil
 func TestRowFileHandle_NilData(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	fh := &RowFileHandle{
 		node:      node,
@@ -582,7 +582,7 @@ func TestRowFileHandle_NilData(t *testing.T) {
 // TestRowFileHandle_RowExists tests the rowExists flag behavior
 func TestRowFileHandle_RowExists(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	node := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	// Test with existing row
 	fhExists := &RowFileHandle{

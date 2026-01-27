@@ -28,6 +28,9 @@ type IndexNode struct {
 	// db is the database client for querying distinct values
 	db *db.Client
 
+	// cache holds metadata cache for permission lookups
+	cache *MetadataCache
+
 	// schema is the PostgreSQL schema name (e.g., "public")
 	schema string
 
@@ -54,15 +57,17 @@ var _ fs.NodeLookuper = (*IndexNode)(nil)
 // Parameters:
 //   - cfg: Filesystem configuration
 //   - dbClient: Database client for queries
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
 //   - column: Indexed column name
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewIndexNode(cfg *config.Config, dbClient *db.Client, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker) *IndexNode {
+func NewIndexNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker) *IndexNode {
 	return &IndexNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		schema:      schema,
 		tableName:   tableName,
 		column:      column,
@@ -181,7 +186,7 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		Mode: syscall.S_IFDIR,
 	}
 
-	valueNode := NewIndexValueNode(n.cfg, n.db, n.schema, n.tableName, n.column, name, pkColumn, rows, n.partialRows)
+	valueNode := NewIndexValueNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.column, name, pkColumn, rows, n.partialRows)
 	child := n.NewPersistentInode(ctx, valueNode, stableAttr)
 
 	return child, 0
@@ -197,6 +202,9 @@ type IndexValueNode struct {
 
 	// db is the database client
 	db *db.Client
+
+	// cache holds metadata cache for permission lookups
+	cache *MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -230,6 +238,7 @@ var _ fs.NodeLookuper = (*IndexValueNode)(nil)
 // Parameters:
 //   - cfg: Filesystem configuration
 //   - dbClient: Database client
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
 //   - column: Indexed column name
@@ -237,10 +246,11 @@ var _ fs.NodeLookuper = (*IndexValueNode)(nil)
 //   - pkColumn: Primary key column name
 //   - matchingPKs: Primary keys of rows matching the value
 //   - partialRows: Tracker for incremental row creation
-func NewIndexValueNode(cfg *config.Config, dbClient *db.Client, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker) *IndexValueNode {
+func NewIndexValueNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker) *IndexValueNode {
 	return &IndexValueNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		schema:      schema,
 		tableName:   tableName,
 		column:      column,
@@ -311,7 +321,7 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		Mode: syscall.S_IFDIR,
 	}
 
-	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.schema, n.tableName, n.pkColumn, name, n.partialRows)
+	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pkColumn, name, n.partialRows)
 	child := n.NewPersistentInode(ctx, rowDirNode, stableAttr)
 
 	return child, 0
@@ -333,6 +343,9 @@ type CompositeIndexNode struct {
 
 	// db is the database client for queries
 	db *db.Client
+
+	// cache holds metadata cache for permission lookups
+	cache *MetadataCache
 
 	// schema is the PostgreSQL schema name (e.g., "public")
 	schema string
@@ -360,15 +373,17 @@ var _ fs.NodeLookuper = (*CompositeIndexNode)(nil)
 // Parameters:
 //   - cfg: Filesystem configuration
 //   - dbClient: Database client for queries
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
 //   - columns: All column names in the composite index (in index order)
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewCompositeIndexNode(cfg *config.Config, dbClient *db.Client, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexNode {
+func NewCompositeIndexNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexNode {
 	return &CompositeIndexNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		schema:      schema,
 		tableName:   tableName,
 		columns:     columns,
@@ -438,7 +453,7 @@ func (n *CompositeIndexNode) Lookup(ctx context.Context, name string, out *fuse.
 	}
 
 	levelNode := NewCompositeIndexLevelNode(
-		n.cfg, n.db, n.schema, n.tableName,
+		n.cfg, n.db, n.cache, n.schema, n.tableName,
 		n.columns,
 		[]string{name}, // First value in the filter chain
 		n.index,
@@ -461,6 +476,9 @@ type CompositeIndexLevelNode struct {
 
 	// db is the database client
 	db *db.Client
+
+	// cache holds metadata cache for permission lookups
+	cache *MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -491,16 +509,18 @@ var _ fs.NodeLookuper = (*CompositeIndexLevelNode)(nil)
 // Parameters:
 //   - cfg: Filesystem configuration
 //   - dbClient: Database client
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
 //   - columns: All column names in the composite index
 //   - values: Values specified so far (for columns[0] through columns[len(values)-1])
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewCompositeIndexLevelNode(cfg *config.Config, dbClient *db.Client, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexLevelNode {
+func NewCompositeIndexLevelNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexLevelNode {
 	return &CompositeIndexLevelNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		schema:      schema,
 		tableName:   tableName,
 		columns:     columns,
@@ -638,7 +658,7 @@ func (n *CompositeIndexLevelNode) lookupNextLevel(ctx context.Context, name stri
 	}
 
 	levelNode := NewCompositeIndexLevelNode(
-		n.cfg, n.db, n.schema, n.tableName,
+		n.cfg, n.db, n.cache, n.schema, n.tableName,
 		n.columns, newValues, n.index, n.partialRows,
 	)
 	child := n.NewPersistentInode(ctx, levelNode, stableAttr)
@@ -676,7 +696,7 @@ func (n *CompositeIndexLevelNode) lookupRow(ctx context.Context, name string) (*
 		stableAttr := fs.StableAttr{
 			Mode: syscall.S_IFREG,
 		}
-		rowNode := NewRowFileNode(n.cfg, n.db, n.schema, n.tableName, pkColumn, pkValue, format)
+		rowNode := NewRowFileNode(n.cfg, n.db, n.cache, n.schema, n.tableName, pkColumn, pkValue, format)
 		child := n.NewPersistentInode(ctx, rowNode, stableAttr)
 		return child, 0
 	}
@@ -685,7 +705,7 @@ func (n *CompositeIndexLevelNode) lookupRow(ctx context.Context, name string) (*
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
-	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.schema, n.tableName, pkColumn, pkValue, n.partialRows)
+	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.cache, n.schema, n.tableName, pkColumn, pkValue, n.partialRows)
 	child := n.NewPersistentInode(ctx, rowDirNode, stableAttr)
 
 	return child, 0

@@ -17,7 +17,7 @@ func TestNewIndexNode(t *testing.T) {
 		IsPrimary: false,
 	}
 
-	node := NewIndexNode(cfg, nil, "public", "users", "email", idx, nil)
+	node := NewIndexNode(cfg, nil, nil, "public", "users", "email", idx, nil)
 
 	if node.cfg != cfg {
 		t.Error("Expected cfg to be set")
@@ -41,7 +41,7 @@ func TestNewIndexValueNode(t *testing.T) {
 	cfg := &config.Config{}
 	matchingPKs := []string{"1", "5", "10"}
 
-	node := NewIndexValueNode(cfg, nil, "public", "users", "email", "foo@example.com", "id", matchingPKs, nil)
+	node := NewIndexValueNode(cfg, nil, nil, "public", "users", "email", "foo@example.com", "id", matchingPKs, nil)
 
 	if node.cfg != cfg {
 		t.Error("Expected cfg to be set")
@@ -70,7 +70,7 @@ func TestNewIndexValueNode(t *testing.T) {
 func TestIndexNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	idx := &db.Index{Name: "test_idx", Columns: []string{"col"}}
-	node := NewIndexNode(cfg, nil, "public", "test", "col", idx, nil)
+	node := NewIndexNode(cfg, nil, nil, "public", "test", "col", idx, nil)
 
 	// Compiler will verify these interface assertions
 	_ = node
@@ -79,7 +79,7 @@ func TestIndexNode_Interfaces(t *testing.T) {
 // TestIndexValueNode_Interfaces verifies IndexValueNode implements required interfaces.
 func TestIndexValueNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewIndexValueNode(cfg, nil, "public", "test", "col", "val", "id", []string{"1"}, nil)
+	node := NewIndexValueNode(cfg, nil, nil, "public", "test", "col", "val", "id", []string{"1"}, nil)
 
 	// Compiler will verify these interface assertions
 	_ = node
@@ -96,7 +96,7 @@ func TestNewCompositeIndexNode(t *testing.T) {
 		IsPrimary: false,
 	}
 
-	node := NewCompositeIndexNode(cfg, nil, "public", "users", columns, idx, nil)
+	node := NewCompositeIndexNode(cfg, nil, nil, "public", "users", columns, idx, nil)
 
 	if node.cfg != cfg {
 		t.Error("Expected cfg to be set")
@@ -128,7 +128,7 @@ func TestNewCompositeIndexLevelNode(t *testing.T) {
 	values := []string{"Smith"}
 	idx := &db.Index{Name: "idx_name", Columns: columns}
 
-	node := NewCompositeIndexLevelNode(cfg, nil, "public", "users", columns, values, idx, nil)
+	node := NewCompositeIndexLevelNode(cfg, nil, nil, "public", "users", columns, values, idx, nil)
 
 	if node.cfg != cfg {
 		t.Error("Expected cfg to be set")
@@ -155,7 +155,7 @@ func TestCompositeIndexNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
 	columns := []string{"col1", "col2"}
 	idx := &db.Index{Name: "test_idx", Columns: columns}
-	node := NewCompositeIndexNode(cfg, nil, "public", "test", columns, idx, nil)
+	node := NewCompositeIndexNode(cfg, nil, nil, "public", "test", columns, idx, nil)
 
 	// Compiler will verify these interface assertions
 	_ = node
@@ -167,7 +167,7 @@ func TestCompositeIndexLevelNode_Interfaces(t *testing.T) {
 	columns := []string{"col1", "col2"}
 	values := []string{"val1"}
 	idx := &db.Index{Name: "test_idx", Columns: columns}
-	node := NewCompositeIndexLevelNode(cfg, nil, "public", "test", columns, values, idx, nil)
+	node := NewCompositeIndexLevelNode(cfg, nil, nil, "public", "test", columns, values, idx, nil)
 
 	// Compiler will verify these interface assertions
 	_ = node
@@ -200,10 +200,10 @@ func TestParseCompositeIndexName(t *testing.T) {
 	}{
 		{".last_name.first_name", []string{"last_name", "first_name"}},
 		{".a.b.c", []string{"a", "b", "c"}},
-		{".email", nil},  // Single column, not composite
-		{"email", nil},   // No leading dot
-		{".", nil},       // Just a dot
-		{"", nil},        // Empty
+		{".email", nil}, // Single column, not composite
+		{"email", nil},  // No leading dot
+		{".", nil},      // Just a dot
+		{"", nil},       // Empty
 	}
 
 	for _, tc := range tests {
@@ -233,19 +233,19 @@ func TestCompositeIndexLevelNode_NavigationDepth(t *testing.T) {
 	idx := &db.Index{Name: "idx_location", Columns: columns}
 
 	// Level 1: One value specified
-	level1 := NewCompositeIndexLevelNode(cfg, nil, "public", "locations", columns, []string{"USA"}, idx, nil)
+	level1 := NewCompositeIndexLevelNode(cfg, nil, nil, "public", "locations", columns, []string{"USA"}, idx, nil)
 	if len(level1.values) != 1 {
 		t.Errorf("Level 1 should have 1 value, got %d", len(level1.values))
 	}
 
 	// Level 2: Two values specified
-	level2 := NewCompositeIndexLevelNode(cfg, nil, "public", "locations", columns, []string{"USA", "California"}, idx, nil)
+	level2 := NewCompositeIndexLevelNode(cfg, nil, nil, "public", "locations", columns, []string{"USA", "California"}, idx, nil)
 	if len(level2.values) != 2 {
 		t.Errorf("Level 2 should have 2 values, got %d", len(level2.values))
 	}
 
 	// Level 3: All values specified (final level)
-	level3 := NewCompositeIndexLevelNode(cfg, nil, "public", "locations", columns, []string{"USA", "California", "Los Angeles"}, idx, nil)
+	level3 := NewCompositeIndexLevelNode(cfg, nil, nil, "public", "locations", columns, []string{"USA", "California", "Los Angeles"}, idx, nil)
 	if len(level3.values) != 3 {
 		t.Errorf("Level 3 should have 3 values, got %d", len(level3.values))
 	}

@@ -173,7 +173,7 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 			Mode: syscall.S_IFREG,
 		}
 
-		rowNode := NewRowFileNode(a.cfg, a.db, a.schema, a.tableName, pkColumn, pkValue, format)
+		rowNode := NewRowFileNode(a.cfg, a.db, a.cache, a.schema, a.tableName, pkColumn, pkValue, format)
 		child := a.NewPersistentInode(ctx, rowNode, stableAttr)
 		return child, 0
 	}
@@ -183,7 +183,7 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		Mode: syscall.S_IFDIR,
 	}
 
-	rowDirNode := NewRowDirectoryNode(a.cfg, a.db, a.schema, a.tableName, pkColumn, pkValue, a.partialRows)
+	rowDirNode := NewRowDirectoryNode(a.cfg, a.db, a.cache, a.schema, a.tableName, pkColumn, pkValue, a.partialRows)
 	child := a.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }

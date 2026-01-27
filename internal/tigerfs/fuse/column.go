@@ -10,24 +10,27 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
+	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
 )
 
-// ColumnFileNode represents a single column value as a file
-// Reading the file returns just that column's value as text
+// ColumnFileNode represents a single column value as a file.
+// Reading the file returns just that column's value as text.
+// File permissions are determined by the user's PostgreSQL privileges on the table.
 type ColumnFileNode struct {
 	fs.Inode
 
-	cfg         *config.Config
-	db          *db.Client
-	schema      string
-	tableName   string
-	pkColumn    string
-	pkValue     string
-	columnName  string
-	partialRows *PartialRowTracker
+	cfg         *config.Config     // TigerFS configuration
+	db          *db.Client         // Database client for queries
+	cache       *MetadataCache     // Metadata cache for permissions lookup
+	schema      string             // PostgreSQL schema name
+	tableName   string             // Table name
+	pkColumn    string             // Primary key column name
+	pkValue     string             // Primary key value identifying the row
+	columnName  string             // Column name this file represents
+	partialRows *PartialRowTracker // Tracker for uncommitted partial rows
 
-	// Cached column data
+	// Cached column data - populated on first read, invalidated on write
 	data []byte
 }
 
@@ -36,11 +39,23 @@ var _ fs.NodeOpener = (*ColumnFileNode)(nil)
 var _ fs.NodeGetattrer = (*ColumnFileNode)(nil)
 var _ fs.NodeSetattrer = (*ColumnFileNode)(nil)
 
-// NewColumnFileNode creates a new column file node
-func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue, columnName string, partialRows *PartialRowTracker) *ColumnFileNode {
+// NewColumnFileNode creates a new column file node.
+//
+// Parameters:
+//   - cfg: TigerFS configuration
+//   - dbClient: Database client for queries
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
+//   - schema: PostgreSQL schema name
+//   - tableName: Table name
+//   - pkColumn: Primary key column name
+//   - pkValue: Primary key value identifying the row
+//   - columnName: Column name this file represents
+//   - partialRows: Tracker for uncommitted partial rows
+func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, pkColumn, pkValue, columnName string, partialRows *PartialRowTracker) *ColumnFileNode {
 	return &ColumnFileNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		schema:      schema,
 		tableName:   tableName,
 		pkColumn:    pkColumn,
@@ -50,7 +65,12 @@ func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, schema, tableNam
 	}
 }
 
-// Getattr returns attributes for the column file
+// Getattr returns attributes for the column file.
+// File permissions are mapped from PostgreSQL privileges:
+//   - SELECT → read (0400)
+//   - UPDATE/INSERT → write (0200)
+//
+// Falls back to 0644 if cache is unavailable or permissions can't be fetched.
 func (c *ColumnFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("ColumnFileNode.Getattr called",
 		zap.String("table", c.tableName),
@@ -69,11 +89,50 @@ func (c *ColumnFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 		}
 	}
 
-	out.Mode = 0644 | syscall.S_IFREG // Read-write
+	// Determine file mode based on table permissions
+	mode := c.getFileMode(ctx)
+
+	out.Mode = uint32(mode) | syscall.S_IFREG
 	out.Nlink = 1
 	out.Size = uint64(len(c.data))
 
 	return 0
+}
+
+// getFileMode returns the file permission bits based on table permissions.
+// Falls back to 0600 (owner read-write) if permissions can't be determined.
+func (c *ColumnFileNode) getFileMode(ctx context.Context) uint32 {
+	// Default to owner read-write if no cache available
+	if c.cache == nil {
+		return 0600
+	}
+
+	perms, err := c.cache.GetTablePermissions(ctx, c.tableName)
+	if err != nil {
+		logging.Warn("Failed to get table permissions, using default mode",
+			zap.String("table", c.tableName),
+			zap.Error(err))
+		return 0600
+	}
+
+	if perms == nil {
+		// No cached permissions, use default
+		return 0600
+	}
+
+	// Map PostgreSQL privileges to Unix file permissions
+	mode := util.MapPermissions(perms.CanSelect, perms.CanUpdate, perms.CanInsert, perms.CanDelete)
+
+	logging.Debug("Mapped table permissions to file mode",
+		zap.String("table", c.tableName),
+		zap.String("column", c.columnName),
+		zap.Bool("select", perms.CanSelect),
+		zap.Bool("update", perms.CanUpdate),
+		zap.Bool("insert", perms.CanInsert),
+		zap.Bool("delete", perms.CanDelete),
+		zap.Uint32("mode", uint32(mode)))
+
+	return uint32(mode)
 }
 
 // Setattr handles attribute changes (used for truncation during writes)

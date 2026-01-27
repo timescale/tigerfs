@@ -89,7 +89,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		PasswordCommand         string `yaml:"password_command,omitempty"`
 		TigerCloudServiceID     string `yaml:"tiger_service_id,omitempty"`
 		TigerCloudProjectID     string `yaml:"tiger_project_id,omitempty"`
-		DirListingLimit               int    `yaml:"dir_listing_limit"`
+		DirListingLimit         int    `yaml:"dir_listing_limit"`
 		TrailingNewlines        bool   `yaml:"trailing_newlines"`
 		AttrTimeout             string `yaml:"attr_timeout"`
 		EntryTimeout            string `yaml:"entry_timeout"`
@@ -113,7 +113,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		PasswordCommand:         cfg.PasswordCommand,
 		TigerCloudServiceID:     cfg.TigerCloudServiceID,
 		TigerCloudProjectID:     cfg.TigerCloudProjectID,
-		DirListingLimit:               cfg.DirListingLimit,
+		DirListingLimit:         cfg.DirListingLimit,
 		TrailingNewlines:        cfg.TrailingNewlines,
 		AttrTimeout:             cfg.AttrTimeout.String(),
 		EntryTimeout:            cfg.EntryTimeout.String(),

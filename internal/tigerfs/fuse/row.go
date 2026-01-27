@@ -11,23 +11,26 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
+	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
 )
 
-// RowFileNode represents a single row as a file
-// Reading the file returns the entire row in the specified format (TSV, CSV, or JSON)
+// RowFileNode represents a single row as a file.
+// Reading the file returns the entire row in the specified format (TSV, CSV, or JSON).
+// File permissions are determined by the user's PostgreSQL privileges on the table.
 type RowFileNode struct {
 	fs.Inode
 
-	cfg       *config.Config
-	db        *db.Client
-	schema    string
-	tableName string
-	pkColumn  string
-	pkValue   string
-	format    string // "tsv", "csv", or "json"
+	cfg       *config.Config // TigerFS configuration
+	db        *db.Client     // Database client for queries
+	cache     *MetadataCache // Metadata cache for permissions lookup
+	schema    string         // PostgreSQL schema name
+	tableName string         // Table name
+	pkColumn  string         // Primary key column name
+	pkValue   string         // Primary key value identifying this row
+	format    string         // Output format: "tsv", "csv", or "json"
 
-	// Cached row data
+	// Cached row data - populated on first read, invalidated on write
 	data []byte
 }
 
@@ -36,11 +39,22 @@ var _ fs.NodeOpener = (*RowFileNode)(nil)
 var _ fs.NodeGetattrer = (*RowFileNode)(nil)
 var _ fs.NodeSetattrer = (*RowFileNode)(nil)
 
-// NewRowFileNode creates a new row file node
-func NewRowFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue, format string) *RowFileNode {
+// NewRowFileNode creates a new row file node.
+//
+// Parameters:
+//   - cfg: TigerFS configuration
+//   - dbClient: Database client for queries
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
+//   - schema: PostgreSQL schema name
+//   - tableName: Table name
+//   - pkColumn: Primary key column name
+//   - pkValue: Primary key value identifying this row
+//   - format: Output format ("tsv", "csv", or "json")
+func NewRowFileNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, pkColumn, pkValue, format string) *RowFileNode {
 	return &RowFileNode{
 		cfg:       cfg,
 		db:        dbClient,
+		cache:     cache,
 		schema:    schema,
 		tableName: tableName,
 		pkColumn:  pkColumn,
@@ -49,7 +63,12 @@ func NewRowFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, 
 	}
 }
 
-// Getattr returns attributes for the row file
+// Getattr returns attributes for the row file.
+// File permissions are mapped from PostgreSQL privileges:
+//   - SELECT → read (0400)
+//   - UPDATE/INSERT → write (0200)
+//
+// Falls back to 0644 if cache is unavailable or permissions can't be fetched.
 func (r *RowFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("RowFileNode.Getattr called",
 		zap.String("table", r.tableName),
@@ -66,11 +85,49 @@ func (r *RowFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.A
 		}
 	}
 
-	out.Mode = 0644 | syscall.S_IFREG
+	// Determine file mode based on table permissions
+	mode := r.getFileMode(ctx)
+
+	out.Mode = uint32(mode) | syscall.S_IFREG
 	out.Nlink = 1
 	out.Size = uint64(len(r.data))
 
 	return 0
+}
+
+// getFileMode returns the file permission bits based on table permissions.
+// Falls back to 0600 (owner read-write) if permissions can't be determined.
+func (r *RowFileNode) getFileMode(ctx context.Context) uint32 {
+	// Default to owner read-write if no cache available
+	if r.cache == nil {
+		return 0600
+	}
+
+	perms, err := r.cache.GetTablePermissions(ctx, r.tableName)
+	if err != nil {
+		logging.Warn("Failed to get table permissions, using default mode",
+			zap.String("table", r.tableName),
+			zap.Error(err))
+		return 0600
+	}
+
+	if perms == nil {
+		// No cached permissions, use default
+		return 0600
+	}
+
+	// Map PostgreSQL privileges to Unix file permissions
+	mode := util.MapPermissions(perms.CanSelect, perms.CanUpdate, perms.CanInsert, perms.CanDelete)
+
+	logging.Debug("Mapped table permissions to file mode",
+		zap.String("table", r.tableName),
+		zap.Bool("select", perms.CanSelect),
+		zap.Bool("update", perms.CanUpdate),
+		zap.Bool("insert", perms.CanInsert),
+		zap.Bool("delete", perms.CanDelete),
+		zap.Uint32("mode", uint32(mode)))
+
+	return uint32(mode)
 }
 
 // Setattr handles attribute changes (used for truncation during writes)

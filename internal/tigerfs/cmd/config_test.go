@@ -45,13 +45,13 @@ func TestValidateConfigValues(t *testing.T) {
 	// Helper to create a valid base config
 	validConfig := func() *config.Config {
 		return &config.Config{
-			Port:           5432,
-			PoolSize:       10,
-			PoolMaxIdle:    5,
-			DirListingLimit:      10000,
-			DefaultFormat:  "tsv",
-			BinaryEncoding: "raw",
-			LogLevel:       "info",
+			Port:            5432,
+			PoolSize:        10,
+			PoolMaxIdle:     5,
+			DirListingLimit: 10000,
+			DefaultFormat:   "tsv",
+			BinaryEncoding:  "raw",
+			LogLevel:        "info",
 		}
 	}
 

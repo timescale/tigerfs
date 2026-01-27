@@ -14,7 +14,7 @@ func TestNewColumnFileNode(t *testing.T) {
 		DefaultSchema: "public",
 	}
 
-	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	colNode := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	if colNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -51,7 +51,7 @@ func TestColumnFileNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	colNode := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	colNode := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	// Mark as used (compiler will verify types)
 	_ = colNode
@@ -65,7 +65,7 @@ func TestNewColumnFileNode_DifferentColumns(t *testing.T) {
 
 	for _, col := range columns {
 		t.Run(col, func(t *testing.T) {
-			node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", col, nil)
+			node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", col, nil)
 
 			if node.columnName != col {
 				t.Errorf("Expected columnName=%q, got %q", col, node.columnName)
@@ -91,7 +91,7 @@ func TestNewColumnFileNode_DifferentPKTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.pkColumn+"_"+tc.pkValue, func(t *testing.T) {
-			node := NewColumnFileNode(cfg, nil, "public", "users", tc.pkColumn, tc.pkValue, "email", nil)
+			node := NewColumnFileNode(cfg, nil, nil, "public", "users", tc.pkColumn, tc.pkValue, "email", nil)
 
 			if node.pkColumn != tc.pkColumn {
 				t.Errorf("Expected pkColumn=%q, got %q", tc.pkColumn, node.pkColumn)
@@ -111,7 +111,7 @@ func TestNewColumnFileNode_MultipleSchemas(t *testing.T) {
 
 	for _, schema := range schemas {
 		t.Run("schema_"+schema, func(t *testing.T) {
-			node := NewColumnFileNode(cfg, nil, schema, "users", "id", "1", "email", nil)
+			node := NewColumnFileNode(cfg, nil, nil, schema, "users", "id", "1", "email", nil)
 
 			if node.schema != schema {
 				t.Errorf("Expected schema=%q, got %q", schema, node.schema)
@@ -125,7 +125,7 @@ func TestNewColumnFileNode_WithPartialRowTracker(t *testing.T) {
 	cfg := &config.Config{}
 	tracker := NewPartialRowTracker(nil)
 
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", tracker)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", tracker)
 
 	if node.partialRows != tracker {
 		t.Error("Expected partialRows to be set")
@@ -135,7 +135,7 @@ func TestNewColumnFileNode_WithPartialRowTracker(t *testing.T) {
 // TestColumnFileNode_Getattr_WithData tests Getattr when data is pre-populated
 func TestColumnFileNode_Getattr_WithData(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	// Pre-populate data to avoid database fetch
 	testData := []byte("john@example.com")
@@ -151,7 +151,7 @@ func TestColumnFileNode_Getattr_WithData(t *testing.T) {
 	}
 
 	// Check mode is regular file with 644 permissions
-	expectedMode := uint32(0644 | syscall.S_IFREG)
+	expectedMode := uint32(0600 | syscall.S_IFREG)
 	if out.Mode != expectedMode {
 		t.Errorf("Expected Mode=0x%x, got 0x%x", expectedMode, out.Mode)
 	}
@@ -187,7 +187,7 @@ func TestColumnFileNode_Getattr_DifferentDataSizes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "data", nil)
+			node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "data", nil)
 			node.data = tc.data
 
 			var out fuse.AttrOut
@@ -207,7 +207,7 @@ func TestColumnFileNode_Getattr_DifferentDataSizes(t *testing.T) {
 // TestColumnFileHandle_Read tests basic read operation
 func TestColumnFileHandle_Read(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	testData := []byte("john@example.com")
 
@@ -233,7 +233,7 @@ func TestColumnFileHandle_Read(t *testing.T) {
 // TestColumnFileHandle_Read_WithOffset tests read with offset
 func TestColumnFileHandle_Read_WithOffset(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	testData := []byte("john@example.com")
 
@@ -260,7 +260,7 @@ func TestColumnFileHandle_Read_WithOffset(t *testing.T) {
 // TestColumnFileHandle_Read_PartialBuffer tests read with buffer smaller than remaining data
 func TestColumnFileHandle_Read_PartialBuffer(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	testData := []byte("john@example.com")
 
@@ -286,7 +286,7 @@ func TestColumnFileHandle_Read_PartialBuffer(t *testing.T) {
 // TestColumnFileHandle_Read_EOF tests read at end of file
 func TestColumnFileHandle_Read_EOF(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	testData := []byte("test")
 
@@ -312,7 +312,7 @@ func TestColumnFileHandle_Read_EOF(t *testing.T) {
 // TestColumnFileHandle_Read_ExactEOF tests read starting exactly at EOF
 func TestColumnFileHandle_Read_ExactEOF(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	testData := []byte("hello")
 
@@ -338,7 +338,7 @@ func TestColumnFileHandle_Read_ExactEOF(t *testing.T) {
 // TestColumnFileHandle_Read_EmptyData tests read with empty data (NULL column)
 func TestColumnFileHandle_Read_EmptyData(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	fh := &ColumnFileHandle{
 		node: node,
@@ -361,7 +361,7 @@ func TestColumnFileHandle_Read_EmptyData(t *testing.T) {
 // TestColumnFileHandle_Write tests basic write operation
 func TestColumnFileHandle_Write(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	fh := &ColumnFileHandle{
 		node: node,
@@ -387,7 +387,7 @@ func TestColumnFileHandle_Write(t *testing.T) {
 // TestColumnFileHandle_Write_WithOffset tests write at non-zero offset
 func TestColumnFileHandle_Write_WithOffset(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	// Start with existing data
 	initialData := []byte("old@example.com")
@@ -418,7 +418,7 @@ func TestColumnFileHandle_Write_WithOffset(t *testing.T) {
 // TestColumnFileHandle_Write_Extend tests write that extends the file
 func TestColumnFileHandle_Write_Extend(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	// Start with small data
 	initialData := []byte("abc")
@@ -459,7 +459,7 @@ func TestColumnFileHandle_Write_Extend(t *testing.T) {
 // TestColumnFileHandle_Write_WithNewline tests write with trailing newline (echo behavior)
 func TestColumnFileHandle_Write_WithNewline(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	fh := &ColumnFileHandle{
 		node: node,
@@ -487,7 +487,7 @@ func TestColumnFileHandle_Write_WithNewline(t *testing.T) {
 // TestColumnFileHandle_Write_Multiple tests multiple sequential writes
 func TestColumnFileHandle_Write_Multiple(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	fh := &ColumnFileHandle{
 		node: node,
@@ -521,7 +521,7 @@ func TestColumnFileHandle_Write_Multiple(t *testing.T) {
 // TestColumnFileHandle_ReadWrite_Cycle tests a complete read-modify-write cycle
 func TestColumnFileHandle_ReadWrite_Cycle(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	originalData := []byte("old@example.com")
 
@@ -556,7 +556,7 @@ func TestColumnFileHandle_ReadWrite_Cycle(t *testing.T) {
 // TestColumnFileHandle_NilData tests handle behavior when data is nil
 func TestColumnFileHandle_NilData(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", "email", nil)
+	node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", "email", nil)
 
 	fh := &ColumnFileHandle{
 		node: node,
@@ -597,7 +597,7 @@ func TestColumnFileNode_DifferentColumnTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.columnName, func(t *testing.T) {
-			node := NewColumnFileNode(cfg, nil, "public", "users", "id", "1", tc.columnName, nil)
+			node := NewColumnFileNode(cfg, nil, nil, "public", "users", "id", "1", tc.columnName, nil)
 			node.data = tc.data
 
 			var out fuse.AttrOut

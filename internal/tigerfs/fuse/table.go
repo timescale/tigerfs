@@ -277,7 +277,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 			Mode: syscall.S_IFREG,
 		}
 
-		rowNode := NewRowFileNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, format)
+		rowNode := NewRowFileNode(t.cfg, t.db, t.cache, t.schema, t.tableName, pkColumn, pkValue, format)
 		child := t.NewPersistentInode(ctx, rowNode, stableAttr)
 		return child, 0
 	}
@@ -287,7 +287,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		Mode: syscall.S_IFDIR,
 	}
 
-	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
+	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.cache, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }
@@ -320,7 +320,7 @@ func (t *TableNode) lookupPaginationDirectory(ctx context.Context, paginationTyp
 		Mode: syscall.S_IFDIR,
 	}
 
-	paginationNode := NewPaginationNode(t.cfg, t.db, t.schema, t.tableName, paginationType, t.partialRows)
+	paginationNode := NewPaginationNode(t.cfg, t.db, t.cache, t.schema, t.tableName, paginationType, t.partialRows)
 	child := t.NewPersistentInode(ctx, paginationNode, stableAttr)
 
 	logging.Debug("Created pagination directory node",
@@ -441,7 +441,7 @@ func (t *TableNode) lookupIndexDirectory(ctx context.Context, name string) (*fs.
 		Mode: syscall.S_IFDIR,
 	}
 
-	indexNode := NewIndexNode(t.cfg, t.db, t.schema, t.tableName, columnName, idx, t.partialRows)
+	indexNode := NewIndexNode(t.cfg, t.db, t.cache, t.schema, t.tableName, columnName, idx, t.partialRows)
 	child := t.NewPersistentInode(ctx, indexNode, stableAttr)
 
 	logging.Debug("Created index directory node",
@@ -500,7 +500,7 @@ func (t *TableNode) lookupCompositeIndexDirectory(ctx context.Context, name stri
 		Mode: syscall.S_IFDIR,
 	}
 
-	compositeNode := NewCompositeIndexNode(t.cfg, t.db, t.schema, t.tableName, columns, matchingIdx, t.partialRows)
+	compositeNode := NewCompositeIndexNode(t.cfg, t.db, t.cache, t.schema, t.tableName, columns, matchingIdx, t.partialRows)
 	child := t.NewPersistentInode(ctx, compositeNode, stableAttr)
 
 	logging.Debug("Created composite index directory node",
@@ -672,7 +672,7 @@ func (t *TableNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 	}
 
 	// Create row directory node (will be empty until columns are written)
-	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
+	rowDirNode := NewRowDirectoryNode(t.cfg, t.db, t.cache, t.schema, t.tableName, pkColumn, pkValue, t.partialRows)
 	child := t.NewPersistentInode(ctx, rowDirNode, stableAttr)
 
 	logging.Debug("Row directory created",

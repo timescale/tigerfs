@@ -14,7 +14,7 @@ func TestNewRowDirectoryNode(t *testing.T) {
 		DefaultSchema: "public",
 	}
 
-	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
+	rowDirNode := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", nil)
 
 	if rowDirNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -43,7 +43,7 @@ func TestRowDirectoryNode_Interfaces(t *testing.T) {
 	// If this compiles, the interfaces are correctly implemented
 
 	cfg := &config.Config{}
-	rowDirNode := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
+	rowDirNode := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", nil)
 
 	// Mark as used (compiler will verify types)
 	_ = rowDirNode
@@ -67,7 +67,7 @@ func TestNewRowDirectoryNode_DifferentPKTypes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.pkColumn+"_"+tc.pkValue, func(t *testing.T) {
-			node := NewRowDirectoryNode(cfg, nil, "public", "users", tc.pkColumn, tc.pkValue, nil)
+			node := NewRowDirectoryNode(cfg, nil, nil, "public", "users", tc.pkColumn, tc.pkValue, nil)
 
 			if node.pkColumn != tc.pkColumn {
 				t.Errorf("Expected pkColumn=%q, got %q", tc.pkColumn, node.pkColumn)
@@ -87,7 +87,7 @@ func TestNewRowDirectoryNode_MultipleSchemas(t *testing.T) {
 
 	for _, schema := range schemas {
 		t.Run("schema_"+schema, func(t *testing.T) {
-			node := NewRowDirectoryNode(cfg, nil, schema, "users", "id", "1", nil)
+			node := NewRowDirectoryNode(cfg, nil, nil, schema, "users", "id", "1", nil)
 
 			if node.schema != schema {
 				t.Errorf("Expected schema=%q, got %q", schema, node.schema)
@@ -104,7 +104,7 @@ func TestNewRowDirectoryNode_MultipleTables(t *testing.T) {
 
 	for _, table := range tables {
 		t.Run(table, func(t *testing.T) {
-			node := NewRowDirectoryNode(cfg, nil, "public", table, "id", "1", nil)
+			node := NewRowDirectoryNode(cfg, nil, nil, "public", table, "id", "1", nil)
 
 			if node.tableName != table {
 				t.Errorf("Expected tableName=%q, got %q", table, node.tableName)
@@ -118,7 +118,7 @@ func TestNewRowDirectoryNode_WithPartialRowTracker(t *testing.T) {
 	cfg := &config.Config{}
 	tracker := NewPartialRowTracker(nil)
 
-	node := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", tracker)
+	node := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", tracker)
 
 	if node.partialRows != tracker {
 		t.Error("Expected partialRows to be set")
@@ -128,7 +128,7 @@ func TestNewRowDirectoryNode_WithPartialRowTracker(t *testing.T) {
 // TestRowDirectoryNode_Getattr tests Getattr returns correct directory attributes
 func TestRowDirectoryNode_Getattr(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
+	node := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", nil)
 
 	ctx := context.Background()
 	var out fuse.AttrOut
@@ -173,7 +173,7 @@ func TestRowDirectoryNode_Getattr_DifferentRows(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.table+"_"+tc.pkValue, func(t *testing.T) {
-			node := NewRowDirectoryNode(cfg, nil, "public", tc.table, "id", tc.pkValue, nil)
+			node := NewRowDirectoryNode(cfg, nil, nil, "public", tc.table, "id", tc.pkValue, nil)
 
 			var out fuse.AttrOut
 			errno := node.Getattr(ctx, nil, &out)
@@ -193,7 +193,7 @@ func TestRowDirectoryNode_Getattr_DifferentRows(t *testing.T) {
 // TestRowDirectoryNode_Getattr_IsIdempotent tests that multiple calls return same result
 func TestRowDirectoryNode_Getattr_IsIdempotent(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
+	node := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", nil)
 	ctx := context.Background()
 
 	var out1, out2 fuse.AttrOut
@@ -221,7 +221,7 @@ func TestRowDirectoryNode_Getattr_IsIdempotent(t *testing.T) {
 // TestRowDirectoryNode_NilDatabase tests node creation and basic operations with nil db
 func TestRowDirectoryNode_NilDatabase(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
+	node := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", nil)
 
 	// db should be nil
 	if node.db != nil {
@@ -243,10 +243,10 @@ func TestRowDirectoryNode_RowDirectoryVsRowFile(t *testing.T) {
 	cfg := &config.Config{}
 
 	// Create row as directory
-	rowDir := NewRowDirectoryNode(cfg, nil, "public", "users", "id", "1", nil)
+	rowDir := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", "1", nil)
 
 	// Create row as file
-	rowFile := NewRowFileNode(cfg, nil, "public", "users", "id", "1", "tsv")
+	rowFile := NewRowFileNode(cfg, nil, nil, "public", "users", "id", "1", "tsv")
 
 	// Get attributes for both
 	ctx := context.Background()
@@ -286,12 +286,12 @@ func TestRowDirectoryNode_RowDirectoryVsRowFile(t *testing.T) {
 // TestRowDirectoryNode_AllFieldsSet tests that all fields are properly set
 func TestRowDirectoryNode_AllFieldsSet(t *testing.T) {
 	cfg := &config.Config{
-		DefaultSchema: "test_schema",
-		DirListingLimit:     5000,
+		DefaultSchema:   "test_schema",
+		DirListingLimit: 5000,
 	}
 	tracker := NewPartialRowTracker(nil)
 
-	node := NewRowDirectoryNode(cfg, nil, "my_schema", "my_table", "pk_col", "pk_val", tracker)
+	node := NewRowDirectoryNode(cfg, nil, nil, "my_schema", "my_table", "pk_col", "pk_val", tracker)
 
 	tests := []struct {
 		name     string
@@ -342,7 +342,7 @@ func TestRowDirectoryNode_SpecialCharacterPKValues(t *testing.T) {
 
 	for _, pk := range testCases {
 		t.Run("pk_"+pk, func(t *testing.T) {
-			node := NewRowDirectoryNode(cfg, nil, "public", "users", "id", pk, nil)
+			node := NewRowDirectoryNode(cfg, nil, nil, "public", "users", "id", pk, nil)
 
 			if node.pkValue != pk {
 				t.Errorf("Expected pkValue=%q, got %q", pk, node.pkValue)

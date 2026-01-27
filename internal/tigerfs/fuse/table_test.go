@@ -11,8 +11,8 @@ import (
 
 func TestNewTableNode(t *testing.T) {
 	cfg := &config.Config{
-		DefaultSchema: "public",
-		DirListingLimit:     10000,
+		DefaultSchema:   "public",
+		DirListingLimit: 10000,
 	}
 
 	partialRows := NewPartialRowTracker(nil)
@@ -51,8 +51,8 @@ func TestTableNode_Interfaces(t *testing.T) {
 // TestTableNode_Getattr tests that Getattr returns correct directory attributes
 func TestTableNode_Getattr(t *testing.T) {
 	cfg := &config.Config{
-		DefaultSchema: "public",
-		DirListingLimit:     10000,
+		DefaultSchema:   "public",
+		DirListingLimit: 10000,
 	}
 
 	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil)

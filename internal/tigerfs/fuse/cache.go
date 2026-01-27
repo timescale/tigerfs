@@ -21,10 +21,10 @@ type MetadataCache struct {
 	db  *db.Client     // Database client for queries
 
 	// Cached data - all refreshed together
-	tables           []string                       // List of table names in default schema
-	tableRowCounts   map[string]int64               // table name -> estimated row count
+	tables           []string                        // List of table names in default schema
+	tableRowCounts   map[string]int64                // table name -> estimated row count
 	tablePermissions map[string]*db.TablePermissions // table name -> user permissions
-	lastFetch        time.Time                      // When cache was last refreshed
+	lastFetch        time.Time                       // When cache was last refreshed
 
 	// defaultSchema is the PostgreSQL schema to cache (typically "public").
 	// Used for single-schema mode where tables are shown at root level.

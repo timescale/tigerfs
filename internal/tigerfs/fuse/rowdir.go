@@ -12,18 +12,20 @@ import (
 	"go.uber.org/zap"
 )
 
-// RowDirectoryNode represents a single row as a directory
-// Listing the directory shows column names as files
+// RowDirectoryNode represents a single row as a directory.
+// Listing the directory shows column names as files.
+// Each column file's permissions are determined by the user's PostgreSQL privileges.
 type RowDirectoryNode struct {
 	fs.Inode
 
-	cfg         *config.Config
-	db          *db.Client
-	schema      string
-	tableName   string
-	pkColumn    string
-	pkValue     string
-	partialRows *PartialRowTracker
+	cfg         *config.Config     // TigerFS configuration
+	db          *db.Client         // Database client for queries
+	cache       *MetadataCache     // Metadata cache for permissions lookup
+	schema      string             // PostgreSQL schema name
+	tableName   string             // Table name
+	pkColumn    string             // Primary key column name
+	pkValue     string             // Primary key value identifying this row
+	partialRows *PartialRowTracker // Tracker for uncommitted partial rows
 }
 
 var _ fs.InodeEmbedder = (*RowDirectoryNode)(nil)
@@ -32,11 +34,22 @@ var _ fs.NodeReaddirer = (*RowDirectoryNode)(nil)
 var _ fs.NodeLookuper = (*RowDirectoryNode)(nil)
 var _ fs.NodeUnlinker = (*RowDirectoryNode)(nil)
 
-// NewRowDirectoryNode creates a new row directory node
-func NewRowDirectoryNode(cfg *config.Config, dbClient *db.Client, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
+// NewRowDirectoryNode creates a new row directory node.
+//
+// Parameters:
+//   - cfg: TigerFS configuration
+//   - dbClient: Database client for queries
+//   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
+//   - schema: PostgreSQL schema name
+//   - tableName: Table name
+//   - pkColumn: Primary key column name
+//   - pkValue: Primary key value identifying this row
+//   - partialRows: Tracker for uncommitted partial rows
+func NewRowDirectoryNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
 	return &RowDirectoryNode{
 		cfg:         cfg,
 		db:          dbClient,
+		cache:       cache,
 		schema:      schema,
 		tableName:   tableName,
 		pkColumn:    pkColumn,
@@ -156,8 +169,8 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 		Mode: syscall.S_IFREG,
 	}
 
-	// Create column file node with partial row tracker
-	columnNode := NewColumnFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, name, r.partialRows)
+	// Create column file node with cache for permissions and partial row tracker
+	columnNode := NewColumnFileNode(r.cfg, r.db, r.cache, r.schema, r.tableName, r.pkColumn, r.pkValue, name, r.partialRows)
 
 	child := r.NewPersistentInode(ctx, columnNode, stableAttr)
 	return child, 0
@@ -174,7 +187,7 @@ func (r *RowDirectoryNode) createFormatFileNode(ctx context.Context, format stri
 		Mode: syscall.S_IFREG,
 	}
 
-	rowNode := NewRowFileNode(r.cfg, r.db, r.schema, r.tableName, r.pkColumn, r.pkValue, format)
+	rowNode := NewRowFileNode(r.cfg, r.db, r.cache, r.schema, r.tableName, r.pkColumn, r.pkValue, format)
 	child := r.NewPersistentInode(ctx, rowNode, stableAttr)
 	return child, 0
 }

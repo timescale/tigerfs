@@ -27,7 +27,7 @@ func TestNewPaginationNode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			node := NewPaginationNode(cfg, nil, "myschema", "users", tt.paginationType, partialRows)
+			node := NewPaginationNode(cfg, nil, nil, "myschema", "users", tt.paginationType, partialRows)
 
 			if node.cfg != cfg {
 				t.Error("Expected config to be set")
@@ -65,7 +65,7 @@ func TestPaginationNode_Getattr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			node := NewPaginationNode(cfg, nil, "public", "users", tt.paginationType, nil)
+			node := NewPaginationNode(cfg, nil, nil, "public", "users", tt.paginationType, nil)
 			ctx := context.Background()
 
 			var out fuse.AttrOut
@@ -89,7 +89,7 @@ func TestPaginationNode_Getattr(t *testing.T) {
 
 func TestPaginationNode_Readdir_Empty(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewPaginationNode(cfg, nil, "public", "users", PaginationFirst, nil)
+	node := NewPaginationNode(cfg, nil, nil, "public", "users", PaginationFirst, nil)
 	ctx := context.Background()
 
 	stream, errno := node.Readdir(ctx)
@@ -113,7 +113,7 @@ func TestNewPaginationLimitNode(t *testing.T) {
 	cfg := &config.Config{}
 	partialRows := NewPartialRowTracker(nil)
 
-	node := NewPaginationLimitNode(cfg, nil, "myschema", "users", PaginationFirst, 50, partialRows)
+	node := NewPaginationLimitNode(cfg, nil, nil, "myschema", "users", PaginationFirst, 50, partialRows)
 
 	if node.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -142,7 +142,7 @@ func TestNewPaginationLimitNode(t *testing.T) {
 
 func TestPaginationLimitNode_Getattr(t *testing.T) {
 	cfg := &config.Config{}
-	node := NewPaginationLimitNode(cfg, nil, "public", "users", PaginationLast, 100, nil)
+	node := NewPaginationLimitNode(cfg, nil, nil, "public", "users", PaginationLast, 100, nil)
 	ctx := context.Background()
 
 	var out fuse.AttrOut

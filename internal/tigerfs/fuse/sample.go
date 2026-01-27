@@ -258,7 +258,7 @@ func (s *SampleLimitNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 			Mode: syscall.S_IFREG,
 		}
 
-		rowNode := NewRowFileNode(s.cfg, s.db, s.schema, s.tableName, pkColumn, pkValue, format)
+		rowNode := NewRowFileNode(s.cfg, s.db, s.cache, s.schema, s.tableName, pkColumn, pkValue, format)
 		child := s.NewPersistentInode(ctx, rowNode, stableAttr)
 		return child, 0
 	}
@@ -268,7 +268,7 @@ func (s *SampleLimitNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 		Mode: syscall.S_IFDIR,
 	}
 
-	rowDirNode := NewRowDirectoryNode(s.cfg, s.db, s.schema, s.tableName, pkColumn, pkValue, s.partialRows)
+	rowDirNode := NewRowDirectoryNode(s.cfg, s.db, s.cache, s.schema, s.tableName, pkColumn, pkValue, s.partialRows)
 	child := s.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }
