@@ -222,6 +222,84 @@ cat /mnt/db/users/.columns       # Column names (one per line)
 cat /mnt/db/users/.schema        # Column details (name, type, nullable)
 ```
 
+### Schema Management
+
+TigerFS supports creating, modifying, and deleting database tables, indexes, and other objects via a unified staging pattern.  (This work is currently in progress 🚧)
+
+#### Staging Pattern
+
+All DDL operations follow the same workflow:
+
+| Step | Action | Effect |
+|------|--------|--------|
+| 1 | Read `.schema` | See template with context (current schema, examples) |
+| 2 | Write `.schema` | Stage your DDL (stored in memory) |
+| 3 | Touch `.test` | Validate via BEGIN/ROLLBACK (optional) |
+| 4 | Touch `.commit` | Execute DDL |
+| — | Touch `.abort` | Cancel and clear staging |
+
+#### Operations
+
+| Object | Create | Modify | Delete |
+|--------|--------|--------|--------|
+| Table | `.create/<name>/` | `<table>/.modify/` | `<table>/.delete/` |
+| Index | `<table>/.indexes/.create/<idx>/` | — | `<table>/.indexes/<idx>/.delete/` |
+| Schema | `.schemas/.create/<name>/` | — | `.schemas/<name>/.delete/` |
+| View | `.views/.create/<name>/` | — | `.views/<name>/.delete/` |
+
+#### Human Workflow (Interactive)
+
+Templates help you write correct DDL:
+
+```bash
+mkdir /mnt/db/.create/orders           # Create staging directory
+cat /mnt/db/.create/orders/.schema     # See template with hints
+vi /mnt/db/.create/orders/.schema      # Edit template
+touch /mnt/db/.create/orders/.test     # Validate (optional)
+touch /mnt/db/.create/orders/.commit   # Execute
+```
+
+#### Script Workflow (Programmatic)
+
+Write DDL directly - templates are overwritten:
+
+```bash
+echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.schema
+touch /mnt/db/.create/orders/.commit
+```
+
+#### Examples
+
+```bash
+# Create table (human workflow)
+mkdir /mnt/db/.create/orders           # Create staging directory
+vi /mnt/db/.create/orders/.schema      # Edit template: add your columns
+touch /mnt/db/.create/orders/.test     # Validate (optional)
+touch /mnt/db/.create/orders/.commit   # Execute
+
+# Create table (script workflow)
+echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.schema
+touch /mnt/db/.create/orders/.commit
+
+# Modify table
+cat /mnt/db/users/.modify/.schema      # See current schema + examples
+echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/.schema
+touch /mnt/db/users/.modify/.commit
+
+# Delete table (template shows row count, foreign keys)
+cat /mnt/db/users/.delete/.schema      # Review what will be deleted
+echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/.schema
+touch /mnt/db/users/.delete/.commit
+
+# Create index
+echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.schema
+touch /mnt/db/users/.indexes/.create/email_idx/.commit
+
+# Create view
+echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.schema
+touch /mnt/db/.views/.create/active_users/.commit
+```
+
 ## Configuration
 
 Configuration file: `~/.config/tigerfs/config.yaml`
@@ -313,7 +391,7 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - Comprehensive unit and integration test coverage
 
 **Planned:**
-- Table and schema creation via filesystem (mkdir, write to .ddl)
+- DDL operations via filesystem (create/modify/delete tables, indexes, schemas, views)
 - Non-serial primary keys (UUID, text, composite)
 - Tables without primary keys (read-only via ctid)
 - Database views (read-only for JOINs, updatable for simple views)
