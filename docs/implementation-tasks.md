@@ -3020,6 +3020,59 @@ cat /tmp/testmount/users/.ddl | grep -E "^-- (Table|Indexes|Foreign Keys|Trigger
 
 ---
 
+### Task 4.21: Implement .indexes Metadata File
+
+**Objective:** Add a `.indexes` metadata file that lists available index navigation paths for quick discovery.
+
+**Background:** Currently, discovering what indexes are available requires either `ls -la` and scanning for dot-prefixed directories, or reading the full `.ddl` file. A simple `.indexes` file provides instant visibility into available index paths.
+
+**Output Format:**
+```
+.email/                    (unique)
+.last_name.first_name/     (composite)
+.created_at/
+```
+
+Format: `.<index_path>/` followed by annotations in parentheses:
+- `(unique)` for unique indexes
+- `(composite)` for multi-column indexes
+- No annotation for regular single-column indexes
+
+**Steps:**
+1. Add `fetchIndexes()` method to `internal/tigerfs/fuse/metadata.go`
+2. Update `fetchData()` switch to handle "indexes" file type
+3. Update `internal/tigerfs/fuse/table.go`:
+   - Add `.indexes` to Readdir output
+   - Add `.indexes` to Lookup metadata file handling
+   - Add `.indexes` to Unlink protection
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/metadata.go`
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+# Mount database
+go run ./cmd/tigerfs mount postgres://... /tmp/testmount
+
+# List available indexes
+cat /tmp/testmount/users/.indexes
+
+# Should show something like:
+# .email/                    (unique)
+# .created_at/
+```
+
+**Completion Criteria:**
+- [ ] `.indexes` file appears in table directory listing
+- [ ] Lists all non-primary-key index directories
+- [ ] Shows `(unique)` annotation for unique indexes
+- [ ] Shows `(composite)` annotation for multi-column indexes
+- [ ] Excludes primary key (rows already accessible by PK)
+- [ ] Tests pass
+
+---
+
 ## Phase 5: Distribution & Release
 
 ### Task 5.1: Create Unix Install Script

@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// MetadataFileNode represents a metadata file (.columns, .schema, .ddl, .count).
+// MetadataFileNode represents a metadata file (.columns, .schema, .ddl, .count, .indexes).
 // These read-only files provide table metadata without requiring SQL queries.
 //
 // Supported file types:
@@ -22,6 +22,7 @@ import (
 //   - "schema": Shows the CREATE TABLE DDL statement (fast)
 //   - "ddl": Shows complete DDL (table, indexes, constraints, triggers, comments)
 //   - "count": Shows row count (exact for small tables, estimated for large)
+//   - "indexes": Lists available index navigation paths with annotations
 //
 // The .count file uses an adaptive strategy: exact COUNT(*) for tables with
 // fewer than 100K rows (estimated), and pg_class.reltuples estimate for larger
@@ -144,6 +145,8 @@ func (m *MetadataFileNode) fetchData(ctx context.Context) error {
 		return m.fetchDDL(ctx)
 	case "count":
 		return m.fetchCount(ctx)
+	case "indexes":
+		return m.fetchIndexes(ctx)
 	default:
 		return fmt.Errorf("unknown metadata file type: %s", m.fileType)
 	}
@@ -199,6 +202,65 @@ func (m *MetadataFileNode) fetchDDL(ctx context.Context) error {
 	}
 
 	m.data = []byte(ddl)
+	return nil
+}
+
+// fetchIndexes retrieves the list of available index navigation paths.
+// Lists both single-column and composite indexes with annotations:
+//   - (unique) for unique indexes
+//   - (composite) for multi-column indexes
+//
+// Primary key indexes are excluded since rows are already accessible by PK.
+// Returns error if the database query fails.
+func (m *MetadataFileNode) fetchIndexes(ctx context.Context) error {
+	// Get single-column indexes
+	singleIndexes, err := m.db.GetSingleColumnIndexes(ctx, m.schema, m.tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get single-column indexes: %w", err)
+	}
+
+	// Get composite indexes
+	compositeIndexes, err := m.db.GetCompositeIndexes(ctx, m.schema, m.tableName)
+	if err != nil {
+		return fmt.Errorf("failed to get composite indexes: %w", err)
+	}
+
+	var lines []string
+
+	// Add single-column indexes (skip primary key)
+	for _, idx := range singleIndexes {
+		if idx.IsPrimary {
+			continue
+		}
+		if len(idx.Columns) > 0 {
+			line := "." + idx.Columns[0] + "/"
+			if idx.IsUnique {
+				line += "                    (unique)"
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	// Add composite indexes (skip primary key)
+	for _, idx := range compositeIndexes {
+		if idx.IsPrimary {
+			continue
+		}
+		line := FormatCompositeIndexName(idx.Columns) + "/"
+		annotation := "(composite"
+		if idx.IsUnique {
+			annotation += ", unique"
+		}
+		annotation += ")"
+		line += "                    " + annotation
+		lines = append(lines, line)
+	}
+
+	if len(lines) == 0 {
+		m.data = []byte("(no indexes)\n")
+	} else {
+		m.data = []byte(strings.Join(lines, "\n") + "\n")
+	}
 	return nil
 }
 

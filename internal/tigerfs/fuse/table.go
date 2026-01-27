@@ -141,6 +141,10 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
+			Name: ".indexes",
+			Mode: syscall.S_IFREG,
+		},
+		fuse.DirEntry{
 			Name: ".all",
 			Mode: syscall.S_IFDIR,
 		},
@@ -209,7 +213,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("name", name))
 
 	// Check if this is a metadata file lookup
-	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" {
+	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" || name == ".indexes" {
 		return t.lookupMetadataFile(ctx, name, out)
 	}
 
@@ -377,6 +381,8 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string, out *fu
 		fileType = "ddl"
 	case ".count":
 		fileType = "count"
+	case ".indexes":
+		fileType = "indexes"
 	default:
 		logging.Debug("Unknown metadata file",
 			zap.String("table", t.tableName),
@@ -552,7 +558,7 @@ func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		zap.String("name", name))
 
 	// Can't delete metadata files
-	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" {
+	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" || name == ".indexes" {
 		logging.Debug("Cannot delete metadata file",
 			zap.String("table", t.tableName),
 			zap.String("file", name))
