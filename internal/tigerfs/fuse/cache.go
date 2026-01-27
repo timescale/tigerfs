@@ -11,36 +11,52 @@ import (
 	"go.uber.org/zap"
 )
 
-// MetadataCache caches database metadata (schemas, tables, columns)
-// to avoid excessive queries to information_schema
+// MetadataCache caches database metadata (schemas, tables, columns, permissions)
+// to avoid excessive queries to information_schema and system catalogs.
+// All cached data is refreshed together based on MetadataRefreshInterval.
 type MetadataCache struct {
 	mu sync.RWMutex
 
-	cfg *config.Config
-	db  *db.Client
+	cfg *config.Config // TigerFS configuration
+	db  *db.Client     // Database client for queries
 
-	// Cached data
-	tables         []string
-	tableRowCounts map[string]int64 // table name -> estimated row count
-	lastFetch      time.Time
+	// Cached data - all refreshed together
+	tables           []string                       // List of table names in default schema
+	tableRowCounts   map[string]int64               // table name -> estimated row count
+	tablePermissions map[string]*db.TablePermissions // table name -> user permissions
+	lastFetch        time.Time                      // When cache was last refreshed
 
-	// Default schema for flattening (typically "public")
+	// defaultSchema is the PostgreSQL schema to cache (typically "public").
+	// Used for single-schema mode where tables are shown at root level.
 	defaultSchema string
 }
 
-// NewMetadataCache creates a new metadata cache
+// NewMetadataCache creates a new metadata cache.
+//
+// Parameters:
+//   - cfg: TigerFS configuration (determines refresh interval)
+//   - dbClient: Database client for queries
+//
+// Returns an empty cache that will be populated on first access.
 func NewMetadataCache(cfg *config.Config, dbClient *db.Client) *MetadataCache {
 	return &MetadataCache{
-		cfg:            cfg,
-		db:             dbClient,
-		defaultSchema:  cfg.DefaultSchema,
-		tables:         []string{},
-		tableRowCounts: make(map[string]int64),
+		cfg:              cfg,
+		db:               dbClient,
+		defaultSchema:    cfg.DefaultSchema,
+		tables:           []string{},
+		tableRowCounts:   make(map[string]int64),
+		tablePermissions: make(map[string]*db.TablePermissions),
 	}
 }
 
-// GetTables returns the list of tables from the default schema
-// Uses cached data if still fresh, otherwise refreshes from database
+// GetTables returns the list of tables from the default schema.
+// Uses cached data if still fresh, otherwise refreshes from database.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns a copy of the table list to prevent external modification.
+// Returns error if the cache refresh fails.
 func (c *MetadataCache) GetTables(ctx context.Context) ([]string, error) {
 	c.mu.RLock()
 	needsRefresh := c.needsRefresh()
@@ -63,7 +79,12 @@ func (c *MetadataCache) GetTables(ctx context.Context) ([]string, error) {
 	return tablesCopy, nil
 }
 
-// Refresh updates the cache from the database
+// Refresh updates the cache from the database.
+// Fetches tables, row count estimates, and permissions for all tables.
+// Non-critical data (row counts, permissions) failures are logged but don't
+// cause the refresh to fail, ensuring the cache remains usable.
+//
+// Returns error only if the table list query fails.
 func (c *MetadataCache) Refresh(ctx context.Context) error {
 	logging.Debug("Refreshing metadata cache", zap.String("schema", c.defaultSchema))
 
@@ -82,20 +103,44 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 		rowCounts = make(map[string]int64)
 	}
 
+	// Query permissions for all tables
+	// Done individually since there's no batch API for has_table_privilege
+	permissions := make(map[string]*db.TablePermissions)
+	for _, table := range tables {
+		perms, err := c.db.GetTablePermissions(ctx, c.defaultSchema, table)
+		if err != nil {
+			logging.Warn("Failed to get permissions for table, continuing without",
+				zap.String("table", table),
+				zap.Error(err))
+			continue
+		}
+		permissions[table] = perms
+	}
+
 	c.mu.Lock()
 	c.tables = tables
 	c.tableRowCounts = rowCounts
+	c.tablePermissions = permissions
 	c.lastFetch = time.Now()
 	c.mu.Unlock()
 
 	logging.Debug("Metadata cache refreshed",
 		zap.Int("table_count", len(tables)),
+		zap.Int("permissions_count", len(permissions)),
 		zap.Strings("tables", tables))
 
 	return nil
 }
 
-// HasTable checks if a table exists in the cache
+// HasTable checks if a table exists in the cache.
+// Refreshes the cache if stale before checking.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - tableName: Name of the table to check
+//
+// Returns true if the table exists, false otherwise.
+// Returns error if the cache refresh fails.
 func (c *MetadataCache) HasTable(ctx context.Context, tableName string) (bool, error) {
 	tables, err := c.GetTables(ctx)
 	if err != nil {
@@ -111,8 +156,11 @@ func (c *MetadataCache) HasTable(ctx context.Context, tableName string) (bool, e
 	return false, nil
 }
 
-// needsRefresh checks if the cache needs to be refreshed
-// Must be called with at least read lock held
+// needsRefresh checks if the cache needs to be refreshed.
+// Returns true if the cache has never been populated or has expired
+// based on MetadataRefreshInterval config setting.
+//
+// IMPORTANT: Must be called with at least read lock held.
 func (c *MetadataCache) needsRefresh() bool {
 	// If never fetched, needs refresh
 	if c.lastFetch.IsZero() {
@@ -125,7 +173,14 @@ func (c *MetadataCache) needsRefresh() bool {
 }
 
 // GetRowCountEstimate returns the cached row count estimate for a table.
-// Returns -1 if the table is not in cache (caller should treat as unknown).
+// The estimate comes from pg_class.reltuples, which is updated by VACUUM/ANALYZE.
+//
+// Parameters:
+//   - ctx: Context for cancellation (used if cache needs refresh)
+//   - tableName: Name of the table to get count for
+//
+// Returns the estimated row count, or -1 if the table is not in cache.
+// Callers should treat -1 as "unknown" and may fall back to exact count.
 func (c *MetadataCache) GetRowCountEstimate(ctx context.Context, tableName string) (int64, error) {
 	// Ensure cache is fresh
 	c.mu.RLock()
@@ -147,7 +202,37 @@ func (c *MetadataCache) GetRowCountEstimate(ctx context.Context, tableName strin
 	return -1, nil
 }
 
-// Invalidate clears the cache, forcing a refresh on next access
+// GetTablePermissions returns the cached permissions for a table.
+// Returns nil if the table is not in cache or permissions weren't fetched.
+//
+// Parameters:
+//   - ctx: Context for cancellation (used if cache needs refresh)
+//   - tableName: Name of the table to get permissions for
+//
+// Returns the cached permissions, or nil if not available.
+func (c *MetadataCache) GetTablePermissions(ctx context.Context, tableName string) (*db.TablePermissions, error) {
+	// Ensure cache is fresh
+	c.mu.RLock()
+	needsRefresh := c.needsRefresh()
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		if err := c.Refresh(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if perms, ok := c.tablePermissions[tableName]; ok {
+		return perms, nil
+	}
+	return nil, nil
+}
+
+// Invalidate clears the cache, forcing a refresh on next access.
+// Call this when you know metadata has changed (e.g., after DDL operations).
 func (c *MetadataCache) Invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -155,5 +240,6 @@ func (c *MetadataCache) Invalidate() {
 	logging.Debug("Invalidating metadata cache")
 	c.tables = []string{}
 	c.tableRowCounts = make(map[string]int64)
+	c.tablePermissions = make(map[string]*db.TablePermissions)
 	c.lastFetch = time.Time{}
 }
