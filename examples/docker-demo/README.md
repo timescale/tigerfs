@@ -25,7 +25,7 @@ docker-compose up -d --build
 docker-compose exec tigerfs bash
 
 # Mount the local demo database
-tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &
+mnt  # Alias for: tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &
 
 # Explore!
 ls /mnt/db
