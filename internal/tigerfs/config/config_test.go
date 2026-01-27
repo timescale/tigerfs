@@ -104,7 +104,7 @@ func TestInit_SetsDefaults(t *testing.T) {
 		expected interface{}
 	}{
 		{"port", 5432},
-		{"default_schema", "public"},
+		{"default_schema", ""}, // Empty = inherit from PostgreSQL's current_schema()
 		{"pool_size", 10},
 		{"pool_max_idle", 5},
 		{"dir_listing_limit", 10000},
@@ -162,8 +162,9 @@ func TestLoad_UnmarshalConfig(t *testing.T) {
 	if cfg.Port != 5432 {
 		t.Errorf("Expected Port=5432, got %d", cfg.Port)
 	}
-	if cfg.DefaultSchema != "public" {
-		t.Errorf("Expected DefaultSchema='public', got %q", cfg.DefaultSchema)
+	// Empty default schema means inherit from PostgreSQL's current_schema()
+	if cfg.DefaultSchema != "" {
+		t.Errorf("Expected DefaultSchema='' (inherit from PostgreSQL), got %q", cfg.DefaultSchema)
 	}
 	if cfg.PoolSize != 10 {
 		t.Errorf("Expected PoolSize=10, got %d", cfg.PoolSize)

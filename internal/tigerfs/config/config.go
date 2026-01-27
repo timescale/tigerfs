@@ -53,7 +53,7 @@ type Config struct {
 func Init() error {
 	// Set defaults
 	viper.SetDefault("port", 5432)
-	viper.SetDefault("default_schema", "public")
+	viper.SetDefault("default_schema", "") // Empty = inherit from PostgreSQL's current_schema()
 	viper.SetDefault("pool_size", 10)
 	viper.SetDefault("pool_max_idle", 5)
 	viper.SetDefault("dir_listing_limit", 10000)

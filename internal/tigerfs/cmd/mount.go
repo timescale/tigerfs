@@ -40,6 +40,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var user string
 	var database string
 	var tigerServiceID string
+	var schema string
 	var readOnly bool
 	var maxLsRows int
 	var foreground bool
@@ -100,6 +101,11 @@ Examples:
 				return fmt.Errorf("failed to load config: %w", err)
 			}
 
+			// Apply --schema flag if set (overrides config/env)
+			if schema != "" {
+				cfg.DefaultSchema = schema
+			}
+
 			// Mount the FUSE filesystem
 			fs, err := fuse.Mount(ctx, cfg, connStr, absMountpoint)
 			if err != nil {
@@ -144,6 +150,7 @@ Examples:
 	cmd.Flags().StringVarP(&user, "user", "U", "", "database user")
 	cmd.Flags().StringVarP(&database, "database", "d", "", "database name")
 	cmd.Flags().StringVar(&tigerServiceID, "tiger-service-id", "", "Tiger Cloud service ID")
+	cmd.Flags().StringVar(&schema, "schema", "", "default schema (inherits from PostgreSQL if not set)")
 
 	// Filesystem flags
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount as read-only")

@@ -11,6 +11,36 @@ import (
 	"go.uber.org/zap"
 )
 
+// GetCurrentSchema returns PostgreSQL's current_schema() for this connection.
+// This is the first schema in search_path that exists and is accessible.
+// Used to determine the default schema when not explicitly configured.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - pool: PostgreSQL connection pool
+//
+// Returns the current schema name, or error on database failure.
+func GetCurrentSchema(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	logging.Debug("Querying current_schema from PostgreSQL")
+
+	var schema string
+	err := pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema)
+	if err != nil {
+		return "", fmt.Errorf("failed to query current_schema: %w", err)
+	}
+
+	logging.Debug("Got current schema", zap.String("schema", schema))
+	return schema, nil
+}
+
+// GetCurrentSchema is a convenience wrapper around GetCurrentSchema for Client.
+func (c *Client) GetCurrentSchema(ctx context.Context) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetCurrentSchema(ctx, c.pool)
+}
+
 // GetSchemas returns all user-defined schemas (excluding system schemas)
 func GetSchemas(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 	logging.Debug("Querying schemas from information_schema")

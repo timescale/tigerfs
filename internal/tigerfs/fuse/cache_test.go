@@ -281,3 +281,250 @@ func TestMetadataCache_Refresh(t *testing.T) {
 
 	t.Logf("Cache contains %d tables after refresh", tableCount)
 }
+
+// TestMetadataCache_GetSchemas tests getting the list of all schemas
+func TestMetadataCache_GetSchemas(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	client, err := db.NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create cache
+	cache := NewMetadataCache(cfg, client)
+
+	// Get schemas
+	schemas, err := cache.GetSchemas(ctx)
+	if err != nil {
+		t.Fatalf("GetSchemas() failed: %v", err)
+	}
+
+	// Should have at least 'public' schema
+	foundPublic := false
+	for _, schema := range schemas {
+		if schema == "public" {
+			foundPublic = true
+			break
+		}
+	}
+
+	if !foundPublic {
+		t.Errorf("Expected to find 'public' schema, got: %v", schemas)
+	}
+
+	t.Logf("Found %d schemas: %v", len(schemas), schemas)
+}
+
+// TestMetadataCache_HasSchema tests checking if a schema exists
+func TestMetadataCache_HasSchema(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	client, err := db.NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create cache
+	cache := NewMetadataCache(cfg, client)
+
+	// Check 'public' schema exists
+	exists, err := cache.HasSchema(ctx, "public")
+	if err != nil {
+		t.Fatalf("HasSchema() failed: %v", err)
+	}
+
+	if !exists {
+		t.Error("Expected HasSchema('public')=true")
+	}
+
+	// Check nonexistent schema
+	exists, err = cache.HasSchema(ctx, "nonexistent_schema_xyz")
+	if err != nil {
+		t.Fatalf("HasSchema() failed: %v", err)
+	}
+
+	if exists {
+		t.Error("Expected HasSchema('nonexistent_schema_xyz')=false")
+	}
+}
+
+// TestMetadataCache_GetTablesForSchema tests getting tables for a specific schema
+func TestMetadataCache_GetTablesForSchema(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	client, err := db.NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create a test table
+	_, err = client.Query(ctx, `
+		CREATE TABLE IF NOT EXISTS test_schema_table (
+			id serial PRIMARY KEY
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_ = client.Exec(context.Background(), "DROP TABLE IF EXISTS test_schema_table")
+	}()
+
+	// Create cache
+	cache := NewMetadataCache(cfg, client)
+
+	// Get tables for public schema
+	tables, err := cache.GetTablesForSchema(ctx, "public")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema() failed: %v", err)
+	}
+
+	// Should find our test table
+	found := false
+	for _, table := range tables {
+		if table == "test_schema_table" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("Expected to find test_schema_table in public schema, got: %v", tables)
+	}
+
+	t.Logf("Found %d tables in public schema", len(tables))
+}
+
+// TestMetadataCache_CurrentSchema tests that empty defaultSchema resolves from PostgreSQL
+func TestMetadataCache_CurrentSchema(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "", // Empty - should be resolved from PostgreSQL
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	client, err := db.NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create cache with empty defaultSchema
+	cache := NewMetadataCache(cfg, client)
+
+	// Before refresh, defaultSchema should be empty
+	if cache.GetDefaultSchema() != "" {
+		t.Errorf("Expected empty default schema before refresh, got '%s'", cache.GetDefaultSchema())
+	}
+
+	// Refresh should resolve the default schema from PostgreSQL
+	err = cache.Refresh(ctx)
+	if err != nil {
+		t.Fatalf("Refresh() failed: %v", err)
+	}
+
+	// After refresh, defaultSchema should be resolved (typically 'public')
+	resolvedSchema := cache.GetDefaultSchema()
+	if resolvedSchema == "" {
+		t.Error("Expected defaultSchema to be resolved after refresh")
+	}
+
+	t.Logf("Resolved default schema from PostgreSQL: '%s'", resolvedSchema)
+}
+
+// TestMetadataCache_GetDefaultSchema tests the GetDefaultSchema method
+func TestMetadataCache_GetDefaultSchema(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "myschema",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	cache := NewMetadataCache(cfg, nil)
+
+	if cache.GetDefaultSchema() != "myschema" {
+		t.Errorf("Expected 'myschema', got '%s'", cache.GetDefaultSchema())
+	}
+}
+
+// TestMetadataCache_InvalidateSchemas tests that Invalidate clears schema caches
+func TestMetadataCache_InvalidateSchemas(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	cache := NewMetadataCache(cfg, nil)
+
+	// Pre-populate schema caches
+	cache.schemas = []string{"public", "analytics"}
+	cache.schemaTables["analytics"] = []string{"reports"}
+	cache.schemaLastFetch["analytics"] = time.Now()
+
+	// Invalidate
+	cache.Invalidate()
+
+	// Check schema data is cleared
+	if len(cache.schemas) != 0 {
+		t.Error("Expected schemas to be empty after invalidate")
+	}
+
+	if len(cache.schemaTables) != 0 {
+		t.Error("Expected schemaTables to be empty after invalidate")
+	}
+
+	if len(cache.schemaLastFetch) != 0 {
+		t.Error("Expected schemaLastFetch to be empty after invalidate")
+	}
+}
