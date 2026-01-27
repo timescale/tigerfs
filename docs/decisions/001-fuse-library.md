@@ -1,6 +1,8 @@
-# FUSE Library Decision
+# ADR-001: FUSE Library Selection
 
 **Date:** 2026-01-23
+**Status:** Accepted
+**Deciders:** Mike Freedman
 **Decision:** Use `github.com/hanwen/go-fuse/v2`
 
 ## Summary

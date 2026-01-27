@@ -41,3 +41,6 @@ config.local.yaml
 tmp/
 temp/
 /tigerfs
+
+# Planning docs (working area, not committed)
+docs/.plans/
