@@ -3316,6 +3316,75 @@ git push origin v0.1.0
 
 ---
 
+## Phase 6: Performance & Scalability
+
+### Task 6.1: Implement Hybrid Metadata Caching
+
+**Objective:** Optimize metadata caching for databases with many tables (100s-1000s)
+
+**Background:**
+The current cache fetches all table metadata (row counts, permissions) at once during refresh. This is expensive for databases with many tables. A hybrid approach fetches metadata eagerly for small databases but lazily for large ones.
+
+**Steps:**
+1. Add new config option to `internal/tigerfs/config/config.go`:
+   - `MetadataPreloadLimit int` with default of 100
+   - Tables at or below this count: eager fetch all metadata
+   - Tables above this count: lazy fetch per-table on first access
+
+2. Update `internal/tigerfs/fuse/cache.go`:
+   - Add per-table timestamp tracking for lazy-cached entries:
+     ```go
+     type cachedEntry[T any] struct {
+         value     T
+         fetchedAt time.Time
+     }
+     ```
+   - Modify `tableRowCounts` and `tablePermissions` to use `cachedEntry`
+   - Update `Refresh()` to check table count against threshold:
+     - If `len(tables) <= cfg.MetadataPreloadLimit`: eager fetch (current behavior)
+     - If `len(tables) > cfg.MetadataPreloadLimit`: skip, let getters fetch lazily
+   - Update `GetRowCountEstimate()` to fetch on-demand if entry missing/stale
+   - Update `GetTablePermissions()` to fetch on-demand if entry missing/stale
+
+3. Add tests in `internal/tigerfs/fuse/cache_test.go`:
+   - Test eager behavior when table count <= threshold
+   - Test lazy behavior when table count > threshold
+   - Test per-table TTL expiration
+
+4. Document in `specs/spec.md`:
+   - Add `metadata_preload_limit` to Configuration System section
+
+**Files to Modify:**
+- `internal/tigerfs/config/config.go`
+- `internal/tigerfs/fuse/cache.go`
+- `internal/tigerfs/fuse/cache_test.go`
+- `specs/spec.md`
+
+**Verification:**
+```bash
+# Run tests
+go test ./internal/tigerfs/fuse/... -v -run TestCache
+
+# Test with small database (eager)
+TIGERFS_METADATA_PRELOAD_LIMIT=100 ./bin/tigerfs postgres://... /tmp/mount
+# First ls should fetch all metadata
+
+# Test with threshold=1 to force lazy behavior
+TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
+# First ls should only fetch table list
+# Accessing individual table fetches its metadata
+```
+
+**Completion Criteria:**
+- [ ] Config option `metadata_preload_limit` added with default 100
+- [ ] Eager caching works for small databases
+- [ ] Lazy caching works for large databases
+- [ ] Per-table TTL respected for lazy-cached entries
+- [ ] Tests pass
+- [ ] Documented in spec.md
+
+---
+
 ## Task Execution Guidelines
 
 ### Before Starting Each Task
@@ -3355,7 +3424,7 @@ git push origin v0.1.0
 ## Success Criteria for Implementation
 
 ### Functional Requirements
-- [ ] All Phase 5 tasks completed
+- [ ] All Phase 6 tasks completed
 - [ ] All CLI commands functional
 - [ ] CRUD operations working
 - [ ] Index navigation operational
