@@ -281,8 +281,12 @@ touch /mnt/db/.create/orders/.commit   # Execute
 echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.schema
 touch /mnt/db/.create/orders/.commit
 
-# Modify table
-cat /mnt/db/users/.modify/.schema      # See current schema + examples
+# Modify table (human workflow)
+vi /mnt/db/users/.modify/.schema       # Edit: see current schema, add ALTER statement
+touch /mnt/db/users/.modify/.test      # Validate (optional)
+touch /mnt/db/users/.modify/.commit    # Execute
+
+# Modify table (script workflow)
 echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/.schema
 touch /mnt/db/users/.modify/.commit
 
