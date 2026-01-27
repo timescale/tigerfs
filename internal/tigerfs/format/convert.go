@@ -38,8 +38,10 @@ func ConvertValueToText(value interface{}) (string, error) {
 		return "f", nil
 
 	case time.Time:
-		// ISO 8601 format (RFC3339)
-		return v.Format(time.RFC3339), nil
+		// ISO 8601 format with full precision (RFC3339Nano)
+		// Must preserve sub-second precision for round-trip queries
+		// (e.g., index navigation needs exact timestamp matching)
+		return v.Format(time.RFC3339Nano), nil
 
 	case map[string]interface{}:
 		// JSONB object - return as compact JSON
@@ -92,9 +94,9 @@ func BoolToStandardText(value bool) string {
 	return "false"
 }
 
-// TimeToText converts a time.Time to RFC3339 format
+// TimeToText converts a time.Time to RFC3339Nano format (full precision)
 func TimeToText(t time.Time) string {
-	return t.Format(time.RFC3339)
+	return t.Format(time.RFC3339Nano)
 }
 
 // JSONBToText converts a JSONB value to compact JSON text
