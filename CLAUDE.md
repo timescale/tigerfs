@@ -219,3 +219,11 @@ test: add integration tests for index navigation
 | CLI commands & flags | `specs/spec.md` § CLI Interface |
 | Tiger Cloud integration | `specs/spec.md` § Tiger Cloud Integration |
 | Implementation tasks | `docs/implementation-tasks.md` |
+| Task checklist | `docs/implementation-tasks-checklist.md` |
+
+## Implementation Tasks Checklist
+
+Keep `docs/implementation-tasks-checklist.md` in sync with `docs/implementation-tasks.md`:
+
+- **Task completed:** Mark `[ ]` → `[X]` and update Summary table
+- **Tasks modified:** New tasks added, tasks removed, or tasks renumbered
