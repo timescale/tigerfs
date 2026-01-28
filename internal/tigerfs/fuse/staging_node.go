@@ -103,24 +103,46 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		node := NewSchemaFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
+		// Set file attributes - .sql has content (staged DDL or template)
+		content := s.staging.GetContent(s.ctx.StagingPath)
+		if content == "" {
+			// Generate template to get size
+			content = node.getContent(ctx)
+		}
+		out.Mode = 0644 | syscall.S_IFREG
+		out.Nlink = 1
+		out.Size = uint64(len(content))
 		return child, 0
 
 	case ".test":
 		node := NewTestFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
+		// Set file attributes - .test shows test results if any
+		result := s.staging.GetTestResult(s.ctx.StagingPath)
+		out.Mode = 0644 | syscall.S_IFREG
+		out.Nlink = 1
+		out.Size = uint64(len(result))
 		return child, 0
 
 	case ".commit":
 		node := NewCommitFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
+		// Set file attributes - .commit is a trigger file (no readable content)
+		out.Mode = 0644 | syscall.S_IFREG
+		out.Nlink = 1
+		out.Size = 0 // Trigger-only, no content
 		return child, 0
 
 	case ".abort":
 		node := NewAbortFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
+		// Set file attributes - .abort is a trigger file (no readable content)
+		out.Mode = 0644 | syscall.S_IFREG
+		out.Nlink = 1
+		out.Size = 0 // Trigger-only, no content
 		return child, 0
 
 	default:
