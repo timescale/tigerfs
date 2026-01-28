@@ -103,13 +103,52 @@ func (c *Client) Query(ctx context.Context, sql string, args ...interface{}) (in
 	return nil, fmt.Errorf("query execution not yet implemented")
 }
 
-// Exec executes a SQL statement (INSERT, UPDATE, DELETE)
+// Exec executes a SQL statement (INSERT, UPDATE, DELETE, DDL)
 func (c *Client) Exec(ctx context.Context, sql string, args ...interface{}) error {
 	logging.Debug("Executing statement", zap.String("sql", sql))
 
-	// TODO: Execute statement using pgx
-	// _, err := c.pool.Exec(ctx, sql, args...)
-	// return err
+	_, err := c.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		logging.Error("Statement execution failed",
+			zap.String("sql", sql),
+			zap.Error(err))
+		return err
+	}
 
-	return fmt.Errorf("statement execution not yet implemented")
+	logging.Debug("Statement executed successfully", zap.String("sql", sql))
+	return nil
+}
+
+// ExecInTransaction executes a SQL statement within a transaction that is
+// always rolled back. Used to validate DDL without persisting changes.
+//
+// Returns nil if the statement would succeed, or an error describing the failure.
+func (c *Client) ExecInTransaction(ctx context.Context, sql string, args ...interface{}) error {
+	logging.Debug("Testing statement in transaction", zap.String("sql", sql))
+
+	// Start transaction
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	// Always rollback - we're just testing
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			// Rollback failure after successful test is not critical
+			logging.Debug("Rollback after test", zap.Error(rbErr))
+		}
+	}()
+
+	// Execute the statement
+	_, err = tx.Exec(ctx, sql, args...)
+	if err != nil {
+		logging.Debug("Statement test failed",
+			zap.String("sql", sql),
+			zap.Error(err))
+		return err
+	}
+
+	logging.Debug("Statement test passed", zap.String("sql", sql))
+	return nil
 }

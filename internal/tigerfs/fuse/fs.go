@@ -23,6 +23,7 @@ type FS struct {
 	server      *fuse.Server
 	root        *RootNode
 	partialRows *PartialRowTracker
+	staging     *StagingTracker
 }
 
 // Mount creates and mounts a new TigerFS filesystem
@@ -43,10 +44,14 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	// 2. Create partial row tracker
 	partialRows := NewPartialRowTracker(dbClient)
 
-	// 3. Create root node with partial row tracker
-	root := NewRootNode(cfg, dbClient, partialRows)
+	// 3. Create staging tracker for DDL operations
+	staging := NewStagingTracker()
 
-	// 4. Configure FUSE mount options
+	// 4. Create root node with partial row tracker and staging
+	root := NewRootNode(cfg, dbClient, partialRows)
+	root.staging = staging
+
+	// 5. Configure FUSE mount options
 	opts := &fs.Options{
 		MountOptions: fuse.MountOptions{
 			Name:   "tigerfs",
@@ -68,7 +73,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 		zap.Bool("debug", cfg.Debug),
 	)
 
-	// 5. Mount the filesystem
+	// 6. Mount the filesystem
 	server, err := fs.Mount(mountpoint, root, opts)
 	if err != nil {
 		if closeErr := dbClient.Close(); closeErr != nil {
@@ -88,6 +93,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 		server:      server,
 		root:        root,
 		partialRows: partialRows,
+		staging:     staging,
 	}, nil
 }
 

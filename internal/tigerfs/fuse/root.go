@@ -21,6 +21,7 @@ type RootNode struct {
 	db          *db.Client
 	cache       *MetadataCache
 	partialRows *PartialRowTracker
+	staging     *StagingTracker
 }
 
 var _ fs.InodeEmbedder = (*RootNode)(nil)

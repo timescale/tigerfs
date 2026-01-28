@@ -92,7 +92,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 5.1 | Implement Core Staging Infrastructure | 3156 |
+| ✅ | 5.1 | Implement Core Staging Infrastructure | 3156 |
 | ⬜ | 5.2 | Implement Template Generation Framework | 3251 |
 | ⬜ | 5.3 | Implement Schema Create/Delete Operations | 3387 |
 | ⬜ | 5.4 | Implement Index Create/Delete Operations | 3447 |
@@ -139,7 +139,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 18 | 22 | 82% |
-| Phase 5: DDL Operations | 0 | 10 | 0% |
+| Phase 5: DDL Operations | 1 | 10 | 10% |
 | Phase 6: Distribution | 0 | 9 | 0% |
 | Phase 7: Performance | 0 | 3 | 0% |
-| **Total** | **50** | **76** | **66%** |
+| **Total** | **51** | **76** | **67%** |
