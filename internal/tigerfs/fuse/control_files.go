@@ -178,18 +178,9 @@ func (s *SchemaFileNode) generateModifyTemplate(ctx context.Context) string {
 }
 
 func (s *SchemaFileNode) generateDeleteTemplate(ctx context.Context) string {
-	// Will be enhanced in Task 5.2 to show dependencies
 	switch s.ctx.ObjectType {
 	case "table":
-		return fmt.Sprintf(`-- Delete table: %s
--- WARNING: This will permanently delete the table and all its data.
-
--- Uncomment to delete:
--- DROP TABLE %s;
-
--- Or with CASCADE to also drop dependent objects:
--- DROP TABLE %s CASCADE;
-`, s.ctx.ObjectName, s.ctx.ObjectName, s.ctx.ObjectName)
+		return s.generateDeleteTableTemplate(ctx)
 
 	case "index":
 		return fmt.Sprintf(`-- Delete index: %s
@@ -222,6 +213,39 @@ func (s *SchemaFileNode) generateDeleteTemplate(ctx context.Context) string {
 	default:
 		return fmt.Sprintf("-- Delete %s: %s\n", s.ctx.ObjectType, s.ctx.ObjectName)
 	}
+}
+
+// generateDeleteTableTemplate generates a delete template for tables.
+// Uses rich template with column info, row count, and foreign keys if db supports it.
+func (s *SchemaFileNode) generateDeleteTableTemplate(ctx context.Context) string {
+	// Try to use rich template if db supports the required interfaces
+	if dbClient, ok := s.db.(db.DBClient); ok {
+		template := &DeleteTableTemplate{
+			Schema:    s.ctx.Schema,
+			TableName: s.ctx.ObjectName,
+			DB:        dbClient,
+		}
+		content, err := template.Generate(ctx)
+		if err != nil {
+			logging.Warn("Failed to generate rich delete template, using simple template",
+				zap.String("table", s.ctx.ObjectName),
+				zap.Error(err))
+			// Fall through to simple template
+		} else {
+			return content
+		}
+	}
+
+	// Simple template fallback (for mocks or when db doesn't support full interface)
+	return fmt.Sprintf(`-- Delete table: %s
+-- WARNING: This will permanently delete the table and all its data.
+
+-- Uncomment to delete:
+-- DROP TABLE %s;
+
+-- Or with CASCADE to also drop dependent objects:
+-- DROP TABLE %s CASCADE;
+`, s.ctx.ObjectName, s.ctx.ObjectName, s.ctx.ObjectName)
 }
 
 // SchemaFileHandle handles read/write operations on .schema files.

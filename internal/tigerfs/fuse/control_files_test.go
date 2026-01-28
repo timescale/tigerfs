@@ -1361,6 +1361,7 @@ func TestTableDeleteWorkflow_WithMocks(t *testing.T) {
 }
 
 // TestSchemaFileNode_DeleteTemplate tests that delete template is generated correctly.
+// This test uses MockDDLExecutor which doesn't implement DBClient, so it tests the fallback template.
 func TestSchemaFileNode_DeleteTemplate(t *testing.T) {
 	staging := NewStagingTracker()
 	mockDB := &db.MockDDLExecutor{}
@@ -1396,5 +1397,160 @@ func TestSchemaFileNode_DeleteTemplate(t *testing.T) {
 	}
 	if !containsHelper(content, "DROP TABLE") {
 		t.Error("Template should contain DROP TABLE hint")
+	}
+}
+
+// TestSchemaFileNode_DeleteTemplateRich tests the rich delete template with columns, row count, and FKs.
+// This test uses MockDBClient which implements the full interface for rich templates.
+func TestSchemaFileNode_DeleteTemplateRich(t *testing.T) {
+	staging := NewStagingTracker()
+	stagingPath := "orders/.delete"
+
+	// Create MockDBClient with mock methods for rich template
+	mockDB := db.NewMockDBClient()
+	mockDB.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "customer_id", DataType: "integer"},
+			{Name: "total", DataType: "numeric"},
+			{Name: "created_at", DataType: "timestamp with time zone"},
+		}, nil
+	}
+	mockDB.MockCountReader.GetRowCountSmartFunc = func(ctx context.Context, schema, table string) (int64, error) {
+		return 1500, nil
+	}
+	mockDB.MockDDLReader.GetReferencingForeignKeysFunc = func(ctx context.Context, schema, table string) ([]db.ForeignKeyRef, error) {
+		// No foreign keys reference this table
+		return []db.ForeignKeyRef{}, nil
+	}
+
+	// Create staging entry with no content
+	staging.GetOrCreate(stagingPath)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLDelete,
+		ObjectType:  "table",
+		ObjectName:  "orders",
+		Schema:      "public",
+		TableName:   "orders",
+	}
+
+	node := NewSchemaFileNode(nil, mockDB, staging, stagingCtx)
+	ctx := context.Background()
+
+	// Get content (should generate rich delete template)
+	content := node.getContent(ctx)
+
+	// Verify rich template was generated
+	if content == "" {
+		t.Fatal("Expected delete template to be generated")
+	}
+
+	// Should show table info
+	if !containsHelper(content, "public.orders") {
+		t.Error("Template should show schema.table")
+	}
+
+	// Should show columns
+	if !containsHelper(content, "id") || !containsHelper(content, "customer_id") {
+		t.Error("Template should list column names")
+	}
+
+	// Should show row count
+	if !containsHelper(content, "1500") {
+		t.Error("Template should show row count")
+	}
+
+	// Should NOT show CASCADE/RESTRICT since no FKs
+	if containsHelper(content, "CASCADE") && containsHelper(content, "RESTRICT") {
+		// Both should only appear if there ARE foreign keys
+	}
+
+	// Should show simple DROP TABLE (no FKs)
+	if !containsHelper(content, "No foreign keys reference this table") {
+		t.Error("Template should indicate no foreign key dependencies")
+	}
+}
+
+// TestSchemaFileNode_DeleteTemplateRichWithForeignKeys tests the rich delete template when FKs exist.
+func TestSchemaFileNode_DeleteTemplateRichWithForeignKeys(t *testing.T) {
+	staging := NewStagingTracker()
+	stagingPath := "users/.delete"
+
+	// Create MockDBClient with mock methods for rich template
+	mockDB := db.NewMockDBClient()
+	mockDB.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "email", DataType: "text"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+	mockDB.MockCountReader.GetRowCountSmartFunc = func(ctx context.Context, schema, table string) (int64, error) {
+		return 500, nil
+	}
+	mockDB.MockDDLReader.GetReferencingForeignKeysFunc = func(ctx context.Context, schema, table string) ([]db.ForeignKeyRef, error) {
+		// Foreign keys reference this table
+		return []db.ForeignKeyRef{
+			{
+				SourceSchema:  "public",
+				SourceTable:   "orders",
+				SourceColumns: []string{"customer_id"},
+				TargetColumns: []string{"id"},
+				EstimatedRows: 1500,
+			},
+			{
+				SourceSchema:  "public",
+				SourceTable:   "reviews",
+				SourceColumns: []string{"user_id"},
+				TargetColumns: []string{"id"},
+				EstimatedRows: 300,
+			},
+		}, nil
+	}
+
+	// Create staging entry with no content
+	staging.GetOrCreate(stagingPath)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLDelete,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	node := NewSchemaFileNode(nil, mockDB, staging, stagingCtx)
+	ctx := context.Background()
+
+	// Get content (should generate rich delete template with FK warnings)
+	content := node.getContent(ctx)
+
+	// Verify rich template was generated
+	if content == "" {
+		t.Fatal("Expected delete template to be generated")
+	}
+
+	// Should show FK warning
+	if !containsHelper(content, "WARNING") {
+		t.Error("Template should show FK warning")
+	}
+
+	// Should show referencing tables
+	if !containsHelper(content, "orders") {
+		t.Error("Template should mention orders table as FK source")
+	}
+	if !containsHelper(content, "reviews") {
+		t.Error("Template should mention reviews table as FK source")
+	}
+
+	// Should show CASCADE and RESTRICT options
+	if !containsHelper(content, "CASCADE") {
+		t.Error("Template should offer CASCADE option when FKs exist")
+	}
+	if !containsHelper(content, "RESTRICT") {
+		t.Error("Template should offer RESTRICT option when FKs exist")
 	}
 }
