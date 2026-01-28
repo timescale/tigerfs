@@ -83,7 +83,7 @@ func (s *StagingDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		zap.String("path", s.ctx.StagingPath))
 
 	entries := []fuse.DirEntry{
-		{Name: ".schema", Mode: syscall.S_IFREG},
+		{Name: ".sql", Mode: syscall.S_IFREG},
 		{Name: ".test", Mode: syscall.S_IFREG},
 		{Name: ".commit", Mode: syscall.S_IFREG},
 		{Name: ".abort", Mode: syscall.S_IFREG},
@@ -99,7 +99,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		zap.String("name", name))
 
 	switch name {
-	case ".schema":
+	case ".sql":
 		node := NewSchemaFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)

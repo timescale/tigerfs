@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// SchemaFileNode represents a .schema file in a staging directory.
+// SchemaFileNode represents a .sql file in a staging directory.
 // On read: returns staged content if exists, otherwise generates a template.
 // On write: stores content in the StagingTracker.
 type SchemaFileNode struct {
@@ -30,7 +30,7 @@ var _ fs.NodeGetattrer = (*SchemaFileNode)(nil)
 var _ fs.NodeOpener = (*SchemaFileNode)(nil)
 var _ fs.NodeSetattrer = (*SchemaFileNode)(nil)
 
-// NewSchemaFileNode creates a new .schema file node.
+// NewSchemaFileNode creates a new .sql file node.
 func NewSchemaFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *SchemaFileNode {
 	return &SchemaFileNode{
 		cfg:     cfg,
@@ -40,7 +40,7 @@ func NewSchemaFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *Sta
 	}
 }
 
-// Getattr returns attributes for the .schema file.
+// Getattr returns attributes for the .sql file.
 func (s *SchemaFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("SchemaFileNode.Getattr called",
 		zap.String("path", s.ctx.StagingPath))
@@ -55,7 +55,7 @@ func (s *SchemaFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 	return 0
 }
 
-// Open opens the .schema file for reading or writing.
+// Open opens the .sql file for reading or writing.
 func (s *SchemaFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	logging.Debug("SchemaFileNode.Open called",
 		zap.String("path", s.ctx.StagingPath),
@@ -248,7 +248,7 @@ func (s *SchemaFileNode) generateDeleteTableTemplate(ctx context.Context) string
 `, s.ctx.ObjectName, s.ctx.ObjectName, s.ctx.ObjectName)
 }
 
-// SchemaFileHandle handles read/write operations on .schema files.
+// SchemaFileHandle handles read/write operations on .sql files.
 type SchemaFileHandle struct {
 	node    *SchemaFileNode
 	content []byte
@@ -257,7 +257,7 @@ type SchemaFileHandle struct {
 var _ fs.FileReader = (*SchemaFileHandle)(nil)
 var _ fs.FileWriter = (*SchemaFileHandle)(nil)
 
-// Read reads from the .schema file.
+// Read reads from the .sql file.
 func (fh *SchemaFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	logging.Debug("SchemaFileHandle.Read called",
 		zap.Int64("offset", off),
@@ -275,7 +275,7 @@ func (fh *SchemaFileHandle) Read(ctx context.Context, dest []byte, off int64) (f
 	return fuse.ReadResultData(fh.content[off:end]), 0
 }
 
-// Write writes to the .schema file, storing content in the staging tracker.
+// Write writes to the .sql file, storing content in the staging tracker.
 func (fh *SchemaFileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
 	logging.Debug("SchemaFileHandle.Write called",
 		zap.Int64("offset", off),
@@ -387,7 +387,7 @@ func (t *TestFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.S
 func (t *TestFileNode) runTest(ctx context.Context) error {
 	// Check if there's content to test
 	if !t.staging.HasContent(t.ctx.StagingPath) {
-		result := "Error: No DDL content to test. Write DDL to .schema first.\n"
+		result := "Error: No DDL content to test. Write DDL to .sql first.\n"
 		t.staging.SetTestResult(t.ctx.StagingPath, result)
 		return fmt.Errorf("no DDL content")
 	}
@@ -397,7 +397,7 @@ func (t *TestFileNode) runTest(ctx context.Context) error {
 	sql := ExtractSQL(content)
 
 	if sql == "" {
-		result := "Error: .schema contains only comments. Uncomment the DDL to test.\n"
+		result := "Error: .sql contains only comments. Uncomment the DDL to test.\n"
 		t.staging.SetTestResult(t.ctx.StagingPath, result)
 		return fmt.Errorf("only comments in schema")
 	}
@@ -521,7 +521,7 @@ func (c *CommitFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse
 func (c *CommitFileNode) runCommit(ctx context.Context) error {
 	// Check if there's content to commit
 	if !c.staging.HasContent(c.ctx.StagingPath) {
-		return fmt.Errorf("no DDL content to commit. Write DDL to .schema first")
+		return fmt.Errorf("no DDL content to commit. Write DDL to .sql first")
 	}
 
 	// Get and extract SQL
@@ -529,7 +529,7 @@ func (c *CommitFileNode) runCommit(ctx context.Context) error {
 	sql := ExtractSQL(content)
 
 	if sql == "" {
-		return fmt.Errorf(".schema contains only comments. Uncomment the DDL to commit")
+		return fmt.Errorf(".sql contains only comments. Uncomment the DDL to commit")
 	}
 
 	// Execute DDL

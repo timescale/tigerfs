@@ -122,7 +122,7 @@ func TestTestFileNode_runTest_NoContent(t *testing.T) {
 
 	// Verify error was stored (SetTestResult requires entry to exist)
 	result := staging.GetTestResult(stagingPath)
-	if result != "Error: No DDL content to test. Write DDL to .schema first.\n" {
+	if result != "Error: No DDL content to test. Write DDL to .sql first.\n" {
 		t.Errorf("Unexpected test result: %q", result)
 	}
 }
@@ -153,7 +153,7 @@ func TestTestFileNode_runTest_OnlyComments(t *testing.T) {
 
 	// HasContent returns false for comment-only content, so we get "no DDL content" error
 	result := staging.GetTestResult(stagingPath)
-	if result != "Error: No DDL content to test. Write DDL to .schema first.\n" {
+	if result != "Error: No DDL content to test. Write DDL to .sql first.\n" {
 		t.Errorf("Unexpected test result: %q", result)
 	}
 }
@@ -270,7 +270,7 @@ func TestCommitFileNode_runCommit_NoContent(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for empty content, got nil")
 	}
-	if err.Error() != "no DDL content to commit. Write DDL to .schema first" {
+	if err.Error() != "no DDL content to commit. Write DDL to .sql first" {
 		t.Errorf("Unexpected error message: %v", err)
 	}
 }
@@ -297,7 +297,7 @@ func TestCommitFileNode_runCommit_OnlyComments(t *testing.T) {
 		t.Error("Expected error for comment-only content, got nil")
 	}
 	// HasContent returns false for comment-only content
-	if err.Error() != "no DDL content to commit. Write DDL to .schema first" {
+	if err.Error() != "no DDL content to commit. Write DDL to .sql first" {
 		t.Errorf("Unexpected error message: %v", err)
 	}
 }
@@ -384,7 +384,7 @@ func TestAbortFileNode_Creation(t *testing.T) {
 func runTestWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *StagingTracker, stagingCtx StagingContext) error {
 	// Check if there's content to test
 	if !staging.HasContent(stagingCtx.StagingPath) {
-		result := "Error: No DDL content to test. Write DDL to .schema first.\n"
+		result := "Error: No DDL content to test. Write DDL to .sql first.\n"
 		staging.SetTestResult(stagingCtx.StagingPath, result)
 		return errors.New("no DDL content")
 	}
@@ -394,7 +394,7 @@ func runTestWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *
 	sql := ExtractSQL(content)
 
 	if sql == "" {
-		result := "Error: .schema contains only comments. Uncomment the DDL to test.\n"
+		result := "Error: .sql contains only comments. Uncomment the DDL to test.\n"
 		staging.SetTestResult(stagingCtx.StagingPath, result)
 		return errors.New("only comments in schema")
 	}
@@ -418,7 +418,7 @@ func runTestWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *
 func runCommitWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *StagingTracker, cache *MetadataCache, stagingCtx StagingContext) error {
 	// Check if there's content to commit
 	if !staging.HasContent(stagingCtx.StagingPath) {
-		return errors.New("no DDL content to commit. Write DDL to .schema first")
+		return errors.New("no DDL content to commit. Write DDL to .sql first")
 	}
 
 	// Get and extract SQL
@@ -426,7 +426,7 @@ func runCommitWithExecutor(ctx context.Context, executor db.DDLExecutor, staging
 	sql := ExtractSQL(content)
 
 	if sql == "" {
-		return errors.New(".schema contains only comments. Uncomment the DDL to commit")
+		return errors.New(".sql contains only comments. Uncomment the DDL to commit")
 	}
 
 	// Execute DDL
@@ -469,7 +469,7 @@ func TestCreateDirNode_Mkdir(t *testing.T) {
 		t.Fatal("mkdir should create staging entry")
 	}
 
-	// Verify entry has empty content (ready for .schema write)
+	// Verify entry has empty content (ready for .sql write)
 	if entry.Content != "" {
 		t.Errorf("New staging entry should have empty content, got %q", entry.Content)
 	}
@@ -529,7 +529,7 @@ func TestAbortFileNode_runAbort(t *testing.T) {
 	}
 }
 
-// TestSchemaFileHandle_WriteAndRead tests writing and reading .schema content.
+// TestSchemaFileHandle_WriteAndRead tests writing and reading .sql content.
 func TestSchemaFileHandle_WriteAndRead(t *testing.T) {
 	cfg := &config.Config{}
 	staging := NewStagingTracker()
@@ -590,7 +590,7 @@ func TestSchemaFileHandle_WriteAndRead(t *testing.T) {
 	}
 }
 
-// TestSchemaFileNode_GeneratesTemplate tests that reading .schema generates a template.
+// TestSchemaFileNode_GeneratesTemplate tests that reading .sql generates a template.
 func TestSchemaFileNode_GeneratesTemplate(t *testing.T) {
 	cfg := &config.Config{}
 	staging := NewStagingTracker()
@@ -625,7 +625,7 @@ func TestSchemaFileNode_GeneratesTemplate(t *testing.T) {
 	}
 }
 
-// TestFullWorkflow tests the complete staging workflow: mkdir -> write .schema -> touch .test -> touch .commit
+// TestFullWorkflow tests the complete staging workflow: mkdir -> write .sql -> touch .test -> touch .commit
 func TestFullWorkflow(t *testing.T) {
 	ctx := context.Background()
 	staging := NewStagingTracker()
@@ -652,11 +652,11 @@ func TestFullWorkflow(t *testing.T) {
 		t.Fatal("Step 1 failed: mkdir should create staging entry")
 	}
 
-	// Step 2: Write DDL to .schema
+	// Step 2: Write DDL to .sql
 	ddl := "CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT);"
 	staging.Set(stagingPath, ddl)
 	if staging.GetContent(stagingPath) != ddl {
-		t.Fatal("Step 2 failed: write .schema should store content")
+		t.Fatal("Step 2 failed: write .sql should store content")
 	}
 
 	// Step 3: touch .test (validate DDL)
@@ -749,7 +749,7 @@ func TestTableCreateWorkflow_WithMocks(t *testing.T) {
 		t.Error("Created table should appear in pending list")
 	}
 
-	// Step 3: Create SchemaFileNode and write DDL (simulates echo "..." > .create/orders/.schema)
+	// Step 3: Create SchemaFileNode and write DDL (simulates echo "..." > .create/orders/.sql)
 	stagingCtx := StagingContext{
 		StagingPath: stagingPath,
 		Operation:   DDLCreate,
@@ -968,7 +968,7 @@ func containsHelper(s, substr string) bool {
 // =============================================================================
 
 // TestTableModifyWorkflow_WithMocks tests the complete table modification workflow.
-// Workflow: ls table/.modify/ -> cat .schema -> echo "ALTER..." > .schema -> touch .test -> touch .commit
+// Workflow: ls table/.modify/ -> cat .sql -> echo "ALTER..." > .sql -> touch .test -> touch .commit
 func TestTableModifyWorkflow_WithMocks(t *testing.T) {
 	ctx := context.Background()
 	cfg := &config.Config{DefaultSchema: "public"}
@@ -1014,7 +1014,7 @@ func TestTableModifyWorkflow_WithMocks(t *testing.T) {
 		t.Fatal("Staging entry should be created")
 	}
 
-	// Step 3: Create SchemaFileNode and write ALTER DDL (simulates echo "ALTER..." > .modify/.schema)
+	// Step 3: Create SchemaFileNode and write ALTER DDL (simulates echo "ALTER..." > .modify/.sql)
 	schemaNode := NewSchemaFileNode(cfg, mockDB, staging, stagingCtx)
 	fh, _, errno := schemaNode.Open(ctx, 0)
 	if errno != 0 {

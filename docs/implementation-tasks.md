@@ -3421,14 +3421,14 @@ go test ./internal/tigerfs/fuse/... -v -run TestTemplate
 ```bash
 # Mount and test
 mkdir /mnt/db/.schemas/.create/test_schema
-cat /mnt/db/.schemas/.create/test_schema/.schema
+cat /mnt/db/.schemas/.create/test_schema/.sql
 # Shows: CREATE SCHEMA test_schema;
 
 touch /mnt/db/.schemas/.create/test_schema/.commit
 ls /mnt/db/.schemas/
 # Shows: test_schema
 
-echo "DROP SCHEMA test_schema" > /mnt/db/.schemas/test_schema/.delete/.schema
+echo "DROP SCHEMA test_schema" > /mnt/db/.schemas/test_schema/.delete/.sql
 touch /mnt/db/.schemas/test_schema/.delete/.commit
 ls /mnt/db/.schemas/
 # test_schema gone
@@ -3479,10 +3479,10 @@ ls /mnt/db/.schemas/
 ```bash
 # Create index
 mkdir /mnt/db/users/.indexes/.create/email_idx
-cat /mnt/db/users/.indexes/.create/email_idx/.schema
+cat /mnt/db/users/.indexes/.create/email_idx/.sql
 # Shows template
 
-echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.schema
+echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.sql
 touch /mnt/db/users/.indexes/.create/email_idx/.test
 # Exit 0
 
@@ -3491,7 +3491,7 @@ ls /mnt/db/users/.indexes/
 # Shows: email_idx
 
 # Delete index
-echo "DROP INDEX email_idx" > /mnt/db/users/.indexes/email_idx/.delete/.schema
+echo "DROP INDEX email_idx" > /mnt/db/users/.indexes/email_idx/.delete/.sql
 touch /mnt/db/users/.indexes/email_idx/.delete/.commit
 ```
 
@@ -3521,7 +3521,7 @@ touch /mnt/db/users/.indexes/email_idx/.delete/.commit
    - `Mkdir(name)`: Create staging entry
 
 3. Also support direct write (no mkdir):
-   - Writing to `.create/tablename/.schema` should create staging entry if not exists
+   - Writing to `.create/tablename/.sql` should create staging entry if not exists
 
 4. Update SchemaNode to include `.create/` for tables in that schema
 
@@ -3540,17 +3540,17 @@ touch /mnt/db/users/.indexes/email_idx/.delete/.commit
 ```bash
 # Create in default schema
 mkdir /mnt/db/.create/orders
-cat /mnt/db/.create/orders/.schema
+cat /mnt/db/.create/orders/.sql
 # Shows template
 
-echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.schema
+echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
 touch /mnt/db/.create/orders/.test
 touch /mnt/db/.create/orders/.commit
 ls /mnt/db/
 # Shows: orders
 
 # Create in specific schema
-echo "CREATE TABLE foo (id serial PRIMARY KEY)" > /mnt/db/.schemas/public/.create/foo/.schema
+echo "CREATE TABLE foo (id serial PRIMARY KEY)" > /mnt/db/.schemas/public/.create/foo/.sql
 touch /mnt/db/.schemas/public/.create/foo/.commit
 ```
 
@@ -3588,10 +3588,10 @@ touch /mnt/db/.schemas/public/.create/foo/.commit
 
 **Verification:**
 ```bash
-cat /mnt/db/users/.modify/.schema
+cat /mnt/db/users/.modify/.sql
 # Shows current schema + examples + stub
 
-echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/.schema
+echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/.sql
 touch /mnt/db/users/.modify/.test
 touch /mnt/db/users/.modify/.commit
 
@@ -3633,10 +3633,10 @@ cat /mnt/db/users/.schema
 
 **Verification:**
 ```bash
-cat /mnt/db/users/.delete/.schema
+cat /mnt/db/users/.delete/.sql
 # Shows table info, FKs if any, DROP options
 
-echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/.schema
+echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/.sql
 touch /mnt/db/users/.delete/.test
 touch /mnt/db/users/.delete/.commit
 
@@ -3695,13 +3695,13 @@ ls /mnt/db/.views/
 # Shows existing views + .create/
 
 mkdir /mnt/db/.views/.create/active_users
-echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.schema
+echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.sql
 touch /mnt/db/.views/.create/active_users/.commit
 
 ls /mnt/db/.views/active_users/
 # Shows rows from view
 
-echo "DROP VIEW active_users" > /mnt/db/.views/active_users/.delete/.schema
+echo "DROP VIEW active_users" > /mnt/db/.views/active_users/.delete/.sql
 touch /mnt/db/.views/active_users/.delete/.commit
 ```
 
