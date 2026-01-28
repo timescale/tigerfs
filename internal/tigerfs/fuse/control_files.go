@@ -337,22 +337,16 @@ func (t *TestFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.
 	return 0
 }
 
-// Open opens the .test file. Any open triggers validation.
+// Open opens the .test file for access.
+// This is a trigger-only file - validation is triggered via touch (Setattr).
 // Results are written to .test.log for reading.
 func (t *TestFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	logging.Debug("TestFileNode.Open called",
 		zap.String("path", t.ctx.StagingPath),
 		zap.Uint32("flags", flags))
 
-	// Any open triggers the test (touch, cat, echo, etc.)
-	if err := t.runTest(ctx); err != nil {
-		logging.Error("DDL test failed",
-			zap.String("path", t.ctx.StagingPath),
-			zap.Error(err))
-		return nil, 0, syscall.EIO
-	}
-
 	// Return nil file handle - this is a trigger-only file
+	// Validation is triggered via Setattr (touch), not Open
 	return nil, 0, 0
 }
 
