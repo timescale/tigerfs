@@ -7,6 +7,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
 func TestNewRowDirectoryNode(t *testing.T) {
@@ -358,5 +359,276 @@ func TestRowDirectoryNode_SpecialCharacterPKValues(t *testing.T) {
 	}
 }
 
-// Note: Readdir, Lookup, Unlink tests require database integration
-// See test/integration/ for full CRUD operation tests with PostgreSQL
+// =============================================================================
+// Mock-based tests
+// =============================================================================
+
+// TestRowDirectoryNode_Readdir_WithMock tests listing columns in a row directory
+func TestRowDirectoryNode_Readdir_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		NoFilenameExtensions: true, // Disable extensions for simpler testing
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+			{Name: "email", DataType: "text"},
+			{Name: "created_at", DataType: "timestamp"},
+		}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if stream == nil {
+		t.Fatal("Expected non-nil stream")
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// RowDirectoryNode includes columns + format files (.json, .csv, .tsv)
+	// 4 columns + 3 format files = 7 entries
+	if len(entries) != 7 {
+		t.Errorf("Expected 7 entries (4 columns + 3 format files), got %d: %v", len(entries), entries)
+	}
+
+	// Verify columns and format files are present
+	expected := map[string]bool{
+		"id": true, "name": true, "email": true, "created_at": true,
+		".json": true, ".csv": true, ".tsv": true,
+	}
+	for _, name := range entries {
+		if !expected[name] {
+			t.Errorf("Unexpected entry: %s", name)
+		}
+	}
+}
+
+// TestRowDirectoryNode_Readdir_WithMock_Empty tests empty column list
+func TestRowDirectoryNode_Readdir_WithMock_Empty(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// Even with no columns, format files (.json, .csv, .tsv) are still present
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 format files, got %d: %v", len(entries), entries)
+	}
+}
+
+// TestRowDirectoryNode_Readdir_WithMock_Error tests error handling
+func TestRowDirectoryNode_Readdir_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	_, errno := node.Readdir(context.Background())
+
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestRowDirectoryNode_Readdir_WithMock_WithPartialRow tests including partial row columns
+func TestRowDirectoryNode_Readdir_WithMock_WithPartialRow(t *testing.T) {
+	cfg := &config.Config{
+		NoFilenameExtensions: true, // Disable extensions for simpler testing
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	// Add a partial row with extra data using GetOrCreate
+	partialRows.GetOrCreate("public", "users", "id", "1")
+	partialRows.SetColumn("public", "users", "id", "1", "name", "John")
+
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// 2 columns + 3 format files = 5 entries
+	if len(entries) != 5 {
+		t.Errorf("Expected 5 entries (2 columns + 3 format files), got %d: %v", len(entries), entries)
+	}
+}
+
+// TestRowDirectoryNode_Unlink_WithMock tests deleting a column value
+func TestRowDirectoryNode_Unlink_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		NoFilenameExtensions: true, // Use exact column name matching
+	}
+
+	var updateCalled bool
+	var updatedColumn string
+	var updatedValue string
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer", IsNullable: false},
+			{Name: "name", DataType: "text", IsNullable: true},
+			{Name: "email", DataType: "text", IsNullable: true},
+		}, nil
+	}
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+		updateCalled = true
+		updatedColumn = columnName
+		updatedValue = newValue
+		return nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	errno := node.Unlink(context.Background(), "email")
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if !updateCalled {
+		t.Error("Expected UpdateColumn to be called")
+	}
+
+	if updatedColumn != "email" {
+		t.Errorf("Expected column='email', got %q", updatedColumn)
+	}
+
+	if updatedValue != "" {
+		t.Errorf("Expected value='', got %q", updatedValue)
+	}
+}
+
+// TestRowDirectoryNode_Unlink_WithMock_NonNullable tests unlinking a non-nullable column
+func TestRowDirectoryNode_Unlink_WithMock_NonNullable(t *testing.T) {
+	cfg := &config.Config{
+		NoFilenameExtensions: true, // Use exact column name matching
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer", IsNullable: false},
+			{Name: "name", DataType: "text", IsNullable: false, Default: ""}, // NOT NULL, no default
+		}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	errno := node.Unlink(context.Background(), "name")
+
+	// Should return EACCES because column is NOT NULL without default
+	if errno != syscall.EACCES {
+		t.Errorf("Expected errno=EACCES (13), got %d", errno)
+	}
+}
+
+// TestRowDirectoryNode_Unlink_WithMock_ColumnNotFound tests unlinking nonexistent column
+func TestRowDirectoryNode_Unlink_WithMock_ColumnNotFound(t *testing.T) {
+	cfg := &config.Config{
+		NoFilenameExtensions: true, // Use exact column name matching
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	errno := node.Unlink(context.Background(), "nonexistent")
+
+	if errno != syscall.ENOENT {
+		t.Errorf("Expected errno=ENOENT, got %d", errno)
+	}
+}
+
+// TestRowDirectoryNode_Unlink_WithMock_Error tests error handling during unlink
+func TestRowDirectoryNode_Unlink_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{
+		NoFilenameExtensions: true, // Use exact column name matching
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer", IsNullable: false},
+			{Name: "name", DataType: "text", IsNullable: true},
+		}, nil
+	}
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+		return context.DeadlineExceeded
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewRowDirectoryNode(cfg, mock, nil, "public", "users", "id", "1", partialRows)
+
+	errno := node.Unlink(context.Background(), "name")
+
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestRowDirectoryNode_Lookup_WithMock tests are skipped because Lookup requires
+// FUSE bridge infrastructure (NewPersistentInode). See test/integration/.

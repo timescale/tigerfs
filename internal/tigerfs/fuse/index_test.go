@@ -1,6 +1,8 @@
 package fuse
 
 import (
+	"context"
+	"syscall"
 	"testing"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
@@ -250,3 +252,256 @@ func TestCompositeIndexLevelNode_NavigationDepth(t *testing.T) {
 		t.Errorf("Level 3 should have 3 values, got %d", len(level3.values))
 	}
 }
+
+// =============================================================================
+// Mock-based tests
+// =============================================================================
+
+// TestIndexNode_Readdir_WithMock tests listing distinct values for an indexed column
+func TestIndexNode_Readdir_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+	idx := &db.Index{Name: "idx_status", Columns: []string{"status"}, IsUnique: false}
+
+	mock := db.NewMockDBClient()
+	mock.MockIndexReader.GetDistinctValuesFunc = func(ctx context.Context, schema, table, column string, limit int) ([]string, error) {
+		return []string{"active", "pending", "inactive", "deleted"}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewIndexNode(cfg, mock, nil, "public", "users", "status", idx, partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if stream == nil {
+		t.Fatal("Expected non-nil stream")
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// IndexNode includes distinct values plus .first and .last pagination directories
+	// So we expect 4 values + 2 pagination = 6 entries
+	if len(entries) != 6 {
+		t.Errorf("Expected 6 entries (4 values + .first + .last), got %d: %v", len(entries), entries)
+	}
+
+	// Verify the distinct values are present
+	valueSet := make(map[string]bool)
+	for _, e := range entries {
+		valueSet[e] = true
+	}
+	for _, expected := range []string{"active", "pending", "inactive", "deleted", ".first", ".last"} {
+		if !valueSet[expected] {
+			t.Errorf("Expected entry %q not found", expected)
+		}
+	}
+}
+
+// TestIndexNode_Readdir_WithMock_Empty tests empty distinct values
+func TestIndexNode_Readdir_WithMock_Empty(t *testing.T) {
+	cfg := &config.Config{}
+	idx := &db.Index{Name: "idx_status", Columns: []string{"status"}}
+
+	mock := db.NewMockDBClient()
+	mock.MockIndexReader.GetDistinctValuesFunc = func(ctx context.Context, schema, table, column string, limit int) ([]string, error) {
+		return []string{}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewIndexNode(cfg, mock, nil, "public", "users", "status", idx, partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Even with no distinct values, IndexNode includes .first and .last
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// Should have only pagination directories
+	if len(entries) != 2 {
+		t.Errorf("Expected 2 entries (.first, .last), got %d: %v", len(entries), entries)
+	}
+}
+
+// TestIndexNode_Readdir_WithMock_Error tests error handling
+func TestIndexNode_Readdir_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+	idx := &db.Index{Name: "idx_status", Columns: []string{"status"}}
+
+	mock := db.NewMockDBClient()
+	mock.MockIndexReader.GetDistinctValuesFunc = func(ctx context.Context, schema, table, column string, limit int) ([]string, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewIndexNode(cfg, mock, nil, "public", "users", "status", idx, partialRows)
+
+	_, errno := node.Readdir(context.Background())
+
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestIndexValueNode_Readdir_WithMock tests listing rows matching an index value
+func TestIndexValueNode_Readdir_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	// Pre-populated PKs from Lookup
+	matchingPKs := []string{"5", "12", "27", "103"}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewIndexValueNode(cfg, mock, nil, "public", "users", "status", "active", "id", matchingPKs, partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// IndexValueNode includes rows plus .first and .last pagination
+	// So we expect 4 PKs + 2 pagination = 6 entries
+	if len(entries) != 6 {
+		t.Errorf("Expected 6 entries (4 rows + .first + .last), got %d: %v", len(entries), entries)
+	}
+
+	// Verify PKs and pagination are present
+	expected := map[string]bool{"5": true, "12": true, "27": true, "103": true, ".first": true, ".last": true}
+	for _, name := range entries {
+		if !expected[name] {
+			t.Errorf("Unexpected entry: %s", name)
+		}
+	}
+}
+
+// TestCompositeIndexNode_Readdir_WithMock tests listing first-level values
+func TestCompositeIndexNode_Readdir_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+	columns := []string{"country", "state"}
+	idx := &db.Index{Name: "idx_location", Columns: columns}
+
+	mock := db.NewMockDBClient()
+	mock.MockIndexReader.GetDistinctValuesFunc = func(ctx context.Context, schema, table, column string, limit int) ([]string, error) {
+		if column == "country" {
+			return []string{"USA", "Canada", "Mexico"}, nil
+		}
+		return nil, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewCompositeIndexNode(cfg, mock, nil, "public", "locations", columns, idx, partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries, got %d", len(entries))
+	}
+}
+
+// TestCompositeIndexLevelNode_Readdir_WithMock_Intermediate tests listing next-level values
+func TestCompositeIndexLevelNode_Readdir_WithMock_Intermediate(t *testing.T) {
+	cfg := &config.Config{}
+	columns := []string{"country", "state", "city"}
+	values := []string{"USA"}
+	idx := &db.Index{Name: "idx_location", Columns: columns}
+
+	mock := db.NewMockDBClient()
+	mock.MockIndexReader.GetDistinctValuesFilteredFunc = func(ctx context.Context, schema, table, column string, filterColumns, filterValues []string, limit int) ([]string, error) {
+		if column == "state" && len(filterValues) > 0 && filterValues[0] == "USA" {
+			return []string{"California", "Texas", "New York"}, nil
+		}
+		return nil, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewCompositeIndexLevelNode(cfg, mock, nil, "public", "locations", columns, values, idx, partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries, got %d", len(entries))
+	}
+}
+
+// TestCompositeIndexLevelNode_Readdir_WithMock_Final tests listing rows at final level
+func TestCompositeIndexLevelNode_Readdir_WithMock_Final(t *testing.T) {
+	cfg := &config.Config{}
+	columns := []string{"country", "state"}
+	values := []string{"USA", "California"} // All columns specified = final level
+	idx := &db.Index{Name: "idx_location", Columns: columns}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return &db.PrimaryKey{Columns: []string{"id"}}, nil
+	}
+	mock.MockIndexReader.GetRowsByCompositeIndexFunc = func(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+		return []string{"1", "5", "10"}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewCompositeIndexLevelNode(cfg, mock, nil, "public", "locations", columns, values, idx, partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries (rows), got %d", len(entries))
+	}
+}
+
+// TestIndexNode_Lookup_WithMock tests are skipped because Lookup requires
+// FUSE bridge infrastructure (NewPersistentInode). See test/integration/.
