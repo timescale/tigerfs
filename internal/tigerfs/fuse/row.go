@@ -206,6 +206,8 @@ func (r *RowFileNode) fetchData(ctx context.Context) error {
 		data, err = format.RowToCSV(row.Columns, row.Values)
 	case "json":
 		data, err = format.RowToJSON(row.Columns, row.Values)
+	case "yaml":
+		data, err = format.RowToYAML(row.Columns, row.Values)
 	case "tsv":
 		fallthrough
 	default:
@@ -370,6 +372,9 @@ func (fh *RowFileHandle) parseRowData() ([]string, []interface{}, error) {
 	case "json":
 		// JSON includes column names
 		columns, values, err = format.ParseJSON(string(data))
+	case "yaml":
+		// YAML includes column names
+		columns, values, err = format.ParseYAML(string(data))
 	case "tsv", "csv":
 		// TSV/CSV don't include column names, get from schema
 		ctx := context.Background()

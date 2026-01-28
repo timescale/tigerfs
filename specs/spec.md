@@ -44,7 +44,7 @@
 **Key Features:**
 - Mount PostgreSQL databases as filesystem directories
 - Navigate schemas, tables, rows, and columns like files
-- Multiple data formats (TSV, CSV, JSON)
+- Multiple data formats (TSV, CSV, JSON, YAML)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
 - Respects database constraints and permissions
@@ -333,15 +333,17 @@ Row represented as directory with individual column files.
 ├── avatar.bin      # Contains: (binary data)
 ├── .json           # Entire row as JSON
 ├── .csv            # Entire row as CSV
-└── .tsv            # Entire row as TSV
+├── .tsv            # Entire row as TSV
+└── .yaml           # Entire row as YAML
 ```
 
 **Row Format Files:**
-Within a row directory, `.json`, `.csv`, and `.tsv` provide the entire row in that format:
+Within a row directory, `.json`, `.csv`, `.tsv`, and `.yaml` provide the entire row in that format:
 ```bash
 cat /mnt/db/users/123/.json    # {"id":123,"email":"foo@example.com",...}
 cat /mnt/db/users/123/.csv     # 123,foo@example.com,Foo Bar,25
 cat /mnt/db/users/123/.tsv     # 123	foo@example.com	Foo Bar	25
+cat /mnt/db/users/123/.yaml    # ---\nid: 123\nemail: foo@example.com\n...
 ```
 
 **Filename Extensions:**
@@ -547,7 +549,7 @@ echo '{"email":"foo@example.com","age":25}' > /mount/users/123.json
 
 **Write Semantics:**
 - TSV/CSV must follow schema column order
-- Empty fields (TSV/CSV) or omitted keys (JSON) = NULL or column default
+- Empty fields (TSV/CSV) or omitted keys (JSON/YAML) = NULL or column default
 - Constraint violations return EACCES with detailed logs
 
 #### Column Write (UPDATE or INSERT)
@@ -974,7 +976,7 @@ logging:
 
 # Formats
 formats:
-  default: tsv                 # Default row format: tsv, csv, json
+  default: tsv                 # Default row format: tsv, csv, json, yaml
   binary_encoding: raw         # BYTEA encoding: raw, hex, base64
 
 # Debug
@@ -1887,7 +1889,7 @@ Examples:
 - Computed on first access (acceptable overhead)
 
 **Row files:**
-- Size = byte length of serialized format (TSV/CSV/JSON)
+- Size = byte length of serialized format (TSV/CSV/JSON/YAML)
 - Computed on demand
 
 **Directories:**
@@ -2895,7 +2897,7 @@ curl http://localhost:9090/metrics
 - SQL generation from paths
 - Permission mapping logic
 - Configuration parsing
-- Format conversion (TSV/CSV/JSON)
+- Format conversion (TSV/CSV/JSON/YAML)
 - Type handling (NULL, JSONB, arrays, BYTEA)
 - Error mapping (PostgreSQL errors → errno)
 
@@ -3199,7 +3201,7 @@ go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 - **First Mount** - Connect to database
 - **Exploring Filesystem** - Navigate schemas/tables
 - **Reading Data:**
-  - Row-as-file (TSV, CSV, JSON)
+  - Row-as-file (TSV, CSV, JSON, YAML)
   - Row-as-directory (columns)
   - Index navigation
 - **Writing Data:**
@@ -3289,7 +3291,7 @@ See `docs/implementation-tasks.md` for detailed step-by-step tasks.
 - Logging infrastructure (Zap)
 - PostgreSQL connection with pgx and connection pooling
 - Schema/table discovery
-- Row-as-file read (TSV, CSV, JSON formats)
+- Row-as-file read (TSV, CSV, JSON, YAML formats)
 - Directory listing (small tables only)
 - Unit test framework and testcontainers-go setup
 

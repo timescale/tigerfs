@@ -15,7 +15,7 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Navigate schemas, tables, rows, and columns like files
 - Read and write data using standard Unix tools
 - Automatic file extensions based on column type (.txt, .json, .bin)
-- Multiple data formats for row-based exploration (TSV, CSV, JSON)
+- Multiple data formats for row-based exploration (TSV, CSV, JSON, YAML)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
 - Respects database constraints and permissions
@@ -52,7 +52,7 @@ TigerFS maps filesystem paths to database queries:
 **Components:**
 - **FUSE Layer** - Filesystem interface (read, write, readdir operations)
 - **Database Layer** - PostgreSQL client with connection pooling
-- **Format Layer** - Data serialization (TSV, CSV, JSON)
+- **Format Layer** - Data serialization (TSV, CSV, JSON, YAML)
 - **Configuration** - Viper-based multi-source configuration
 - **Logging** - Structured logging with zap
 
@@ -168,6 +168,7 @@ cat /mnt/db/users/123         # TSV (default)
 cat /mnt/db/users/123.tsv     # TSV (explicit)
 cat /mnt/db/users/123.json    # JSON
 cat /mnt/db/users/123.csv     # CSV
+cat /mnt/db/users/123.yaml    # YAML
 ```
 
 Or access individual columns via row-as-directory:
@@ -177,6 +178,7 @@ ls /mnt/db/users/123/              # List columns
 cat /mnt/db/users/123/email.txt    # Read single column
 cat /mnt/db/users/123/.json        # Entire row as JSON
 cat /mnt/db/users/123/.csv         # Entire row as CSV
+cat /mnt/db/users/123/.yaml        # Entire row as YAML
 ```
 
 ### Index Navigation
@@ -382,7 +384,7 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 
 **Completed:**
 - FUSE filesystem with full CRUD operations (Read, Write, Create, Delete)
-- Row-as-file (TSV, CSV, JSON) and row-as-directory access patterns
+- Row-as-file (TSV, CSV, JSON, YAML) and row-as-directory access patterns
 - Column-level reads and writes with type-based file extensions
 - PostgreSQL database layer with connection pooling (pgx/v5)
 - Data format serialization with NULL handling

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ParseTSV parses a TSV line into columns and values
@@ -63,6 +65,30 @@ func ParseJSON(jsonStr string) ([]string, []interface{}, error) {
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	// Extract columns and values
+	columns := make([]string, 0, len(data))
+	values := make([]interface{}, 0, len(data))
+
+	for col, val := range data {
+		columns = append(columns, col)
+		values = append(values, val)
+	}
+
+	return columns, values, nil
+}
+
+// ParseYAML parses a YAML document into columns and values
+// Format:
+//
+//	col1: value1
+//	col2: 42
+//	col3: null
+func ParseYAML(yamlStr string) ([]string, []interface{}, error) {
+	var data map[string]interface{}
+	if err := yaml.Unmarshal([]byte(yamlStr), &data); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
 	// Extract columns and values

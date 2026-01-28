@@ -399,16 +399,16 @@ func TestRowDirectoryNode_Readdir_WithMock(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// RowDirectoryNode includes columns + format files (.json, .csv, .tsv)
-	// 4 columns + 3 format files = 7 entries
-	if len(entries) != 7 {
-		t.Errorf("Expected 7 entries (4 columns + 3 format files), got %d: %v", len(entries), entries)
+	// RowDirectoryNode includes columns + format files (.json, .csv, .tsv, .yaml)
+	// 4 columns + 4 format files = 8 entries
+	if len(entries) != 8 {
+		t.Errorf("Expected 8 entries (4 columns + 4 format files), got %d: %v", len(entries), entries)
 	}
 
 	// Verify columns and format files are present
 	expected := map[string]bool{
 		"id": true, "name": true, "email": true, "created_at": true,
-		".json": true, ".csv": true, ".tsv": true,
+		".json": true, ".csv": true, ".tsv": true, ".yaml": true,
 	}
 	for _, name := range entries {
 		if !expected[name] {
@@ -442,9 +442,9 @@ func TestRowDirectoryNode_Readdir_WithMock_Empty(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Even with no columns, format files (.json, .csv, .tsv) are still present
-	if len(entries) != 3 {
-		t.Errorf("Expected 3 format files, got %d: %v", len(entries), entries)
+	// Even with no columns, format files (.json, .csv, .tsv, .yaml) are still present
+	if len(entries) != 4 {
+		t.Errorf("Expected 4 format files, got %d: %v", len(entries), entries)
 	}
 }
 
@@ -501,9 +501,9 @@ func TestRowDirectoryNode_Readdir_WithMock_WithPartialRow(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// 2 columns + 3 format files = 5 entries
-	if len(entries) != 5 {
-		t.Errorf("Expected 5 entries (2 columns + 3 format files), got %d: %v", len(entries), entries)
+	// 2 columns + 4 format files = 6 entries
+	if len(entries) != 6 {
+		t.Errorf("Expected 6 entries (2 columns + 4 format files), got %d: %v", len(entries), entries)
 	}
 }
 

@@ -7,6 +7,7 @@ import "strings"
 //   - "123" -> pkValue="123", format="tsv"
 //   - "123.csv" -> pkValue="123", format="csv"
 //   - "123.json" -> pkValue="123", format="json"
+//   - "123.yaml" -> pkValue="123", format="yaml"
 //   - "foo@example.com" -> pkValue="foo@example.com", format="tsv"
 //   - "123.unknown" -> pkValue="123.unknown", format="tsv" (unrecognized extension kept as part of PK)
 func ParseRowFilename(name string) (pkValue string, format string) {
@@ -22,6 +23,8 @@ func ParseRowFilename(name string) (pkValue string, format string) {
 			return name[:idx], "json"
 		case "tsv":
 			return name[:idx], "tsv"
+		case "yaml":
+			return name[:idx], "yaml"
 		}
 	}
 
