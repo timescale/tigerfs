@@ -20,7 +20,7 @@ type SchemaFileNode struct {
 	fs.Inode
 
 	cfg     *config.Config
-	db      *db.Client
+	db      db.DDLExecutor // Currently unused, but available for future template enhancement
 	staging *StagingTracker
 	ctx     StagingContext
 }
@@ -31,7 +31,7 @@ var _ fs.NodeOpener = (*SchemaFileNode)(nil)
 var _ fs.NodeSetattrer = (*SchemaFileNode)(nil)
 
 // NewSchemaFileNode creates a new .schema file node.
-func NewSchemaFileNode(cfg *config.Config, dbClient *db.Client, staging *StagingTracker, ctx StagingContext) *SchemaFileNode {
+func NewSchemaFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *SchemaFileNode {
 	return &SchemaFileNode{
 		cfg:     cfg,
 		db:      dbClient,
@@ -282,7 +282,7 @@ type TestFileNode struct {
 	fs.Inode
 
 	cfg     *config.Config
-	db      *db.Client
+	db      db.DDLExecutor
 	staging *StagingTracker
 	ctx     StagingContext
 }
@@ -293,7 +293,7 @@ var _ fs.NodeOpener = (*TestFileNode)(nil)
 var _ fs.NodeSetattrer = (*TestFileNode)(nil)
 
 // NewTestFileNode creates a new .test file node.
-func NewTestFileNode(cfg *config.Config, dbClient *db.Client, staging *StagingTracker, ctx StagingContext) *TestFileNode {
+func NewTestFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *TestFileNode {
 	return &TestFileNode{
 		cfg:     cfg,
 		db:      dbClient,
@@ -422,7 +422,7 @@ type CommitFileNode struct {
 	fs.Inode
 
 	cfg     *config.Config
-	db      *db.Client
+	db      db.DDLExecutor
 	staging *StagingTracker
 	cache   *MetadataCache
 	ctx     StagingContext
@@ -434,7 +434,7 @@ var _ fs.NodeOpener = (*CommitFileNode)(nil)
 var _ fs.NodeSetattrer = (*CommitFileNode)(nil)
 
 // NewCommitFileNode creates a new .commit file node.
-func NewCommitFileNode(cfg *config.Config, dbClient *db.Client, staging *StagingTracker, ctx StagingContext) *CommitFileNode {
+func NewCommitFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *CommitFileNode {
 	return &CommitFileNode{
 		cfg:     cfg,
 		db:      dbClient,
@@ -536,7 +536,7 @@ type AbortFileNode struct {
 	fs.Inode
 
 	cfg     *config.Config
-	db      *db.Client
+	db      db.DDLExecutor // Unused, but kept for consistency with other control file nodes
 	staging *StagingTracker
 	ctx     StagingContext
 }
@@ -547,7 +547,7 @@ var _ fs.NodeOpener = (*AbortFileNode)(nil)
 var _ fs.NodeSetattrer = (*AbortFileNode)(nil)
 
 // NewAbortFileNode creates a new .abort file node.
-func NewAbortFileNode(cfg *config.Config, dbClient *db.Client, staging *StagingTracker, ctx StagingContext) *AbortFileNode {
+func NewAbortFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *AbortFileNode {
 	return &AbortFileNode{
 		cfg:     cfg,
 		db:      dbClient,

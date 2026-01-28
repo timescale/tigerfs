@@ -45,7 +45,7 @@ type StagingDirNode struct {
 	fs.Inode
 
 	cfg     *config.Config
-	db      *db.Client
+	db      db.DDLExecutor
 	staging *StagingTracker
 	ctx     StagingContext // Context for this staging operation
 }
@@ -56,7 +56,7 @@ var _ fs.NodeReaddirer = (*StagingDirNode)(nil)
 var _ fs.NodeLookuper = (*StagingDirNode)(nil)
 
 // NewStagingDirNode creates a new staging directory node.
-func NewStagingDirNode(cfg *config.Config, dbClient *db.Client, staging *StagingTracker, ctx StagingContext) *StagingDirNode {
+func NewStagingDirNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *StagingDirNode {
 	return &StagingDirNode{
 		cfg:     cfg,
 		db:      dbClient,
@@ -139,7 +139,7 @@ type CreateDirNode struct {
 	fs.Inode
 
 	cfg        *config.Config
-	db         *db.Client
+	db         db.DDLExecutor
 	cache      *MetadataCache
 	staging    *StagingTracker
 	objectType string // "table", "index", "schema", "view"
@@ -155,7 +155,7 @@ var _ fs.NodeLookuper = (*CreateDirNode)(nil)
 var _ fs.NodeMkdirer = (*CreateDirNode)(nil)
 
 // NewCreateDirNode creates a new .create directory node.
-func NewCreateDirNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, staging *StagingTracker, objectType, schema, tableName, pathPrefix string) *CreateDirNode {
+func NewCreateDirNode(cfg *config.Config, dbClient db.DDLExecutor, cache *MetadataCache, staging *StagingTracker, objectType, schema, tableName, pathPrefix string) *CreateDirNode {
 	return &CreateDirNode{
 		cfg:        cfg,
 		db:         dbClient,
