@@ -18,7 +18,7 @@ type MetadataCache struct {
 	mu sync.RWMutex
 
 	cfg *config.Config // TigerFS configuration
-	db  *db.Client     // Database client for queries
+	db  db.DBClient    // Database client for queries
 
 	// Cached data - all refreshed together
 	tables           []string                        // List of table names in default schema
@@ -42,12 +42,12 @@ type MetadataCache struct {
 //
 // Parameters:
 //   - cfg: TigerFS configuration (determines refresh interval)
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //
 // Returns an empty cache that will be populated on first access.
 // If cfg.DefaultSchema is empty, it will be resolved from PostgreSQL's
 // current_schema() on first refresh.
-func NewMetadataCache(cfg *config.Config, dbClient *db.Client) *MetadataCache {
+func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 	return &MetadataCache{
 		cfg:               cfg,
 		db:                dbClient,

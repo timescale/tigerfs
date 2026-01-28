@@ -19,7 +19,7 @@ type RowDirectoryNode struct {
 	fs.Inode
 
 	cfg         *config.Config     // TigerFS configuration
-	db          *db.Client         // Database client for queries
+	db          db.DBClient        // Database client for queries
 	cache       *MetadataCache     // Metadata cache for permissions lookup
 	schema      string             // PostgreSQL schema name
 	tableName   string             // Table name
@@ -38,14 +38,14 @@ var _ fs.NodeUnlinker = (*RowDirectoryNode)(nil)
 //
 // Parameters:
 //   - cfg: TigerFS configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: PostgreSQL schema name
 //   - tableName: Table name
 //   - pkColumn: Primary key column name
 //   - pkValue: Primary key value identifying this row
 //   - partialRows: Tracker for uncommitted partial rows
-func NewRowDirectoryNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
+func NewRowDirectoryNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
 	return &RowDirectoryNode{
 		cfg:         cfg,
 		db:          dbClient,

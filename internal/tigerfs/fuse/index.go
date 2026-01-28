@@ -27,7 +27,7 @@ type IndexNode struct {
 	cfg *config.Config
 
 	// db is the database client for querying distinct values
-	db *db.Client
+	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
 	cache *MetadataCache
@@ -57,14 +57,14 @@ var _ fs.NodeLookuper = (*IndexNode)(nil)
 //
 // Parameters:
 //   - cfg: Filesystem configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
 //   - column: Indexed column name
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewIndexNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker) *IndexNode {
+func NewIndexNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker) *IndexNode {
 	return &IndexNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -228,7 +228,7 @@ type IndexValueNode struct {
 	cfg *config.Config
 
 	// db is the database client
-	db *db.Client
+	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
 	cache *MetadataCache
@@ -273,7 +273,7 @@ var _ fs.NodeLookuper = (*IndexValueNode)(nil)
 //   - pkColumn: Primary key column name
 //   - matchingPKs: Primary keys of rows matching the value
 //   - partialRows: Tracker for incremental row creation
-func NewIndexValueNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker) *IndexValueNode {
+func NewIndexValueNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker) *IndexValueNode {
 	return &IndexValueNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -412,7 +412,7 @@ type IndexValuePaginationNode struct {
 	fs.Inode
 
 	cfg            *config.Config
-	db             *db.Client
+	db             db.DBClient
 	cache          *MetadataCache
 	schema         string
 	tableName      string
@@ -429,7 +429,7 @@ var _ fs.NodeReaddirer = (*IndexValuePaginationNode)(nil)
 var _ fs.NodeLookuper = (*IndexValuePaginationNode)(nil)
 
 // NewIndexValuePaginationNode creates a new pagination node within an index value.
-func NewIndexValuePaginationNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexValuePaginationNode {
+func NewIndexValuePaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexValuePaginationNode {
 	return &IndexValuePaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -480,7 +480,7 @@ type IndexValuePaginationLimitNode struct {
 	fs.Inode
 
 	cfg            *config.Config
-	db             *db.Client
+	db             db.DBClient
 	cache          *MetadataCache
 	schema         string
 	tableName      string
@@ -498,7 +498,7 @@ var _ fs.NodeReaddirer = (*IndexValuePaginationLimitNode)(nil)
 var _ fs.NodeLookuper = (*IndexValuePaginationLimitNode)(nil)
 
 // NewIndexValuePaginationLimitNode creates a new pagination limit node within an index value.
-func NewIndexValuePaginationLimitNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexValuePaginationLimitNode {
+func NewIndexValuePaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexValuePaginationLimitNode {
 	return &IndexValuePaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -609,7 +609,7 @@ type CompositeIndexNode struct {
 	cfg *config.Config
 
 	// db is the database client for queries
-	db *db.Client
+	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
 	cache *MetadataCache
@@ -639,14 +639,14 @@ var _ fs.NodeLookuper = (*CompositeIndexNode)(nil)
 //
 // Parameters:
 //   - cfg: Filesystem configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
 //   - columns: All column names in the composite index (in index order)
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewCompositeIndexNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexNode {
+func NewCompositeIndexNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexNode {
 	return &CompositeIndexNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -742,7 +742,7 @@ type CompositeIndexLevelNode struct {
 	cfg *config.Config
 
 	// db is the database client
-	db *db.Client
+	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
 	cache *MetadataCache
@@ -775,7 +775,7 @@ var _ fs.NodeLookuper = (*CompositeIndexLevelNode)(nil)
 //
 // Parameters:
 //   - cfg: Filesystem configuration
-//   - dbClient: Database client
+//   - dbClient: Database client (accepts db.DBClient interface)
 //   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: Schema name
 //   - tableName: Table name
@@ -783,7 +783,7 @@ var _ fs.NodeLookuper = (*CompositeIndexLevelNode)(nil)
 //   - values: Values specified so far (for columns[0] through columns[len(values)-1])
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewCompositeIndexLevelNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexLevelNode {
+func NewCompositeIndexLevelNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexLevelNode {
 	return &CompositeIndexLevelNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -1005,7 +1005,7 @@ type IndexPaginationNode struct {
 	fs.Inode
 
 	cfg            *config.Config
-	db             *db.Client
+	db             db.DBClient
 	cache          *MetadataCache
 	schema         string
 	tableName      string
@@ -1020,7 +1020,7 @@ var _ fs.NodeReaddirer = (*IndexPaginationNode)(nil)
 var _ fs.NodeLookuper = (*IndexPaginationNode)(nil)
 
 // NewIndexPaginationNode creates a new .first/ or .last/ directory node within an index.
-func NewIndexPaginationNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexPaginationNode {
+func NewIndexPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexPaginationNode {
 	return &IndexPaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -1069,7 +1069,7 @@ type IndexPaginationLimitNode struct {
 	fs.Inode
 
 	cfg            *config.Config
-	db             *db.Client
+	db             db.DBClient
 	cache          *MetadataCache
 	schema         string
 	tableName      string
@@ -1085,7 +1085,7 @@ var _ fs.NodeReaddirer = (*IndexPaginationLimitNode)(nil)
 var _ fs.NodeLookuper = (*IndexPaginationLimitNode)(nil)
 
 // NewIndexPaginationLimitNode creates a new .first/N/ or .last/N/ directory node within an index.
-func NewIndexPaginationLimitNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexPaginationLimitNode {
+func NewIndexPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexPaginationLimitNode {
 	return &IndexPaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,

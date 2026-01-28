@@ -22,7 +22,7 @@ type SampleNode struct {
 	fs.Inode
 
 	cfg         *config.Config     // TigerFS configuration
-	db          *db.Client         // Database client for queries
+	db          db.DBClient        // Database client for queries
 	cache       *MetadataCache     // Cache for row count estimates
 	schema      string             // PostgreSQL schema name
 	tableName   string             // Table this sample belongs to
@@ -38,12 +38,12 @@ var _ fs.NodeLookuper = (*SampleNode)(nil)
 //
 // Parameters:
 //   - cfg: TigerFS configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for row count estimates (used for TABLESAMPLE optimization)
 //   - schema: PostgreSQL schema name
 //   - tableName: Name of the table
 //   - partialRows: Tracker for partial row writes
-func NewSampleNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *SampleNode {
+func NewSampleNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *SampleNode {
 	return &SampleNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -110,7 +110,7 @@ type SampleLimitNode struct {
 	fs.Inode
 
 	cfg         *config.Config     // TigerFS configuration
-	db          *db.Client         // Database client for queries
+	db          db.DBClient        // Database client for queries
 	cache       *MetadataCache     // Cache for row count estimates
 	schema      string             // PostgreSQL schema name
 	tableName   string             // Table this sample belongs to
@@ -127,13 +127,13 @@ var _ fs.NodeLookuper = (*SampleLimitNode)(nil)
 //
 // Parameters:
 //   - cfg: TigerFS configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for row count estimates
 //   - schema: PostgreSQL schema name
 //   - tableName: Name of the table
 //   - sampleSize: Target number of random rows to return
 //   - partialRows: Tracker for partial row writes
-func NewSampleLimitNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, sampleSize int, partialRows *PartialRowTracker) *SampleLimitNode {
+func NewSampleLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, sampleSize int, partialRows *PartialRowTracker) *SampleLimitNode {
 	return &SampleLimitNode{
 		cfg:         cfg,
 		db:          dbClient,

@@ -32,6 +32,9 @@ type SchemaReader interface {
 
 	// GetPrimaryKey discovers the primary key for a table.
 	GetPrimaryKey(ctx context.Context, schema, table string) (*PrimaryKey, error)
+
+	// GetTablePermissions returns the current user's permissions on a table.
+	GetTablePermissions(ctx context.Context, schema, table string) (*TablePermissions, error)
 }
 
 // RowReader provides row-level read operations.

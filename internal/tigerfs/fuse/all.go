@@ -20,7 +20,7 @@ type AllRowsNode struct {
 	fs.Inode
 
 	cfg         *config.Config
-	db          *db.Client
+	db          db.DBClient
 	cache       *MetadataCache
 	schema      string
 	tableName   string
@@ -33,7 +33,7 @@ var _ fs.NodeReaddirer = (*AllRowsNode)(nil)
 var _ fs.NodeLookuper = (*AllRowsNode)(nil)
 
 // NewAllRowsNode creates a new .all/ directory node
-func NewAllRowsNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *AllRowsNode {
+func NewAllRowsNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *AllRowsNode {
 	return &AllRowsNode{
 		cfg:         cfg,
 		db:          dbClient,

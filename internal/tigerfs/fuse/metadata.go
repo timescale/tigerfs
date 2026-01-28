@@ -31,7 +31,7 @@ type MetadataFileNode struct {
 	fs.Inode
 
 	cfg       *config.Config // TigerFS configuration
-	db        *db.Client     // Database client for queries
+	db        db.DBClient    // Database client for queries
 	schema    string         // PostgreSQL schema name
 	tableName string         // Table this metadata describes
 	fileType  string         // Metadata type: "columns", "schema", or "count"
@@ -49,13 +49,13 @@ var _ fs.NodeGetattrer = (*MetadataFileNode)(nil)
 //
 // Parameters:
 //   - cfg: TigerFS configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - schema: PostgreSQL schema name
 //   - tableName: Name of the table this metadata describes
 //   - fileType: Type of metadata file ("columns", "schema", or "count")
 //
 // Returns a new MetadataFileNode ready for FUSE operations.
-func NewMetadataFileNode(cfg *config.Config, dbClient *db.Client, schema, tableName, fileType string) *MetadataFileNode {
+func NewMetadataFileNode(cfg *config.Config, dbClient db.DBClient, schema, tableName, fileType string) *MetadataFileNode {
 	return &MetadataFileNode{
 		cfg:       cfg,
 		db:        dbClient,

@@ -20,7 +20,7 @@ type TableNode struct {
 	fs.Inode
 
 	cfg         *config.Config
-	db          *db.Client
+	db          db.DBClient
 	cache       *MetadataCache
 	tableName   string
 	schema      string
@@ -36,7 +36,7 @@ var _ fs.NodeRmdirer = (*TableNode)(nil)
 var _ fs.NodeMkdirer = (*TableNode)(nil)
 
 // NewTableNode creates a new table directory node
-func NewTableNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *TableNode {
+func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *TableNode {
 	return &TableNode{
 		cfg:         cfg,
 		db:          dbClient,

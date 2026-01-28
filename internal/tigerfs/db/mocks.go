@@ -29,11 +29,12 @@ func (m *MockDDLExecutor) ExecInTransaction(ctx context.Context, sql string, arg
 
 // MockSchemaReader is a mock implementation of SchemaReader for testing.
 type MockSchemaReader struct {
-	GetCurrentSchemaFunc func(ctx context.Context) (string, error)
-	GetSchemasFunc       func(ctx context.Context) ([]string, error)
-	GetTablesFunc        func(ctx context.Context, schema string) ([]string, error)
-	GetColumnsFunc       func(ctx context.Context, schema, table string) ([]Column, error)
-	GetPrimaryKeyFunc    func(ctx context.Context, schema, table string) (*PrimaryKey, error)
+	GetCurrentSchemaFunc    func(ctx context.Context) (string, error)
+	GetSchemasFunc          func(ctx context.Context) ([]string, error)
+	GetTablesFunc           func(ctx context.Context, schema string) ([]string, error)
+	GetColumnsFunc          func(ctx context.Context, schema, table string) ([]Column, error)
+	GetPrimaryKeyFunc       func(ctx context.Context, schema, table string) (*PrimaryKey, error)
+	GetTablePermissionsFunc func(ctx context.Context, schema, table string) (*TablePermissions, error)
 }
 
 var _ SchemaReader = (*MockSchemaReader)(nil)
@@ -71,6 +72,13 @@ func (m *MockSchemaReader) GetPrimaryKey(ctx context.Context, schema, table stri
 		return m.GetPrimaryKeyFunc(ctx, schema, table)
 	}
 	return &PrimaryKey{Columns: []string{"id"}}, nil
+}
+
+func (m *MockSchemaReader) GetTablePermissions(ctx context.Context, schema, table string) (*TablePermissions, error) {
+	if m.GetTablePermissionsFunc != nil {
+		return m.GetTablePermissionsFunc(ctx, schema, table)
+	}
+	return &TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}, nil
 }
 
 // MockRowReader is a mock implementation of RowReader for testing.

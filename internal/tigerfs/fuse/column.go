@@ -21,7 +21,7 @@ type ColumnFileNode struct {
 	fs.Inode
 
 	cfg         *config.Config     // TigerFS configuration
-	db          *db.Client         // Database client for queries
+	db          db.DBClient        // Database client for queries
 	cache       *MetadataCache     // Metadata cache for permissions lookup
 	schema      string             // PostgreSQL schema name
 	tableName   string             // Table name
@@ -43,7 +43,7 @@ var _ fs.NodeSetattrer = (*ColumnFileNode)(nil)
 //
 // Parameters:
 //   - cfg: TigerFS configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: PostgreSQL schema name
 //   - tableName: Table name
@@ -51,7 +51,7 @@ var _ fs.NodeSetattrer = (*ColumnFileNode)(nil)
 //   - pkValue: Primary key value identifying the row
 //   - columnName: Column name this file represents
 //   - partialRows: Tracker for uncommitted partial rows
-func NewColumnFileNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName, pkColumn, pkValue, columnName string, partialRows *PartialRowTracker) *ColumnFileNode {
+func NewColumnFileNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, pkColumn, pkValue, columnName string, partialRows *PartialRowTracker) *ColumnFileNode {
 	return &ColumnFileNode{
 		cfg:         cfg,
 		db:          dbClient,

@@ -29,7 +29,7 @@ type PaginationNode struct {
 	fs.Inode
 
 	cfg            *config.Config     // TigerFS configuration
-	db             *db.Client         // Database client for queries
+	db             db.DBClient        // Database client for queries
 	cache          *MetadataCache     // Metadata cache for permissions lookup
 	schema         string             // PostgreSQL schema name
 	tableName      string             // Table this pagination belongs to
@@ -52,7 +52,7 @@ var _ fs.NodeLookuper = (*PaginationNode)(nil)
 //   - tableName: Name of the table
 //   - paginationType: PaginationFirst or PaginationLast
 //   - partialRows: Tracker for partial row writes
-func NewPaginationNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker) *PaginationNode {
+func NewPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker) *PaginationNode {
 	return &PaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -125,7 +125,7 @@ type PaginationLimitNode struct {
 	fs.Inode
 
 	cfg            *config.Config     // TigerFS configuration
-	db             *db.Client         // Database client for queries
+	db             db.DBClient        // Database client for queries
 	cache          *MetadataCache     // Metadata cache for permissions lookup
 	schema         string             // PostgreSQL schema name
 	tableName      string             // Table this pagination belongs to
@@ -143,14 +143,14 @@ var _ fs.NodeLookuper = (*PaginationLimitNode)(nil)
 //
 // Parameters:
 //   - cfg: TigerFS configuration
-//   - dbClient: Database client for queries
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
 //   - cache: Metadata cache for permission lookups (may be nil for fallback to 0644)
 //   - schema: PostgreSQL schema name
 //   - tableName: Name of the table
 //   - paginationType: PaginationFirst or PaginationLast
 //   - limit: Maximum number of rows to list
 //   - partialRows: Tracker for partial row writes
-func NewPaginationLimitNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *PaginationLimitNode {
+func NewPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *PaginationLimitNode {
 	return &PaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,
