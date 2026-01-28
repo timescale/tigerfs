@@ -105,6 +105,7 @@ func TestIndexesNode_Readdir_Empty(t *testing.T) {
 
 // TestIndexCreateDirNode_Mkdir tests creating a new index staging entry
 func TestIndexCreateDirNode_Mkdir(t *testing.T) {
+	ctx := context.Background()
 	cfg := &config.Config{}
 	mock := db.NewMockDBClient()
 	staging := NewStagingTracker()
@@ -114,7 +115,7 @@ func TestIndexCreateDirNode_Mkdir(t *testing.T) {
 	// Simulate what Mkdir does - it should create a staging entry
 	// We test the staging logic directly since Mkdir requires FUSE bridge for NewPersistentInode
 	path := "users/.indexes/.create/email_idx"
-	template := node.generateIndexTemplate("email_idx")
+	template := node.generateIndexTemplate(ctx, "email_idx")
 	staging.Set(path, template)
 
 	// Verify staging entry was created
@@ -144,12 +145,13 @@ func TestIndexCreateDirNode_Mkdir(t *testing.T) {
 
 // TestIndexCreateDirNode_GenerateTemplate tests template generation
 func TestIndexCreateDirNode_GenerateTemplate(t *testing.T) {
+	ctx := context.Background()
 	cfg := &config.Config{}
 	mock := db.NewMockDBClient()
 	staging := NewStagingTracker()
 
 	node := NewIndexCreateDirNode(cfg, mock, "public", "users", staging)
-	template := node.generateIndexTemplate("email_idx")
+	template := node.generateIndexTemplate(ctx, "email_idx")
 
 	// Template should contain index name and table name
 	if template == "" {
@@ -168,16 +170,116 @@ func TestIndexCreateDirNode_GenerateTemplate(t *testing.T) {
 
 // TestIndexCreateDirNode_GenerateTemplate_NonDefaultSchema tests template with schema prefix
 func TestIndexCreateDirNode_GenerateTemplate_NonDefaultSchema(t *testing.T) {
+	ctx := context.Background()
 	cfg := &config.Config{}
 	mock := db.NewMockDBClient()
 	staging := NewStagingTracker()
 
 	node := NewIndexCreateDirNode(cfg, mock, "analytics", "events", staging)
-	template := node.generateIndexTemplate("event_time_idx")
+	template := node.generateIndexTemplate(ctx, "event_time_idx")
 
 	// Template should contain qualified table name
 	if !contains(template, "analytics.events") {
 		t.Error("Template should contain schema-qualified table name")
+	}
+}
+
+// TestIndexCreateDirNode_GenerateTemplate_ColumnInference tests column inference from index name
+func TestIndexCreateDirNode_GenerateTemplate_ColumnInference(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+
+	// Create mock with columns
+	mock := db.NewMockDBClient()
+	mock.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "email", DataType: "text"},
+			{Name: "name", DataType: "text"},
+			{Name: "created_at", DataType: "timestamp"},
+		}, nil
+	}
+
+	node := NewIndexCreateDirNode(cfg, mock, "public", "users", staging)
+
+	tests := []struct {
+		indexName      string
+		expectColumn   string
+		expectInferred bool
+	}{
+		{"idx_email", "email", true},
+		{"email_idx", "email", true},
+		{"email_index", "email", true},
+		{"idx_name", "name", true},
+		{"name", "name", true},             // just the column name
+		{"users_email_idx", "email", true}, // table prefix stripped (no 'users' column)
+		{"users_email", "email", true},     // table prefix stripped without suffix
+		{"idx_foo", "", false},             // no matching column
+		{"idx_", "", false},                // empty after prefix
+		{"random_name", "", false},         // no pattern match
+		{"created_at_idx", "", false},      // ambiguous (contains underscore after strip)
+		{"idx_created_at", "", false},      // ambiguous (contains underscore after strip)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.indexName, func(t *testing.T) {
+			template := node.generateIndexTemplate(ctx, tt.indexName)
+
+			if tt.expectInferred {
+				// Should have "Inferred column" comment and uncommented CREATE INDEX
+				if !contains(template, "Inferred column: "+tt.expectColumn) {
+					t.Errorf("Expected 'Inferred column: %s' in template", tt.expectColumn)
+				}
+				// Should have uncommented CREATE INDEX with the column
+				expected := "CREATE INDEX " + tt.indexName + " ON users (" + tt.expectColumn + ");"
+				if !contains(template, expected) {
+					t.Errorf("Expected uncommented '%s' in template, got:\n%s", expected, template)
+				}
+			} else {
+				// Should have commented CREATE INDEX
+				if contains(template, "Inferred column") {
+					t.Error("Should not have inferred column")
+				}
+				if !contains(template, "-- CREATE INDEX") {
+					t.Error("CREATE INDEX should be commented out when no column inferred")
+				}
+				if !contains(template, "Uncomment and replace column_name") {
+					t.Error("Should have instruction to uncomment")
+				}
+			}
+		})
+	}
+}
+
+// TestIndexCreateDirNode_GenerateTemplate_ColumnInference_WithTableNameColumn tests
+// that table prefix stripping is disabled when there's a column named the same as the table.
+func TestIndexCreateDirNode_GenerateTemplate_ColumnInference_WithTableNameColumn(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+
+	// Create mock with a column named 'users' (same as table name)
+	mock := db.NewMockDBClient()
+	mock.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "users", DataType: "integer"},  // column same as table name!
+			{Name: "email", DataType: "text"},
+		}, nil
+	}
+
+	node := NewIndexCreateDirNode(cfg, mock, "public", "users", staging)
+
+	// users_email_idx should NOT infer email because 'users' is a column
+	// (could be composite index on users, email)
+	template := node.generateIndexTemplate(ctx, "users_email_idx")
+
+	if contains(template, "Inferred column") {
+		t.Error("Should not infer column when table name is also a column name")
+	}
+	if !contains(template, "-- CREATE INDEX") {
+		t.Error("CREATE INDEX should be commented out")
 	}
 }
 

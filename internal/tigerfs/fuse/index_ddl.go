@@ -9,6 +9,7 @@ package fuse
 import (
 	"context"
 	"fmt"
+	"strings"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -512,8 +513,8 @@ func (n *IndexCreateDirNode) Mkdir(ctx context.Context, name string, mode uint32
 	// Create staging entry
 	path := fmt.Sprintf("%s/.indexes/.create/%s", n.tableName, name)
 
-	// Generate template for index creation
-	template := n.generateIndexTemplate(name)
+	// Generate template for index creation (with column inference)
+	template := n.generateIndexTemplate(ctx, name)
 	n.staging.Set(path, template)
 
 	return n.createStagingNode(ctx, name, out)
@@ -546,12 +547,44 @@ func (n *IndexCreateDirNode) createStagingNode(ctx context.Context, name string,
 }
 
 // generateIndexTemplate generates a CREATE INDEX template.
-func (n *IndexCreateDirNode) generateIndexTemplate(indexName string) string {
+// Attempts to infer the column name from the index name.
+func (n *IndexCreateDirNode) generateIndexTemplate(ctx context.Context, indexName string) string {
 	qualifiedTable := n.tableName
 	if n.schema != "" && n.schema != "public" {
 		qualifiedTable = fmt.Sprintf("%s.%s", n.schema, n.tableName)
 	}
 
+	// Try to infer column from index name
+	inferredColumn := n.inferColumnFromIndexName(ctx, indexName)
+
+	if inferredColumn != "" {
+		// Column inferred - leave CREATE INDEX uncommented
+		return fmt.Sprintf(`-- Create index: %s
+-- Table: %s
+-- Inferred column: %s (from index name)
+--
+-- Modify this template if needed.
+-- Then run: touch .test  (to validate)
+-- Finally:  touch .commit (to execute)
+--
+-- Examples:
+--   CREATE INDEX %s ON %s (%s);
+--   CREATE UNIQUE INDEX %s ON %s (%s);
+--   CREATE INDEX %s ON %s (col1, col2);
+--   CREATE INDEX %s ON %s USING gin (jsonb_column);
+--
+CREATE INDEX %s ON %s (%s);
+`,
+			indexName, qualifiedTable, inferredColumn,
+			indexName, qualifiedTable, inferredColumn,
+			indexName, qualifiedTable, inferredColumn,
+			indexName, qualifiedTable,
+			indexName, qualifiedTable,
+			indexName, qualifiedTable, inferredColumn,
+		)
+	}
+
+	// No column inferred - comment out the CREATE INDEX
 	return fmt.Sprintf(`-- Create index: %s
 -- Table: %s
 --
@@ -565,7 +598,8 @@ func (n *IndexCreateDirNode) generateIndexTemplate(indexName string) string {
 --   CREATE INDEX %s ON %s (col1, col2);
 --   CREATE INDEX %s ON %s USING gin (jsonb_column);
 --
-CREATE INDEX %s ON %s (column_name);
+-- Uncomment and replace column_name with your column:
+-- CREATE INDEX %s ON %s (column_name);
 `,
 		indexName, qualifiedTable,
 		indexName, qualifiedTable,
@@ -574,4 +608,106 @@ CREATE INDEX %s ON %s (column_name);
 		indexName, qualifiedTable,
 		indexName, qualifiedTable,
 	)
+}
+
+// inferColumnFromIndexName tries to extract a column name from an index name.
+// Returns the column name if exactly one match is found, empty string otherwise.
+func (n *IndexCreateDirNode) inferColumnFromIndexName(ctx context.Context, indexName string) string {
+	// Get table columns
+	columns, err := n.db.GetColumns(ctx, n.schema, n.tableName)
+	if err != nil {
+		logging.Debug("Failed to get columns for index inference",
+			zap.String("table", n.tableName),
+			zap.Error(err))
+		return ""
+	}
+
+	// Build set of column names (lowercase for matching)
+	columnSet := make(map[string]string) // lowercase -> actual name
+	hasTableNameColumn := false
+	for _, col := range columns {
+		columnSet[strings.ToLower(col.Name)] = col.Name
+		if strings.ToLower(col.Name) == strings.ToLower(n.tableName) {
+			hasTableNameColumn = true
+		}
+	}
+
+	// Try to extract column name from index name
+	// Common patterns: idx_<column>, <column>_idx, <table>_<column>_idx
+	candidates := extractColumnCandidates(indexName, n.tableName, hasTableNameColumn)
+
+	var matches []string
+	for _, candidate := range candidates {
+		if actual, ok := columnSet[strings.ToLower(candidate)]; ok {
+			matches = append(matches, actual)
+		}
+	}
+
+	// Only return if exactly one match (no ambiguity)
+	if len(matches) == 1 {
+		return matches[0]
+	}
+
+	return ""
+}
+
+// extractColumnCandidates extracts potential column names from an index name.
+// Handles patterns like idx_<column>, <column>_idx, and <table>_<column>_idx.
+// The hasTableNameColumn flag indicates if there's a column with the same name as the table,
+// which would make <table>_<column>_idx ambiguous.
+func extractColumnCandidates(indexName, tableName string, hasTableNameColumn bool) []string {
+	name := strings.ToLower(indexName)
+	table := strings.ToLower(tableName)
+
+	var candidates []string
+
+	// Remove common prefixes: idx_email -> email
+	prefixes := []string{"idx_", "ix_", "index_"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(name, prefix) {
+			rest := strings.TrimPrefix(name, prefix)
+			if rest != "" && !strings.Contains(rest, "_") {
+				// Only add if no underscores remain (single column name)
+				candidates = append(candidates, rest)
+			}
+		}
+	}
+
+	// Remove common suffixes: email_idx -> email
+	suffixes := []string{"_idx", "_ix", "_index"}
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(name, suffix) {
+			rest := strings.TrimSuffix(name, suffix)
+			if rest != "" && !strings.Contains(rest, "_") {
+				// Only add if no underscores remain (single column name)
+				candidates = append(candidates, rest)
+			}
+		}
+	}
+
+	// Handle <table>_<column>_idx pattern (e.g., users_email_idx on users table)
+	// Only if there's no column named the same as the table (to avoid ambiguity)
+	if !hasTableNameColumn && strings.HasPrefix(name, table+"_") {
+		rest := strings.TrimPrefix(name, table+"_")
+		// Try removing suffix from the rest
+		for _, suffix := range suffixes {
+			if strings.HasSuffix(rest, suffix) {
+				col := strings.TrimSuffix(rest, suffix)
+				if col != "" && !strings.Contains(col, "_") {
+					candidates = append(candidates, col)
+				}
+			}
+		}
+		// Also try without suffix (e.g., users_email)
+		if !strings.Contains(rest, "_") {
+			candidates = append(candidates, rest)
+		}
+	}
+
+	// Also try the original name (might be just the column name)
+	if !strings.Contains(name, "_") {
+		candidates = append(candidates, name)
+	}
+
+	return candidates
 }
