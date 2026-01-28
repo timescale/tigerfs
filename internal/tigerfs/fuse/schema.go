@@ -187,7 +187,7 @@ func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		zap.String("table", name))
 
 	// Create table node with this schema (not the default schema)
-	tableNode := NewTableNode(s.cfg, s.db, s.cache, s.schema, name, s.partialRows)
+	tableNode := NewTableNode(s.cfg, s.db, s.cache, s.schema, name, s.partialRows, s.staging)
 	child := s.NewPersistentInode(ctx, tableNode, stableAttr)
 
 	return child, 0

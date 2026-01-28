@@ -962,3 +962,439 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+// =============================================================================
+// Table Modify Workflow Tests (Task 5.6)
+// =============================================================================
+
+// TestTableModifyWorkflow_WithMocks tests the complete table modification workflow.
+// Workflow: ls table/.modify/ -> cat .schema -> echo "ALTER..." > .schema -> touch .test -> touch .commit
+func TestTableModifyWorkflow_WithMocks(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{DefaultSchema: "public"}
+	staging := NewStagingTracker()
+
+	// Track what SQL was executed
+	var testedSQL, committedSQL string
+	testCalled := false
+	commitCalled := false
+
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			testCalled = true
+			testedSQL = sql
+			return nil
+		},
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			commitCalled = true
+			committedSQL = sql
+			return nil
+		},
+	}
+
+	// Step 1: Create StagingDirNode for modify operation (simulates /users/.modify/ directory)
+	stagingPath := "users/.modify"
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLModify,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	stagingNode := NewStagingDirNode(cfg, mockDB, staging, stagingCtx)
+	if stagingNode == nil {
+		t.Fatal("NewStagingDirNode returned nil")
+	}
+
+	// Step 2: Create the staging entry (simulates accessing the .modify directory)
+	staging.GetOrCreate(stagingPath)
+	if staging.Get(stagingPath) == nil {
+		t.Fatal("Staging entry should be created")
+	}
+
+	// Step 3: Create SchemaFileNode and write ALTER DDL (simulates echo "ALTER..." > .modify/.schema)
+	schemaNode := NewSchemaFileNode(cfg, mockDB, staging, stagingCtx)
+	fh, _, errno := schemaNode.Open(ctx, 0)
+	if errno != 0 {
+		t.Fatalf("SchemaFileNode.Open failed: %d", errno)
+	}
+
+	sfh := fh.(*SchemaFileHandle)
+	alterDDL := []byte(`ALTER TABLE "public"."users" ADD COLUMN email TEXT NOT NULL;`)
+	written, errno := sfh.Write(ctx, alterDDL, 0)
+	if errno != 0 {
+		t.Fatalf("SchemaFileHandle.Write failed: %d", errno)
+	}
+	if written != uint32(len(alterDDL)) {
+		t.Errorf("Expected %d bytes written, got %d", len(alterDDL), written)
+	}
+
+	// Verify content was stored
+	if staging.GetContent(stagingPath) != string(alterDDL) {
+		t.Error("ALTER DDL content should be stored in staging")
+	}
+
+	// Step 4: Create TestFileNode and run test (simulates touch .modify/.test)
+	testNode := NewTestFileNode(cfg, mockDB, staging, stagingCtx)
+	if testNode == nil {
+		t.Fatal("NewTestFileNode returned nil")
+	}
+
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err != nil {
+		t.Fatalf("DDL test failed: %v", err)
+	}
+
+	if !testCalled {
+		t.Error("ExecInTransaction should have been called")
+	}
+	if testedSQL != string(alterDDL) {
+		t.Errorf("Expected tested SQL %q, got %q", string(alterDDL), testedSQL)
+	}
+
+	// Verify test result
+	result := staging.GetTestResult(stagingPath)
+	if result != "OK: DDL validated successfully.\n" {
+		t.Errorf("Expected success result, got %q", result)
+	}
+
+	// Step 5: Create CommitFileNode and commit (simulates touch .modify/.commit)
+	commitNode := NewCommitFileNode(cfg, mockDB, staging, stagingCtx)
+	if commitNode == nil {
+		t.Fatal("NewCommitFileNode returned nil")
+	}
+
+	err = runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Fatalf("DDL commit failed: %v", err)
+	}
+
+	if !commitCalled {
+		t.Error("Exec should have been called")
+	}
+	if committedSQL != string(alterDDL) {
+		t.Errorf("Expected committed SQL %q, got %q", string(alterDDL), committedSQL)
+	}
+
+	// Verify staging was cleared after successful commit
+	if staging.HasContent(stagingPath) {
+		t.Error("Staging should be cleared after successful commit")
+	}
+}
+
+// TestTableModifyWorkflow_Abort tests aborting a table modification clears staging.
+func TestTableModifyWorkflow_Abort(t *testing.T) {
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	cfg := &config.Config{DefaultSchema: "public"}
+
+	stagingPath := "users/.modify"
+
+	// Create staging entry and write ALTER DDL
+	staging.Set(stagingPath, `ALTER TABLE "public"."users" ADD COLUMN status TEXT;`)
+
+	if !staging.HasContent(stagingPath) {
+		t.Fatal("Content should exist before abort")
+	}
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLModify,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	// Create AbortFileNode and trigger abort
+	abortNode := NewAbortFileNode(cfg, mockDB, staging, stagingCtx)
+	abortNode.runAbort()
+
+	// Verify staging was cleared
+	if staging.HasContent(stagingPath) {
+		t.Error("Staging should be cleared after abort")
+	}
+	if staging.Get(stagingPath) != nil {
+		t.Error("Staging entry should be deleted after abort")
+	}
+}
+
+// TestTableModifyWorkflow_CommitFailure tests that staging is preserved on alter failure.
+func TestTableModifyWorkflow_CommitFailure(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	// Mock that returns an error
+	mockDB := &db.MockDDLExecutor{
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			return errors.New("column \"email\" of relation \"users\" already exists")
+		},
+	}
+
+	stagingPath := "users/.modify"
+	alterDDL := `ALTER TABLE "public"."users" ADD COLUMN email TEXT;`
+	staging.Set(stagingPath, alterDDL)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLModify,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	// Attempt commit - should fail
+	err := runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err == nil {
+		t.Error("Expected commit to fail")
+	}
+
+	// Verify staging is preserved so user can fix and retry
+	if !staging.HasContent(stagingPath) {
+		t.Error("Staging should be preserved after failed commit")
+	}
+	if staging.GetContent(stagingPath) != alterDDL {
+		t.Error("DDL content should be unchanged after failed commit")
+	}
+}
+
+// TestTableModifyWorkflow_TestFailure tests that test failure reports error but preserves staging.
+func TestTableModifyWorkflow_TestFailure(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	// Mock that returns a validation error
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			return errors.New(`column "nonexistent" does not exist`)
+		},
+	}
+
+	stagingPath := "users/.modify"
+	alterDDL := `ALTER TABLE "public"."users" DROP COLUMN nonexistent;` // Column doesn't exist
+	staging.Set(stagingPath, alterDDL)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLModify,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	// Test should fail
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err == nil {
+		t.Error("Expected test to fail")
+	}
+
+	// Verify error was recorded
+	result := staging.GetTestResult(stagingPath)
+	if result == "" {
+		t.Error("Test result should be recorded")
+	}
+	if !containsHelper(result, "does not exist") {
+		t.Errorf("Expected error message in result, got %q", result)
+	}
+
+	// Verify staging is preserved so user can fix
+	if !staging.HasContent(stagingPath) {
+		t.Error("Staging should be preserved after failed test")
+	}
+}
+
+// TestTableModifyWorkflow_MultipleAlterStatements tests multiple ALTER statements in one commit.
+func TestTableModifyWorkflow_MultipleAlterStatements(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	var committedSQL string
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			return nil
+		},
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			committedSQL = sql
+			return nil
+		},
+	}
+
+	stagingPath := "users/.modify"
+	// Multiple ALTER statements separated by semicolons
+	multiAlterDDL := `ALTER TABLE "public"."users" ADD COLUMN email TEXT;
+ALTER TABLE "public"."users" ADD COLUMN phone TEXT;
+ALTER TABLE "public"."users" DROP COLUMN old_column;`
+	staging.Set(stagingPath, multiAlterDDL)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLModify,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	// Test and commit
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err != nil {
+		t.Fatalf("Test failed: %v", err)
+	}
+
+	err = runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	// Verify all statements were passed through
+	if committedSQL != multiAlterDDL {
+		t.Errorf("Expected all ALTER statements, got %q", committedSQL)
+	}
+}
+
+// TestSchemaFileNode_ModifyTemplate tests that modify template is generated correctly.
+func TestSchemaFileNode_ModifyTemplate(t *testing.T) {
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	stagingPath := "users/.modify"
+
+	// Create staging entry with no content
+	staging.GetOrCreate(stagingPath)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLModify,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	node := NewSchemaFileNode(cfg, mockDB, staging, stagingCtx)
+	ctx := context.Background()
+
+	// Get content (should generate modify template since no content exists)
+	content := node.getContent(ctx)
+
+	// Verify template was generated with modify-specific content
+	if content == "" {
+		t.Error("Expected modify template to be generated")
+	}
+	if !containsHelper(content, "Modify") {
+		t.Error("Template should indicate modification")
+	}
+	if !containsHelper(content, "users") {
+		t.Error("Template should contain table name 'users'")
+	}
+	if !containsHelper(content, "ALTER TABLE") {
+		t.Error("Template should contain ALTER TABLE hint")
+	}
+}
+
+// =============================================================================
+// Table Delete Workflow Tests (Task 5.7 preparation)
+// =============================================================================
+
+// TestTableDeleteWorkflow_WithMocks tests the complete table deletion workflow.
+func TestTableDeleteWorkflow_WithMocks(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	var committedSQL string
+	commitCalled := false
+
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			return nil
+		},
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			commitCalled = true
+			committedSQL = sql
+			return nil
+		},
+	}
+
+	stagingPath := "users/.delete"
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLDelete,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	// Create staging entry
+	staging.GetOrCreate(stagingPath)
+
+	// Write DROP TABLE DDL
+	dropDDL := `DROP TABLE "public"."users";`
+	staging.Set(stagingPath, dropDDL)
+
+	// Test and commit
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err != nil {
+		t.Fatalf("Test failed: %v", err)
+	}
+
+	err = runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	if !commitCalled {
+		t.Error("Exec should have been called")
+	}
+	if committedSQL != dropDDL {
+		t.Errorf("Expected committed SQL %q, got %q", dropDDL, committedSQL)
+	}
+
+	// Verify staging was cleared
+	if staging.HasContent(stagingPath) {
+		t.Error("Staging should be cleared after successful commit")
+	}
+}
+
+// TestSchemaFileNode_DeleteTemplate tests that delete template is generated correctly.
+func TestSchemaFileNode_DeleteTemplate(t *testing.T) {
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	stagingPath := "users/.delete"
+
+	// Create staging entry with no content
+	staging.GetOrCreate(stagingPath)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLDelete,
+		ObjectType:  "table",
+		ObjectName:  "users",
+		Schema:      "public",
+		TableName:   "users",
+	}
+
+	node := NewSchemaFileNode(nil, mockDB, staging, stagingCtx)
+	ctx := context.Background()
+
+	// Get content (should generate delete template since no content exists)
+	content := node.getContent(ctx)
+
+	// Verify template was generated with delete-specific content
+	if content == "" {
+		t.Error("Expected delete template to be generated")
+	}
+	if !containsHelper(content, "Delete") {
+		t.Error("Template should indicate deletion")
+	}
+	if !containsHelper(content, "users") {
+		t.Error("Template should contain table name 'users'")
+	}
+	if !containsHelper(content, "DROP TABLE") {
+		t.Error("Template should contain DROP TABLE hint")
+	}
+}

@@ -17,7 +17,7 @@ func TestNewTableNode(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	tableNode := NewTableNode(cfg, nil, nil, "myschema", "users", partialRows)
+	tableNode := NewTableNode(cfg, nil, nil, "myschema", "users", partialRows, nil)
 
 	if tableNode.cfg != cfg {
 		t.Error("Expected config to be set")
@@ -43,7 +43,7 @@ func TestNewTableNode(t *testing.T) {
 // TestTableNode_Interfaces verifies that TableNode implements required interfaces
 func TestTableNode_Interfaces(t *testing.T) {
 	cfg := &config.Config{}
-	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil)
+	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil, nil)
 
 	// Verify interface assertions compile (checked at compile time via var _ declarations)
 	_ = tableNode
@@ -56,7 +56,7 @@ func TestTableNode_Getattr(t *testing.T) {
 		DirListingLimit: 10000,
 	}
 
-	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil)
+	tableNode := NewTableNode(cfg, nil, nil, "public", "users", nil, nil)
 	ctx := context.Background()
 
 	var out fuse.AttrOut
@@ -92,7 +92,7 @@ func TestTableNode_Getattr_DifferentTables(t *testing.T) {
 
 	for _, tableName := range tables {
 		t.Run(tableName, func(t *testing.T) {
-			tableNode := NewTableNode(cfg, nil, nil, "public", tableName, nil)
+			tableNode := NewTableNode(cfg, nil, nil, "public", tableName, nil, nil)
 
 			var out fuse.AttrOut
 			errno := tableNode.Getattr(ctx, nil, &out)
@@ -125,7 +125,7 @@ func TestTableNode_MultipleSchemas(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.schema+"_"+tc.tableName, func(t *testing.T) {
-			node := NewTableNode(cfg, nil, nil, tc.schema, tc.tableName, nil)
+			node := NewTableNode(cfg, nil, nil, tc.schema, tc.tableName, nil, nil)
 
 			if node.schema != tc.schema {
 				t.Errorf("Expected schema=%q, got %q", tc.schema, node.schema)
@@ -156,7 +156,7 @@ func TestTableNode_Readdir_WithMock(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows, nil)
 
 	stream, errno := node.Readdir(context.Background())
 
@@ -205,7 +205,7 @@ func TestTableNode_Readdir_WithMock_Empty(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows, nil)
 
 	stream, errno := node.Readdir(context.Background())
 
@@ -242,7 +242,7 @@ func TestTableNode_Readdir_WithMock_Error(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows, nil)
 
 	_, errno := node.Readdir(context.Background())
 
@@ -295,7 +295,7 @@ func TestTableNode_Unlink_WithMock(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows, nil)
 
 	errno := node.Unlink(context.Background(), "1")
 
@@ -325,7 +325,7 @@ func TestTableNode_Unlink_WithMock_Error(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows, nil)
 
 	errno := node.Unlink(context.Background(), "1")
 
@@ -351,7 +351,7 @@ func TestTableNode_Rmdir_WithMock(t *testing.T) {
 	}
 
 	partialRows := NewPartialRowTracker(nil)
-	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows, nil)
 
 	errno := node.Rmdir(context.Background(), "1")
 

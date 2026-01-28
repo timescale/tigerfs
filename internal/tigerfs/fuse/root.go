@@ -159,8 +159,8 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		defaultSchema = r.cfg.DefaultSchema
 	}
 
-	// Create table node with database client, cache, and partial row tracker
-	tableNode := NewTableNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows)
+	// Create table node with database client, cache, partial row tracker, and staging
+	tableNode := NewTableNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows, r.staging)
 
 	child := r.NewPersistentInode(ctx, tableNode, stableAttr)
 	return child, 0

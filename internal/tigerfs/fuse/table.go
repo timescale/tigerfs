@@ -25,6 +25,7 @@ type TableNode struct {
 	tableName   string
 	schema      string
 	partialRows *PartialRowTracker
+	staging     *StagingTracker
 }
 
 var _ fs.InodeEmbedder = (*TableNode)(nil)
@@ -36,7 +37,7 @@ var _ fs.NodeRmdirer = (*TableNode)(nil)
 var _ fs.NodeMkdirer = (*TableNode)(nil)
 
 // NewTableNode creates a new table directory node
-func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *TableNode {
+func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, staging *StagingTracker) *TableNode {
 	return &TableNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -44,6 +45,7 @@ func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 		tableName:   tableName,
 		schema:      schema,
 		partialRows: partialRows,
+		staging:     staging,
 	}
 }
 
@@ -149,11 +151,19 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
+			Name: ".delete",
+			Mode: syscall.S_IFDIR,
+		},
+		fuse.DirEntry{
 			Name: ".first",
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
 			Name: ".last",
+			Mode: syscall.S_IFDIR,
+		},
+		fuse.DirEntry{
+			Name: ".modify",
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
@@ -215,6 +225,16 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Check if this is a metadata file lookup
 	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" || name == ".indexes" {
 		return t.lookupMetadataFile(ctx, name, out)
+	}
+
+	// Check if this is the .modify directory (ALTER TABLE staging)
+	if name == ".modify" {
+		return t.lookupModifyDirectory(ctx)
+	}
+
+	// Check if this is the .delete directory (DROP TABLE staging)
+	if name == ".delete" {
+		return t.lookupDeleteDirectory(ctx)
 	}
 
 	// Check if this is the .all directory (bypass dir_listing_limit)
@@ -705,6 +725,64 @@ func (t *TableNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 	logging.Debug("Row directory created",
 		zap.String("table", t.tableName),
 		zap.String("pk", pkValue))
+
+	return child, 0
+}
+
+// lookupModifyDirectory handles lookup for the .modify directory (ALTER TABLE staging).
+func (t *TableNode) lookupModifyDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .modify directory",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	stagingCtx := StagingContext{
+		ObjectType:  "table",
+		ObjectName:  t.tableName,
+		Schema:      t.schema,
+		TableName:   t.tableName,
+		Operation:   DDLModify,
+		StagingPath: t.tableName + "/.modify",
+	}
+
+	modifyNode := NewStagingDirNode(t.cfg, t.db, t.staging, stagingCtx)
+	child := t.NewPersistentInode(ctx, modifyNode, stableAttr)
+
+	logging.Debug("Created .modify directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
+// lookupDeleteDirectory handles lookup for the .delete directory (DROP TABLE staging).
+func (t *TableNode) lookupDeleteDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .delete directory",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	stagingCtx := StagingContext{
+		ObjectType:  "table",
+		ObjectName:  t.tableName,
+		Schema:      t.schema,
+		TableName:   t.tableName,
+		Operation:   DDLDelete,
+		StagingPath: t.tableName + "/.delete",
+	}
+
+	deleteNode := NewStagingDirNode(t.cfg, t.db, t.staging, stagingCtx)
+	child := t.NewPersistentInode(ctx, deleteNode, stableAttr)
+
+	logging.Debug("Created .delete directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
 
 	return child, 0
 }
