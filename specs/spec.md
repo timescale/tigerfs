@@ -181,6 +181,7 @@
 │   │   │   └── <idx>/                    # mkdir creates staging entry
 │   │   │       ├── .sql                  # Staged CREATE INDEX DDL
 │   │   │       ├── .test                 # Touch to validate (optional)
+│   │   │       ├── .test.log             # Validation result (read-only)
 │   │   │       ├── .commit               # Touch to execute
 │   │   │       └── .abort                # Touch to cancel
 │   │   └── <idx>/                        # Existing index directories
@@ -188,6 +189,7 @@
 │   │       └── .delete/                  # Staging for deletion
 │   │           ├── .sql                  # DROP INDEX template
 │   │           ├── .test                 # Touch to validate (optional)
+│   │           ├── .test.log             # Validation result (read-only)
 │   │           ├── .commit               # Touch to execute
 │   │           └── .abort                # Touch to cancel
 │   ├── .count                            # Total row count

@@ -236,6 +236,7 @@ All DDL operations follow the same workflow:
 | 1 | Read `.sql` | See template with context (current schema, examples) |
 | 2 | Write `.sql` | Stage your DDL (stored in memory) |
 | 3 | Touch `.test` | Validate via BEGIN/ROLLBACK (optional) |
+| 3b | Read `.test.log` | See validation result (optional) |
 | 4 | Touch `.commit` | Execute DDL |
 | — | Touch `.abort` | Cancel and clear staging |
 
@@ -257,6 +258,7 @@ mkdir /mnt/db/.create/orders           # Create staging directory
 cat /mnt/db/.create/orders/.sql        # See template with hints
 vi /mnt/db/.create/orders/.sql         # Edit template
 touch /mnt/db/.create/orders/.test     # Validate (optional)
+cat /mnt/db/.create/orders/.test.log   # See validation result
 touch /mnt/db/.create/orders/.commit   # Execute
 ```
 
@@ -276,6 +278,7 @@ touch /mnt/db/.create/orders/.commit
 mkdir /mnt/db/.create/orders           # Create staging directory
 vi /mnt/db/.create/orders/.sql         # Edit template: add your columns
 touch /mnt/db/.create/orders/.test     # Validate (optional)
+cat /mnt/db/.create/orders/.test.log   # View validation result
 touch /mnt/db/.create/orders/.commit   # Execute
 
 # Create table (script workflow)
@@ -285,6 +288,7 @@ touch /mnt/db/.create/orders/.commit
 # Modify table (human workflow)
 vi /mnt/db/users/.modify/.sql          # Edit: see current schema, add ALTER statement
 touch /mnt/db/users/.modify/.test      # Validate (optional)
+cat /mnt/db/users/.modify/.test.log    # View validation result
 touch /mnt/db/users/.modify/.commit    # Execute
 
 # Modify table (script workflow)

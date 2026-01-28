@@ -302,6 +302,7 @@ func (fh *SchemaFileHandle) Write(ctx context.Context, data []byte, off int64) (
 
 // TestFileNode represents a .test file in a staging directory.
 // Touch/open triggers DDL validation via BEGIN/ROLLBACK.
+// This is a trigger-only file - results are read from .test.log.
 type TestFileNode struct {
 	fs.Inode
 
@@ -327,37 +328,32 @@ func NewTestFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *Stagi
 }
 
 // Getattr returns attributes for the .test file.
+// Size is always 0 since this is a trigger-only file.
 func (t *TestFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	result := t.staging.GetTestResult(t.ctx.StagingPath)
-
 	out.Mode = 0644 | syscall.S_IFREG
 	out.Nlink = 1
-	out.Size = uint64(len(result))
+	out.Size = 0 // Trigger-only file, no readable content
 
 	return 0
 }
 
-// Open opens the .test file. If opened for writing, triggers validation.
+// Open opens the .test file. Any open triggers validation.
+// Results are written to .test.log for reading.
 func (t *TestFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	logging.Debug("TestFileNode.Open called",
 		zap.String("path", t.ctx.StagingPath),
 		zap.Uint32("flags", flags))
 
-	// If opened for writing (including O_WRONLY), trigger test
-	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-		if err := t.runTest(ctx); err != nil {
-			logging.Error("DDL test failed",
-				zap.String("path", t.ctx.StagingPath),
-				zap.Error(err))
-			return nil, 0, syscall.EIO
-		}
+	// Any open triggers the test (touch, cat, echo, etc.)
+	if err := t.runTest(ctx); err != nil {
+		logging.Error("DDL test failed",
+			zap.String("path", t.ctx.StagingPath),
+			zap.Error(err))
+		return nil, 0, syscall.EIO
 	}
 
-	// Return file handle for reading test result
-	result := t.staging.GetTestResult(t.ctx.StagingPath)
-	fh := &TestFileHandle{content: []byte(result)}
-
-	return fh, fuse.FOPEN_DIRECT_IO, 0
+	// Return nil file handle - this is a trigger-only file
+	return nil, 0, 0
 }
 
 // Setattr handles touch operations (utime) which trigger validation.
@@ -375,10 +371,9 @@ func (t *TestFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.S
 		}
 	}
 
-	result := t.staging.GetTestResult(t.ctx.StagingPath)
 	out.Mode = 0644 | syscall.S_IFREG
 	out.Nlink = 1
-	out.Size = uint64(len(result))
+	out.Size = 0 // Trigger-only file
 
 	return 0
 }
@@ -419,15 +414,66 @@ func (t *TestFileNode) runTest(ctx context.Context) error {
 	return nil
 }
 
-// TestFileHandle handles read operations on .test files.
-type TestFileHandle struct {
+// TestLogFileNode represents a .test.log file in a staging directory.
+// This is a read-only file that shows the results of DDL validation.
+type TestLogFileNode struct {
+	fs.Inode
+
+	cfg     *config.Config
+	staging *StagingTracker
+	ctx     StagingContext
+}
+
+var _ fs.InodeEmbedder = (*TestLogFileNode)(nil)
+var _ fs.NodeGetattrer = (*TestLogFileNode)(nil)
+var _ fs.NodeOpener = (*TestLogFileNode)(nil)
+
+// NewTestLogFileNode creates a new .test.log file node.
+func NewTestLogFileNode(cfg *config.Config, staging *StagingTracker, ctx StagingContext) *TestLogFileNode {
+	return &TestLogFileNode{
+		cfg:     cfg,
+		staging: staging,
+		ctx:     ctx,
+	}
+}
+
+// Getattr returns attributes for the .test.log file.
+func (t *TestLogFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	result := t.staging.GetTestResult(t.ctx.StagingPath)
+
+	out.Mode = 0444 | syscall.S_IFREG // Read-only
+	out.Nlink = 1
+	out.Size = uint64(len(result))
+
+	return 0
+}
+
+// Open opens the .test.log file for reading.
+func (t *TestLogFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	logging.Debug("TestLogFileNode.Open called",
+		zap.String("path", t.ctx.StagingPath),
+		zap.Uint32("flags", flags))
+
+	// Read-only file - reject write attempts
+	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
+		return nil, 0, syscall.EACCES
+	}
+
+	result := t.staging.GetTestResult(t.ctx.StagingPath)
+	fh := &TestLogFileHandle{content: []byte(result)}
+
+	return fh, fuse.FOPEN_DIRECT_IO, 0
+}
+
+// TestLogFileHandle handles read operations on .test.log files.
+type TestLogFileHandle struct {
 	content []byte
 }
 
-var _ fs.FileReader = (*TestFileHandle)(nil)
+var _ fs.FileReader = (*TestLogFileHandle)(nil)
 
 // Read reads the test result.
-func (fh *TestFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (fh *TestLogFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	end := off + int64(len(dest))
 	if end > int64(len(fh.content)) {
 		end = int64(len(fh.content))
