@@ -402,7 +402,7 @@ func (t *TestFileNode) runTest(ctx context.Context) error {
 	result := "OK: DDL validated successfully.\n"
 	t.staging.SetTestResult(t.ctx.StagingPath, result)
 
-	logging.Info("DDL test passed",
+	logging.Warn("DDL test passed",
 		zap.String("path", t.ctx.StagingPath))
 
 	return nil
@@ -578,7 +578,7 @@ func (c *CommitFileNode) runCommit(ctx context.Context) error {
 		return fmt.Errorf("DDL execution failed: %w", err)
 	}
 
-	logging.Info("DDL committed successfully",
+	logging.Warn("DDL committed successfully",
 		zap.String("path", c.ctx.StagingPath),
 		zap.String("objectType", c.ctx.ObjectType),
 		zap.String("objectName", c.ctx.ObjectName))
@@ -662,8 +662,8 @@ func (a *AbortFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.
 
 // runAbort clears the staging entry.
 func (a *AbortFileNode) runAbort() {
-	logging.Info("DDL aborted",
-		zap.String("path", a.ctx.StagingPath))
-
 	a.staging.Delete(a.ctx.StagingPath)
+
+	logging.Warn("DDL staging aborted",
+		zap.String("path", a.ctx.StagingPath))
 }
