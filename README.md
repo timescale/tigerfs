@@ -185,7 +185,7 @@ Navigate tables using indexed columns (shown as dotfiles):
 
 ```bash
 # List available indexes
-cat /mnt/db/users/.indexes
+ls /mnt/db/users/.indexes/
 
 # Browse by indexed column
 ls /mnt/db/users/.email/                        # List distinct values
@@ -217,9 +217,9 @@ Inspect table structure without querying the database directly:
 
 ```bash
 cat /mnt/db/users/.ddl           # Full CREATE TABLE statement
-cat /mnt/db/users/.indexes       # Index names (one per line)
-cat /mnt/db/users/.columns       # Column names (one per line)
 cat /mnt/db/users/.schema        # Column details (name, type, nullable)
+cat /mnt/db/users/.columns       # Column names (one per line)
+ls /mnt/db/users/.indexes/       # Index names
 ```
 
 ### Schema Management

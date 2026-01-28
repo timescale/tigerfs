@@ -144,7 +144,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		},
 		fuse.DirEntry{
 			Name: ".indexes",
-			Mode: syscall.S_IFREG,
+			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
 			Name: ".all",
@@ -223,8 +223,13 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("name", name))
 
 	// Check if this is a metadata file lookup
-	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" || name == ".indexes" {
+	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" {
 		return t.lookupMetadataFile(ctx, name, out)
+	}
+
+	// Check if this is the .indexes directory (index DDL operations)
+	if name == ".indexes" {
+		return t.lookupIndexesDirectory(ctx)
 	}
 
 	// Check if this is the .modify directory (ALTER TABLE staging)
@@ -401,8 +406,6 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string, out *fu
 		fileType = "ddl"
 	case ".count":
 		fileType = "count"
-	case ".indexes":
-		fileType = "indexes"
 	default:
 		logging.Debug("Unknown metadata file",
 			zap.String("table", t.tableName),
@@ -725,6 +728,26 @@ func (t *TableNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 	logging.Debug("Row directory created",
 		zap.String("table", t.tableName),
 		zap.String("pk", pkValue))
+
+	return child, 0
+}
+
+// lookupIndexesDirectory handles lookup for the .indexes directory (index DDL operations).
+func (t *TableNode) lookupIndexesDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .indexes directory",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	indexesNode := NewIndexesNode(t.cfg, t.db, t.schema, t.tableName, t.staging)
+	child := t.NewPersistentInode(ctx, indexesNode, stableAttr)
+
+	logging.Debug("Created .indexes directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
 
 	return child, 0
 }
