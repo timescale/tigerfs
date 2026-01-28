@@ -153,7 +153,7 @@ touch /mnt/db/.create/orders/.commit # Execute
 
 **Script workflow (programmatic):**
 ```bash
-echo "CREATE TABLE orders (id serial PRIMARY KEY)" > /mnt/db/.create/orders/.sql
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY)" > /mnt/db/.create/orders/.sql
 touch /mnt/db/.create/orders/.commit
 ```
 

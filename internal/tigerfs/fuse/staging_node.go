@@ -211,9 +211,10 @@ func (c *CreateDirNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 	// Check if staging entry exists
 	entry := c.staging.Get(stagingPath)
 	if entry == nil {
-		// For .create directories, we allow lookup to succeed even if no entry exists
-		// This enables writing directly to .create/name/.schema without mkdir first
-		c.staging.GetOrCreate(stagingPath)
+		// Entry doesn't exist - return ENOENT so mkdir can create it
+		// Note: This means direct writes like `echo ... > .create/name/.sql`
+		// require `mkdir .create/name` first. See README for workflow options.
+		return nil, syscall.ENOENT
 	}
 
 	// Create staging context

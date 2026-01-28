@@ -262,10 +262,10 @@ touch /mnt/db/.create/orders/.commit   # Execute
 
 #### Script Workflow (Programmatic)
 
-Write DDL directly - templates are overwritten:
+Create staging directory and write DDL in one command:
 
 ```bash
-echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
 touch /mnt/db/.create/orders/.commit
 ```
 
@@ -279,7 +279,7 @@ touch /mnt/db/.create/orders/.test     # Validate (optional)
 touch /mnt/db/.create/orders/.commit   # Execute
 
 # Create table (script workflow)
-echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
 touch /mnt/db/.create/orders/.commit
 
 # Modify table (human workflow)
@@ -297,11 +297,11 @@ echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/.sql
 touch /mnt/db/users/.delete/.commit
 
 # Create index
-echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.sql
+mkdir /mnt/db/users/.indexes/.create/email_idx && echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.sql
 touch /mnt/db/users/.indexes/.create/email_idx/.commit
 
 # Create view
-echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.sql
+mkdir /mnt/db/.views/.create/active_users && echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.sql
 touch /mnt/db/.views/.create/active_users/.commit
 ```
 
