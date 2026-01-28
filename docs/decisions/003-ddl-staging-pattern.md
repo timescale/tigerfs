@@ -99,10 +99,11 @@ Use **Option 3: Staging Pattern with Control Files**.
 | Create table | `.create/<name>/.schema`, `.commit`, `.test`, `.abort` |
 | Modify table | `<table>/.modify/.schema`, `.commit`, `.test`, `.abort` |
 | Delete table | `<table>/.delete/.schema`, `.commit`, `.test`, `.abort` |
-| Create index | `<table>/.indexes/.create/<idx>/.schema`, `.commit` |
-| Delete index | `<table>/.indexes/<idx>/.delete/.schema`, `.commit` |
-| Create schema | `.schemas/.create/<name>/.schema`, `.commit` |
-| Delete schema | `.schemas/<name>/.delete/.schema`, `.commit` |
+| Create index | `<table>/.indexes/.create/<idx>/.schema`, `.test`, `.commit`, `.abort` |
+| Delete index | `<table>/.indexes/<idx>/.delete/.schema`, `.test`, `.commit`, `.abort` |
+| View index | `<table>/.indexes/<idx>/.schema` (read-only, shows CREATE INDEX DDL) |
+| Create schema | `.schemas/.create/<name>/.schema`, `.test`, `.commit`, `.abort` |
+| Delete schema | `.schemas/<name>/.delete/.schema`, `.test`, `.commit`, `.abort` |
 
 ### Control Files
 

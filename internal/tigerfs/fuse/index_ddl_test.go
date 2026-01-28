@@ -181,7 +181,7 @@ func TestIndexCreateDirNode_GenerateTemplate_NonDefaultSchema(t *testing.T) {
 	}
 }
 
-// TestIndexDDLNode_Readdir tests listing .delete and .info
+// TestIndexDDLNode_Readdir tests listing .delete and .schema
 func TestIndexDDLNode_Readdir(t *testing.T) {
 	cfg := &config.Config{}
 	mock := db.NewMockDBClient()
@@ -207,8 +207,8 @@ func TestIndexDDLNode_Readdir(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Should have .delete and .info
-	expected := map[string]bool{".delete": true, ".info": true}
+	// Should have .delete and .schema
+	expected := map[string]bool{".delete": true, ".schema": true}
 	for _, e := range entries {
 		if !expected[e] {
 			t.Errorf("Unexpected entry: %q", e)
@@ -220,54 +220,56 @@ func TestIndexDDLNode_Readdir(t *testing.T) {
 	}
 }
 
-// TestIndexDDLNode_GetInfoContent tests .info content generation
-func TestIndexDDLNode_GetInfoContent(t *testing.T) {
+// TestIndexDDLNode_GetSchemaContent tests .schema content generation
+func TestIndexDDLNode_GetSchemaContent(t *testing.T) {
 	cfg := &config.Config{}
 	mock := db.NewMockDBClient()
 	staging := NewStagingTracker()
 
 	index := &db.Index{
-		Name:      "users_email_idx",
-		Columns:   []string{"email"},
-		IsUnique:  true,
-		IsPrimary: false,
+		Name:       "users_email_idx",
+		Columns:    []string{"email"},
+		IsUnique:   true,
+		IsPrimary:  false,
+		Definition: "CREATE UNIQUE INDEX users_email_idx ON public.users USING btree (email)",
 	}
 
 	node := NewIndexDDLNode(cfg, mock, "public", "users", index, staging)
-	content := node.getInfoContent()
+	content := node.getSchemaContent()
 
-	if !contains(content, "Name: users_email_idx") {
-		t.Error("Info should contain index name")
+	if !contains(content, "CREATE UNIQUE INDEX") {
+		t.Error("Schema should contain CREATE INDEX statement")
 	}
-	if !contains(content, "Columns: email") {
-		t.Error("Info should contain column name")
+	if !contains(content, "users_email_idx") {
+		t.Error("Schema should contain index name")
 	}
-	if !contains(content, "Unique: true") {
-		t.Error("Info should show unique status")
-	}
-	if !contains(content, "Primary: false") {
-		t.Error("Info should show primary status")
+	if !contains(content, "email") {
+		t.Error("Schema should contain column name")
 	}
 }
 
-// TestIndexDDLNode_GetInfoContent_Composite tests .info for composite index
-func TestIndexDDLNode_GetInfoContent_Composite(t *testing.T) {
+// TestIndexDDLNode_GetSchemaContent_Fallback tests .schema fallback when Definition is empty
+func TestIndexDDLNode_GetSchemaContent_Fallback(t *testing.T) {
 	cfg := &config.Config{}
 	mock := db.NewMockDBClient()
 	staging := NewStagingTracker()
 
 	index := &db.Index{
-		Name:      "users_name_idx",
-		Columns:   []string{"last_name", "first_name"},
-		IsUnique:  false,
-		IsPrimary: false,
+		Name:       "users_name_idx",
+		Columns:    []string{"last_name", "first_name"},
+		IsUnique:   false,
+		IsPrimary:  false,
+		Definition: "", // Empty definition
 	}
 
 	node := NewIndexDDLNode(cfg, mock, "public", "users", index, staging)
-	content := node.getInfoContent()
+	content := node.getSchemaContent()
 
-	if !contains(content, "Columns: last_name, first_name") {
-		t.Errorf("Info should contain comma-separated columns, got: %s", content)
+	if !contains(content, "users_name_idx") {
+		t.Errorf("Fallback should contain index name, got: %s", content)
+	}
+	if !contains(content, "definition not available") {
+		t.Errorf("Fallback should indicate definition not available, got: %s", content)
 	}
 }
 

@@ -176,7 +176,20 @@
 │   ├── .schema                           # CREATE TABLE statement
 │   ├── .ddl                              # Complete DDL (indexes, constraints, etc.)
 │   ├── .columns                          # Column list
-│   ├── .indexes                          # Index navigation paths
+│   ├── .indexes/                         # Index metadata and DDL operations
+│   │   ├── .create/                      # Staging for new indexes
+│   │   │   └── <idx>/                    # mkdir creates staging entry
+│   │   │       ├── .schema               # Staged CREATE INDEX DDL
+│   │   │       ├── .test                 # Touch to validate (optional)
+│   │   │       ├── .commit               # Touch to execute
+│   │   │       └── .abort                # Touch to cancel
+│   │   └── <idx>/                        # Existing index directories
+│   │       ├── .schema                   # CREATE INDEX DDL (read-only)
+│   │       └── .delete/                  # Staging for deletion
+│   │           ├── .schema               # DROP INDEX template
+│   │           ├── .test                 # Touch to validate (optional)
+│   │           ├── .commit               # Touch to execute
+│   │           └── .abort                # Touch to cancel
 │   ├── .count                            # Total row count
 │   ├── .sample/                          # Random samples
 │   │   └── 100/                          # 100 random rows
@@ -241,7 +254,7 @@
 - `.schema` - CREATE TABLE statement
 - `.ddl` - Complete DDL (indexes, constraints, triggers, comments)
 - `.columns` - Column list (one per line)
-- `.indexes` - Index navigation paths (one per line)
+- `.indexes/` - Index metadata directory (list indexes, view DDL, create/delete)
 - `.information_schema/` - Global metadata
 - `.schemas/` - Explicit schema access
 - `.refresh` - Cache refresh trigger
@@ -1991,31 +2004,48 @@ ORDER BY ordinal_position;
 
 ---
 
-#### `.indexes` - Index Navigation Paths
+#### `.indexes/` - Index Metadata and DDL Operations
 
-**Usage:**
+The `.indexes/` directory provides index metadata and DDL operations.
+
+**List indexes:**
 ```bash
-cat /mnt/db/users/.indexes
+ls /mnt/db/users/.indexes/
 ```
 
 **Output:**
 ```
-.email/                    (unique)
-.created_at/
-.last_name.first_name/                    (composite, unique)
+.create/           # Staging for new indexes
+email_idx/         # Existing index
+created_at_idx/    # Existing index
 ```
 
-Lists available index navigation paths (dotfile directories) with annotations:
-- `(unique)` - unique index
-- `(composite)` - multi-column index
-- `(composite, unique)` - both
-
-Primary key indexes are excluded (accessed directly via row paths).
-
-If no non-primary indexes exist:
+**View index DDL:**
+```bash
+cat /mnt/db/users/.indexes/email_idx/.schema
 ```
-(no indexes)
+
+**Output:**
+```sql
+CREATE UNIQUE INDEX email_idx ON public.users USING btree (email)
 ```
+
+**Create new index:**
+```bash
+mkdir /mnt/db/users/.indexes/.create/new_idx
+cat /mnt/db/users/.indexes/.create/new_idx/.schema    # See template
+echo "CREATE INDEX new_idx ON users(column)" > /mnt/db/users/.indexes/.create/new_idx/.schema
+touch /mnt/db/users/.indexes/.create/new_idx/.commit  # Execute
+```
+
+**Delete index:**
+```bash
+cat /mnt/db/users/.indexes/email_idx/.delete/.schema  # See DROP template
+echo "DROP INDEX email_idx" > /mnt/db/users/.indexes/email_idx/.delete/.schema
+touch /mnt/db/users/.indexes/email_idx/.delete/.commit  # Execute
+```
+
+Primary key indexes are excluded from listing (accessed via row paths).
 
 ---
 

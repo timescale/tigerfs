@@ -216,10 +216,11 @@ cat /mnt/db/events/.count        # Total row count
 Inspect table structure without querying the database directly:
 
 ```bash
-cat /mnt/db/users/.ddl           # Full CREATE TABLE statement
-cat /mnt/db/users/.schema        # Column details (name, type, nullable)
-cat /mnt/db/users/.columns       # Column names (one per line)
-ls /mnt/db/users/.indexes/       # Index names
+cat /mnt/db/users/.ddl                        # Full CREATE TABLE statement
+cat /mnt/db/users/.schema                     # Column details (name, type, nullable)
+cat /mnt/db/users/.columns                    # Column names (one per line)
+ls /mnt/db/users/.indexes/                    # Index names
+cat /mnt/db/users/.indexes/email_idx/.schema  # Index DDL (CREATE INDEX statement)
 ```
 
 ### Schema Management

@@ -244,20 +244,20 @@ func (n *IndexDDLNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.
 	return 0
 }
 
-// Readdir lists .delete/ and index info.
+// Readdir lists .delete/ and .schema file.
 func (n *IndexDDLNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("IndexDDLNode.Readdir called",
 		zap.String("index", n.index.Name))
 
 	entries := []fuse.DirEntry{
 		{Name: ".delete", Mode: syscall.S_IFDIR},
-		{Name: ".info", Mode: syscall.S_IFREG}, // Shows index definition
+		{Name: ".schema", Mode: syscall.S_IFREG}, // Shows CREATE INDEX DDL
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup handles .delete/ and .info lookups.
+// Lookup handles .delete/ and .schema lookups.
 func (n *IndexDDLNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("IndexDDLNode.Lookup called",
 		zap.String("index", n.index.Name),
@@ -266,8 +266,8 @@ func (n *IndexDDLNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	switch name {
 	case ".delete":
 		return n.lookupDeleteDirectory(ctx, out)
-	case ".info":
-		return n.lookupInfoFile(ctx, out)
+	case ".schema":
+		return n.lookupSchemaFile(ctx, out)
 	default:
 		return nil, syscall.ENOENT
 	}
@@ -301,17 +301,17 @@ func (n *IndexDDLNode) lookupDeleteDirectory(ctx context.Context, out *fuse.Entr
 	return child, 0
 }
 
-// lookupInfoFile returns a file containing the index definition.
-func (n *IndexDDLNode) lookupInfoFile(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+// lookupSchemaFile returns a file containing the CREATE INDEX DDL.
+func (n *IndexDDLNode) lookupSchemaFile(ctx context.Context, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFREG,
 	}
 
-	infoNode := NewIndexInfoNode(n.cfg, n.db, n.schema, n.tableName, n.index)
-	child := n.NewPersistentInode(ctx, infoNode, stableAttr)
+	schemaNode := NewIndexSchemaNode(n.cfg, n.db, n.schema, n.tableName, n.index)
+	child := n.NewPersistentInode(ctx, schemaNode, stableAttr)
 
 	// Set file attributes
-	content := n.getInfoContent()
+	content := n.getSchemaContent()
 	out.Mode = 0400 | syscall.S_IFREG
 	out.Nlink = 1
 	out.Size = uint64(len(content))
@@ -319,14 +319,13 @@ func (n *IndexDDLNode) lookupInfoFile(ctx context.Context, out *fuse.EntryOut) (
 	return child, 0
 }
 
-// getInfoContent generates the content for .info file.
-func (n *IndexDDLNode) getInfoContent() string {
-	var content string
-	content += fmt.Sprintf("Name: %s\n", n.index.Name)
-	content += fmt.Sprintf("Columns: %s\n", joinStrings(n.index.Columns, ", "))
-	content += fmt.Sprintf("Unique: %v\n", n.index.IsUnique)
-	content += fmt.Sprintf("Primary: %v\n", n.index.IsPrimary)
-	return content
+// getSchemaContent returns the CREATE INDEX DDL statement.
+func (n *IndexDDLNode) getSchemaContent() string {
+	if n.index.Definition != "" {
+		return n.index.Definition + "\n"
+	}
+	// Fallback if Definition is empty
+	return fmt.Sprintf("-- Index: %s (definition not available)\n", n.index.Name)
 }
 
 // joinStrings joins strings with a separator.
@@ -342,11 +341,11 @@ func joinStrings(strs []string, sep string) string {
 }
 
 // ============================================================================
-// IndexInfoNode - Read-only file showing index information
+// IndexSchemaNode - Read-only file showing CREATE INDEX DDL
 // ============================================================================
 
-// IndexInfoNode represents the .info file showing index definition.
-type IndexInfoNode struct {
+// IndexSchemaNode represents the .schema file showing the CREATE INDEX DDL.
+type IndexSchemaNode struct {
 	fs.Inode
 
 	cfg       *config.Config
@@ -356,14 +355,14 @@ type IndexInfoNode struct {
 	index     *db.Index
 }
 
-var _ fs.InodeEmbedder = (*IndexInfoNode)(nil)
-var _ fs.NodeGetattrer = (*IndexInfoNode)(nil)
-var _ fs.NodeOpener = (*IndexInfoNode)(nil)
-var _ fs.NodeReader = (*IndexInfoNode)(nil)
+var _ fs.InodeEmbedder = (*IndexSchemaNode)(nil)
+var _ fs.NodeGetattrer = (*IndexSchemaNode)(nil)
+var _ fs.NodeOpener = (*IndexSchemaNode)(nil)
+var _ fs.NodeReader = (*IndexSchemaNode)(nil)
 
-// NewIndexInfoNode creates a new index info file node.
-func NewIndexInfoNode(cfg *config.Config, dbClient db.DBClient, schema, tableName string, index *db.Index) *IndexInfoNode {
-	return &IndexInfoNode{
+// NewIndexSchemaNode creates a new index schema file node.
+func NewIndexSchemaNode(cfg *config.Config, dbClient db.DBClient, schema, tableName string, index *db.Index) *IndexSchemaNode {
+	return &IndexSchemaNode{
 		cfg:       cfg,
 		db:        dbClient,
 		schema:    schema,
@@ -373,7 +372,7 @@ func NewIndexInfoNode(cfg *config.Config, dbClient db.DBClient, schema, tableNam
 }
 
 // Getattr returns file attributes.
-func (n *IndexInfoNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+func (n *IndexSchemaNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	content := n.getContent()
 	out.Mode = 0400 | syscall.S_IFREG
 	out.Nlink = 1
@@ -382,12 +381,12 @@ func (n *IndexInfoNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse
 }
 
 // Open opens the file for reading.
-func (n *IndexInfoNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+func (n *IndexSchemaNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	return nil, fuse.FOPEN_KEEP_CACHE, 0
 }
 
-// Read returns the index information.
-func (n *IndexInfoNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+// Read returns the CREATE INDEX DDL.
+func (n *IndexSchemaNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	content := n.getContent()
 	if off >= int64(len(content)) {
 		return fuse.ReadResultData(nil), 0
@@ -399,14 +398,13 @@ func (n *IndexInfoNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte,
 	return fuse.ReadResultData([]byte(content)[off:end]), 0
 }
 
-// getContent generates the .info file content.
-func (n *IndexInfoNode) getContent() string {
-	var content string
-	content += fmt.Sprintf("Name: %s\n", n.index.Name)
-	content += fmt.Sprintf("Columns: %s\n", joinStrings(n.index.Columns, ", "))
-	content += fmt.Sprintf("Unique: %v\n", n.index.IsUnique)
-	content += fmt.Sprintf("Primary: %v\n", n.index.IsPrimary)
-	return content
+// getContent returns the CREATE INDEX DDL statement.
+func (n *IndexSchemaNode) getContent() string {
+	if n.index.Definition != "" {
+		return n.index.Definition + "\n"
+	}
+	// Fallback if Definition is empty
+	return fmt.Sprintf("-- Index: %s (definition not available)\n", n.index.Name)
 }
 
 // ============================================================================
