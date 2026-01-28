@@ -37,6 +37,7 @@ func setupTestSchemasNode(schemas []string) *SchemasNode {
 		db:          nil,
 		cache:       cache,
 		partialRows: NewPartialRowTracker(nil),
+		staging:     NewStagingTracker(),
 	}
 }
 
@@ -49,8 +50,9 @@ func TestNewSchemasNode(t *testing.T) {
 
 	cache := NewMetadataCache(cfg, nil)
 	partialRows := NewPartialRowTracker(nil)
+	staging := NewStagingTracker()
 
-	node := NewSchemasNode(cfg, nil, cache, partialRows)
+	node := NewSchemasNode(cfg, nil, cache, partialRows, staging)
 
 	if node == nil {
 		t.Fatal("NewSchemasNode returned nil")
@@ -66,6 +68,10 @@ func TestNewSchemasNode(t *testing.T) {
 
 	if node.partialRows != partialRows {
 		t.Error("Expected partialRows to be set")
+	}
+
+	if node.staging != staging {
+		t.Error("Expected staging to be set")
 	}
 }
 
@@ -98,7 +104,7 @@ func TestSchemasNode_Getattr(t *testing.T) {
 	}
 }
 
-// TestSchemasNode_Readdir tests listing schemas
+// TestSchemasNode_Readdir tests listing schemas plus .create directory
 func TestSchemasNode_Readdir(t *testing.T) {
 	schemas := []string{"public", "analytics", "staging"}
 	node := setupTestSchemasNode(schemas)
@@ -121,28 +127,37 @@ func TestSchemasNode_Readdir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	if len(entries) != len(schemas) {
-		t.Errorf("Expected %d entries, got %d", len(schemas), len(entries))
+	// Expected: schemas + .create
+	expectedCount := len(schemas) + 1
+	if len(entries) != expectedCount {
+		t.Errorf("Expected %d entries (schemas + .create), got %d", expectedCount, len(entries))
 	}
 
-	// Verify each schema is present
-	schemaSet := make(map[string]bool)
+	// Verify .create and all schemas are present
+	expectedNames := make(map[string]bool)
+	expectedNames[".create"] = true
 	for _, schema := range schemas {
-		schemaSet[schema] = true
+		expectedNames[schema] = true
 	}
 
 	for _, entry := range entries {
-		if !schemaSet[entry.Name] {
+		if !expectedNames[entry.Name] {
 			t.Errorf("Unexpected entry: %q", entry.Name)
 		}
 		// Verify entries are directories
 		if entry.Mode != syscall.S_IFDIR {
 			t.Errorf("Expected entry %q to be directory, got mode 0x%x", entry.Name, entry.Mode)
 		}
+		delete(expectedNames, entry.Name)
+	}
+
+	// Verify all expected entries were found
+	for name := range expectedNames {
+		t.Errorf("Missing expected entry: %q", name)
 	}
 }
 
-// TestSchemasNode_Readdir_Empty tests listing with no schemas
+// TestSchemasNode_Readdir_Empty tests listing with no schemas (still has .create)
 func TestSchemasNode_Readdir_Empty(t *testing.T) {
 	node := setupTestSchemasNode([]string{})
 	ctx := context.Background()
@@ -157,10 +172,20 @@ func TestSchemasNode_Readdir_Empty(t *testing.T) {
 		t.Fatal("Expected non-nil DirStream")
 	}
 
-	// Should have no entries
-	if dirStream.HasNext() {
+	// Read all entries
+	var entries []fuse.DirEntry
+	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		t.Errorf("Expected no entries, got %q", entry.Name)
+		entries = append(entries, entry)
+	}
+
+	// Should have exactly .create entry
+	if len(entries) != 1 {
+		t.Errorf("Expected 1 entry (.create), got %d", len(entries))
+	}
+
+	if len(entries) > 0 && entries[0].Name != ".create" {
+		t.Errorf("Expected .create entry, got %q", entries[0].Name)
 	}
 }
 
@@ -205,4 +230,53 @@ func TestSchemasNode_Interfaces(t *testing.T) {
 	var _ fs.NodeReaddirer = node
 	var _ fs.NodeLookuper = node
 	var _ fs.NodeGetattrer = node
+}
+
+// TestSchemasNode_Lookup_CreateDir tests that .create directory is listed
+func TestSchemasNode_Lookup_CreateDir(t *testing.T) {
+	node := setupTestSchemasNode([]string{"public", "analytics"})
+
+	// Verify .create is handled by Lookup (we test via Readdir since Lookup requires Inode operations)
+	ctx := context.Background()
+	dirStream, errno := node.Readdir(ctx)
+	if errno != 0 {
+		t.Fatalf("Readdir failed: %d", errno)
+	}
+
+	foundCreate := false
+	for dirStream.HasNext() {
+		entry, _ := dirStream.Next()
+		if entry.Name == ".create" {
+			foundCreate = true
+			if entry.Mode != syscall.S_IFDIR {
+				t.Errorf("Expected .create to be directory, got mode 0x%x", entry.Mode)
+			}
+		}
+	}
+
+	if !foundCreate {
+		t.Error("Expected .create directory in schemas listing")
+	}
+}
+
+// TestSchemasNode_Readdir_CreateFirst tests that .create is listed first
+func TestSchemasNode_Readdir_CreateFirst(t *testing.T) {
+	schemas := []string{"public", "analytics", "zzz_schema"}
+	node := setupTestSchemasNode(schemas)
+	ctx := context.Background()
+
+	dirStream, errno := node.Readdir(ctx)
+	if errno != 0 {
+		t.Fatalf("Readdir failed: %d", errno)
+	}
+
+	// First entry should be .create
+	if dirStream.HasNext() {
+		entry, _ := dirStream.Next()
+		if entry.Name != ".create" {
+			t.Errorf("Expected first entry to be .create, got %q", entry.Name)
+		}
+	} else {
+		t.Error("Expected at least one entry")
+	}
 }

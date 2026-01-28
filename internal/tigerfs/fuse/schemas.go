@@ -14,6 +14,7 @@ import (
 
 // SchemasNode represents the .schemas/ directory at the filesystem root.
 // Lists all user-defined schemas and provides navigation to individual schema directories.
+// Also provides .create/ for creating new schemas.
 type SchemasNode struct {
 	fs.Inode
 
@@ -21,6 +22,7 @@ type SchemasNode struct {
 	db          *db.Client
 	cache       *MetadataCache
 	partialRows *PartialRowTracker
+	staging     *StagingTracker
 }
 
 var _ fs.InodeEmbedder = (*SchemasNode)(nil)
@@ -35,12 +37,14 @@ var _ fs.NodeGetattrer = (*SchemasNode)(nil)
 //   - dbClient: Database client for queries
 //   - cache: Metadata cache for schema info
 //   - partialRows: Tracker for partial row creation
-func NewSchemasNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, partialRows *PartialRowTracker) *SchemasNode {
+//   - staging: Tracker for DDL staging operations
+func NewSchemasNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, partialRows *PartialRowTracker, staging *StagingTracker) *SchemasNode {
 	return &SchemasNode{
 		cfg:         cfg,
 		db:          dbClient,
 		cache:       cache,
 		partialRows: partialRows,
+		staging:     staging,
 	}
 }
 
@@ -55,7 +59,7 @@ func (s *SchemasNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.A
 	return 0
 }
 
-// Readdir lists all user-defined schemas.
+// Readdir lists all user-defined schemas plus .create/ for creating new schemas.
 func (s *SchemasNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("SchemasNode.Readdir called")
 
@@ -66,8 +70,16 @@ func (s *SchemasNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 		return nil, syscall.EIO
 	}
 
-	// Convert schemas to directory entries
-	entries := make([]fuse.DirEntry, 0, len(schemas))
+	// Convert schemas to directory entries (+ 1 for .create)
+	entries := make([]fuse.DirEntry, 0, len(schemas)+1)
+
+	// Add .create directory first
+	entries = append(entries, fuse.DirEntry{
+		Name: ".create",
+		Mode: syscall.S_IFDIR,
+	})
+
+	// Add existing schemas
 	for _, schema := range schemas {
 		entries = append(entries, fuse.DirEntry{
 			Name: schema,
@@ -76,15 +88,37 @@ func (s *SchemasNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	}
 
 	logging.Debug(".schemas directory listing",
-		zap.Int("schema_count", len(entries)),
+		zap.Int("schema_count", len(schemas)),
 		zap.Strings("schemas", schemas))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a schema name in the .schemas directory.
+// Lookup looks up a schema name or .create in the .schemas directory.
 func (s *SchemasNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	logging.Debug("SchemasNode.Lookup called", zap.String("schema", name))
+	logging.Debug("SchemasNode.Lookup called", zap.String("name", name))
+
+	// Handle .create directory for creating new schemas
+	if name == ".create" {
+		logging.Debug("Looking up .create directory for schemas")
+
+		stableAttr := fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+		}
+
+		createNode := NewCreateDirNode(
+			s.cfg,
+			s.db, // db.DDLExecutor
+			s.cache,
+			s.staging,
+			"schema",           // objectType
+			"",                 // schema (not applicable for schema creation)
+			"",                 // tableName (not applicable)
+			".schemas/.create", // pathPrefix for staging
+		)
+		child := s.NewPersistentInode(ctx, createNode, stableAttr)
+		return child, 0
+	}
 
 	// Check if schema exists
 	exists, err := s.cache.HasSchema(ctx, name)
@@ -107,7 +141,7 @@ func (s *SchemasNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		Mode: syscall.S_IFDIR,
 	}
 
-	schemaNode := NewSchemaNode(s.cfg, s.db, s.cache, name, s.partialRows)
+	schemaNode := NewSchemaNode(s.cfg, s.db, s.cache, name, s.partialRows, s.staging)
 	child := s.NewPersistentInode(ctx, schemaNode, stableAttr)
 
 	return child, 0

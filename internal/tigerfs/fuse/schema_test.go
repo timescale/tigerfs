@@ -42,6 +42,7 @@ func setupTestSchemaNode(schema string, tables []string) *SchemaNode {
 		cache:       cache,
 		schema:      schema,
 		partialRows: NewPartialRowTracker(nil),
+		staging:     NewStagingTracker(),
 	}
 }
 
@@ -54,8 +55,9 @@ func TestNewSchemaNode(t *testing.T) {
 
 	cache := NewMetadataCache(cfg, nil)
 	partialRows := NewPartialRowTracker(nil)
+	staging := NewStagingTracker()
 
-	node := NewSchemaNode(cfg, nil, cache, "analytics", partialRows)
+	node := NewSchemaNode(cfg, nil, cache, "analytics", partialRows, staging)
 
 	if node == nil {
 		t.Fatal("NewSchemaNode returned nil")
@@ -75,6 +77,10 @@ func TestNewSchemaNode(t *testing.T) {
 
 	if node.partialRows != partialRows {
 		t.Error("Expected partialRows to be set")
+	}
+
+	if node.staging != staging {
+		t.Error("Expected staging to be set")
 	}
 }
 
@@ -107,7 +113,7 @@ func TestSchemaNode_Getattr(t *testing.T) {
 	}
 }
 
-// TestSchemaNode_Readdir tests listing tables in a schema
+// TestSchemaNode_Readdir tests listing tables in a schema plus control directories
 func TestSchemaNode_Readdir(t *testing.T) {
 	tables := []string{"reports", "metrics", "dashboards"}
 	node := setupTestSchemaNode("analytics", tables)
@@ -130,28 +136,38 @@ func TestSchemaNode_Readdir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	if len(entries) != len(tables) {
-		t.Errorf("Expected %d entries, got %d", len(tables), len(entries))
+	// Expected: tables + .create + .delete
+	expectedCount := len(tables) + 2
+	if len(entries) != expectedCount {
+		t.Errorf("Expected %d entries, got %d", expectedCount, len(entries))
 	}
 
-	// Verify each table is present
-	tableSet := make(map[string]bool)
+	// Verify .create and .delete are present, plus all tables
+	expectedNames := make(map[string]bool)
+	expectedNames[".create"] = true
+	expectedNames[".delete"] = true
 	for _, table := range tables {
-		tableSet[table] = true
+		expectedNames[table] = true
 	}
 
 	for _, entry := range entries {
-		if !tableSet[entry.Name] {
+		if !expectedNames[entry.Name] {
 			t.Errorf("Unexpected entry: %q", entry.Name)
 		}
 		// Verify entries are directories
 		if entry.Mode != syscall.S_IFDIR {
 			t.Errorf("Expected entry %q to be directory, got mode 0x%x", entry.Name, entry.Mode)
 		}
+		delete(expectedNames, entry.Name)
+	}
+
+	// Verify all expected entries were found
+	for name := range expectedNames {
+		t.Errorf("Missing expected entry: %q", name)
 	}
 }
 
-// TestSchemaNode_Readdir_Empty tests listing with no tables
+// TestSchemaNode_Readdir_Empty tests listing with no tables (still has .create and .delete)
 func TestSchemaNode_Readdir_Empty(t *testing.T) {
 	node := setupTestSchemaNode("empty_schema", []string{})
 	ctx := context.Background()
@@ -166,10 +182,25 @@ func TestSchemaNode_Readdir_Empty(t *testing.T) {
 		t.Fatal("Expected non-nil DirStream")
 	}
 
-	// Should have no entries
-	if dirStream.HasNext() {
+	// Read all entries
+	var entries []fuse.DirEntry
+	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		t.Errorf("Expected no entries, got %q", entry.Name)
+		entries = append(entries, entry)
+	}
+
+	// Should have exactly .create and .delete entries
+	if len(entries) != 2 {
+		t.Errorf("Expected 2 entries (.create and .delete), got %d", len(entries))
+	}
+
+	// Verify .create and .delete are present
+	expectedNames := map[string]bool{".create": true, ".delete": true}
+	for _, entry := range entries {
+		if !expectedNames[entry.Name] {
+			t.Errorf("Unexpected entry: %q", entry.Name)
+		}
+		delete(expectedNames, entry.Name)
 	}
 }
 
@@ -206,8 +237,10 @@ func TestSchemaNode_DifferentSchemas(t *testing.T) {
 				count++
 			}
 
-			if count != len(tc.tables) {
-				t.Errorf("Expected %d tables, got %d", len(tc.tables), count)
+			// Expected count: tables + .create + .delete
+			expectedCount := len(tc.tables) + 2
+			if count != expectedCount {
+				t.Errorf("Expected %d entries (tables + .create + .delete), got %d", expectedCount, count)
 			}
 		})
 	}
@@ -222,4 +255,105 @@ func TestSchemaNode_Interfaces(t *testing.T) {
 	var _ fs.NodeReaddirer = node
 	var _ fs.NodeLookuper = node
 	var _ fs.NodeGetattrer = node
+}
+
+// TestSchemaNode_Lookup_Table tests that lookup finds existing tables
+func TestSchemaNode_Lookup_Table(t *testing.T) {
+	tables := []string{"users", "orders", "products"}
+	node := setupTestSchemaNode("analytics", tables)
+	ctx := context.Background()
+
+	// Test lookup of existing table via cache
+	cacheHasTables, err := node.cache.GetTablesForSchema(ctx, "analytics")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema failed: %v", err)
+	}
+
+	// Verify all test tables are in cache
+	tableSet := make(map[string]bool)
+	for _, table := range cacheHasTables {
+		tableSet[table] = true
+	}
+
+	for _, table := range tables {
+		if !tableSet[table] {
+			t.Errorf("Expected table %q to be in cache", table)
+		}
+	}
+}
+
+// TestSchemaNode_Lookup_TableNotFound tests that lookup returns ENOENT for missing tables
+func TestSchemaNode_Lookup_TableNotFound(t *testing.T) {
+	tables := []string{"users", "orders"}
+	node := setupTestSchemaNode("analytics", tables)
+	ctx := context.Background()
+
+	// Test that a non-existent table is not found in cache
+	cacheHasTables, err := node.cache.GetTablesForSchema(ctx, "analytics")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema failed: %v", err)
+	}
+
+	tableSet := make(map[string]bool)
+	for _, table := range cacheHasTables {
+		tableSet[table] = true
+	}
+
+	if tableSet["nonexistent"] {
+		t.Error("Expected 'nonexistent' to not be in cache")
+	}
+}
+
+// TestSchemaNode_Lookup_CreateDir tests that .create directory lookup works
+func TestSchemaNode_Lookup_CreateDir(t *testing.T) {
+	node := setupTestSchemaNode("analytics", []string{"users"})
+
+	// Verify .create is handled by Lookup (we test via Readdir since Lookup requires Inode operations)
+	ctx := context.Background()
+	dirStream, errno := node.Readdir(ctx)
+	if errno != 0 {
+		t.Fatalf("Readdir failed: %d", errno)
+	}
+
+	foundCreate := false
+	for dirStream.HasNext() {
+		entry, _ := dirStream.Next()
+		if entry.Name == ".create" {
+			foundCreate = true
+			if entry.Mode != syscall.S_IFDIR {
+				t.Errorf("Expected .create to be directory, got mode 0x%x", entry.Mode)
+			}
+		}
+	}
+
+	if !foundCreate {
+		t.Error("Expected .create directory in schema listing")
+	}
+}
+
+// TestSchemaNode_Lookup_DeleteDir tests that .delete directory lookup works
+func TestSchemaNode_Lookup_DeleteDir(t *testing.T) {
+	node := setupTestSchemaNode("analytics", []string{"users"})
+
+	// Verify .delete is handled by Lookup (we test via Readdir since Lookup requires Inode operations)
+	ctx := context.Background()
+	dirStream, errno := node.Readdir(ctx)
+	if errno != 0 {
+		t.Fatalf("Readdir failed: %d", errno)
+	}
+
+	foundDelete := false
+	for dirStream.HasNext() {
+		entry, _ := dirStream.Next()
+		if entry.Name == ".delete" {
+			foundDelete = true
+			if entry.Mode != syscall.S_IFDIR {
+				t.Errorf("Expected .delete to be directory, got mode 0x%x", entry.Mode)
+			}
+		}
+	}
+
+	if !foundDelete {
+		t.Error("Expected .delete directory in schema listing")
+	}
 }

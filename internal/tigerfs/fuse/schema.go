@@ -14,6 +14,7 @@ import (
 
 // SchemaNode represents a directory for a specific schema under .schemas/.
 // Lists tables in this schema and provides navigation to table directories.
+// Also provides .create/ for creating tables and .delete/ for deleting the schema.
 type SchemaNode struct {
 	fs.Inode
 
@@ -22,6 +23,7 @@ type SchemaNode struct {
 	cache       *MetadataCache
 	schema      string // The schema this node represents
 	partialRows *PartialRowTracker
+	staging     *StagingTracker
 }
 
 var _ fs.InodeEmbedder = (*SchemaNode)(nil)
@@ -37,13 +39,15 @@ var _ fs.NodeGetattrer = (*SchemaNode)(nil)
 //   - cache: Metadata cache for schema/table info
 //   - schema: The schema name this node represents
 //   - partialRows: Tracker for partial row creation
-func NewSchemaNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema string, partialRows *PartialRowTracker) *SchemaNode {
+//   - staging: Tracker for DDL staging operations
+func NewSchemaNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema string, partialRows *PartialRowTracker, staging *StagingTracker) *SchemaNode {
 	return &SchemaNode{
 		cfg:         cfg,
 		db:          dbClient,
 		cache:       cache,
 		schema:      schema,
 		partialRows: partialRows,
+		staging:     staging,
 	}
 }
 
@@ -58,7 +62,7 @@ func (s *SchemaNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.At
 	return 0
 }
 
-// Readdir lists the tables in this schema.
+// Readdir lists the tables in this schema plus .create/ and .delete/ control directories.
 func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("SchemaNode.Readdir called", zap.String("schema", s.schema))
 
@@ -71,8 +75,22 @@ func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// Convert tables to directory entries
-	entries := make([]fuse.DirEntry, 0, len(tables))
+	// Convert tables to directory entries (+ 2 for .create and .delete)
+	entries := make([]fuse.DirEntry, 0, len(tables)+2)
+
+	// Add .create directory for creating new tables in this schema
+	entries = append(entries, fuse.DirEntry{
+		Name: ".create",
+		Mode: syscall.S_IFDIR,
+	})
+
+	// Add .delete directory for deleting this schema
+	entries = append(entries, fuse.DirEntry{
+		Name: ".delete",
+		Mode: syscall.S_IFDIR,
+	})
+
+	// Add existing tables
 	for _, table := range tables {
 		entries = append(entries, fuse.DirEntry{
 			Name: table,
@@ -82,17 +100,61 @@ func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 
 	logging.Debug("Schema directory listing",
 		zap.String("schema", s.schema),
-		zap.Int("table_count", len(entries)),
+		zap.Int("table_count", len(tables)),
 		zap.Strings("tables", tables))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a table name in the schema directory.
+// Lookup looks up a table name, .create, or .delete in the schema directory.
 func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("SchemaNode.Lookup called",
 		zap.String("schema", s.schema),
-		zap.String("table", name))
+		zap.String("name", name))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	// Handle .create directory for creating new tables in this schema
+	if name == ".create" {
+		logging.Debug("Looking up .create directory for tables",
+			zap.String("schema", s.schema))
+
+		pathPrefix := ".schemas/" + s.schema + "/.create"
+		createNode := NewCreateDirNode(
+			s.cfg,
+			s.db, // db.DDLExecutor
+			s.cache,
+			s.staging,
+			"table",  // objectType
+			s.schema, // schema for the new table
+			"",       // tableName (not applicable for table creation)
+			pathPrefix,
+		)
+		child := s.NewPersistentInode(ctx, createNode, stableAttr)
+		return child, 0
+	}
+
+	// Handle .delete directory for deleting this schema
+	if name == ".delete" {
+		logging.Debug("Looking up .delete directory for schema",
+			zap.String("schema", s.schema))
+
+		stagingCtx := StagingContext{
+			ObjectType: "schema",
+			Schema:     s.schema,
+			Operation:  DDLDelete,
+		}
+		deleteNode := NewStagingDirNode(
+			s.cfg,
+			s.db, // db.DDLExecutor
+			s.staging,
+			stagingCtx,
+		)
+		child := s.NewPersistentInode(ctx, deleteNode, stableAttr)
+		return child, 0
+	}
 
 	// Get tables for this schema
 	tables, err := s.cache.GetTablesForSchema(ctx, s.schema)
@@ -123,10 +185,6 @@ func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	logging.Debug("Table found in schema",
 		zap.String("schema", s.schema),
 		zap.String("table", name))
-
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-	}
 
 	// Create table node with this schema (not the default schema)
 	tableNode := NewTableNode(s.cfg, s.db, s.cache, s.schema, name, s.partialRows)

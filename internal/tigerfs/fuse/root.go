@@ -32,12 +32,14 @@ var _ fs.NodeGetattrer = (*RootNode)(nil)
 // NewRootNode creates a new root directory node
 func NewRootNode(cfg *config.Config, dbClient *db.Client, partialRows *PartialRowTracker) *RootNode {
 	cache := NewMetadataCache(cfg, dbClient)
+	staging := NewStagingTracker()
 
 	return &RootNode{
 		cfg:         cfg,
 		db:          dbClient,
 		cache:       cache,
 		partialRows: partialRows,
+		staging:     staging,
 	}
 }
 
@@ -100,7 +102,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 			Mode: syscall.S_IFDIR,
 		}
 
-		schemasNode := NewSchemasNode(r.cfg, r.db, r.cache, r.partialRows)
+		schemasNode := NewSchemasNode(r.cfg, r.db, r.cache, r.partialRows, r.staging)
 		child := r.NewPersistentInode(ctx, schemasNode, stableAttr)
 		return child, 0
 	}

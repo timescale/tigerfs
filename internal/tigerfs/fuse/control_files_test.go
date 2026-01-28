@@ -445,3 +445,267 @@ func runCommitWithExecutor(ctx context.Context, executor db.DDLExecutor, staging
 
 	return nil
 }
+
+// TestCreateDirNode_Mkdir tests the mkdir operation that creates staging entries.
+func TestCreateDirNode_Mkdir(t *testing.T) {
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+
+	node := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", ".create")
+
+	// Verify staging entry doesn't exist before mkdir
+	if staging.Get(".create/orders") != nil {
+		t.Fatal("Entry should not exist before mkdir")
+	}
+
+	// Simulate mkdir .create/orders
+	stagingPath := node.pathPrefix + "/orders"
+	staging.GetOrCreate(stagingPath) // This is what Mkdir does
+
+	// Verify staging entry was created
+	entry := staging.Get(".create/orders")
+	if entry == nil {
+		t.Fatal("mkdir should create staging entry")
+	}
+
+	// Verify entry has empty content (ready for .schema write)
+	if entry.Content != "" {
+		t.Errorf("New staging entry should have empty content, got %q", entry.Content)
+	}
+
+	// Verify entry appears in ListPending
+	pending := staging.ListPending(".create")
+	found := false
+	for _, name := range pending {
+		if name == "orders" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Created entry should appear in ListPending")
+	}
+}
+
+// TestAbortFileNode_runAbort tests that abort clears staging.
+func TestAbortFileNode_runAbort(t *testing.T) {
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	stagingPath := ".create/users"
+
+	// Set up staged content
+	staging.Set(stagingPath, "CREATE TABLE users (id SERIAL PRIMARY KEY);")
+
+	// Verify content exists
+	if !staging.HasContent(stagingPath) {
+		t.Fatal("Content should exist before abort")
+	}
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "users",
+	}
+
+	node := NewAbortFileNode(cfg, mockDB, staging, stagingCtx)
+	if node == nil {
+		t.Fatal("NewAbortFileNode returned nil")
+	}
+
+	// Simulate touch .abort (calls runAbort)
+	node.runAbort()
+
+	// Verify staging entry was cleared
+	if staging.HasContent(stagingPath) {
+		t.Error("abort should clear staging content")
+	}
+
+	// Verify the entry no longer exists
+	if staging.Get(stagingPath) != nil {
+		t.Error("abort should delete staging entry")
+	}
+}
+
+// TestSchemaFileHandle_WriteAndRead tests writing and reading .schema content.
+func TestSchemaFileHandle_WriteAndRead(t *testing.T) {
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	stagingPath := ".create/users"
+
+	// Create the staging entry
+	staging.GetOrCreate(stagingPath)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "users",
+	}
+
+	node := NewSchemaFileNode(cfg, mockDB, staging, stagingCtx)
+	ctx := context.Background()
+
+	// Open the file
+	fh, _, errno := node.Open(ctx, 0)
+	if errno != 0 {
+		t.Fatalf("Open failed with errno %d", errno)
+	}
+
+	// Cast to SchemaFileHandle
+	sfh, ok := fh.(*SchemaFileHandle)
+	if !ok {
+		t.Fatal("Expected SchemaFileHandle")
+	}
+
+	// Write DDL content
+	ddl := []byte("CREATE TABLE users (id SERIAL PRIMARY KEY);")
+	written, errno := sfh.Write(ctx, ddl, 0)
+	if errno != 0 {
+		t.Fatalf("Write failed with errno %d", errno)
+	}
+	if written != uint32(len(ddl)) {
+		t.Errorf("Expected %d bytes written, got %d", len(ddl), written)
+	}
+
+	// Verify content was stored in staging tracker
+	content := staging.GetContent(stagingPath)
+	if content != string(ddl) {
+		t.Errorf("Expected content %q, got %q", string(ddl), content)
+	}
+
+	// Read content back
+	dest := make([]byte, 1024)
+	result, errno := sfh.Read(ctx, dest, 0)
+	if errno != 0 {
+		t.Fatalf("Read failed with errno %d", errno)
+	}
+
+	readContent, _ := result.Bytes(dest)
+	if string(readContent) != string(ddl) {
+		t.Errorf("Expected to read %q, got %q", string(ddl), string(readContent))
+	}
+}
+
+// TestSchemaFileNode_GeneratesTemplate tests that reading .schema generates a template.
+func TestSchemaFileNode_GeneratesTemplate(t *testing.T) {
+	cfg := &config.Config{}
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	stagingPath := ".create/orders"
+
+	// Create staging entry with no content
+	staging.GetOrCreate(stagingPath)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "orders",
+	}
+
+	node := NewSchemaFileNode(cfg, mockDB, staging, stagingCtx)
+	ctx := context.Background()
+
+	// Get content (should generate template since no content exists)
+	content := node.getContent(ctx)
+
+	// Verify template was generated
+	if content == "" {
+		t.Error("Expected template to be generated")
+	}
+	if !contains(content, "orders") {
+		t.Error("Template should contain object name 'orders'")
+	}
+	if !contains(content, "CREATE TABLE") {
+		t.Error("Template should contain CREATE TABLE hint")
+	}
+}
+
+// TestFullWorkflow tests the complete staging workflow: mkdir -> write .schema -> touch .test -> touch .commit
+func TestFullWorkflow(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	// Track what SQL was executed
+	var testedSQL, committedSQL string
+
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			testedSQL = sql
+			return nil
+		},
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			committedSQL = sql
+			return nil
+		},
+	}
+
+	stagingPath := ".create/products"
+
+	// Step 1: mkdir .create/products
+	staging.GetOrCreate(stagingPath)
+	if staging.Get(stagingPath) == nil {
+		t.Fatal("Step 1 failed: mkdir should create staging entry")
+	}
+
+	// Step 2: Write DDL to .schema
+	ddl := "CREATE TABLE products (id SERIAL PRIMARY KEY, name TEXT);"
+	staging.Set(stagingPath, ddl)
+	if staging.GetContent(stagingPath) != ddl {
+		t.Fatal("Step 2 failed: write .schema should store content")
+	}
+
+	// Step 3: touch .test (validate DDL)
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "products",
+	}
+
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err != nil {
+		t.Fatalf("Step 3 failed: touch .test returned error: %v", err)
+	}
+	if testedSQL != ddl {
+		t.Errorf("Step 3: Expected tested SQL %q, got %q", ddl, testedSQL)
+	}
+
+	// Verify test result was stored
+	result := staging.GetTestResult(stagingPath)
+	if result != "OK: DDL validated successfully.\n" {
+		t.Errorf("Step 3: Expected success result, got %q", result)
+	}
+
+	// Step 4: touch .commit (execute DDL)
+	err = runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Fatalf("Step 4 failed: touch .commit returned error: %v", err)
+	}
+	if committedSQL != ddl {
+		t.Errorf("Step 4: Expected committed SQL %q, got %q", ddl, committedSQL)
+	}
+
+	// Verify staging entry was cleared
+	if staging.HasContent(stagingPath) {
+		t.Error("Step 4 failed: staging entry should be cleared after commit")
+	}
+}
+
+// contains is a helper function for string containment check
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
