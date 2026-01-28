@@ -4,9 +4,11 @@ import (
 	"context"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
 func TestNewColumnFileNode(t *testing.T) {
@@ -609,6 +611,331 @@ func TestColumnFileNode_DifferentColumnTypes(t *testing.T) {
 
 			if out.Size != uint64(len(tc.data)) {
 				t.Errorf("Expected Size=%d, got %d", len(tc.data), out.Size)
+			}
+		})
+	}
+}
+
+// ============================================================================
+// Mock-based tests for database interactions (ADR-004)
+// ============================================================================
+
+// TestColumnFileNode_Getattr_WithMock tests Getattr using MockDBClient
+func TestColumnFileNode_Getattr_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+
+	// Create mock that returns column data
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+		if columnName == "email" && pkValue == "1" {
+			return "john@example.com", nil
+		}
+		return nil, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "email", partialRows)
+
+	ctx := context.Background()
+	var out fuse.AttrOut
+	errno := node.Getattr(ctx, nil, &out)
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Check that data was fetched and size is correct
+	expectedSize := uint64(len("john@example.com"))
+	if out.Size != expectedSize {
+		t.Errorf("Expected Size=%d, got %d", expectedSize, out.Size)
+	}
+
+	// Verify the data was cached
+	if string(node.data) != "john@example.com" {
+		t.Errorf("Expected cached data=%q, got %q", "john@example.com", node.data)
+	}
+}
+
+// TestColumnFileNode_Getattr_WithMock_NullValue tests Getattr with NULL column value
+func TestColumnFileNode_Getattr_WithMock_NullValue(t *testing.T) {
+	cfg := &config.Config{}
+
+	// Mock returns nil (NULL value)
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+		return nil, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "email", partialRows)
+
+	ctx := context.Background()
+	var out fuse.AttrOut
+	errno := node.Getattr(ctx, nil, &out)
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// NULL should result in empty file
+	if out.Size != 0 {
+		t.Errorf("Expected Size=0 for NULL, got %d", out.Size)
+	}
+}
+
+// TestColumnFileNode_Getattr_WithMock_Error tests Getattr when database returns error
+func TestColumnFileNode_Getattr_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+
+	// Mock returns error
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "email", partialRows)
+
+	ctx := context.Background()
+	var out fuse.AttrOut
+	errno := node.Getattr(ctx, nil, &out)
+
+	// Should return EIO on database error
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestColumnFileNode_fetchData_WithMock tests fetchData with various data types
+func TestColumnFileNode_fetchData_WithMock(t *testing.T) {
+	testCases := []struct {
+		name     string
+		value    interface{}
+		expected string
+	}{
+		{"string", "hello", "hello"},
+		{"integer", 42, "42"},
+		{"float", 3.14, "3.14"},
+		// PostgreSQL booleans are represented as "t" and "f"
+		{"boolean_true", true, "t"},
+		{"boolean_false", false, "f"},
+		{"null", nil, ""},
+		{"json_object", map[string]interface{}{"key": "value"}, `{"key":"value"}`},
+		{"json_array", []interface{}{1, 2, 3}, "[1,2,3]"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+
+			mock := db.NewMockDBClient()
+			mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+				return tc.value, nil
+			}
+
+			partialRows := NewPartialRowTracker(nil)
+			node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "data", partialRows)
+
+			err := node.fetchData(context.Background())
+			if err != nil {
+				t.Fatalf("fetchData() error: %v", err)
+			}
+
+			if string(node.data) != tc.expected {
+				t.Errorf("Expected data=%q, got %q", tc.expected, node.data)
+			}
+		})
+	}
+}
+
+// TestColumnFileNode_fetchData_WithTrailingNewlines tests fetchData with TrailingNewlines config
+func TestColumnFileNode_fetchData_WithTrailingNewlines(t *testing.T) {
+	cfg := &config.Config{
+		TrailingNewlines: true,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+		return "hello", nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "data", partialRows)
+
+	err := node.fetchData(context.Background())
+	if err != nil {
+		t.Fatalf("fetchData() error: %v", err)
+	}
+
+	expected := "hello\n"
+	if string(node.data) != expected {
+		t.Errorf("Expected data=%q, got %q", expected, node.data)
+	}
+}
+
+// TestColumnFileHandle_Flush_WithMock_ExistingRow tests Flush for an existing row (UPDATE)
+func TestColumnFileHandle_Flush_WithMock_ExistingRow(t *testing.T) {
+	cfg := &config.Config{}
+
+	// Track what was called
+	var updatedColumn, updatedValue string
+
+	mock := db.NewMockDBClient()
+	// Row exists
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{Columns: []string{"id", "email"}, Values: []interface{}{"1", "old@example.com"}}, nil
+	}
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+		updatedColumn = columnName
+		updatedValue = newValue
+		return nil
+	}
+
+	node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "email", NewPartialRowTracker(nil))
+
+	fh := &ColumnFileHandle{
+		node: node,
+		data: []byte("new@example.com\n"),
+	}
+
+	errno := fh.Flush(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if updatedColumn != "email" {
+		t.Errorf("Expected UpdateColumn called with column='email', got %q", updatedColumn)
+	}
+
+	// Should strip trailing newline
+	if updatedValue != "new@example.com" {
+		t.Errorf("Expected UpdateColumn called with value='new@example.com', got %q", updatedValue)
+	}
+}
+
+// TestColumnFileHandle_Flush_WithMock_NewRow tests Flush for a new row (partial row creation)
+// Note: Full TryCommit behavior requires integration tests because PartialRowTracker
+// uses *db.Client internally (not DBClient interface). This test verifies SetColumn directly.
+func TestColumnFileHandle_Flush_WithMock_NewRow(t *testing.T) {
+	// This test cannot use the full Flush path because PartialRowTracker.TryCommit
+	// requires a real *db.Client. Instead, we test SetColumn directly.
+
+	partialRows := NewPartialRowTracker(nil)
+
+	// Simulate what Flush does: SetColumn for the new row
+	partialRows.SetColumn("public", "users", "id", "1", "email", "test@example.com")
+
+	// Verify the partial row has the email column set
+	partial := partialRows.Get("public", "users", "1")
+	if partial == nil {
+		t.Fatal("Expected partial row to exist")
+	}
+
+	if partial.Columns["email"] != "test@example.com" {
+		t.Errorf("Expected partial row email='test@example.com', got %q", partial.Columns["email"])
+	}
+
+	// Verify PK info was stored correctly
+	if partial.PkColumn != "id" {
+		t.Errorf("Expected pkColumn='id', got %q", partial.PkColumn)
+	}
+	if partial.PkValue != "1" {
+		t.Errorf("Expected pkValue='1', got %q", partial.PkValue)
+	}
+}
+
+// TestColumnFileHandle_Flush_WithMock_Error tests Flush when database update fails
+func TestColumnFileHandle_Flush_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	// Row exists
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{Columns: []string{"id"}, Values: []interface{}{"1"}}, nil
+	}
+	// Update fails
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+		return context.DeadlineExceeded
+	}
+
+	node := NewColumnFileNode(cfg, mock, nil, "public", "users", "id", "1", "email", NewPartialRowTracker(nil))
+
+	fh := &ColumnFileHandle{
+		node: node,
+		data: []byte("test@example.com"),
+	}
+
+	errno := fh.Flush(context.Background())
+
+	// Should return EIO on database error
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestColumnFileNode_getFileMode_WithMock tests permission mapping from PostgreSQL privileges
+func TestColumnFileNode_getFileMode_WithMock(t *testing.T) {
+	testCases := []struct {
+		name     string
+		select_  bool
+		update   bool
+		insert   bool
+		delete_  bool
+		expected uint32
+	}{
+		// File mode max is 0600 (no execute bit for data files)
+		{"full_access", true, true, true, true, 0600},
+		{"read_only", true, false, false, false, 0400},
+		{"write_only", false, true, true, false, 0200},
+		{"read_write", true, true, true, false, 0600},
+		{"no_access", false, false, false, false, 0000},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				DefaultSchema:           "public",
+				MetadataRefreshInterval: time.Hour, // Prevent auto-refresh
+			}
+
+			mock := db.NewMockDBClient()
+			// Set up all mocks needed for cache Refresh
+			mock.MockSchemaReader.GetCurrentSchemaFunc = func(ctx context.Context) (string, error) {
+				return "public", nil
+			}
+			mock.MockSchemaReader.GetSchemasFunc = func(ctx context.Context) ([]string, error) {
+				return []string{"public"}, nil
+			}
+			mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+				return []string{"users"}, nil
+			}
+			mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+				return map[string]int64{"users": 100}, nil
+			}
+			mock.MockSchemaReader.GetTablePermissionsFunc = func(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
+				return &db.TablePermissions{
+					CanSelect: tc.select_,
+					CanUpdate: tc.update,
+					CanInsert: tc.insert,
+					CanDelete: tc.delete_,
+				}, nil
+			}
+
+			cache := NewMetadataCache(cfg, mock)
+			// Pre-populate the cache by calling Refresh
+			if err := cache.Refresh(context.Background()); err != nil {
+				t.Fatalf("Failed to refresh cache: %v", err)
+			}
+
+			partialRows := NewPartialRowTracker(nil)
+			node := NewColumnFileNode(cfg, mock, cache, "public", "users", "id", "1", "email", partialRows)
+			node.data = []byte("test") // Pre-populate to avoid fetch
+
+			mode := node.getFileMode(context.Background())
+
+			if mode != tc.expected {
+				t.Errorf("Expected mode=0%o, got 0%o", tc.expected, mode)
 			}
 		})
 	}

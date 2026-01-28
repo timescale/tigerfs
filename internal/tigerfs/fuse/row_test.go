@@ -4,9 +4,11 @@ import (
 	"context"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
 func TestNewRowFileNode(t *testing.T) {
@@ -602,6 +604,445 @@ func TestRowFileHandle_RowExists(t *testing.T) {
 	}
 	if fhNew.rowExists {
 		t.Error("Expected rowExists=false for new row")
+	}
+}
+
+// ============================================================================
+// Mock-based tests for database interactions (ADR-004)
+// ============================================================================
+
+// TestRowFileNode_Getattr_WithMock tests Getattr using MockDBClient
+func TestRowFileNode_Getattr_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+
+	// Create mock that returns row data
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		if pkValue == "1" {
+			return &db.Row{
+				Columns: []string{"id", "name", "email"},
+				Values:  []interface{}{1, "John", "john@example.com"},
+			}, nil
+		}
+		return nil, context.DeadlineExceeded
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+			{Name: "email", DataType: "text"},
+		}, nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	ctx := context.Background()
+	var out fuse.AttrOut
+	errno := node.Getattr(ctx, nil, &out)
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Check that data was fetched and size is non-zero
+	if out.Size == 0 {
+		t.Error("Expected non-zero size")
+	}
+
+	// Verify data was cached
+	if node.data == nil {
+		t.Error("Expected data to be cached")
+	}
+}
+
+// TestRowFileNode_Getattr_WithMock_Error tests Getattr when database returns error
+func TestRowFileNode_Getattr_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "999", "tsv")
+
+	ctx := context.Background()
+	var out fuse.AttrOut
+	errno := node.Getattr(ctx, nil, &out)
+
+	// Should return EIO on database error
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestRowFileNode_fetchData_WithMock_TSV tests fetchData with TSV format
+func TestRowFileNode_fetchData_WithMock_TSV(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{
+			Columns: []string{"id", "name"},
+			Values:  []interface{}{1, "John"},
+		}, nil
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	err := node.fetchData(context.Background())
+	if err != nil {
+		t.Fatalf("fetchData() error: %v", err)
+	}
+
+	// TSV format: tab-separated values with newline
+	expected := "1\tJohn\n"
+	if string(node.data) != expected {
+		t.Errorf("Expected data=%q, got %q", expected, node.data)
+	}
+}
+
+// TestRowFileNode_fetchData_WithMock_CSV tests fetchData with CSV format
+func TestRowFileNode_fetchData_WithMock_CSV(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{
+			Columns: []string{"id", "name"},
+			Values:  []interface{}{1, "John"},
+		}, nil
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "csv")
+
+	err := node.fetchData(context.Background())
+	if err != nil {
+		t.Fatalf("fetchData() error: %v", err)
+	}
+
+	// CSV format: comma-separated values with newline
+	expected := "1,John\n"
+	if string(node.data) != expected {
+		t.Errorf("Expected data=%q, got %q", expected, node.data)
+	}
+}
+
+// TestRowFileNode_fetchData_WithMock_JSON tests fetchData with JSON format
+func TestRowFileNode_fetchData_WithMock_JSON(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{
+			Columns: []string{"id", "name"},
+			Values:  []interface{}{1, "John"},
+		}, nil
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "json")
+
+	err := node.fetchData(context.Background())
+	if err != nil {
+		t.Fatalf("fetchData() error: %v", err)
+	}
+
+	// JSON format includes a trailing newline
+	expected := "{\"id\":1,\"name\":\"John\"}\n"
+	if string(node.data) != expected {
+		t.Errorf("Expected data=%q, got %q", expected, node.data)
+	}
+}
+
+// TestRowFileNode_fetchData_WithMock_NullValues tests fetchData with NULL values
+func TestRowFileNode_fetchData_WithMock_NullValues(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{
+			Columns: []string{"id", "name", "email"},
+			Values:  []interface{}{1, "John", nil}, // email is NULL
+		}, nil
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+			{Name: "email", DataType: "text"},
+		}, nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	err := node.fetchData(context.Background())
+	if err != nil {
+		t.Fatalf("fetchData() error: %v", err)
+	}
+
+	// TSV with NULL should have empty field
+	expected := "1\tJohn\t\n"
+	if string(node.data) != expected {
+		t.Errorf("Expected data=%q, got %q", expected, node.data)
+	}
+}
+
+// TestRowFileNode_Open_WithMock tests Open using MockDBClient
+func TestRowFileNode_Open_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{
+			Columns: []string{"id", "name"},
+			Values:  []interface{}{1, "John"},
+		}, nil
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	fh, flags, errno := node.Open(context.Background(), syscall.O_RDONLY)
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if fh == nil {
+		t.Error("Expected non-nil file handle")
+	}
+
+	// Should have DIRECT_IO flag
+	if flags&fuse.FOPEN_DIRECT_IO == 0 {
+		t.Error("Expected FOPEN_DIRECT_IO flag")
+	}
+
+	// Verify handle has data
+	rfh, ok := fh.(*RowFileHandle)
+	if !ok {
+		t.Fatal("Expected RowFileHandle")
+	}
+
+	if len(rfh.data) == 0 {
+		t.Error("Expected handle to have data")
+	}
+}
+
+// TestRowFileHandle_Flush_WithMock_ExistingRow tests Flush for an existing row (UPDATE)
+func TestRowFileHandle_Flush_WithMock_ExistingRow(t *testing.T) {
+	cfg := &config.Config{}
+
+	// Track what was called
+	var updateCalled bool
+	var updatedColumns []string
+	var updatedValues []interface{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+		return &db.Row{Columns: []string{"id", "name"}, Values: []interface{}{1, "John"}}, nil
+	}
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+	mock.MockRowWriter.UpdateRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+		updateCalled = true
+		updatedColumns = columns
+		updatedValues = values
+		return nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte("1\tJane\n"),
+		rowExists: true,
+		dirty:     true, // Must set dirty=true for Flush to write
+	}
+
+	errno := fh.Flush(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if !updateCalled {
+		t.Error("Expected UpdateRow to be called")
+	}
+
+	// Verify updated data
+	if len(updatedColumns) != 2 {
+		t.Errorf("Expected 2 columns, got %d", len(updatedColumns))
+	}
+
+	if len(updatedValues) != 2 {
+		t.Errorf("Expected 2 values, got %d", len(updatedValues))
+	}
+}
+
+// TestRowFileHandle_Flush_WithMock_NewRow tests Flush for a new row (INSERT)
+func TestRowFileHandle_Flush_WithMock_NewRow(t *testing.T) {
+	cfg := &config.Config{}
+
+	var insertCalled bool
+	var insertedColumns []string
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+	mock.MockRowWriter.InsertRowFunc = func(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error) {
+		insertCalled = true
+		insertedColumns = columns
+		return "1", nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte("1\tJohn\n"),
+		rowExists: false,
+		dirty:     true, // Must set dirty=true for Flush to write
+	}
+
+	errno := fh.Flush(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if !insertCalled {
+		t.Error("Expected InsertRow to be called")
+	}
+
+	if len(insertedColumns) != 2 {
+		t.Errorf("Expected 2 columns, got %d", len(insertedColumns))
+	}
+}
+
+// TestRowFileHandle_Flush_WithMock_Error tests Flush when database update fails
+func TestRowFileHandle_Flush_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
+		return []db.Column{
+			{Name: "id", DataType: "integer"},
+			{Name: "name", DataType: "text"},
+		}, nil
+	}
+	mock.MockRowWriter.UpdateRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+		return context.DeadlineExceeded
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte("1\tJohn\n"),
+		rowExists: true,
+		dirty:     true, // Must set dirty=true for Flush to attempt write
+	}
+
+	errno := fh.Flush(context.Background())
+
+	// Should return EIO on database error
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestRowFileNode_getFileMode_WithMock tests permission mapping
+func TestRowFileNode_getFileMode_WithMock(t *testing.T) {
+	testCases := []struct {
+		name     string
+		select_  bool
+		update   bool
+		insert   bool
+		delete_  bool
+		expected uint32
+	}{
+		// File mode max is 0600 (no execute bit for data files)
+		{"full_access", true, true, true, true, 0600},
+		{"read_only", true, false, false, false, 0400},
+		{"write_only", false, true, true, false, 0200},
+		{"read_write", true, true, true, false, 0600},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				MetadataRefreshInterval: time.Hour, // Prevent auto-refresh
+			}
+
+			mock := db.NewMockDBClient()
+			// Set up all mocks needed for cache Refresh
+			mock.MockSchemaReader.GetCurrentSchemaFunc = func(ctx context.Context) (string, error) {
+				return "public", nil
+			}
+			mock.MockSchemaReader.GetSchemasFunc = func(ctx context.Context) ([]string, error) {
+				return []string{"public"}, nil
+			}
+			mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+				return []string{"users"}, nil
+			}
+			mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+				return map[string]int64{"users": 100}, nil
+			}
+			mock.MockSchemaReader.GetTablePermissionsFunc = func(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
+				return &db.TablePermissions{
+					CanSelect: tc.select_,
+					CanUpdate: tc.update,
+					CanInsert: tc.insert,
+					CanDelete: tc.delete_,
+				}, nil
+			}
+
+			cache := NewMetadataCache(cfg, mock)
+			// Pre-populate the cache by calling Refresh
+			if err := cache.Refresh(context.Background()); err != nil {
+				t.Fatalf("Failed to refresh cache: %v", err)
+			}
+
+			node := NewRowFileNode(cfg, mock, cache, "public", "users", "id", "1", "tsv")
+			node.data = []byte("test") // Pre-populate to avoid fetch
+
+			mode := node.getFileMode(context.Background())
+
+			if mode != tc.expected {
+				t.Errorf("Expected mode=0%o, got 0%o", tc.expected, mode)
+			}
+		})
 	}
 }
 

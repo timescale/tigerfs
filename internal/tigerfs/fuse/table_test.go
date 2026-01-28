@@ -7,6 +7,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
 func TestNewTableNode(t *testing.T) {
@@ -136,5 +137,237 @@ func TestTableNode_MultipleSchemas(t *testing.T) {
 	}
 }
 
-// Note: Readdir, Lookup, Unlink, Rmdir, Mkdir tests require database integration
-// See test/integration/ for full CRUD operation tests
+// ============================================================================
+// Mock-based tests for database interactions (ADR-004)
+// ============================================================================
+
+// TestTableNode_Readdir_WithMock tests Readdir using MockDBClient
+func TestTableNode_Readdir_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return &db.PrimaryKey{Columns: []string{"id"}}, nil
+	}
+	mock.MockRowReader.ListRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+		return []string{"1", "2", "3"}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if stream == nil {
+		t.Fatal("Expected non-nil stream")
+	}
+
+	// Collect entries
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// Should have special dirs plus 3 rows
+	// Special dirs: .first, .last, .sample, .all, .index, .count, .ddl, .ddl/
+	// The exact count depends on implementation, but should include our 3 rows
+	found := 0
+	for _, e := range entries {
+		if e == "1" || e == "2" || e == "3" {
+			found++
+		}
+	}
+
+	if found != 3 {
+		t.Errorf("Expected to find 3 row entries, found %d in %v", found, entries)
+	}
+}
+
+// TestTableNode_Readdir_WithMock_Empty tests Readdir for an empty table
+func TestTableNode_Readdir_WithMock_Empty(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return &db.PrimaryKey{Columns: []string{"id"}}, nil
+	}
+	mock.MockRowReader.ListRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+		return []string{}, nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+
+	stream, errno := node.Readdir(context.Background())
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if stream == nil {
+		t.Fatal("Expected non-nil stream even for empty table")
+	}
+
+	// Should still have special directories
+	var entries []string
+	for stream.HasNext() {
+		entry, _ := stream.Next()
+		entries = append(entries, entry.Name)
+	}
+
+	// Should have special directories even with empty table
+	if len(entries) == 0 {
+		t.Error("Expected special directories even for empty table")
+	}
+}
+
+// TestTableNode_Readdir_WithMock_Error tests Readdir when database returns error
+func TestTableNode_Readdir_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+
+	_, errno := node.Readdir(context.Background())
+
+	// Should return EIO on database error
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestTableNode_Lookup_WithMock_Row tests Lookup for a row
+// NOTE: This test requires FUSE bridge infrastructure (NewPersistentInode).
+// Lookup tests that create child inodes must be done via integration tests.
+func TestTableNode_Lookup_WithMock_Row(t *testing.T) {
+	t.Skip("Lookup tests require FUSE bridge infrastructure - see test/integration/")
+}
+
+// TestTableNode_Lookup_WithMock_RowNotFound tests Lookup for a nonexistent row
+// NOTE: This test requires FUSE bridge infrastructure (NewPersistentInode).
+func TestTableNode_Lookup_WithMock_RowNotFound(t *testing.T) {
+	t.Skip("Lookup tests require FUSE bridge infrastructure - see test/integration/")
+}
+
+// TestTableNode_Lookup_WithMock_SpecialDirs tests Lookup for special directories
+// NOTE: This test requires FUSE bridge infrastructure (NewPersistentInode).
+func TestTableNode_Lookup_WithMock_SpecialDirs(t *testing.T) {
+	t.Skip("Lookup tests require FUSE bridge infrastructure - see test/integration/")
+}
+
+// TestTableNode_Lookup_WithMock_RowWithFormat tests Lookup for row with format extension
+// NOTE: This test requires FUSE bridge infrastructure (NewPersistentInode).
+func TestTableNode_Lookup_WithMock_RowWithFormat(t *testing.T) {
+	t.Skip("Lookup tests require FUSE bridge infrastructure - see test/integration/")
+}
+
+// TestTableNode_Unlink_WithMock tests Unlink (row deletion)
+func TestTableNode_Unlink_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+
+	var deleteCalled bool
+	var deletedPK string
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return &db.PrimaryKey{Columns: []string{"id"}}, nil
+	}
+	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+		deleteCalled = true
+		deletedPK = pkValue
+		return nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+
+	errno := node.Unlink(context.Background(), "1")
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if !deleteCalled {
+		t.Error("Expected DeleteRow to be called")
+	}
+
+	if deletedPK != "1" {
+		t.Errorf("Expected deleted PK='1', got %q", deletedPK)
+	}
+}
+
+// TestTableNode_Unlink_WithMock_Error tests Unlink when database returns error
+func TestTableNode_Unlink_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return &db.PrimaryKey{Columns: []string{"id"}}, nil
+	}
+	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+		return context.DeadlineExceeded
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+
+	errno := node.Unlink(context.Background(), "1")
+
+	// Should return EIO on database error
+	if errno != syscall.EIO {
+		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestTableNode_Rmdir_WithMock tests Rmdir (row deletion via rm -r)
+func TestTableNode_Rmdir_WithMock(t *testing.T) {
+	cfg := &config.Config{}
+
+	var deleteCalled bool
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+		return &db.PrimaryKey{Columns: []string{"id"}}, nil
+	}
+	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+		deleteCalled = true
+		return nil
+	}
+
+	partialRows := NewPartialRowTracker(nil)
+	node := NewTableNode(cfg, mock, nil, "public", "users", partialRows)
+
+	errno := node.Rmdir(context.Background(), "1")
+
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	if !deleteCalled {
+		t.Error("Expected DeleteRow to be called")
+	}
+}
+
+// TestTableNode_Mkdir_WithMock tests Mkdir (create row directory)
+// NOTE: This test requires FUSE bridge infrastructure (NewPersistentInode).
+func TestTableNode_Mkdir_WithMock(t *testing.T) {
+	t.Skip("Mkdir tests require FUSE bridge infrastructure - see test/integration/")
+}
+
+// Note: Full CRUD operation integration tests are in test/integration/

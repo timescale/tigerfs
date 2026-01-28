@@ -10,6 +10,8 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
+// Mock tests use db.NewMockDBClient() - see ADR-004
+
 func getTestConnectionString(t *testing.T) string {
 	t.Helper()
 
@@ -526,5 +528,334 @@ func TestMetadataCache_InvalidateSchemas(t *testing.T) {
 
 	if len(cache.schemaLastFetch) != 0 {
 		t.Error("Expected schemaLastFetch to be empty after invalidate")
+	}
+}
+
+// ============================================================================
+// Mock-based tests for database interactions (ADR-004)
+// ============================================================================
+
+// TestMetadataCache_GetTables_WithMock tests GetTables using MockDBClient
+func TestMetadataCache_GetTables_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		if schema == "public" {
+			return []string{"users", "orders", "products"}, nil
+		}
+		return []string{}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	tables, err := cache.GetTables(context.Background())
+	if err != nil {
+		t.Fatalf("GetTables() error: %v", err)
+	}
+
+	if len(tables) != 3 {
+		t.Errorf("Expected 3 tables, got %d", len(tables))
+	}
+
+	// Verify caching - second call should use cache
+	tables2, err := cache.GetTables(context.Background())
+	if err != nil {
+		t.Fatalf("Second GetTables() error: %v", err)
+	}
+
+	if len(tables2) != 3 {
+		t.Errorf("Expected 3 tables from cache, got %d", len(tables2))
+	}
+}
+
+// TestMetadataCache_GetTables_WithMock_Error tests GetTables when database returns error
+func TestMetadataCache_GetTables_WithMock_Error(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return nil, context.DeadlineExceeded
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	_, err := cache.GetTables(context.Background())
+	if err == nil {
+		t.Error("Expected error from GetTables()")
+	}
+}
+
+// TestMetadataCache_HasTable_WithMock tests HasTable using MockDBClient
+func TestMetadataCache_HasTable_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return []string{"users", "orders"}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// Test existing table
+	exists, err := cache.HasTable(context.Background(), "users")
+	if err != nil {
+		t.Fatalf("HasTable() error: %v", err)
+	}
+	if !exists {
+		t.Error("Expected HasTable('users')=true")
+	}
+
+	// Test non-existing table
+	exists, err = cache.HasTable(context.Background(), "nonexistent")
+	if err != nil {
+		t.Fatalf("HasTable() error: %v", err)
+	}
+	if exists {
+		t.Error("Expected HasTable('nonexistent')=false")
+	}
+}
+
+// TestMetadataCache_GetSchemas_WithMock tests GetSchemas using MockDBClient
+func TestMetadataCache_GetSchemas_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetSchemasFunc = func(ctx context.Context) ([]string, error) {
+		return []string{"public", "analytics", "staging"}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	schemas, err := cache.GetSchemas(context.Background())
+	if err != nil {
+		t.Fatalf("GetSchemas() error: %v", err)
+	}
+
+	if len(schemas) != 3 {
+		t.Errorf("Expected 3 schemas, got %d", len(schemas))
+	}
+}
+
+// TestMetadataCache_HasSchema_WithMock tests HasSchema using MockDBClient
+func TestMetadataCache_HasSchema_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetSchemasFunc = func(ctx context.Context) ([]string, error) {
+		return []string{"public", "analytics"}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// Test existing schema
+	exists, err := cache.HasSchema(context.Background(), "public")
+	if err != nil {
+		t.Fatalf("HasSchema() error: %v", err)
+	}
+	if !exists {
+		t.Error("Expected HasSchema('public')=true")
+	}
+
+	// Test non-existing schema
+	exists, err = cache.HasSchema(context.Background(), "nonexistent")
+	if err != nil {
+		t.Fatalf("HasSchema() error: %v", err)
+	}
+	if exists {
+		t.Error("Expected HasSchema('nonexistent')=false")
+	}
+}
+
+// TestMetadataCache_GetTablesForSchema_WithMock tests GetTablesForSchema using MockDBClient
+func TestMetadataCache_GetTablesForSchema_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		switch schema {
+		case "public":
+			return []string{"users", "orders"}, nil
+		case "analytics":
+			return []string{"events", "reports"}, nil
+		default:
+			return []string{}, nil
+		}
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// Test public schema
+	tables, err := cache.GetTablesForSchema(context.Background(), "public")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema('public') error: %v", err)
+	}
+	if len(tables) != 2 {
+		t.Errorf("Expected 2 tables in public, got %d", len(tables))
+	}
+
+	// Test analytics schema
+	tables, err = cache.GetTablesForSchema(context.Background(), "analytics")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema('analytics') error: %v", err)
+	}
+	if len(tables) != 2 {
+		t.Errorf("Expected 2 tables in analytics, got %d", len(tables))
+	}
+}
+
+// TestMetadataCache_GetTablePermissions_WithMock tests GetTablePermissions using MockDBClient
+func TestMetadataCache_GetTablePermissions_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	// GetTables must return the tables for which we want permissions
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return []string{"users", "other"}, nil
+	}
+	mock.MockSchemaReader.GetTablePermissionsFunc = func(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
+		if table == "users" {
+			return &db.TablePermissions{
+				CanSelect: true,
+				CanInsert: true,
+				CanUpdate: true,
+				CanDelete: false,
+			}, nil
+		}
+		return &db.TablePermissions{
+			CanSelect: true,
+			CanInsert: false,
+			CanUpdate: false,
+			CanDelete: false,
+		}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// Test users table (full access except delete)
+	perms, err := cache.GetTablePermissions(context.Background(), "users")
+	if err != nil {
+		t.Fatalf("GetTablePermissions('users') error: %v", err)
+	}
+	if perms == nil {
+		t.Fatal("Expected non-nil permissions")
+	}
+	if !perms.CanSelect || !perms.CanInsert || !perms.CanUpdate || perms.CanDelete {
+		t.Errorf("Unexpected permissions: %+v", perms)
+	}
+
+	// Test other table (read-only)
+	perms, err = cache.GetTablePermissions(context.Background(), "other")
+	if err != nil {
+		t.Fatalf("GetTablePermissions('other') error: %v", err)
+	}
+	if perms == nil {
+		t.Fatal("Expected non-nil permissions for 'other'")
+	}
+	if !perms.CanSelect || perms.CanInsert || perms.CanUpdate || perms.CanDelete {
+		t.Errorf("Expected read-only permissions: %+v", perms)
+	}
+}
+
+// TestMetadataCache_GetRowCountEstimate_WithMock tests GetRowCountEstimate using MockDBClient
+func TestMetadataCache_GetRowCountEstimate_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "public",
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+		return map[string]int64{
+			"users":  1000,
+			"orders": 50000,
+		}, nil
+	}
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return []string{"users", "orders"}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// Trigger cache population
+	_, _ = cache.GetTables(context.Background())
+
+	// Now test row count estimate
+	count, err := cache.GetRowCountEstimate(context.Background(), "users")
+	if err != nil {
+		t.Fatalf("GetRowCountEstimate('users') error: %v", err)
+	}
+	if count != 1000 {
+		t.Errorf("Expected count=1000, got %d", count)
+	}
+
+	count, err = cache.GetRowCountEstimate(context.Background(), "orders")
+	if err != nil {
+		t.Fatalf("GetRowCountEstimate('orders') error: %v", err)
+	}
+	if count != 50000 {
+		t.Errorf("Expected count=50000, got %d", count)
+	}
+}
+
+// TestMetadataCache_Refresh_WithMock tests Refresh using MockDBClient
+func TestMetadataCache_Refresh_WithMock(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:           "", // Empty to test resolution from database
+		MetadataRefreshInterval: 30 * time.Second,
+	}
+
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetCurrentSchemaFunc = func(ctx context.Context) (string, error) {
+		return "myschema", nil
+	}
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return []string{"table1", "table2"}, nil
+	}
+	mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+		return map[string]int64{"table1": 100, "table2": 200}, nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	err := cache.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh() error: %v", err)
+	}
+
+	// Check that default schema was resolved
+	if cache.GetDefaultSchema() != "myschema" {
+		t.Errorf("Expected defaultSchema='myschema', got %q", cache.GetDefaultSchema())
+	}
+
+	// Check that tables were fetched
+	if len(cache.tables) != 2 {
+		t.Errorf("Expected 2 tables, got %d", len(cache.tables))
+	}
+
+	// Check that lastFetch was updated
+	if cache.lastFetch.IsZero() {
+		t.Error("Expected lastFetch to be set")
 	}
 }
