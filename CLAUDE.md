@@ -193,6 +193,14 @@ Existing code may not meet these standards. When modifying files, update comment
 4. Write unit tests for each layer
 5. Propose integration tests with recommendation (ask user before implementing)
 
+## Git Operations
+
+**Keep git operations simple:**
+- **Add files explicitly by name** - never use `git add -A` or `git add .`
+- **Make simple commits** - just `git add <files>` and `git commit`
+- **No complex git operations** - avoid `git rebase`, `git commit --amend`, `git reset`, `git push --force`, or any destructive commands
+- **If commits need fixing**, let the user handle it manually
+
 ## Commit Guidelines
 
 ```bash
