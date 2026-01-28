@@ -55,7 +55,7 @@ func (r *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 }
 
 // Readdir lists the contents of the root directory.
-// Returns tables from the default schema (schema flattening) plus .schemas directory.
+// Returns tables from the default schema (schema flattening) plus .schemas and .create directories.
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("RootNode.Readdir called")
 
@@ -66,10 +66,16 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
-	// Convert tables to directory entries (+ 1 for .schemas)
-	entries := make([]fuse.DirEntry, 0, len(tables)+1)
+	// Convert tables to directory entries (+ 2 for .schemas and .create)
+	entries := make([]fuse.DirEntry, 0, len(tables)+2)
 
-	// Add .schemas directory first
+	// Add .create directory for creating new tables in default schema
+	entries = append(entries, fuse.DirEntry{
+		Name: ".create",
+		Mode: syscall.S_IFDIR,
+	})
+
+	// Add .schemas directory
 	entries = append(entries, fuse.DirEntry{
 		Name: ".schemas",
 		Mode: syscall.S_IFDIR,
@@ -90,17 +96,41 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a table name or .schemas in the root directory.
+// Lookup looks up a table name, .schemas, or .create in the root directory.
 func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("RootNode.Lookup called", zap.String("name", name))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	// Handle .create directory for creating new tables in default schema
+	if name == ".create" {
+		logging.Debug("Looking up .create directory for tables")
+
+		// Get the resolved default schema from the cache
+		defaultSchema := r.cache.GetDefaultSchema()
+		if defaultSchema == "" {
+			defaultSchema = r.cfg.DefaultSchema
+		}
+
+		createNode := NewCreateDirNode(
+			r.cfg,
+			r.db, // db.DDLExecutor
+			r.cache,
+			r.staging,
+			"table",       // objectType
+			defaultSchema, // schema for the new table
+			"",            // tableName (not applicable for table creation)
+			".create",     // pathPrefix for staging
+		)
+		child := r.NewPersistentInode(ctx, createNode, stableAttr)
+		return child, 0
+	}
 
 	// Handle .schemas directory
 	if name == ".schemas" {
 		logging.Debug("Looking up .schemas directory")
-
-		stableAttr := fs.StableAttr{
-			Mode: syscall.S_IFDIR,
-		}
 
 		schemasNode := NewSchemasNode(r.cfg, r.db, r.cache, r.partialRows, r.staging)
 		child := r.NewPersistentInode(ctx, schemasNode, stableAttr)
@@ -121,11 +151,6 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	// Table exists - create table directory node
 	logging.Debug("Table found", zap.String("table", name))
-
-	// Create a stable inode for the table directory
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-	}
 
 	// Get the resolved default schema from the cache
 	defaultSchema := r.cache.GetDefaultSchema()

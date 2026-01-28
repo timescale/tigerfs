@@ -696,6 +696,259 @@ func TestFullWorkflow(t *testing.T) {
 	}
 }
 
+// TestTableCreateWorkflow_WithMocks tests the complete table creation workflow using mock DDLExecutor.
+// This tests the actual FUSE node operations (Mkdir, Open, Write, etc.) with mocked database calls.
+func TestTableCreateWorkflow_WithMocks(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{DefaultSchema: "public"}
+	staging := NewStagingTracker()
+
+	// Track what SQL was executed
+	var testedSQL, committedSQL string
+	testCalled := false
+	commitCalled := false
+
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			testCalled = true
+			testedSQL = sql
+			return nil
+		},
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			commitCalled = true
+			committedSQL = sql
+			return nil
+		},
+	}
+
+	// Step 1: Create CreateDirNode (simulates /.create/ directory)
+	createNode := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", ".create")
+	if createNode == nil {
+		t.Fatal("NewCreateDirNode returned nil")
+	}
+
+	// Step 2: Simulate mkdir .create/orders via Mkdir method
+	// Note: Mkdir requires FUSE inode context, so we simulate the core logic
+	stagingPath := createNode.pathPrefix + "/orders"
+	staging.GetOrCreate(stagingPath)
+
+	if staging.Get(stagingPath) == nil {
+		t.Fatal("mkdir should create staging entry")
+	}
+
+	// Verify the entry appears in ListPending (simulates ls .create/)
+	pending := staging.ListPending(".create")
+	found := false
+	for _, name := range pending {
+		if name == "orders" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Created table should appear in pending list")
+	}
+
+	// Step 3: Create SchemaFileNode and write DDL (simulates echo "..." > .create/orders/.schema)
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "orders",
+		Schema:      "public",
+	}
+
+	schemaNode := NewSchemaFileNode(cfg, mockDB, staging, stagingCtx)
+	fh, _, errno := schemaNode.Open(ctx, 0)
+	if errno != 0 {
+		t.Fatalf("SchemaFileNode.Open failed: %d", errno)
+	}
+
+	sfh := fh.(*SchemaFileHandle)
+	ddl := []byte("CREATE TABLE orders (id SERIAL PRIMARY KEY, customer_id INT, total DECIMAL);")
+	written, errno := sfh.Write(ctx, ddl, 0)
+	if errno != 0 {
+		t.Fatalf("SchemaFileHandle.Write failed: %d", errno)
+	}
+	if written != uint32(len(ddl)) {
+		t.Errorf("Expected %d bytes written, got %d", len(ddl), written)
+	}
+
+	// Verify content was stored
+	if staging.GetContent(stagingPath) != string(ddl) {
+		t.Error("DDL content should be stored in staging")
+	}
+
+	// Step 4: Create TestFileNode and run test (simulates touch .create/orders/.test)
+	testNode := NewTestFileNode(cfg, mockDB, staging, stagingCtx)
+	if testNode == nil {
+		t.Fatal("NewTestFileNode returned nil")
+	}
+
+	// Run the test via the helper (actual Setattr requires FUSE context)
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err != nil {
+		t.Fatalf("DDL test failed: %v", err)
+	}
+
+	if !testCalled {
+		t.Error("ExecInTransaction should have been called")
+	}
+	if testedSQL != string(ddl) {
+		t.Errorf("Expected tested SQL %q, got %q", string(ddl), testedSQL)
+	}
+
+	// Verify test result
+	result := staging.GetTestResult(stagingPath)
+	if result != "OK: DDL validated successfully.\n" {
+		t.Errorf("Expected success result, got %q", result)
+	}
+
+	// Step 5: Create CommitFileNode and commit (simulates touch .create/orders/.commit)
+	commitNode := NewCommitFileNode(cfg, mockDB, staging, stagingCtx)
+	if commitNode == nil {
+		t.Fatal("NewCommitFileNode returned nil")
+	}
+
+	// Run the commit via the helper
+	err = runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Fatalf("DDL commit failed: %v", err)
+	}
+
+	if !commitCalled {
+		t.Error("Exec should have been called")
+	}
+	if committedSQL != string(ddl) {
+		t.Errorf("Expected committed SQL %q, got %q", string(ddl), committedSQL)
+	}
+
+	// Verify staging was cleared after successful commit
+	if staging.HasContent(stagingPath) {
+		t.Error("Staging should be cleared after successful commit")
+	}
+}
+
+// TestTableCreateWorkflow_Abort tests aborting a table creation clears staging.
+func TestTableCreateWorkflow_Abort(t *testing.T) {
+	staging := NewStagingTracker()
+	mockDB := &db.MockDDLExecutor{}
+	cfg := &config.Config{DefaultSchema: "public"}
+
+	stagingPath := ".create/temp_table"
+
+	// Create staging entry and write DDL
+	staging.Set(stagingPath, "CREATE TABLE temp_table (id INT);")
+
+	if !staging.HasContent(stagingPath) {
+		t.Fatal("Content should exist before abort")
+	}
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "temp_table",
+		Schema:      "public",
+	}
+
+	// Create AbortFileNode and trigger abort
+	abortNode := NewAbortFileNode(cfg, mockDB, staging, stagingCtx)
+	abortNode.runAbort()
+
+	// Verify staging was cleared
+	if staging.HasContent(stagingPath) {
+		t.Error("Staging should be cleared after abort")
+	}
+	if staging.Get(stagingPath) != nil {
+		t.Error("Staging entry should be deleted after abort")
+	}
+}
+
+// TestTableCreateWorkflow_CommitFailure tests that staging is preserved on commit failure.
+func TestTableCreateWorkflow_CommitFailure(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	// Mock that returns an error
+	mockDB := &db.MockDDLExecutor{
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			return errors.New("relation \"orders\" already exists")
+		},
+	}
+
+	stagingPath := ".create/orders"
+	ddl := "CREATE TABLE orders (id INT);"
+	staging.Set(stagingPath, ddl)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "orders",
+		Schema:      "public",
+	}
+
+	// Attempt commit - should fail
+	err := runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err == nil {
+		t.Error("Expected commit to fail")
+	}
+
+	// Verify staging is preserved so user can fix and retry
+	if !staging.HasContent(stagingPath) {
+		t.Error("Staging should be preserved after failed commit")
+	}
+	if staging.GetContent(stagingPath) != ddl {
+		t.Error("DDL content should be unchanged after failed commit")
+	}
+}
+
+// TestTableCreateWorkflow_TestFailure tests that test failure reports error but preserves staging.
+func TestTableCreateWorkflow_TestFailure(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+
+	// Mock that returns a validation error
+	mockDB := &db.MockDDLExecutor{
+		ExecInTransactionFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			return errors.New("syntax error at or near \"CRATE\"")
+		},
+	}
+
+	stagingPath := ".create/bad_table"
+	ddl := "CRATE TABLE bad_table (id INT);" // Intentional typo
+	staging.Set(stagingPath, ddl)
+
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "bad_table",
+		Schema:      "public",
+	}
+
+	// Test should fail
+	err := runTestWithExecutor(ctx, mockDB, staging, stagingCtx)
+	if err == nil {
+		t.Error("Expected test to fail")
+	}
+
+	// Verify error was recorded
+	result := staging.GetTestResult(stagingPath)
+	if result == "" {
+		t.Error("Test result should be recorded")
+	}
+	if !containsHelper(result, "syntax error") {
+		t.Errorf("Expected error message in result, got %q", result)
+	}
+
+	// Verify staging is preserved so user can fix
+	if !staging.HasContent(stagingPath) {
+		t.Error("Staging should be preserved after failed test")
+	}
+}
+
 // contains is a helper function for string containment check
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))

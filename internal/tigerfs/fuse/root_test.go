@@ -24,6 +24,7 @@ func setupTestRootNode(tables []string) *RootNode {
 		cfg:         cfg,
 		db:          nil,
 		partialRows: NewPartialRowTracker(nil),
+		staging:     NewStagingTracker(),
 	}
 
 	// Create cache and pre-populate it
@@ -56,6 +57,7 @@ func setupTestRootNodeWithSchemas(tables []string, schemas []string) *RootNode {
 		cfg:         cfg,
 		db:          nil,
 		partialRows: NewPartialRowTracker(nil),
+		staging:     NewStagingTracker(),
 	}
 
 	// Create cache and pre-populate it
@@ -150,21 +152,22 @@ func TestRootNode_Readdir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	// Expected: tables + .schemas
-	expectedCount := len(tables) + 1
+	// Expected: tables + .schemas + .create
+	expectedCount := len(tables) + 2
 	if len(entries) != expectedCount {
 		t.Errorf("Expected %d entries, got %d", expectedCount, len(entries))
 	}
 
-	// Verify each table is present (and .schemas)
-	tableSet := make(map[string]bool)
+	// Verify each table is present (and .schemas and .create)
+	expectedNames := make(map[string]bool)
 	for _, table := range tables {
-		tableSet[table] = true
+		expectedNames[table] = true
 	}
-	tableSet[".schemas"] = true
+	expectedNames[".schemas"] = true
+	expectedNames[".create"] = true
 
 	for _, entry := range entries {
-		if !tableSet[entry.Name] {
+		if !expectedNames[entry.Name] {
 			t.Errorf("Unexpected entry: %q", entry.Name)
 		}
 		// Verify entries are directories
@@ -189,19 +192,23 @@ func TestRootNode_Readdir_EmptyDatabase(t *testing.T) {
 		t.Fatal("Expected non-nil DirStream")
 	}
 
-	// Should have exactly one entry: .schemas
+	// Should have exactly two entries: .create and .schemas
 	var entries []fuse.DirEntry
 	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
 		entries = append(entries, entry)
 	}
 
-	if len(entries) != 1 {
-		t.Errorf("Expected 1 entry (.schemas), got %d", len(entries))
+	if len(entries) != 2 {
+		t.Errorf("Expected 2 entries (.create and .schemas), got %d", len(entries))
 	}
 
-	if len(entries) > 0 && entries[0].Name != ".schemas" {
-		t.Errorf("Expected .schemas, got %q", entries[0].Name)
+	// Verify both .create and .schemas are present
+	expectedNames := map[string]bool{".create": true, ".schemas": true}
+	for _, entry := range entries {
+		if !expectedNames[entry.Name] {
+			t.Errorf("Unexpected entry: %q", entry.Name)
+		}
 	}
 }
 
@@ -222,12 +229,12 @@ func TestRootNode_Readdir_SingleTable(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	// Expected: 1 table + .schemas
-	if len(entries) != 2 {
-		t.Errorf("Expected 2 entries (.schemas + only_table), got %d", len(entries))
+	// Expected: 1 table + .schemas + .create
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries (.create + .schemas + only_table), got %d", len(entries))
 	}
 
-	// First entry should be .schemas, second should be only_table
+	// Verify expected entries are present
 	foundTable := false
 	for _, entry := range entries {
 		if entry.Name == "only_table" {
@@ -263,9 +270,9 @@ func TestRootNode_Readdir_ManyTables(t *testing.T) {
 		count++
 	}
 
-	// Expected: 100 tables + .schemas
-	if count != 101 {
-		t.Errorf("Expected 101 entries (100 tables + .schemas), got %d", count)
+	// Expected: 100 tables + .schemas + .create
+	if count != 102 {
+		t.Errorf("Expected 102 entries (100 tables + .schemas + .create), got %d", count)
 	}
 }
 
@@ -389,8 +396,8 @@ func TestRootNode_Readdir_IncludesSchemasDir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	// Should have tables + .schemas
-	expectedCount := len(tables) + 1
+	// Should have tables + .schemas + .create
+	expectedCount := len(tables) + 2
 	if len(entries) != expectedCount {
 		t.Errorf("Expected %d entries, got %d", expectedCount, len(entries))
 	}
@@ -412,8 +419,8 @@ func TestRootNode_Readdir_IncludesSchemasDir(t *testing.T) {
 	}
 }
 
-// TestRootNode_Readdir_SchemasFirst tests that .schemas appears first in the listing
-func TestRootNode_Readdir_SchemasFirst(t *testing.T) {
+// TestRootNode_Readdir_ControlDirsFirst tests that .create and .schemas appear first in the listing
+func TestRootNode_Readdir_ControlDirsFirst(t *testing.T) {
 	tables := []string{"users", "orders"}
 	root := setupTestRootNode(tables)
 	ctx := context.Background()
@@ -424,14 +431,24 @@ func TestRootNode_Readdir_SchemasFirst(t *testing.T) {
 		t.Fatalf("Expected errno=0, got %d", errno)
 	}
 
-	// First entry should be .schemas
+	// First entry should be .create
 	if !dirStream.HasNext() {
 		t.Fatal("Expected at least one entry")
 	}
 
 	entry, _ := dirStream.Next()
+	if entry.Name != ".create" {
+		t.Errorf("Expected first entry to be .create, got %q", entry.Name)
+	}
+
+	// Second entry should be .schemas
+	if !dirStream.HasNext() {
+		t.Fatal("Expected at least two entries")
+	}
+
+	entry, _ = dirStream.Next()
 	if entry.Name != ".schemas" {
-		t.Errorf("Expected first entry to be .schemas, got %q", entry.Name)
+		t.Errorf("Expected second entry to be .schemas, got %q", entry.Name)
 	}
 }
 
@@ -492,6 +509,119 @@ func TestRootNode_Readdir_NoSchemasAtRoot(t *testing.T) {
 				t.Errorf("Schema %q should not appear at root level", schema)
 			}
 		}
+	}
+}
+
+// TestRootNode_Readdir_IncludesCreateDir tests that .create appears in root listing
+func TestRootNode_Readdir_IncludesCreateDir(t *testing.T) {
+	tables := []string{"users", "orders"}
+	root := setupTestRootNode(tables)
+	ctx := context.Background()
+
+	dirStream, errno := root.Readdir(ctx)
+
+	if errno != 0 {
+		t.Fatalf("Expected errno=0, got %d", errno)
+	}
+
+	// Read all entries
+	var entries []fuse.DirEntry
+	for dirStream.HasNext() {
+		entry, _ := dirStream.Next()
+		entries = append(entries, entry)
+	}
+
+	// Find .create entry
+	foundCreate := false
+	for _, entry := range entries {
+		if entry.Name == ".create" {
+			foundCreate = true
+			if entry.Mode != syscall.S_IFDIR {
+				t.Errorf("Expected .create to be directory, got mode 0x%x", entry.Mode)
+			}
+			break
+		}
+	}
+
+	if !foundCreate {
+		t.Error("Expected to find .create in root listing")
+	}
+}
+
+// TestRootNode_Lookup_CreateDir tests that looking up .create returns CreateDirNode
+func TestRootNode_Lookup_CreateDir(t *testing.T) {
+	root := setupTestRootNode([]string{"users"})
+	ctx := context.Background()
+
+	// Verify .create is listed in readdir
+	dirStream, errno := root.Readdir(ctx)
+	if errno != 0 {
+		t.Fatalf("Readdir failed: %d", errno)
+	}
+
+	foundCreate := false
+	for dirStream.HasNext() {
+		entry, _ := dirStream.Next()
+		if entry.Name == ".create" {
+			foundCreate = true
+			break
+		}
+	}
+
+	if !foundCreate {
+		t.Error("Expected .create directory in root listing")
+	}
+}
+
+// TestRootNode_CreateWorkflow tests the table creation workflow via root .create/
+func TestRootNode_CreateWorkflow(t *testing.T) {
+	root := setupTestRootNode([]string{})
+	staging := root.staging
+
+	// Verify no pending creations initially
+	pending := staging.ListPending(".create")
+	if len(pending) != 0 {
+		t.Errorf("Expected no pending creations, got %d", len(pending))
+	}
+
+	// Simulate mkdir .create/orders (creates staging entry)
+	stagingPath := ".create/orders"
+	staging.GetOrCreate(stagingPath)
+
+	// Verify staging entry was created
+	entry := staging.Get(stagingPath)
+	if entry == nil {
+		t.Fatal("Expected staging entry to be created")
+	}
+
+	// Verify it appears in ListPending
+	pending = staging.ListPending(".create")
+	found := false
+	for _, name := range pending {
+		if name == "orders" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected 'orders' in pending creations")
+	}
+
+	// Simulate writing DDL to .schema
+	ddl := "CREATE TABLE orders (id SERIAL PRIMARY KEY, name TEXT);"
+	staging.Set(stagingPath, ddl)
+
+	// Verify content was stored
+	if staging.GetContent(stagingPath) != ddl {
+		t.Error("Expected DDL content to be stored")
+	}
+
+	// Simulate abort (cleanup)
+	staging.Delete(stagingPath)
+
+	// Verify staging was cleared
+	if staging.Get(stagingPath) != nil {
+		t.Error("Expected staging entry to be deleted after abort")
 	}
 }
 
