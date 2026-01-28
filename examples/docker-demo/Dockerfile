@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     jq \
     tree \
     curl \
+    vim \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js for Claude Code

@@ -85,9 +85,13 @@ func (s *StagingDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	entries := []fuse.DirEntry{
 		{Name: ".sql", Mode: syscall.S_IFREG},
 		{Name: ".test", Mode: syscall.S_IFREG},
-		{Name: ".test.log", Mode: syscall.S_IFREG},
 		{Name: ".commit", Mode: syscall.S_IFREG},
 		{Name: ".abort", Mode: syscall.S_IFREG},
+	}
+
+	// Only include .test.log if a test has been run
+	if s.staging.GetTestResult(s.ctx.StagingPath) != "" {
+		entries = append(entries, fuse.DirEntry{Name: ".test.log", Mode: syscall.S_IFREG})
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -126,11 +130,15 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return child, 0
 
 	case ".test.log":
+		// Only exists if a test has been run
+		result := s.staging.GetTestResult(s.ctx.StagingPath)
+		if result == "" {
+			return nil, syscall.ENOENT
+		}
 		node := NewTestLogFileNode(s.cfg, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
 		// Set file attributes - .test.log shows test results (read-only)
-		result := s.staging.GetTestResult(s.ctx.StagingPath)
 		out.Mode = 0444 | syscall.S_IFREG // Read-only
 		out.Nlink = 1
 		out.Size = uint64(len(result))
