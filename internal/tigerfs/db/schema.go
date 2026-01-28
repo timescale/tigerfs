@@ -817,3 +817,205 @@ func (c *Client) GetFullDDL(ctx context.Context, schema, table string) (string, 
 	}
 	return GetFullDDL(ctx, c.pool, schema, table)
 }
+
+// ForeignKeyRef represents a foreign key that references a table.
+// Used to show dependencies when generating delete templates.
+type ForeignKeyRef struct {
+	// ConstraintName is the name of the foreign key constraint
+	ConstraintName string
+	// SourceSchema is the schema of the table containing the FK
+	SourceSchema string
+	// SourceTable is the table containing the FK
+	SourceTable string
+	// SourceColumns are the columns in the source table
+	SourceColumns []string
+	// TargetColumns are the columns in the target (referenced) table
+	TargetColumns []string
+	// EstimatedRows is the approximate row count in the source table
+	EstimatedRows int64
+}
+
+// GetReferencingForeignKeys returns foreign keys that reference the specified table.
+// This is the reverse of GetForeignKeyDDL - it finds tables that depend on this table.
+func GetReferencingForeignKeys(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]ForeignKeyRef, error) {
+	logging.Debug("Getting referencing foreign keys",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	query := `
+		SELECT
+			con.conname AS constraint_name,
+			src_nsp.nspname AS source_schema,
+			src_cls.relname AS source_table,
+			array_agg(src_att.attname ORDER BY src_att.attnum) AS source_columns,
+			array_agg(tgt_att.attname ORDER BY tgt_att.attnum) AS target_columns,
+			COALESCE(src_cls.reltuples::bigint, 0) AS estimated_rows
+		FROM pg_constraint con
+		JOIN pg_class src_cls ON con.conrelid = src_cls.oid
+		JOIN pg_namespace src_nsp ON src_cls.relnamespace = src_nsp.oid
+		JOIN pg_class tgt_cls ON con.confrelid = tgt_cls.oid
+		JOIN pg_namespace tgt_nsp ON tgt_cls.relnamespace = tgt_nsp.oid
+		JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS src_cols(attnum, ord) ON true
+		JOIN pg_attribute src_att ON src_att.attrelid = src_cls.oid AND src_att.attnum = src_cols.attnum
+		JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS tgt_cols(attnum, ord) ON src_cols.ord = tgt_cols.ord
+		JOIN pg_attribute tgt_att ON tgt_att.attrelid = tgt_cls.oid AND tgt_att.attnum = tgt_cols.attnum
+		WHERE tgt_nsp.nspname = $1
+		AND tgt_cls.relname = $2
+		AND con.contype = 'f'
+		GROUP BY con.conname, src_nsp.nspname, src_cls.relname, src_cls.reltuples
+		ORDER BY src_nsp.nspname, src_cls.relname, con.conname
+	`
+
+	rows, err := pool.Query(ctx, query, schema, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query referencing foreign keys: %w", err)
+	}
+	defer rows.Close()
+
+	var refs []ForeignKeyRef
+	for rows.Next() {
+		var ref ForeignKeyRef
+		if err := rows.Scan(
+			&ref.ConstraintName,
+			&ref.SourceSchema,
+			&ref.SourceTable,
+			&ref.SourceColumns,
+			&ref.TargetColumns,
+			&ref.EstimatedRows,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan foreign key ref: %w", err)
+		}
+		refs = append(refs, ref)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading foreign key refs: %w", err)
+	}
+
+	logging.Debug("Found referencing foreign keys",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int("count", len(refs)))
+
+	return refs, nil
+}
+
+// GetReferencingForeignKeys is a convenience wrapper for Client
+func (c *Client) GetReferencingForeignKeys(ctx context.Context, schema, table string) ([]ForeignKeyRef, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetReferencingForeignKeys(ctx, c.pool, schema, table)
+}
+
+// GetSchemaTableCount returns the number of tables in a schema.
+// Used to determine if a schema is empty when generating delete templates.
+func GetSchemaTableCount(ctx context.Context, pool *pgxpool.Pool, schema string) (int, error) {
+	logging.Debug("Getting schema table count",
+		zap.String("schema", schema))
+
+	query := `
+		SELECT COUNT(*)
+		FROM pg_class c
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		WHERE n.nspname = $1
+		AND c.relkind = 'r'
+	`
+
+	var count int
+	err := pool.QueryRow(ctx, query, schema).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get schema table count: %w", err)
+	}
+
+	return count, nil
+}
+
+// GetSchemaTableCount is a convenience wrapper for Client
+func (c *Client) GetSchemaTableCount(ctx context.Context, schema string) (int, error) {
+	if c.pool == nil {
+		return 0, fmt.Errorf("database connection not initialized")
+	}
+	return GetSchemaTableCount(ctx, c.pool, schema)
+}
+
+// GetViewDefinition returns the SQL definition of a view.
+func GetViewDefinition(ctx context.Context, pool *pgxpool.Pool, schema, view string) (string, error) {
+	logging.Debug("Getting view definition",
+		zap.String("schema", schema),
+		zap.String("view", view))
+
+	query := `
+		SELECT pg_get_viewdef(c.oid, true)
+		FROM pg_class c
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		WHERE n.nspname = $1
+		AND c.relname = $2
+		AND c.relkind = 'v'
+	`
+
+	var definition string
+	err := pool.QueryRow(ctx, query, schema, view).Scan(&definition)
+	if err != nil {
+		return "", fmt.Errorf("failed to get view definition: %w", err)
+	}
+
+	return definition, nil
+}
+
+// GetViewDefinition is a convenience wrapper for Client
+func (c *Client) GetViewDefinition(ctx context.Context, schema, view string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetViewDefinition(ctx, c.pool, schema, view)
+}
+
+// GetDependentViews returns views that depend on the specified view or table.
+func GetDependentViews(ctx context.Context, pool *pgxpool.Pool, schema, name string) ([]string, error) {
+	logging.Debug("Getting dependent views",
+		zap.String("schema", schema),
+		zap.String("name", name))
+
+	query := `
+		SELECT DISTINCT dep_cls.relname
+		FROM pg_depend d
+		JOIN pg_class ref_cls ON d.refobjid = ref_cls.oid
+		JOIN pg_namespace ref_nsp ON ref_cls.relnamespace = ref_nsp.oid
+		JOIN pg_class dep_cls ON d.objid = dep_cls.oid
+		WHERE ref_nsp.nspname = $1
+		AND ref_cls.relname = $2
+		AND dep_cls.relkind = 'v'
+		AND d.deptype = 'n'
+		ORDER BY dep_cls.relname
+	`
+
+	rows, err := pool.Query(ctx, query, schema, name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query dependent views: %w", err)
+	}
+	defer rows.Close()
+
+	var views []string
+	for rows.Next() {
+		var viewName string
+		if err := rows.Scan(&viewName); err != nil {
+			return nil, fmt.Errorf("failed to scan dependent view: %w", err)
+		}
+		views = append(views, viewName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error reading dependent views: %w", err)
+	}
+
+	return views, nil
+}
+
+// GetDependentViews is a convenience wrapper for Client
+func (c *Client) GetDependentViews(ctx context.Context, schema, name string) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetDependentViews(ctx, c.pool, schema, name)
+}

@@ -275,13 +275,17 @@ func (m *MockCountReader) GetRowCountEstimates(ctx context.Context, schema strin
 
 // MockDDLReader is a mock implementation of DDLReader for testing.
 type MockDDLReader struct {
-	GetTableDDLFunc           func(ctx context.Context, schema, table string) (string, error)
-	GetFullDDLFunc            func(ctx context.Context, schema, table string) (string, error)
-	GetIndexDDLFunc           func(ctx context.Context, schema, table string) (string, error)
-	GetForeignKeyDDLFunc      func(ctx context.Context, schema, table string) (string, error)
-	GetCheckConstraintDDLFunc func(ctx context.Context, schema, table string) (string, error)
-	GetTriggerDDLFunc         func(ctx context.Context, schema, table string) (string, error)
-	GetTableCommentsFunc      func(ctx context.Context, schema, table string) (string, error)
+	GetTableDDLFunc               func(ctx context.Context, schema, table string) (string, error)
+	GetFullDDLFunc                func(ctx context.Context, schema, table string) (string, error)
+	GetIndexDDLFunc               func(ctx context.Context, schema, table string) (string, error)
+	GetForeignKeyDDLFunc          func(ctx context.Context, schema, table string) (string, error)
+	GetCheckConstraintDDLFunc     func(ctx context.Context, schema, table string) (string, error)
+	GetTriggerDDLFunc             func(ctx context.Context, schema, table string) (string, error)
+	GetTableCommentsFunc          func(ctx context.Context, schema, table string) (string, error)
+	GetReferencingForeignKeysFunc func(ctx context.Context, schema, table string) ([]ForeignKeyRef, error)
+	GetSchemaTableCountFunc       func(ctx context.Context, schema string) (int, error)
+	GetViewDefinitionFunc         func(ctx context.Context, schema, view string) (string, error)
+	GetDependentViewsFunc         func(ctx context.Context, schema, name string) ([]string, error)
 }
 
 var _ DDLReader = (*MockDDLReader)(nil)
@@ -333,6 +337,34 @@ func (m *MockDDLReader) GetTableComments(ctx context.Context, schema, table stri
 		return m.GetTableCommentsFunc(ctx, schema, table)
 	}
 	return "", nil
+}
+
+func (m *MockDDLReader) GetReferencingForeignKeys(ctx context.Context, schema, table string) ([]ForeignKeyRef, error) {
+	if m.GetReferencingForeignKeysFunc != nil {
+		return m.GetReferencingForeignKeysFunc(ctx, schema, table)
+	}
+	return nil, nil
+}
+
+func (m *MockDDLReader) GetSchemaTableCount(ctx context.Context, schema string) (int, error) {
+	if m.GetSchemaTableCountFunc != nil {
+		return m.GetSchemaTableCountFunc(ctx, schema)
+	}
+	return 0, nil
+}
+
+func (m *MockDDLReader) GetViewDefinition(ctx context.Context, schema, view string) (string, error) {
+	if m.GetViewDefinitionFunc != nil {
+		return m.GetViewDefinitionFunc(ctx, schema, view)
+	}
+	return "", nil
+}
+
+func (m *MockDDLReader) GetDependentViews(ctx context.Context, schema, name string) ([]string, error) {
+	if m.GetDependentViewsFunc != nil {
+		return m.GetDependentViewsFunc(ctx, schema, name)
+	}
+	return nil, nil
 }
 
 // MockPaginationReader is a mock implementation of PaginationReader for testing.

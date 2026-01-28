@@ -141,6 +141,18 @@ type DDLReader interface {
 
 	// GetTableComments returns COMMENT statements for table and columns.
 	GetTableComments(ctx context.Context, schema, table string) (string, error)
+
+	// GetReferencingForeignKeys returns foreign keys that reference the specified table.
+	GetReferencingForeignKeys(ctx context.Context, schema, table string) ([]ForeignKeyRef, error)
+
+	// GetSchemaTableCount returns the number of tables in a schema.
+	GetSchemaTableCount(ctx context.Context, schema string) (int, error)
+
+	// GetViewDefinition returns the SQL definition of a view.
+	GetViewDefinition(ctx context.Context, schema, view string) (string, error)
+
+	// GetDependentViews returns views that depend on the specified view or table.
+	GetDependentViews(ctx context.Context, schema, name string) ([]string, error)
 }
 
 // PaginationReader provides pagination query operations.
