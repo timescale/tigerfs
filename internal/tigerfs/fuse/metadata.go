@@ -195,23 +195,35 @@ func (m *MetadataFileNode) fetchColumns(ctx context.Context) error {
 	return nil
 }
 
-// fetchSchema retrieves the CREATE TABLE/VIEW statement.
-// For tables, constructs the DDL from information_schema metadata.
-// For views, retrieves the view definition.
+// fetchSchema retrieves the CREATE statement for a table or view.
+// For tables, returns the CREATE TABLE DDL with constraints.
+// For views, returns the CREATE VIEW AS SELECT statement.
+//
+// The .info/ddl file provides additional metadata (indexes, triggers, etc.).
 //
 // Returns error if the database query fails.
 func (m *MetadataFileNode) fetchSchema(ctx context.Context) error {
 	if m.isView {
-		// For views, get the view definition
+		// For views, show the CREATE VIEW statement
 		viewDef, err := m.db.GetViewDefinition(ctx, m.schema, m.tableName)
 		if err != nil {
 			return fmt.Errorf("failed to get view definition: %w", err)
 		}
-		// Add VIEW: prefix to distinguish from tables
-		m.data = []byte("VIEW: CREATE VIEW " + m.tableName + " AS\n" + viewDef)
+
+		var sb strings.Builder
+		sb.WriteString("CREATE VIEW ")
+		sb.WriteString(m.tableName)
+		sb.WriteString(" AS\n")
+		sb.WriteString(viewDef)
+		if !strings.HasSuffix(viewDef, "\n") {
+			sb.WriteString("\n")
+		}
+
+		m.data = []byte(sb.String())
 		return nil
 	}
 
+	// For tables, get the CREATE TABLE DDL
 	ddl, err := m.db.GetTableDDL(ctx, m.schema, m.tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table DDL: %w", err)
