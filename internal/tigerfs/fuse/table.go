@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// TableNode represents a table directory in the filesystem
+// TableNode represents a table or view directory in the filesystem
 // Lists rows by their primary key values
 type TableNode struct {
 	fs.Inode
@@ -24,6 +24,7 @@ type TableNode struct {
 	cache       *MetadataCache
 	tableName   string
 	schema      string
+	isView      bool // true if this is a view, not a table
 	partialRows *PartialRowTracker
 	staging     *StagingTracker
 }
@@ -44,9 +45,50 @@ func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 		cache:       cache,
 		tableName:   tableName,
 		schema:      schema,
+		isView:      false,
 		partialRows: partialRows,
 		staging:     staging,
 	}
+}
+
+// NewViewNode creates a new view directory node.
+// Views are treated like tables for reading but may have write restrictions.
+func NewViewNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, viewName string, partialRows *PartialRowTracker, staging *StagingTracker) *TableNode {
+	return &TableNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		tableName:   viewName,
+		schema:      schema,
+		isView:      true,
+		partialRows: partialRows,
+		staging:     staging,
+	}
+}
+
+// checkWriteAllowed verifies that write operations are permitted on this table/view.
+// Returns nil if writes are allowed, or EACCES if this is a non-updatable view.
+func (t *TableNode) checkWriteAllowed(ctx context.Context) syscall.Errno {
+	if !t.isView {
+		return 0 // Tables always allow writes (permission checks happen later)
+	}
+
+	// Check if view is updatable
+	updatable, err := t.db.IsViewUpdatable(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to check if view is updatable",
+			zap.String("view", t.tableName),
+			zap.Error(err))
+		return syscall.EIO
+	}
+
+	if !updatable {
+		logging.Debug("Write denied: view is not updatable",
+			zap.String("view", t.tableName))
+		return syscall.EACCES
+	}
+
+	return 0
 }
 
 // Getattr returns attributes for the table directory
@@ -298,6 +340,11 @@ func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		zap.String("table", t.tableName),
 		zap.String("name", name))
 
+	// Check if writes are allowed (views may be read-only)
+	if errno := t.checkWriteAllowed(ctx); errno != 0 {
+		return errno
+	}
+
 	// Parse filename to get PK value (strip format extension)
 	pkValue, _ := util.ParseRowFilename(name)
 
@@ -339,6 +386,11 @@ func (t *TableNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	logging.Debug("TableNode.Rmdir called",
 		zap.String("table", t.tableName),
 		zap.String("name", name))
+
+	// Check if writes are allowed (views may be read-only)
+	if errno := t.checkWriteAllowed(ctx); errno != 0 {
+		return errno
+	}
 
 	// Can't rmdir row files (must use unlink)
 	// Check if name has format extension
@@ -389,6 +441,11 @@ func (t *TableNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 	logging.Debug("TableNode.Mkdir called",
 		zap.String("table", t.tableName),
 		zap.String("name", name))
+
+	// Check if writes are allowed (views may be read-only)
+	if errno := t.checkWriteAllowed(ctx); errno != 0 {
+		return nil, errno
+	}
 
 	// Parse filename - should be just PK value with no extension
 	pkValue, _ := util.ParseRowFilename(name)
@@ -524,13 +581,20 @@ func (t *TableNode) lookupDeleteDirectory(ctx context.Context) (*fs.Inode, sysca
 func (t *TableNode) lookupInfoDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
 	logging.Debug("Looking up .info directory",
 		zap.String("schema", t.schema),
-		zap.String("table", t.tableName))
+		zap.String("table", t.tableName),
+		zap.Bool("isView", t.isView))
 
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	infoNode := NewInfoDirNode(t.cfg, t.db, t.schema, t.tableName)
+	// Use view-specific constructor if this is a view
+	var infoNode *InfoDirNode
+	if t.isView {
+		infoNode = NewViewInfoDirNode(t.cfg, t.db, t.schema, t.tableName)
+	} else {
+		infoNode = NewInfoDirNode(t.cfg, t.db, t.schema, t.tableName)
+	}
 	child := t.NewPersistentInode(ctx, infoNode, stableAttr)
 
 	logging.Debug("Created .info directory node",

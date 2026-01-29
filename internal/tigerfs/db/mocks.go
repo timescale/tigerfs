@@ -32,6 +32,8 @@ type MockSchemaReader struct {
 	GetCurrentSchemaFunc    func(ctx context.Context) (string, error)
 	GetSchemasFunc          func(ctx context.Context) ([]string, error)
 	GetTablesFunc           func(ctx context.Context, schema string) ([]string, error)
+	GetViewsFunc            func(ctx context.Context, schema string) ([]string, error)
+	IsViewUpdatableFunc     func(ctx context.Context, schema, view string) (bool, error)
 	GetColumnsFunc          func(ctx context.Context, schema, table string) ([]Column, error)
 	GetPrimaryKeyFunc       func(ctx context.Context, schema, table string) (*PrimaryKey, error)
 	GetTablePermissionsFunc func(ctx context.Context, schema, table string) (*TablePermissions, error)
@@ -58,6 +60,20 @@ func (m *MockSchemaReader) GetTables(ctx context.Context, schema string) ([]stri
 		return m.GetTablesFunc(ctx, schema)
 	}
 	return []string{}, nil
+}
+
+func (m *MockSchemaReader) GetViews(ctx context.Context, schema string) ([]string, error) {
+	if m.GetViewsFunc != nil {
+		return m.GetViewsFunc(ctx, schema)
+	}
+	return []string{}, nil
+}
+
+func (m *MockSchemaReader) IsViewUpdatable(ctx context.Context, schema, view string) (bool, error) {
+	if m.IsViewUpdatableFunc != nil {
+		return m.IsViewUpdatableFunc(ctx, schema, view)
+	}
+	return false, nil
 }
 
 func (m *MockSchemaReader) GetColumns(ctx context.Context, schema, table string) ([]Column, error) {

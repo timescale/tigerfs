@@ -55,7 +55,7 @@ func (r *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 }
 
 // Readdir lists the contents of the root directory.
-// Returns tables from the default schema (schema flattening) plus .schemas and .create directories.
+// Returns tables and views from the default schema (schema flattening) plus .schemas and .create directories.
 func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("RootNode.Readdir called")
 
@@ -66,8 +66,15 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
-	// Convert tables to directory entries (+ 2 for .schemas and .create)
-	entries := make([]fuse.DirEntry, 0, len(tables)+2)
+	// Get views from cache
+	views, err := r.cache.GetViews(ctx)
+	if err != nil {
+		logging.Error("Failed to get views", zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	// Convert tables and views to directory entries (+ 3 for .schemas, .views, and .create)
+	entries := make([]fuse.DirEntry, 0, len(tables)+len(views)+3)
 
 	// Add .create directory for creating new tables in default schema
 	entries = append(entries, fuse.DirEntry{
@@ -81,6 +88,12 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		Mode: syscall.S_IFDIR,
 	})
 
+	// Add .views directory for view DDL operations
+	entries = append(entries, fuse.DirEntry{
+		Name: DirViews,
+		Mode: syscall.S_IFDIR,
+	})
+
 	// Add tables from default schema
 	for _, table := range tables {
 		entries = append(entries, fuse.DirEntry{
@@ -89,9 +102,19 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		})
 	}
 
+	// Add views from default schema
+	for _, view := range views {
+		entries = append(entries, fuse.DirEntry{
+			Name: view,
+			Mode: syscall.S_IFDIR, // Views appear as directories (same as tables)
+		})
+	}
+
 	logging.Debug("Root directory listing",
 		zap.Int("table_count", len(tables)),
-		zap.Strings("tables", tables))
+		zap.Int("view_count", len(views)),
+		zap.Strings("tables", tables),
+		zap.Strings("views", views))
 
 	return fs.NewListDirStream(entries), 0
 }
@@ -137,20 +160,14 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return child, 0
 	}
 
-	// Check if table exists in cache
-	exists, err := r.cache.HasTable(ctx, name)
-	if err != nil {
-		logging.Error("Failed to check table existence", zap.String("table", name), zap.Error(err))
-		return nil, syscall.EIO
-	}
+	// Handle .views directory
+	if name == DirViews {
+		logging.Debug("Looking up .views directory")
 
-	if !exists {
-		logging.Debug("Table not found", zap.String("table", name))
-		return nil, syscall.ENOENT
+		viewsNode := NewViewsNode(r.cfg, r.db, r.cache, r.partialRows, r.staging)
+		child := r.NewPersistentInode(ctx, viewsNode, stableAttr)
+		return child, 0
 	}
-
-	// Table exists - create table directory node
-	logging.Debug("Table found", zap.String("table", name))
 
 	// Get the resolved default schema from the cache
 	defaultSchema := r.cache.GetDefaultSchema()
@@ -159,9 +176,37 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		defaultSchema = r.cfg.DefaultSchema
 	}
 
-	// Create table node with database client, cache, partial row tracker, and staging
-	tableNode := NewTableNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows, r.staging)
+	// Check if table exists in cache
+	isTable, err := r.cache.HasTable(ctx, name)
+	if err != nil {
+		logging.Error("Failed to check table existence", zap.String("table", name), zap.Error(err))
+		return nil, syscall.EIO
+	}
 
-	child := r.NewPersistentInode(ctx, tableNode, stableAttr)
-	return child, 0
+	if isTable {
+		// Table exists - create table directory node
+		logging.Debug("Table found", zap.String("table", name))
+		tableNode := NewTableNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows, r.staging)
+		child := r.NewPersistentInode(ctx, tableNode, stableAttr)
+		return child, 0
+	}
+
+	// Check if view exists in cache
+	isView, err := r.cache.HasView(ctx, name)
+	if err != nil {
+		logging.Error("Failed to check view existence", zap.String("view", name), zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	if isView {
+		// View exists - create view directory node
+		logging.Debug("View found", zap.String("view", name))
+		viewNode := NewViewNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows, r.staging)
+		child := r.NewPersistentInode(ctx, viewNode, stableAttr)
+		return child, 0
+	}
+
+	// Neither table nor view found
+	logging.Debug("Table or view not found", zap.String("name", name))
+	return nil, syscall.ENOENT
 }

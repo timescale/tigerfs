@@ -62,7 +62,7 @@ func (s *SchemaNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.At
 	return 0
 }
 
-// Readdir lists the tables in this schema plus .create/ and .delete/ control directories.
+// Readdir lists the tables and views in this schema plus .create/ and .delete/ control directories.
 func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("SchemaNode.Readdir called", zap.String("schema", s.schema))
 
@@ -75,8 +75,17 @@ func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.EIO
 	}
 
-	// Convert tables to directory entries (+ 2 for .create and .delete)
-	entries := make([]fuse.DirEntry, 0, len(tables)+2)
+	// Get views for this schema from cache
+	views, err := s.cache.GetViewsForSchema(ctx, s.schema)
+	if err != nil {
+		logging.Error("Failed to get views for schema",
+			zap.String("schema", s.schema),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	// Convert tables and views to directory entries (+ 2 for .create and .delete)
+	entries := make([]fuse.DirEntry, 0, len(tables)+len(views)+2)
 
 	// Add .create directory for creating new tables in this schema
 	entries = append(entries, fuse.DirEntry{
@@ -98,10 +107,20 @@ func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		})
 	}
 
+	// Add existing views
+	for _, view := range views {
+		entries = append(entries, fuse.DirEntry{
+			Name: view,
+			Mode: syscall.S_IFDIR, // Views appear as directories (same as tables)
+		})
+	}
+
 	logging.Debug("Schema directory listing",
 		zap.String("schema", s.schema),
 		zap.Int("table_count", len(tables)),
-		zap.Strings("tables", tables))
+		zap.Int("view_count", len(views)),
+		zap.Strings("tables", tables),
+		zap.Strings("views", views))
 
 	return fs.NewListDirStream(entries), 0
 }
@@ -166,29 +185,55 @@ func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	// Check if table exists
-	found := false
+	isTable := false
 	for _, table := range tables {
 		if table == name {
-			found = true
+			isTable = true
 			break
 		}
 	}
 
-	if !found {
-		logging.Debug("Table not found in schema",
+	if isTable {
+		// Table exists - create table directory node
+		logging.Debug("Table found in schema",
 			zap.String("schema", s.schema),
 			zap.String("table", name))
-		return nil, syscall.ENOENT
+		tableNode := NewTableNode(s.cfg, s.db, s.cache, s.schema, name, s.partialRows, s.staging)
+		child := s.NewPersistentInode(ctx, tableNode, stableAttr)
+		return child, 0
 	}
 
-	// Table exists - create table directory node
-	logging.Debug("Table found in schema",
+	// Get views for this schema
+	views, err := s.cache.GetViewsForSchema(ctx, s.schema)
+	if err != nil {
+		logging.Error("Failed to get views for schema",
+			zap.String("schema", s.schema),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	// Check if view exists
+	isView := false
+	for _, view := range views {
+		if view == name {
+			isView = true
+			break
+		}
+	}
+
+	if isView {
+		// View exists - create view directory node
+		logging.Debug("View found in schema",
+			zap.String("schema", s.schema),
+			zap.String("view", name))
+		viewNode := NewViewNode(s.cfg, s.db, s.cache, s.schema, name, s.partialRows, s.staging)
+		child := s.NewPersistentInode(ctx, viewNode, stableAttr)
+		return child, 0
+	}
+
+	// Neither table nor view found
+	logging.Debug("Table or view not found in schema",
 		zap.String("schema", s.schema),
-		zap.String("table", name))
-
-	// Create table node with this schema (not the default schema)
-	tableNode := NewTableNode(s.cfg, s.db, s.cache, s.schema, name, s.partialRows, s.staging)
-	child := s.NewPersistentInode(ctx, tableNode, stableAttr)
-
-	return child, 0
+		zap.String("name", name))
+	return nil, syscall.ENOENT
 }

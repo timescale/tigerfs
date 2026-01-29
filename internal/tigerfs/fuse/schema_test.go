@@ -25,7 +25,9 @@ func setupTestSchemaNode(schema string, tables []string) *SchemaNode {
 		defaultSchema:     "public",
 		schemas:           []string{"public", schema},
 		tables:            []string{}, // Default schema tables (not used in this test)
+		views:             []string{}, // Default schema views
 		schemaTables:      make(map[string][]string),
+		schemaViews:       make(map[string][]string),
 		schemaRowCounts:   make(map[string]map[string]int64),
 		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
 		schemaLastFetch:   make(map[string]time.Time),
@@ -34,6 +36,7 @@ func setupTestSchemaNode(schema string, tables []string) *SchemaNode {
 
 	// Pre-populate cache for this schema
 	cache.schemaTables[schema] = tables
+	cache.schemaViews[schema] = []string{} // No views in test
 	cache.schemaLastFetch[schema] = time.Now()
 
 	return &SchemaNode{

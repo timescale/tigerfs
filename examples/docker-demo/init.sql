@@ -158,3 +158,30 @@ CREATE INDEX idx_orders_created_at ON orders(created_at);
 -- Example: ls /mnt/db/users/.by/last_name.first_name/Smith/Alice/
 CREATE INDEX idx_users_name ON users(last_name, first_name);
 CREATE INDEX idx_orders_status_date ON orders(status, created_at);
+
+-- Views demonstrating different view types
+-- Simple view (updatable) - single table with WHERE clause
+CREATE VIEW active_users AS
+SELECT id, name, first_name, last_name, email, age, bio, created_at
+FROM users
+WHERE active = true;
+
+-- JOIN view (non-updatable) - combines data from multiple tables
+CREATE VIEW order_summary AS
+SELECT
+    o.id AS order_id,
+    o.created_at AS order_date,
+    o.status,
+    o.quantity,
+    o.total,
+    u.id AS user_id,
+    u.name AS user_name,
+    u.email AS user_email,
+    p.id AS product_id,
+    p.name AS product_name,
+    p.price AS product_price,
+    c.name AS category_name
+FROM orders o
+JOIN users u ON o.user_id = u.id
+JOIN products p ON o.product_id = p.id
+JOIN categories c ON p.category = c.slug;

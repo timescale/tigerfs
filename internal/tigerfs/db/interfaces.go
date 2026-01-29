@@ -27,6 +27,12 @@ type SchemaReader interface {
 	// GetTables returns all tables in a given schema.
 	GetTables(ctx context.Context, schema string) ([]string, error)
 
+	// GetViews returns all views in a given schema.
+	GetViews(ctx context.Context, schema string) ([]string, error)
+
+	// IsViewUpdatable checks if a view supports INSERT/UPDATE/DELETE operations.
+	IsViewUpdatable(ctx context.Context, schema, view string) (bool, error)
+
 	// GetColumns returns all columns for a table in schema order.
 	GetColumns(ctx context.Context, schema, table string) ([]Column, error)
 

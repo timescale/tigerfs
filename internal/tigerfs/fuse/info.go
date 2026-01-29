@@ -20,10 +20,10 @@ const (
 	InfoFileColumns = "columns"
 )
 
-// InfoDirNode represents the .info/ metadata directory within a table.
-// This directory contains read-only files describing the table:
+// InfoDirNode represents the .info/ metadata directory within a table or view.
+// This directory contains read-only files describing the table/view:
 //   - count: row count
-//   - ddl: CREATE TABLE statement with indexes, constraints, etc.
+//   - ddl: CREATE TABLE/VIEW statement with indexes, constraints, etc.
 //   - schema: column definitions
 //   - columns: column names (one per line)
 //
@@ -35,6 +35,7 @@ type InfoDirNode struct {
 	db        db.DBClient
 	schema    string
 	tableName string
+	isView    bool // true if this is metadata for a view, not a table
 }
 
 var _ fs.InodeEmbedder = (*InfoDirNode)(nil)
@@ -42,7 +43,7 @@ var _ fs.NodeGetattrer = (*InfoDirNode)(nil)
 var _ fs.NodeReaddirer = (*InfoDirNode)(nil)
 var _ fs.NodeLookuper = (*InfoDirNode)(nil)
 
-// NewInfoDirNode creates a new .info directory node.
+// NewInfoDirNode creates a new .info directory node for a table.
 //
 // Parameters:
 //   - cfg: TigerFS configuration
@@ -55,6 +56,24 @@ func NewInfoDirNode(cfg *config.Config, dbClient db.DBClient, schema, tableName 
 		db:        dbClient,
 		schema:    schema,
 		tableName: tableName,
+		isView:    false,
+	}
+}
+
+// NewViewInfoDirNode creates a new .info directory node for a view.
+//
+// Parameters:
+//   - cfg: TigerFS configuration
+//   - dbClient: Database client for queries
+//   - schema: PostgreSQL schema name
+//   - viewName: Name of the view this metadata describes
+func NewViewInfoDirNode(cfg *config.Config, dbClient db.DBClient, schema, viewName string) *InfoDirNode {
+	return &InfoDirNode{
+		cfg:       cfg,
+		db:        dbClient,
+		schema:    schema,
+		tableName: viewName,
+		isView:    true,
 	}
 }
 
@@ -116,7 +135,13 @@ func (i *InfoDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		Mode: syscall.S_IFREG,
 	}
 
-	metadataNode := NewMetadataFileNode(i.cfg, i.db, i.schema, i.tableName, fileType)
+	// Use view-specific constructor if this is a view
+	var metadataNode *MetadataFileNode
+	if i.isView {
+		metadataNode = NewViewMetadataFileNode(i.cfg, i.db, i.schema, i.tableName, fileType)
+	} else {
+		metadataNode = NewMetadataFileNode(i.cfg, i.db, i.schema, i.tableName, fileType)
+	}
 	child := i.NewPersistentInode(ctx, metadataNode, stableAttr)
 
 	// Fill in entry attributes

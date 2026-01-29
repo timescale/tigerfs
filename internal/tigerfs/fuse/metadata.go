@@ -15,12 +15,12 @@ import (
 )
 
 // MetadataFileNode represents a metadata file (.columns, .schema, .ddl, .count, .indexes).
-// These read-only files provide table metadata without requiring SQL queries.
+// These read-only files provide table/view metadata without requiring SQL queries.
 //
 // Supported file types:
 //   - "columns": Lists column names, one per line
-//   - "schema": Shows the CREATE TABLE DDL statement (fast)
-//   - "ddl": Shows complete DDL (table, indexes, constraints, triggers, comments)
+//   - "schema": Shows the CREATE TABLE/VIEW DDL statement (fast)
+//   - "ddl": Shows complete DDL (table/view, indexes, constraints, triggers, comments)
 //   - "count": Shows row count (exact for small tables, estimated for large)
 //   - "indexes": Lists available index navigation paths with annotations
 //
@@ -33,8 +33,9 @@ type MetadataFileNode struct {
 	cfg       *config.Config // TigerFS configuration
 	db        db.DBClient    // Database client for queries
 	schema    string         // PostgreSQL schema name
-	tableName string         // Table this metadata describes
+	tableName string         // Table/view this metadata describes
 	fileType  string         // Metadata type: "columns", "schema", or "count"
+	isView    bool           // true if this metadata is for a view, not a table
 
 	// data holds the cached metadata content, fetched on first access.
 	// Cached to avoid repeated database queries during file operations.
@@ -45,7 +46,7 @@ var _ fs.InodeEmbedder = (*MetadataFileNode)(nil)
 var _ fs.NodeOpener = (*MetadataFileNode)(nil)
 var _ fs.NodeGetattrer = (*MetadataFileNode)(nil)
 
-// NewMetadataFileNode creates a new metadata file node.
+// NewMetadataFileNode creates a new metadata file node for a table.
 //
 // Parameters:
 //   - cfg: TigerFS configuration
@@ -62,6 +63,28 @@ func NewMetadataFileNode(cfg *config.Config, dbClient db.DBClient, schema, table
 		schema:    schema,
 		tableName: tableName,
 		fileType:  fileType,
+		isView:    false,
+	}
+}
+
+// NewViewMetadataFileNode creates a new metadata file node for a view.
+//
+// Parameters:
+//   - cfg: TigerFS configuration
+//   - dbClient: Database client for queries (accepts db.DBClient interface)
+//   - schema: PostgreSQL schema name
+//   - viewName: Name of the view this metadata describes
+//   - fileType: Type of metadata file ("columns", "schema", or "count")
+//
+// Returns a new MetadataFileNode ready for FUSE operations.
+func NewViewMetadataFileNode(cfg *config.Config, dbClient db.DBClient, schema, viewName, fileType string) *MetadataFileNode {
+	return &MetadataFileNode{
+		cfg:       cfg,
+		db:        dbClient,
+		schema:    schema,
+		tableName: viewName,
+		fileType:  fileType,
+		isView:    true,
 	}
 }
 
@@ -172,11 +195,23 @@ func (m *MetadataFileNode) fetchColumns(ctx context.Context) error {
 	return nil
 }
 
-// fetchSchema retrieves the CREATE TABLE statement for the table.
-// Constructs the DDL from information_schema metadata.
+// fetchSchema retrieves the CREATE TABLE/VIEW statement.
+// For tables, constructs the DDL from information_schema metadata.
+// For views, retrieves the view definition.
 //
 // Returns error if the database query fails.
 func (m *MetadataFileNode) fetchSchema(ctx context.Context) error {
+	if m.isView {
+		// For views, get the view definition
+		viewDef, err := m.db.GetViewDefinition(ctx, m.schema, m.tableName)
+		if err != nil {
+			return fmt.Errorf("failed to get view definition: %w", err)
+		}
+		// Add VIEW: prefix to distinguish from tables
+		m.data = []byte("VIEW: CREATE VIEW " + m.tableName + " AS\n" + viewDef)
+		return nil
+	}
+
 	ddl, err := m.db.GetTableDDL(ctx, m.schema, m.tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get table DDL: %w", err)
@@ -186,7 +221,8 @@ func (m *MetadataFileNode) fetchSchema(ctx context.Context) error {
 	return nil
 }
 
-// fetchDDL retrieves the complete DDL for the table including:
+// fetchDDL retrieves the complete DDL for the table/view.
+// For tables includes:
 // - CREATE TABLE statement
 // - Indexes
 // - Foreign keys
@@ -194,8 +230,44 @@ func (m *MetadataFileNode) fetchSchema(ctx context.Context) error {
 // - Triggers
 // - Comments
 //
+// For views includes:
+// - CREATE VIEW statement
+// - Dependent views
+//
 // Returns error if any database query fails.
 func (m *MetadataFileNode) fetchDDL(ctx context.Context) error {
+	if m.isView {
+		// For views, get the view definition and dependent views
+		viewDef, err := m.db.GetViewDefinition(ctx, m.schema, m.tableName)
+		if err != nil {
+			return fmt.Errorf("failed to get view definition: %w", err)
+		}
+
+		var sb strings.Builder
+		sb.WriteString("-- VIEW: ")
+		sb.WriteString(m.tableName)
+		sb.WriteString("\n\n")
+		sb.WriteString("CREATE VIEW ")
+		sb.WriteString(m.tableName)
+		sb.WriteString(" AS\n")
+		sb.WriteString(viewDef)
+		sb.WriteString("\n")
+
+		// Get dependent views
+		dependents, err := m.db.GetDependentViews(ctx, m.schema, m.tableName)
+		if err == nil && len(dependents) > 0 {
+			sb.WriteString("\n-- Dependent views:\n")
+			for _, dep := range dependents {
+				sb.WriteString("--   ")
+				sb.WriteString(dep)
+				sb.WriteString("\n")
+			}
+		}
+
+		m.data = []byte(sb.String())
+		return nil
+	}
+
 	ddl, err := m.db.GetFullDDL(ctx, m.schema, m.tableName)
 	if err != nil {
 		return fmt.Errorf("failed to get full DDL: %w", err)

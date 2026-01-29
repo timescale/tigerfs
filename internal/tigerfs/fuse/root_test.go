@@ -33,8 +33,10 @@ func setupTestRootNode(tables []string) *RootNode {
 		db:                nil,
 		defaultSchema:     cfg.DefaultSchema,
 		tables:            tables,
+		views:             []string{}, // Empty views for tests
 		schemas:           []string{"public"},
 		schemaTables:      make(map[string][]string),
+		schemaViews:       make(map[string][]string),
 		schemaRowCounts:   make(map[string]map[string]int64),
 		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
 		schemaLastFetch:   make(map[string]time.Time),
@@ -66,8 +68,10 @@ func setupTestRootNodeWithSchemas(tables []string, schemas []string) *RootNode {
 		db:                nil,
 		defaultSchema:     cfg.DefaultSchema,
 		tables:            tables,
+		views:             []string{}, // Empty views for tests
 		schemas:           schemas,
 		schemaTables:      make(map[string][]string),
+		schemaViews:       make(map[string][]string),
 		schemaRowCounts:   make(map[string]map[string]int64),
 		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
 		schemaLastFetch:   make(map[string]time.Time),
@@ -152,18 +156,19 @@ func TestRootNode_Readdir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	// Expected: tables + .schemas + .create
-	expectedCount := len(tables) + 2
+	// Expected: tables + .schemas + .views + .create
+	expectedCount := len(tables) + 3
 	if len(entries) != expectedCount {
 		t.Errorf("Expected %d entries, got %d", expectedCount, len(entries))
 	}
 
-	// Verify each table is present (and .schemas and .create)
+	// Verify each table is present (and .schemas, .views, and .create)
 	expectedNames := make(map[string]bool)
 	for _, table := range tables {
 		expectedNames[table] = true
 	}
 	expectedNames[DirSchemas] = true
+	expectedNames[DirViews] = true
 	expectedNames[DirCreate] = true
 
 	for _, entry := range entries {
@@ -192,19 +197,19 @@ func TestRootNode_Readdir_EmptyDatabase(t *testing.T) {
 		t.Fatal("Expected non-nil DirStream")
 	}
 
-	// Should have exactly two entries: .create and .schemas
+	// Should have exactly three entries: .create, .schemas, and .views
 	var entries []fuse.DirEntry
 	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
 		entries = append(entries, entry)
 	}
 
-	if len(entries) != 2 {
-		t.Errorf("Expected 2 entries (.create and .schemas), got %d", len(entries))
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries (.create, .schemas, and .views), got %d", len(entries))
 	}
 
-	// Verify both .create and .schemas are present
-	expectedNames := map[string]bool{DirCreate: true, DirSchemas: true}
+	// Verify .create, .schemas, and .views are present
+	expectedNames := map[string]bool{DirCreate: true, DirSchemas: true, DirViews: true}
 	for _, entry := range entries {
 		if !expectedNames[entry.Name] {
 			t.Errorf("Unexpected entry: %q", entry.Name)
@@ -229,9 +234,9 @@ func TestRootNode_Readdir_SingleTable(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	// Expected: 1 table + .schemas + .create
-	if len(entries) != 3 {
-		t.Errorf("Expected 3 entries (.create + .schemas + only_table), got %d", len(entries))
+	// Expected: 1 table + .schemas + .views + .create
+	if len(entries) != 4 {
+		t.Errorf("Expected 4 entries (.create + .schemas + .views + only_table), got %d", len(entries))
 	}
 
 	// Verify expected entries are present
@@ -270,9 +275,9 @@ func TestRootNode_Readdir_ManyTables(t *testing.T) {
 		count++
 	}
 
-	// Expected: 100 tables + .schemas + .create
-	if count != 102 {
-		t.Errorf("Expected 102 entries (100 tables + .schemas + .create), got %d", count)
+	// Expected: 100 tables + .schemas + .views + .create
+	if count != 103 {
+		t.Errorf("Expected 103 entries (100 tables + .schemas + .views + .create), got %d", count)
 	}
 }
 
@@ -396,8 +401,8 @@ func TestRootNode_Readdir_IncludesSchemasDir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	// Should have tables + .schemas + .create
-	expectedCount := len(tables) + 2
+	// Should have tables + .schemas + .views + .create
+	expectedCount := len(tables) + 3
 	if len(entries) != expectedCount {
 		t.Errorf("Expected %d entries, got %d", expectedCount, len(entries))
 	}

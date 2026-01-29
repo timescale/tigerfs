@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// MetadataCache caches database metadata (schemas, tables, columns, permissions)
+// MetadataCache caches database metadata (schemas, tables, views, columns, permissions)
 // to avoid excessive queries to information_schema and system catalogs.
 // All cached data is refreshed together based on MetadataRefreshInterval.
 type MetadataCache struct {
@@ -22,6 +22,7 @@ type MetadataCache struct {
 
 	// Cached data - all refreshed together
 	tables           []string                        // List of table names in default schema
+	views            []string                        // List of view names in default schema
 	tableRowCounts   map[string]int64                // table name -> estimated row count
 	tablePermissions map[string]*db.TablePermissions // table name -> user permissions
 	lastFetch        time.Time                       // When cache was last refreshed
@@ -33,6 +34,7 @@ type MetadataCache struct {
 	// Multi-schema support (for .schemas/ directory)
 	schemas           []string                                   // All user-defined schemas
 	schemaTables      map[string][]string                        // schema -> table names
+	schemaViews       map[string][]string                        // schema -> view names
 	schemaRowCounts   map[string]map[string]int64                // schema -> table -> count
 	schemaPermissions map[string]map[string]*db.TablePermissions // schema -> table -> permissions
 	schemaLastFetch   map[string]time.Time                       // schema -> last fetch time
@@ -53,10 +55,12 @@ func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 		db:                dbClient,
 		defaultSchema:     cfg.DefaultSchema,
 		tables:            []string{},
+		views:             []string{},
 		tableRowCounts:    make(map[string]int64),
 		tablePermissions:  make(map[string]*db.TablePermissions),
 		schemas:           []string{},
 		schemaTables:      make(map[string][]string),
+		schemaViews:       make(map[string][]string),
 		schemaRowCounts:   make(map[string]map[string]int64),
 		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
 		schemaLastFetch:   make(map[string]time.Time),
@@ -91,6 +95,60 @@ func (c *MetadataCache) GetTables(ctx context.Context) ([]string, error) {
 	copy(tablesCopy, c.tables)
 
 	return tablesCopy, nil
+}
+
+// GetViews returns the list of views from the default schema.
+// Uses cached data if still fresh, otherwise refreshes from database.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//
+// Returns a copy of the view list to prevent external modification.
+// Returns error if the cache refresh fails.
+func (c *MetadataCache) GetViews(ctx context.Context) ([]string, error) {
+	c.mu.RLock()
+	needsRefresh := c.needsRefresh()
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		logging.Debug("Metadata cache expired, refreshing for views")
+		if err := c.Refresh(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// Return a copy to prevent external modification
+	viewsCopy := make([]string, len(c.views))
+	copy(viewsCopy, c.views)
+
+	return viewsCopy, nil
+}
+
+// HasView checks if a view exists in the cache.
+// Refreshes the cache if stale before checking.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - viewName: Name of the view to check
+//
+// Returns true if the view exists, false otherwise.
+// Returns error if the cache refresh fails.
+func (c *MetadataCache) HasView(ctx context.Context, viewName string) (bool, error) {
+	views, err := c.GetViews(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	for _, view := range views {
+		if view == viewName {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // Refresh updates the cache from the database.
@@ -141,6 +199,14 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 		return err
 	}
 
+	// Query views from default schema
+	views, err := c.db.GetViews(ctx, schema)
+	if err != nil {
+		logging.Warn("Failed to get views, continuing without",
+			zap.Error(err))
+		views = []string{}
+	}
+
 	// Query row count estimates for all tables
 	rowCounts, err := c.db.GetRowCountEstimates(ctx, schema, tables)
 	if err != nil {
@@ -167,6 +233,7 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 	c.mu.Lock()
 	c.schemas = schemas
 	c.tables = tables
+	c.views = views
 	c.tableRowCounts = rowCounts
 	c.tablePermissions = permissions
 	c.lastFetch = time.Now()
@@ -175,8 +242,10 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 	logging.Debug("Metadata cache refreshed",
 		zap.Int("schema_count", len(schemas)),
 		zap.Int("table_count", len(tables)),
+		zap.Int("view_count", len(views)),
 		zap.Int("permissions_count", len(permissions)),
-		zap.Strings("tables", tables))
+		zap.Strings("tables", tables),
+		zap.Strings("views", views))
 
 	return nil
 }
@@ -388,6 +457,65 @@ func (c *MetadataCache) GetTablesForSchema(ctx context.Context, schemaName strin
 	return c.RefreshSchema(ctx, schemaName)
 }
 
+// GetViewsForSchema returns the list of views for a specific schema.
+// For the default schema, returns the cached views.
+// For other schemas, lazy-loads and caches on first access.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - schemaName: Name of the schema to get views for
+//
+// Returns a copy of the view list to prevent external modification.
+func (c *MetadataCache) GetViewsForSchema(ctx context.Context, schemaName string) ([]string, error) {
+	// Ensure main cache is fresh
+	c.mu.RLock()
+	needsRefresh := c.needsRefresh()
+	defaultSchema := c.defaultSchema
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		if err := c.Refresh(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// For default schema, return cached views
+	c.mu.RLock()
+	if schemaName == defaultSchema {
+		viewsCopy := make([]string, len(c.views))
+		copy(viewsCopy, c.views)
+		c.mu.RUnlock()
+		return viewsCopy, nil
+	}
+
+	// For other schemas, check if we have cached data
+	if views, ok := c.schemaViews[schemaName]; ok {
+		lastFetch := c.schemaLastFetch[schemaName]
+		age := time.Since(lastFetch)
+		if age <= c.cfg.MetadataRefreshInterval {
+			viewsCopy := make([]string, len(views))
+			copy(viewsCopy, views)
+			c.mu.RUnlock()
+			return viewsCopy, nil
+		}
+	}
+	c.mu.RUnlock()
+
+	// Lazy-load data for this schema (also loads views)
+	_, err := c.RefreshSchema(ctx, schemaName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Now return the views
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	views := c.schemaViews[schemaName]
+	viewsCopy := make([]string, len(views))
+	copy(viewsCopy, views)
+	return viewsCopy, nil
+}
+
 // RefreshSchema loads (or refreshes) cached data for a specific schema.
 // Called automatically by GetTablesForSchema when cache is stale.
 //
@@ -403,6 +531,15 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 	tables, err := c.db.GetTables(ctx, schemaName)
 	if err != nil {
 		return nil, err
+	}
+
+	// Query views for this schema
+	views, err := c.db.GetViews(ctx, schemaName)
+	if err != nil {
+		logging.Warn("Failed to get views for schema, continuing without",
+			zap.String("schema", schemaName),
+			zap.Error(err))
+		views = []string{}
 	}
 
 	// Query row count estimates
@@ -430,6 +567,7 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 
 	c.mu.Lock()
 	c.schemaTables[schemaName] = tables
+	c.schemaViews[schemaName] = views
 	c.schemaRowCounts[schemaName] = rowCounts
 	c.schemaPermissions[schemaName] = permissions
 	c.schemaLastFetch[schemaName] = time.Now()
@@ -437,7 +575,8 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 
 	logging.Debug("Schema cache refreshed",
 		zap.String("schema", schemaName),
-		zap.Int("table_count", len(tables)))
+		zap.Int("table_count", len(tables)),
+		zap.Int("view_count", len(views)))
 
 	// Return a copy
 	tablesCopy := make([]string, len(tables))
@@ -523,6 +662,7 @@ func (c *MetadataCache) Invalidate() {
 
 	logging.Debug("Invalidating metadata cache")
 	c.tables = []string{}
+	c.views = []string{}
 	c.tableRowCounts = make(map[string]int64)
 	c.tablePermissions = make(map[string]*db.TablePermissions)
 	c.lastFetch = time.Time{}
@@ -530,6 +670,7 @@ func (c *MetadataCache) Invalidate() {
 	// Clear multi-schema caches
 	c.schemas = []string{}
 	c.schemaTables = make(map[string][]string)
+	c.schemaViews = make(map[string][]string)
 	c.schemaRowCounts = make(map[string]map[string]int64)
 	c.schemaPermissions = make(map[string]map[string]*db.TablePermissions)
 	c.schemaLastFetch = make(map[string]time.Time)

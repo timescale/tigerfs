@@ -129,6 +129,94 @@ func (c *Client) GetTables(ctx context.Context, schema string) ([]string, error)
 	return GetTables(ctx, c.pool, schema)
 }
 
+// GetViews returns all views in a given schema
+func GetViews(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
+	logging.Debug("Querying views from information_schema", zap.String("schema", schema))
+
+	query := `
+		SELECT table_name
+		FROM information_schema.tables
+		WHERE table_schema = $1 AND table_type = 'VIEW'
+		ORDER BY table_name
+	`
+
+	rows, err := pool.Query(ctx, query, schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query views: %w", err)
+	}
+	defer rows.Close()
+
+	var views []string
+	for rows.Next() {
+		var viewName string
+		if err := rows.Scan(&viewName); err != nil {
+			return nil, fmt.Errorf("failed to scan view name: %w", err)
+		}
+		views = append(views, viewName)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating views: %w", err)
+	}
+
+	logging.Debug("Found views",
+		zap.String("schema", schema),
+		zap.Int("count", len(views)),
+		zap.Strings("views", views))
+
+	return views, nil
+}
+
+// GetViews is a convenience wrapper around GetViews for Client
+func (c *Client) GetViews(ctx context.Context, schema string) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetViews(ctx, c.pool, schema)
+}
+
+// IsViewUpdatable checks if a view supports INSERT/UPDATE/DELETE operations.
+// PostgreSQL determines this based on the view definition - simple views on
+// single tables are typically updatable, while views with JOINs, aggregates,
+// DISTINCT, GROUP BY, etc. are not.
+func IsViewUpdatable(ctx context.Context, pool *pgxpool.Pool, schema, view string) (bool, error) {
+	logging.Debug("Checking if view is updatable",
+		zap.String("schema", schema),
+		zap.String("view", view))
+
+	query := `
+		SELECT is_updatable
+		FROM information_schema.views
+		WHERE table_schema = $1 AND table_name = $2
+	`
+
+	var isUpdatable string
+	err := pool.QueryRow(ctx, query, schema, view).Scan(&isUpdatable)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, fmt.Errorf("view %s.%s not found", schema, view)
+		}
+		return false, fmt.Errorf("failed to check if view is updatable: %w", err)
+	}
+
+	// information_schema returns 'YES' or 'NO'
+	updatable := isUpdatable == "YES"
+	logging.Debug("View updatable status",
+		zap.String("schema", schema),
+		zap.String("view", view),
+		zap.Bool("updatable", updatable))
+
+	return updatable, nil
+}
+
+// IsViewUpdatable is a convenience wrapper around IsViewUpdatable for Client
+func (c *Client) IsViewUpdatable(ctx context.Context, schema, view string) (bool, error) {
+	if c.pool == nil {
+		return false, fmt.Errorf("database connection not initialized")
+	}
+	return IsViewUpdatable(ctx, c.pool, schema, view)
+}
+
 // Column represents metadata about a table column
 type Column struct {
 	Name       string
