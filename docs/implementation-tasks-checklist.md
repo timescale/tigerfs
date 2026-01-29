@@ -90,7 +90,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.25 | Implement .by/ Index Navigation | 3337 |
 | ✅ | 4.26 | Remove Legacy Metadata and Index Paths | 3391 |
 | ✅ | 4.27 | Implement .order/<column>/ Capability | 3437 |
-| ⬜ | 4.28 | Implement .export/ Bulk Read Capability | 3565 |
+| ✅ | 4.28 | Implement .export/ Bulk Read Capability | 3565 |
 | ⬜ | 4.29 | Implement .import/ Bulk Write Capability | 3643 |
 | ⬜ | 4.30 | Require Headers for CSV/TSV Writes | 3753 |
 
@@ -146,8 +146,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 23 | 30 | 77% |
+| Phase 4: Advanced Features | 24 | 30 | 80% |
 | Phase 5: DDL Operations | 8 | 10 | 80% |
 | Phase 6: Distribution | 0 | 9 | 0% |
 | Phase 7: Performance | 0 | 3 | 0% |
-| **Total** | **63** | **84** | **75%** |
+| **Total** | **64** | **84** | **76%** |

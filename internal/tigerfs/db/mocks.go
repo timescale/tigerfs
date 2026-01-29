@@ -429,6 +429,36 @@ func (m *MockPaginationReader) GetLastNRowsOrdered(ctx context.Context, schema, 
 	return []string{}, nil
 }
 
+// MockExportReader is a mock implementation of ExportReader for testing.
+type MockExportReader struct {
+	GetAllRowsFunc            func(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error)
+	GetFirstNRowsWithDataFunc func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+	GetLastNRowsWithDataFunc  func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+}
+
+var _ ExportReader = (*MockExportReader)(nil)
+
+func (m *MockExportReader) GetAllRows(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error) {
+	if m.GetAllRowsFunc != nil {
+		return m.GetAllRowsFunc(ctx, schema, table, limit)
+	}
+	return []string{}, [][]interface{}{}, nil
+}
+
+func (m *MockExportReader) GetFirstNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+	if m.GetFirstNRowsWithDataFunc != nil {
+		return m.GetFirstNRowsWithDataFunc(ctx, schema, table, pkColumn, limit)
+	}
+	return []string{}, [][]interface{}{}, nil
+}
+
+func (m *MockExportReader) GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+	if m.GetLastNRowsWithDataFunc != nil {
+		return m.GetLastNRowsWithDataFunc(ctx, schema, table, pkColumn, limit)
+	}
+	return []string{}, [][]interface{}{}, nil
+}
+
 // MockDBClient is a composite mock implementing DBClient for full FUSE node testing.
 // Embeds individual mocks for each interface.
 type MockDBClient struct {
@@ -440,6 +470,7 @@ type MockDBClient struct {
 	*MockCountReader
 	*MockDDLReader
 	*MockPaginationReader
+	*MockExportReader
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -455,5 +486,6 @@ func NewMockDBClient() *MockDBClient {
 		MockCountReader:      &MockCountReader{},
 		MockDDLReader:        &MockDDLReader{},
 		MockPaginationReader: &MockPaginationReader{},
+		MockExportReader:     &MockExportReader{},
 	}
 }

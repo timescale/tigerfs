@@ -2,14 +2,14 @@ package format
 
 import (
 	"fmt"
-
-	"gopkg.in/yaml.v3"
+	"strings"
 )
 
 // RowToYAML converts a database row to YAML format.
 // Column names are used as keys, producing self-documenting output.
 // NULL values are represented as YAML null.
 // Output includes leading document separator (---) for proper multi-document concatenation.
+// Unicode characters (including emoji) are preserved as-is, not escaped.
 //
 // Example output:
 //
@@ -23,46 +23,125 @@ func RowToYAML(columns []string, values []interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("column count (%d) does not match value count (%d)", len(columns), len(values))
 	}
 
-	// Build ordered map for YAML output
-	// Use yaml.Node to preserve key order
-	var doc yaml.Node
-	doc.Kind = yaml.MappingNode
+	var sb strings.Builder
+	sb.WriteString("---\n")
+
+	// Handle empty row (empty mapping)
+	if len(columns) == 0 {
+		sb.WriteString("{}\n")
+		return []byte(sb.String()), nil
+	}
 
 	for i, col := range columns {
-		// Add key node
-		keyNode := &yaml.Node{
-			Kind:  yaml.ScalarNode,
-			Value: col,
-		}
+		sb.WriteString(col)
+		sb.WriteString(": ")
 
-		// Add value node
-		var valueNode *yaml.Node
 		if values[i] == nil {
-			valueNode = &yaml.Node{
-				Kind:  yaml.ScalarNode,
-				Tag:   "!!null",
-				Value: "null",
-			}
+			sb.WriteString("null")
 		} else {
 			str, err := ConvertValueToText(values[i])
 			if err != nil {
 				return nil, fmt.Errorf("failed to convert column %s: %w", col, err)
 			}
-			valueNode = &yaml.Node{
-				Kind:  yaml.ScalarNode,
-				Value: str,
+			sb.WriteString(yamlScalar(str))
+		}
+		sb.WriteString("\n")
+	}
+
+	return []byte(sb.String()), nil
+}
+
+// yamlScalar formats a string value as a YAML scalar.
+// Handles quoting for special characters while preserving Unicode as-is.
+func yamlScalar(s string) string {
+	if s == "" {
+		return `""`
+	}
+
+	// Check if value needs quoting
+	needsQuote := false
+
+	// Values that look like YAML special values need quoting
+	lower := strings.ToLower(s)
+	switch lower {
+	case "null", "true", "false", "yes", "no", "on", "off", "~":
+		needsQuote = true
+	}
+
+	// Check for characters that require quoting
+	if !needsQuote {
+		for _, r := range s {
+			if r == ':' || r == '#' || r == '\n' || r == '\r' || r == '\t' ||
+				r == '"' || r == '\'' || r == '\\' || r == '[' || r == ']' ||
+				r == '{' || r == '}' || r == ',' || r == '&' || r == '*' ||
+				r == '!' || r == '|' || r == '>' || r == '%' || r == '@' || r == '`' {
+				needsQuote = true
+				break
 			}
 		}
-
-		doc.Content = append(doc.Content, keyNode, valueNode)
 	}
 
-	data, err := yaml.Marshal(&doc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal YAML: %w", err)
+	// Check if starts/ends with whitespace
+	if !needsQuote && (s[0] == ' ' || s[len(s)-1] == ' ') {
+		needsQuote = true
 	}
 
-	// Prepend document separator for proper multi-document concatenation
-	result := append([]byte("---\n"), data...)
+	if !needsQuote {
+		return s
+	}
+
+	// Use double quotes and escape special characters
+	var sb strings.Builder
+	sb.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			sb.WriteString(`\"`)
+		case '\\':
+			sb.WriteString(`\\`)
+		case '\n':
+			sb.WriteString(`\n`)
+		case '\r':
+			sb.WriteString(`\r`)
+		case '\t':
+			sb.WriteString(`\t`)
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	sb.WriteByte('"')
+	return sb.String()
+}
+
+// RowsToYAML converts multiple database rows to multi-document YAML format.
+// Each row becomes a separate YAML document with "---" separator.
+// Column names are used as keys, producing self-documenting output.
+// NULL values are represented as YAML null.
+// Empty input returns empty string.
+//
+// Parameters:
+//   - columns: Column names in database order
+//   - rows: Row values as [][]interface{}
+//
+// Returns multi-document YAML with "---" separators.
+func RowsToYAML(columns []string, rows [][]interface{}) ([]byte, error) {
+	if len(rows) == 0 {
+		return []byte{}, nil
+	}
+
+	var result []byte
+	for i, row := range rows {
+		if len(row) != len(columns) {
+			return nil, fmt.Errorf("row %d: column count mismatch: %d columns, %d values", i, len(columns), len(row))
+		}
+
+		// Convert row to YAML using existing function
+		data, err := RowToYAML(columns, row)
+		if err != nil {
+			return nil, fmt.Errorf("row %d: %w", i, err)
+		}
+		result = append(result, data...)
+	}
+
 	return result, nil
 }

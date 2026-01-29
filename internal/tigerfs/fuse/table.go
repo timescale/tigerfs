@@ -154,6 +154,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		fuse.DirEntry{Name: DirAll, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirBy, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirDelete, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirExport, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirIndexes, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirInfo, Mode: syscall.S_IFDIR},
@@ -194,6 +195,8 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return t.lookupByDirectory(ctx)
 	case DirDelete:
 		return t.lookupDeleteDirectory(ctx)
+	case DirExport:
+		return t.lookupExportDirectory(ctx)
 	case DirFirst:
 		return t.lookupPaginationDirectory(ctx, PaginationFirst)
 	case DirIndexes:
@@ -571,6 +574,26 @@ func (t *TableNode) lookupDeleteDirectory(ctx context.Context) (*fs.Inode, sysca
 	child := t.NewPersistentInode(ctx, deleteNode, stableAttr)
 
 	logging.Debug("Created .delete directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
+// lookupExportDirectory handles lookup for the .export directory (bulk data export).
+func (t *TableNode) lookupExportDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .export directory",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	exportNode := NewExportDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName)
+	child := t.NewPersistentInode(ctx, exportNode, stableAttr)
+
+	logging.Debug("Created .export directory node",
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 

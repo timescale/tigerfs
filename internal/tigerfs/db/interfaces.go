@@ -180,6 +180,20 @@ type PaginationReader interface {
 	GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
 }
 
+// ExportReader provides bulk data export operations.
+// Used by .export/ capability for materializing table data.
+type ExportReader interface {
+	// GetAllRows returns all rows from a table up to the specified limit.
+	// Returns columns, rows (as [][]interface{}), and error.
+	GetAllRows(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error)
+
+	// GetFirstNRowsWithData returns the first N rows with full data ordered by PK ascending.
+	GetFirstNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+
+	// GetLastNRowsWithData returns the last N rows with full data ordered by PK descending.
+	GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+}
+
 // DBClient is the composite interface combining all database capabilities.
 // FUSE nodes that need multiple capabilities can accept this interface.
 // *db.Client satisfies this interface automatically.
@@ -192,6 +206,7 @@ type DBClient interface {
 	CountReader
 	DDLReader
 	PaginationReader
+	ExportReader
 }
 
 // Compile-time verification that *Client implements DBClient
