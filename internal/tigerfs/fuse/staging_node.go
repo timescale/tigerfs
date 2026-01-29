@@ -83,15 +83,15 @@ func (s *StagingDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		zap.String("path", s.ctx.StagingPath))
 
 	entries := []fuse.DirEntry{
-		{Name: ".sql", Mode: syscall.S_IFREG},
+		{Name: "sql", Mode: syscall.S_IFREG},
 		{Name: ".test", Mode: syscall.S_IFREG},
 		{Name: ".commit", Mode: syscall.S_IFREG},
 		{Name: ".abort", Mode: syscall.S_IFREG},
 	}
 
-	// Only include .test.log if a test has been run
+	// Only include test.log if a test has been run
 	if s.staging.GetTestResult(s.ctx.StagingPath) != "" {
-		entries = append(entries, fuse.DirEntry{Name: ".test.log", Mode: syscall.S_IFREG})
+		entries = append(entries, fuse.DirEntry{Name: "test.log", Mode: syscall.S_IFREG})
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -104,11 +104,11 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		zap.String("name", name))
 
 	switch name {
-	case ".sql":
+	case "sql":
 		node := NewSchemaFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
-		// Set file attributes - .sql has content (staged DDL or template)
+		// Set file attributes - sql has content (staged DDL or template)
 		content := s.staging.GetContent(s.ctx.StagingPath)
 		if content == "" {
 			// Generate template to get size
@@ -129,7 +129,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Size = 0 // Trigger-only, no content
 		return child, 0
 
-	case ".test.log":
+	case "test.log":
 		// Only exists if a test has been run
 		result := s.staging.GetTestResult(s.ctx.StagingPath)
 		if result == "" {
@@ -138,7 +138,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		node := NewTestLogFileNode(s.cfg, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
-		// Set file attributes - .test.log shows test results (read-only)
+		// Set file attributes - test.log shows test results (read-only)
 		out.Mode = 0444 | syscall.S_IFREG // Read-only
 		out.Nlink = 1
 		out.Size = uint64(len(result))
@@ -253,7 +253,7 @@ func (c *CreateDirNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 	entry := c.staging.Get(stagingPath)
 	if entry == nil {
 		// Entry doesn't exist - return ENOENT so mkdir can create it
-		// Note: This means direct writes like `echo ... > .create/name/.sql`
+		// Note: This means direct writes like `echo ... > .create/name/sql`
 		// require `mkdir .create/name` first. See README for workflow options.
 		return nil, syscall.ENOENT
 	}

@@ -179,17 +179,17 @@
 │   ├── .indexes/                         # Index metadata and DDL operations
 │   │   ├── .create/                      # Staging for new indexes
 │   │   │   └── <idx>/                    # mkdir creates staging entry
-│   │   │       ├── .sql                  # Staged CREATE INDEX DDL
+│   │   │       ├── sql                   # Staged CREATE INDEX DDL
 │   │   │       ├── .test                 # Touch to validate (optional)
-│   │   │       ├── .test.log             # Validation result (read-only)
+│   │   │       ├── test.log              # Validation result (read-only)
 │   │   │       ├── .commit               # Touch to execute
 │   │   │       └── .abort                # Touch to cancel
 │   │   └── <idx>/                        # Existing index directories
 │   │       ├── .schema                   # CREATE INDEX DDL (read-only)
 │   │       └── .delete/                  # Staging for deletion
-│   │           ├── .sql                  # DROP INDEX template
+│   │           ├── sql                   # DROP INDEX template
 │   │           ├── .test                 # Touch to validate (optional)
-│   │           ├── .test.log             # Validation result (read-only)
+│   │           ├── test.log              # Validation result (read-only)
 │   │           ├── .commit               # Touch to execute
 │   │           └── .abort                # Touch to cancel
 │   ├── .count                            # Total row count
@@ -2037,15 +2037,15 @@ CREATE UNIQUE INDEX email_idx ON public.users USING btree (email)
 **Create new index:**
 ```bash
 mkdir /mnt/db/users/.indexes/.create/new_idx
-cat /mnt/db/users/.indexes/.create/new_idx/.sql       # See template
-echo "CREATE INDEX new_idx ON users(column)" > /mnt/db/users/.indexes/.create/new_idx/.sql
+cat /mnt/db/users/.indexes/.create/new_idx/sql        # See template
+echo "CREATE INDEX new_idx ON users(column)" > /mnt/db/users/.indexes/.create/new_idx/sql
 touch /mnt/db/users/.indexes/.create/new_idx/.commit  # Execute
 ```
 
 **Delete index:**
 ```bash
-cat /mnt/db/users/.indexes/email_idx/.delete/.sql     # See DROP template
-echo "DROP INDEX email_idx" > /mnt/db/users/.indexes/email_idx/.delete/.sql
+cat /mnt/db/users/.indexes/email_idx/.delete/sql      # See DROP template
+echo "DROP INDEX email_idx" > /mnt/db/users/.indexes/email_idx/.delete/sql
 touch /mnt/db/users/.indexes/email_idx/.delete/.commit  # Execute
 ```
 

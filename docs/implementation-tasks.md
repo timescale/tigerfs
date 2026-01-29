@@ -3191,10 +3191,12 @@ cat /mnt/db/orders/.user_id/1/.first/3/*.json  # Read them
    )
 
    // Control files (DDL staging)
+   // Content files (visible): sql, test.log
+   // Trigger files (hidden): .test, .commit, .abort
    const (
-       FileSQL     = ".sql"
+       FileSQL     = "sql"
        FileTest    = ".test"
-       FileTestLog = ".test.log"
+       FileTestLog = "test.log"
        FileCommit  = ".commit"
        FileAbort   = ".abort"
    )

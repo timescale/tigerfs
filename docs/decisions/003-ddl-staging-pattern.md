@@ -68,16 +68,16 @@ Stage DDL in memory, validate optionally, then commit explicitly.
 
 ```bash
 mkdir /mnt/db/.create/orders              # Create staging entry
-cat /mnt/db/.create/orders/.sql           # See template
-vi /mnt/db/.create/orders/.sql            # Edit DDL
+cat /mnt/db/.create/orders/sql            # See template
+vi /mnt/db/.create/orders/sql             # Edit DDL
 touch /mnt/db/.create/orders/.test        # Validate (optional)
-cat /mnt/db/.create/orders/.test.log      # See validation result
+cat /mnt/db/.create/orders/test.log       # See validation result
 touch /mnt/db/.create/orders/.commit      # Execute
 ```
 
 **Pros:**
 - **Satisfies goal #1**: Pure filesystem operations (`mkdir`, `cat`, `echo >`, `touch`)
-- **Satisfies goal #2**: Same `.sql`/`.test`/`.test.log`/`.commit`/`.abort` pattern for all objects
+- **Satisfies goal #2**: Same `sql`/`.test`/`test.log`/`.commit`/`.abort` pattern for all objects
 - **Satisfies goal #3**: Human workflow (read template → edit → test → commit) and script workflow (write → commit)
 - Review before execution (read staged content)
 - Test without side effects (BEGIN/ROLLBACK)
@@ -97,22 +97,22 @@ Use **Option 3: Staging Pattern with Control Files**.
 
 | Operation | Path Pattern |
 |-----------|--------------|
-| Create table | `.create/<name>/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
-| Modify table | `<table>/.modify/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
-| Delete table | `<table>/.delete/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
-| Create index | `<table>/.indexes/.create/<idx>/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
-| Delete index | `<table>/.indexes/<idx>/.delete/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
+| Create table | `.create/<name>/sql`, `.test`, `test.log`, `.commit`, `.abort` |
+| Modify table | `<table>/.modify/sql`, `.test`, `test.log`, `.commit`, `.abort` |
+| Delete table | `<table>/.delete/sql`, `.test`, `test.log`, `.commit`, `.abort` |
+| Create index | `<table>/.indexes/.create/<idx>/sql`, `.test`, `test.log`, `.commit`, `.abort` |
+| Delete index | `<table>/.indexes/<idx>/.delete/sql`, `.test`, `test.log`, `.commit`, `.abort` |
 | View index | `<table>/.indexes/<idx>/.schema` (read-only, shows CREATE INDEX DDL) |
-| Create schema | `.schemas/.create/<name>/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
-| Delete schema | `.schemas/<name>/.delete/.sql`, `.test`, `.test.log`, `.commit`, `.abort` |
+| Create schema | `.schemas/.create/<name>/sql`, `.test`, `test.log`, `.commit`, `.abort` |
+| Delete schema | `.schemas/<name>/.delete/sql`, `.test`, `test.log`, `.commit`, `.abort` |
 
 ### Control Files
 
 | File | Read | Write/Touch |
 |------|------|-------------|
-| `.sql` | Staged DDL, or template if empty | Stage new DDL |
+| `sql` | Staged DDL, or template if empty | Stage new DDL |
 | `.test` | (empty) | Validate via BEGIN/ROLLBACK |
-| `.test.log` | Last test result | (read-only) |
+| `test.log` | Last test result | (read-only) |
 | `.commit` | (empty) | Execute staged DDL |
 | `.abort` | (empty) | Clear staged content |
 
@@ -148,15 +148,15 @@ CREATE TABLE orders (
 **Human workflow (interactive):**
 ```bash
 mkdir /mnt/db/.create/orders
-vi /mnt/db/.create/orders/.sql       # Edit template
+vi /mnt/db/.create/orders/sql        # Edit template
 touch /mnt/db/.create/orders/.test   # Optional: validate
-cat /mnt/db/.create/orders/.test.log # View validation result
+cat /mnt/db/.create/orders/test.log  # View validation result
 touch /mnt/db/.create/orders/.commit # Execute
 ```
 
 **Script workflow (programmatic):**
 ```bash
-mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY)" > /mnt/db/.create/orders/.sql
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY)" > /mnt/db/.create/orders/sql
 touch /mnt/db/.create/orders/.commit
 ```
 

@@ -235,10 +235,10 @@ All DDL operations follow the same workflow:
 
 | Step | Action | Effect |
 |------|--------|--------|
-| 1 | Read `.sql` | See template with context (current schema, examples) |
-| 2 | Write `.sql` | Stage your DDL (stored in memory) |
+| 1 | Read `sql` | See template with context (current schema, examples) |
+| 2 | Write `sql` | Stage your DDL (stored in memory) |
 | 3 | Touch `.test` | Validate via BEGIN/ROLLBACK (optional) |
-| 3b | Read `.test.log` | See validation result (optional) |
+| 3b | Read `test.log` | See validation result (optional) |
 | 4 | Touch `.commit` | Execute DDL |
 | — | Touch `.abort` | Cancel and clear staging |
 
@@ -257,10 +257,10 @@ Templates help you write correct DDL:
 
 ```bash
 mkdir /mnt/db/.create/orders           # Create staging directory
-cat /mnt/db/.create/orders/.sql        # See template with hints
-vi /mnt/db/.create/orders/.sql         # Edit template
+cat /mnt/db/.create/orders/sql         # See template with hints
+vi /mnt/db/.create/orders/sql          # Edit template
 touch /mnt/db/.create/orders/.test     # Validate (optional)
-cat /mnt/db/.create/orders/.test.log   # See validation result
+cat /mnt/db/.create/orders/test.log    # See validation result
 touch /mnt/db/.create/orders/.commit   # Execute
 ```
 
@@ -269,7 +269,7 @@ touch /mnt/db/.create/orders/.commit   # Execute
 Create staging directory and write DDL in one command:
 
 ```bash
-mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/sql
 touch /mnt/db/.create/orders/.commit
 ```
 
@@ -278,36 +278,36 @@ touch /mnt/db/.create/orders/.commit
 ```bash
 # Create table (human workflow)
 mkdir /mnt/db/.create/orders           # Create staging directory
-vi /mnt/db/.create/orders/.sql         # Edit template: add your columns
+vi /mnt/db/.create/orders/sql          # Edit template: add your columns
 touch /mnt/db/.create/orders/.test     # Validate (optional)
-cat /mnt/db/.create/orders/.test.log   # View validation result
+cat /mnt/db/.create/orders/test.log    # View validation result
 touch /mnt/db/.create/orders/.commit   # Execute
 
 # Create table (script workflow)
-mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/.sql
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (id serial PRIMARY KEY, name text)" > /mnt/db/.create/orders/sql
 touch /mnt/db/.create/orders/.commit
 
 # Modify table (human workflow)
-vi /mnt/db/users/.modify/.sql          # Edit: see current schema, add ALTER statement
+vi /mnt/db/users/.modify/sql           # Edit: see current schema, add ALTER statement
 touch /mnt/db/users/.modify/.test      # Validate (optional)
-cat /mnt/db/users/.modify/.test.log    # View validation result
+cat /mnt/db/users/.modify/test.log     # View validation result
 touch /mnt/db/users/.modify/.commit    # Execute
 
 # Modify table (script workflow)
-echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/.sql
+echo "ALTER TABLE users ADD COLUMN status text" > /mnt/db/users/.modify/sql
 touch /mnt/db/users/.modify/.commit
 
 # Delete table (template shows row count, foreign keys)
-cat /mnt/db/users/.delete/.sql         # Review what will be deleted
-echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/.sql
+cat /mnt/db/users/.delete/sql          # Review what will be deleted
+echo "DROP TABLE users CASCADE" > /mnt/db/users/.delete/sql
 touch /mnt/db/users/.delete/.commit
 
 # Create index
-mkdir /mnt/db/users/.indexes/.create/email_idx && echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/.sql
+mkdir /mnt/db/users/.indexes/.create/email_idx && echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/sql
 touch /mnt/db/users/.indexes/.create/email_idx/.commit
 
 # Create view
-mkdir /mnt/db/.views/.create/active_users && echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/.sql
+mkdir /mnt/db/.views/.create/active_users && echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active" > /mnt/db/.views/.create/active_users/sql
 touch /mnt/db/.views/.create/active_users/.commit
 ```
 
