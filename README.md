@@ -182,23 +182,23 @@ cat /mnt/db/users/123/.yaml        # Entire row as YAML
 
 ### Index Navigation
 
-Navigate tables using indexed columns (shown as dotfiles):
+Navigate tables using indexed columns via `.by/`:
 
 ```bash
 # List available indexes
-ls /mnt/db/users/.indexes/
+ls /mnt/db/users/.by/                              # List indexed columns
 
 # Browse by indexed column
-ls /mnt/db/users/.email/                        # List distinct values
-cat /mnt/db/users/.email/foo@example.com.json   # Get matching row
+ls /mnt/db/users/.by/email/                        # List distinct values
+cat /mnt/db/users/.by/email/foo@example.com.json   # Get matching row
 
 # Ordered access within indexes
-ls /mnt/db/users/.created_at/.first/10/         # First 10 values (ascending)
-ls /mnt/db/users/.created_at/.last/10/          # Last 10 values (descending)
+ls /mnt/db/users/.by/created_at/.first/10/         # First 10 values (ascending)
+ls /mnt/db/users/.by/created_at/.last/10/          # Last 10 values (descending)
 
 # Pagination within a specific value
-ls /mnt/db/users/.status/active/.first/50/      # First 50 active users
-ls /mnt/db/users/.status/active/.last/50/       # Last 50 active users
+ls /mnt/db/users/.by/status/active/.first/50/      # First 50 active users
+ls /mnt/db/users/.by/status/active/.last/50/       # Last 50 active users
 ```
 
 ### Table Pagination
@@ -206,10 +206,10 @@ ls /mnt/db/users/.status/active/.last/50/       # Last 50 active users
 Handle large tables without loading everything:
 
 ```bash
-ls /mnt/db/events/.first/100/    # First 100 rows by primary key
-ls /mnt/db/events/.last/100/     # Last 100 rows by primary key
-ls /mnt/db/events/.sample/100/   # Random sample of 100 rows
-cat /mnt/db/events/.count        # Total row count
+ls /mnt/db/events/.first/100/       # First 100 rows by primary key
+ls /mnt/db/events/.last/100/        # Last 100 rows by primary key
+ls /mnt/db/events/.sample/100/      # Random sample of 100 rows
+cat /mnt/db/events/.info/count      # Total row count
 ```
 
 ### Table Metadata
@@ -217,11 +217,10 @@ cat /mnt/db/events/.count        # Total row count
 Inspect table structure without querying the database directly:
 
 ```bash
-cat /mnt/db/users/.ddl                        # Full CREATE TABLE statement
-cat /mnt/db/users/.schema                     # Column details (name, type, nullable)
-cat /mnt/db/users/.columns                    # Column names (one per line)
-ls /mnt/db/users/.indexes/                    # Index names
-cat /mnt/db/users/.indexes/email_idx/.schema  # Index DDL (CREATE INDEX statement)
+cat /mnt/db/users/.info/ddl         # Full CREATE TABLE statement
+cat /mnt/db/users/.info/schema      # Column details (name, type, nullable)
+cat /mnt/db/users/.info/columns     # Column names (one per line)
+ls /mnt/db/users/.indexes/          # Index names
 ```
 
 ### Schema Management
@@ -389,9 +388,9 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - Data format serialization with NULL handling
 - Constraint validation (NOT NULL, UNIQUE)
 - Incremental row creation via mkdir
-- Metadata files (.schema, .columns, .count, .ddl, .indexes)
-- Index-based navigation (`.column/value/`) with `.first/N/` and `.last/N/` pagination
-- Large table handling (`.first/N/`, `.last/N/`, `.sample/N/`, `.count`)
+- Metadata directory (`.info/` with schema, columns, count, ddl files)
+- Index-based navigation (`.by/column/value/`) with `.first/N/` and `.last/N/` pagination
+- Large table handling (`.first/N/`, `.last/N/`, `.sample/N/`, `.info/count`)
 - Schema flattening (default schema at root, `.schemas/` for explicit access)
 - Metadata caching with configurable refresh
 - CLI with mount, unmount, status, list, and config commands

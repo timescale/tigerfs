@@ -217,6 +217,19 @@ func (b *ByDirNode) lookupSingleIndex(ctx context.Context, columnName string) (*
 	return child, 0
 }
 
+// columnsMatch checks if two column slices are equal (same length and elements in order).
+func columnsMatch(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // lookupCompositeIndex handles lookup for composite indexes.
 // Verifies a matching composite index exists with exactly these columns in order.
 func (b *ByDirNode) lookupCompositeIndex(ctx context.Context, columns []string) (*fs.Inode, syscall.Errno) {

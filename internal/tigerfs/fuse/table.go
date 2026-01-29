@@ -103,108 +103,22 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		return nil, syscall.EIO
 	}
 
-	// Get single-column indexes for index directory entries
-	singleIndexes, err := t.db.GetSingleColumnIndexes(ctx, t.schema, t.tableName)
-	if err != nil {
-		logging.Warn("Failed to get single-column indexes, continuing without",
-			zap.String("table", t.tableName),
-			zap.Error(err))
-		singleIndexes = nil
-	}
-
-	// Get composite indexes for multi-column navigation
-	compositeIndexes, err := t.db.GetCompositeIndexes(ctx, t.schema, t.tableName)
-	if err != nil {
-		logging.Warn("Failed to get composite indexes, continuing without",
-			zap.String("table", t.tableName),
-			zap.Error(err))
-		compositeIndexes = nil
-	}
-
 	// Convert rows to directory entries
-	entries := make([]fuse.DirEntry, 0, len(rows)+len(singleIndexes)+len(compositeIndexes)+3)
+	// Capability directories come first, then rows
+	entries := make([]fuse.DirEntry, 0, len(rows)+10)
 
-	// Add capability directories and metadata files first
+	// Add capability directories
 	entries = append(entries,
-		fuse.DirEntry{
-			Name: DirBy,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirInfo,
-			Mode: syscall.S_IFDIR,
-		},
-		// Legacy metadata paths (for backward compatibility, removed in Task 4.26)
-		fuse.DirEntry{
-			Name: FileColumns,
-			Mode: syscall.S_IFREG,
-		},
-		fuse.DirEntry{
-			Name: FileSchema,
-			Mode: syscall.S_IFREG,
-		},
-		fuse.DirEntry{
-			Name: FileDDL,
-			Mode: syscall.S_IFREG,
-		},
-		fuse.DirEntry{
-			Name: FileCount,
-			Mode: syscall.S_IFREG,
-		},
-		fuse.DirEntry{
-			Name: DirIndexes,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirAll,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirDelete,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirFirst,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirLast,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirModify,
-			Mode: syscall.S_IFDIR,
-		},
-		fuse.DirEntry{
-			Name: DirSample,
-			Mode: syscall.S_IFDIR,
-		},
+		fuse.DirEntry{Name: DirAll, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirBy, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirDelete, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirIndexes, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirInfo, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirModify, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirSample, Mode: syscall.S_IFDIR},
 	)
-
-	// Add single-column index directories (e.g., .email/, .category/)
-	// Skip primary key index since rows are already accessible by PK
-	for _, idx := range singleIndexes {
-		if idx.IsPrimary {
-			continue
-		}
-		if len(idx.Columns) > 0 {
-			entries = append(entries, fuse.DirEntry{
-				Name: "." + idx.Columns[0],
-				Mode: syscall.S_IFDIR,
-			})
-		}
-	}
-
-	// Add composite index directories (e.g., .last_name.first_name/)
-	for _, idx := range compositeIndexes {
-		if idx.IsPrimary {
-			continue
-		}
-		entries = append(entries, fuse.DirEntry{
-			Name: FormatCompositeIndexName(idx.Columns),
-			Mode: syscall.S_IFDIR,
-		})
-	}
 
 	// Add rows
 	for _, rowPK := range rows {
@@ -217,8 +131,6 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("Table directory listing",
 		zap.String("table", t.tableName),
 		zap.Int("row_count", len(rows)),
-		zap.Int("single_index_count", len(singleIndexes)),
-		zap.Int("composite_index_count", len(compositeIndexes)),
 		zap.Int("total_entries", len(entries)),
 		zap.Int("dir_listing_limit", t.cfg.DirListingLimit))
 
@@ -231,57 +143,26 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("table", t.tableName),
 		zap.String("name", name))
 
-	// Check if this is the .by index navigation directory
-	if name == DirBy {
-		return t.lookupByDirectory(ctx)
-	}
-
-	// Check if this is the .info metadata directory
-	if name == DirInfo {
-		return t.lookupInfoDirectory(ctx)
-	}
-
-	// Check if this is a legacy metadata file lookup (for backward compatibility)
-	if name == FileColumns || name == FileSchema || name == FileDDL || name == FileCount {
-		return t.lookupMetadataFile(ctx, name, out)
-	}
-
-	// Check if this is the .indexes directory (index DDL operations)
-	if name == DirIndexes {
-		return t.lookupIndexesDirectory(ctx)
-	}
-
-	// Check if this is the .modify directory (ALTER TABLE staging)
-	if name == DirModify {
-		return t.lookupModifyDirectory(ctx)
-	}
-
-	// Check if this is the .delete directory (DROP TABLE staging)
-	if name == DirDelete {
-		return t.lookupDeleteDirectory(ctx)
-	}
-
-	// Check if this is the .all directory (bypass dir_listing_limit)
-	if name == DirAll {
+	// Handle capability directories (alphabetical order)
+	switch name {
+	case DirAll:
 		return t.lookupAllDirectory(ctx)
-	}
-
-	// Check if this is a pagination directory (.first or .last)
-	if name == DirFirst {
+	case DirBy:
+		return t.lookupByDirectory(ctx)
+	case DirDelete:
+		return t.lookupDeleteDirectory(ctx)
+	case DirFirst:
 		return t.lookupPaginationDirectory(ctx, PaginationFirst)
-	}
-	if name == DirLast {
+	case DirIndexes:
+		return t.lookupIndexesDirectory(ctx)
+	case DirInfo:
+		return t.lookupInfoDirectory(ctx)
+	case DirLast:
 		return t.lookupPaginationDirectory(ctx, PaginationLast)
-	}
-
-	// Check if this is a sample directory (.sample)
-	if name == DirSample {
+	case DirModify:
+		return t.lookupModifyDirectory(ctx)
+	case DirSample:
 		return t.lookupSampleDirectory(ctx)
-	}
-
-	// Check if this is an index directory lookup (e.g., .email)
-	if strings.HasPrefix(name, ".") && len(name) > 1 {
-		return t.lookupIndexDirectory(ctx, name)
 	}
 
 	// Parse filename to extract PK value and format
@@ -408,204 +289,11 @@ func (t *TableNode) lookupAllDirectory(ctx context.Context) (*fs.Inode, syscall.
 	return child, 0
 }
 
-// lookupMetadataFile handles lookups for metadata files (.columns, .schema, .count)
-func (t *TableNode) lookupMetadataFile(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	logging.Debug("Looking up metadata file",
-		zap.String("table", t.tableName),
-		zap.String("file", name))
-
-	// Determine metadata file type
-	var fileType string
-	switch name {
-	case FileColumns:
-		fileType = "columns"
-	case FileSchema:
-		fileType = "schema"
-	case FileDDL:
-		fileType = "ddl"
-	case FileCount:
-		fileType = "count"
-	default:
-		logging.Debug("Unknown metadata file",
-			zap.String("table", t.tableName),
-			zap.String("file", name))
-		return nil, syscall.ENOENT
-	}
-
-	// Create stable inode for metadata file
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFREG,
-	}
-
-	// Create metadata file node
-	metadataNode := NewMetadataFileNode(t.cfg, t.db, t.schema, t.tableName, fileType)
-	child := t.NewPersistentInode(ctx, metadataNode, stableAttr)
-
-	// Fill in entry attributes (size, permissions, etc.) so they're cached correctly
-	var attrOut fuse.AttrOut
-	if errno := metadataNode.Getattr(ctx, nil, &attrOut); errno != 0 {
-		return nil, errno
-	}
-	out.Attr = attrOut.Attr
-
-	logging.Debug("Created metadata file node",
-		zap.String("table", t.tableName),
-		zap.String("file", name),
-		zap.String("type", fileType))
-
-	return child, 0
-}
-
-// lookupIndexDirectory handles lookups for index directories.
-// Supports both single-column indexes (e.g., .email/) and composite indexes
-// (e.g., .last_name.first_name/). Index directories provide alternative navigation
-// paths using indexed columns for efficient lookups.
-//
-// Parameters:
-//   - ctx: Context for cancellation and timeout
-//   - name: The dotfile name being looked up (e.g., ".email" or ".last_name.first_name")
-//
-// Returns an IndexNode for single-column indexes or CompositeIndexNode for multi-column.
-// Primary key indexes are excluded since rows are already accessible by PK directly.
-func (t *TableNode) lookupIndexDirectory(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
-	// Check if this is a composite index name (e.g., ".last_name.first_name")
-	compositeColumns := ParseCompositeIndexName(name)
-	if compositeColumns != nil {
-		return t.lookupCompositeIndexDirectory(ctx, name, compositeColumns)
-	}
-
-	// Single-column index: extract column name from dotfile name (e.g., ".email" -> "email")
-	columnName := name[1:]
-
-	logging.Debug("Looking up single-column index directory",
-		zap.String("table", t.tableName),
-		zap.String("column", columnName))
-
-	// Check if this column has an index (must be leading column)
-	idx, err := t.db.GetIndexByColumn(ctx, t.schema, t.tableName, columnName)
-	if err != nil {
-		logging.Error("Failed to check for index",
-			zap.String("table", t.tableName),
-			zap.String("column", columnName),
-			zap.Error(err))
-		return nil, syscall.EIO
-	}
-
-	if idx == nil {
-		logging.Debug("No index found for column",
-			zap.String("table", t.tableName),
-			zap.String("column", columnName))
-		return nil, syscall.ENOENT
-	}
-
-	// Primary key indexes are excluded - rows already accessible via PK
-	if idx.IsPrimary {
-		logging.Debug("Skipping primary key index",
-			zap.String("table", t.tableName),
-			zap.String("column", columnName))
-		return nil, syscall.ENOENT
-	}
-
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-	}
-
-	indexNode := NewIndexNode(t.cfg, t.db, t.cache, t.schema, t.tableName, columnName, idx, t.partialRows)
-	child := t.NewPersistentInode(ctx, indexNode, stableAttr)
-
-	logging.Debug("Created index directory node",
-		zap.String("table", t.tableName),
-		zap.String("column", columnName),
-		zap.String("index", idx.Name))
-
-	return child, 0
-}
-
-// lookupCompositeIndexDirectory handles lookups for composite index directories.
-// Composite indexes span multiple columns and use dot-separated names like .last_name.first_name/.
-//
-// Parameters:
-//   - ctx: Context for cancellation and timeout
-//   - name: The full dotfile name (e.g., ".last_name.first_name")
-//   - columns: The parsed column names (e.g., ["last_name", "first_name"])
-//
-// Verifies that a composite index exists with exactly these columns in this order.
-// Returns ENOENT if no matching composite index is found.
-func (t *TableNode) lookupCompositeIndexDirectory(ctx context.Context, name string, columns []string) (*fs.Inode, syscall.Errno) {
-	logging.Debug("Looking up composite index directory",
-		zap.String("table", t.tableName),
-		zap.Strings("columns", columns))
-
-	// Get all composite indexes and find one that matches these columns exactly
-	compositeIndexes, err := t.db.GetCompositeIndexes(ctx, t.schema, t.tableName)
-	if err != nil {
-		logging.Error("Failed to get composite indexes",
-			zap.String("table", t.tableName),
-			zap.Error(err))
-		return nil, syscall.EIO
-	}
-
-	// Find index with matching columns
-	var matchingIdx *db.Index
-	for i := range compositeIndexes {
-		idx := &compositeIndexes[i]
-		if idx.IsPrimary {
-			continue
-		}
-		if columnsMatch(idx.Columns, columns) {
-			matchingIdx = idx
-			break
-		}
-	}
-
-	if matchingIdx == nil {
-		logging.Debug("No composite index found for columns",
-			zap.String("table", t.tableName),
-			zap.Strings("columns", columns))
-		return nil, syscall.ENOENT
-	}
-
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-	}
-
-	compositeNode := NewCompositeIndexNode(t.cfg, t.db, t.cache, t.schema, t.tableName, columns, matchingIdx, t.partialRows)
-	child := t.NewPersistentInode(ctx, compositeNode, stableAttr)
-
-	logging.Debug("Created composite index directory node",
-		zap.String("table", t.tableName),
-		zap.Strings("columns", columns),
-		zap.String("index", matchingIdx.Name))
-
-	return child, 0
-}
-
-// columnsMatch checks if two column slices are equal (same length and elements).
-func columnsMatch(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // Unlink deletes a row file (rm /users/123.csv)
 func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	logging.Debug("TableNode.Unlink called",
 		zap.String("table", t.tableName),
 		zap.String("name", name))
-
-	// Can't delete metadata files
-	if name == FileColumns || name == FileSchema || name == FileDDL || name == FileCount || name == DirIndexes {
-		logging.Debug("Cannot delete metadata file",
-			zap.String("table", t.tableName),
-			zap.String("file", name))
-		return syscall.EACCES
-	}
 
 	// Parse filename to get PK value (strip format extension)
 	pkValue, _ := util.ParseRowFilename(name)

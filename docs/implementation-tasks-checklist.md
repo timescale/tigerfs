@@ -88,7 +88,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.23 | Centralize Path and Format Constants | 3142 |
 | ✅ | 4.24 | Implement .info/ Metadata Subdirectory | 3283 |
 | ✅ | 4.25 | Implement .by/ Index Navigation | 3337 |
-| ⬜ | 4.26 | Remove Legacy Metadata and Index Paths | 3391 |
+| ✅ | 4.26 | Remove Legacy Metadata and Index Paths | 3391 |
 | ⬜ | 4.27 | Implement .order/<column>/ Capability | 3437 |
 
 ---
@@ -146,8 +146,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 19 | 27 | 70% |
+| Phase 4: Advanced Features | 20 | 27 | 74% |
 | Phase 5: DDL Operations | 7 | 13 | 54% |
 | Phase 6: Distribution | 0 | 9 | 0% |
 | Phase 7: Performance | 0 | 3 | 0% |
-| **Total** | **58** | **84** | **69%** |
+| **Total** | **59** | **84** | **70%** |

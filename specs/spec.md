@@ -173,9 +173,19 @@
 ├── .stats                                # Performance statistics
 ├── .stats/json                           # Stats in JSON format
 ├── table1/                               # Default schema (public) - flattened to root
-│   ├── .schema                           # CREATE TABLE statement
-│   ├── .ddl                              # Complete DDL (indexes, constraints, etc.)
-│   ├── .columns                          # Column list
+│   ├── .by/                              # Index-based navigation
+│   │   ├── email/                        # Single-column index
+│   │   │   ├── foo@example.com/          # Indexed lookup
+│   │   │   ├── .first/10/                # First 10 distinct values
+│   │   │   └── .last/10/                 # Last 10 distinct values
+│   │   └── last_name.first_name/         # Composite index
+│   │       └── Smith/
+│   │           └── Johnson/
+│   ├── .info/                            # Table metadata
+│   │   ├── count                         # Total row count
+│   │   ├── ddl                           # Complete DDL (indexes, constraints, etc.)
+│   │   ├── schema                        # CREATE TABLE statement
+│   │   └── columns                       # Column list
 │   ├── .indexes/                         # Index metadata and DDL operations
 │   │   ├── .create/                      # Staging for new indexes
 │   │   │   └── <idx>/                    # mkdir creates staging entry
@@ -192,7 +202,6 @@
 │   │           ├── test.log              # Validation result (read-only)
 │   │           ├── .commit               # Touch to execute
 │   │           └── .abort                # Touch to cancel
-│   ├── .count                            # Total row count
 │   ├── .sample/                          # Random samples
 │   │   └── 100/                          # 100 random rows
 │   │       ├── 47392/                    # Actual PKs (row-as-directory)
@@ -205,13 +214,6 @@
 │   │   └── 50/                           # Last 50 rows by PK
 │   │       ├── 99999/
 │   │       └── 99998/
-│   ├── .email/                           # Single-column index (dotfile)
-│   │   ├── foo@example.com/              # Indexed lookup
-│   │   ├── .first/10/                    # First 10 distinct values
-│   │   └── .last/10/                     # Last 10 distinct values
-│   ├── .last_name.first_name/            # Composite index
-│   │   └── Smith/
-│   │       └── Johnson/
 │   ├── 123                               # Row-as-file (default: TSV)
 │   ├── 123.json                          # Row-as-file (JSON)
 │   ├── 123.csv                           # Row-as-file (CSV)
@@ -248,15 +250,12 @@
 ### Namespace Conventions
 
 **Dotfiles (Hidden by Default):**
-- `.email/` - Index-based navigation
+- `.by/` - Index-based navigation (`.by/email/`, `.by/created_at/`)
+- `.info/` - Table metadata (count, ddl, schema, columns)
+- `.indexes/` - Index metadata directory (list indexes, view DDL, create/delete)
 - `.sample/` - Random row samples
 - `.first/` - First N rows (ascending by PK)
 - `.last/` - Last N rows (descending by PK)
-- `.count` - Row count file
-- `.schema` - CREATE TABLE statement
-- `.ddl` - Complete DDL (indexes, constraints, triggers, comments)
-- `.columns` - Column list (one per line)
-- `.indexes/` - Index metadata directory (list indexes, view DDL, create/delete)
 - `.information_schema/` - Global metadata
 - `.schemas/` - Explicit schema access
 - `.refresh` - Cache refresh trigger
@@ -890,11 +889,11 @@ SELECT id FROM users TABLESAMPLE BERNOULLI(percentage) LIMIT 100;
 **Future Enhancement:**
 - Could add `.random/N/` using `ORDER BY RANDOM()` for exact N rows (slower)
 
-#### `.count` - Total Row Count
+#### `.info/count` - Total Row Count
 
 **Usage:**
 ```bash
-cat /mnt/db/users/.count
+cat /mnt/db/users/.info/count
 # 10847392
 ```
 
@@ -1955,13 +1954,13 @@ echo $?
 
 ### Table-Level Metadata Files
 
-**Per-table special files (dotfiles):**
+Table metadata is organized under the `.info/` directory:
 
-#### `.schema` - Full DDL
+#### `.info/schema` - CREATE TABLE Statement
 
 **Usage:**
 ```bash
-cat /mnt/db/users/.schema
+cat /mnt/db/users/.info/schema
 ```
 
 **Output:**
@@ -1975,18 +1974,13 @@ CREATE TABLE users (
 );
 ```
 
-**SQL Generated:**
-```sql
--- Query information_schema or use pg_dump for specific table
-```
-
 ---
 
-#### `.columns` - Column List
+#### `.info/columns` - Column List
 
 **Usage:**
 ```bash
-cat /mnt/db/users/.columns
+cat /mnt/db/users/.info/columns
 ```
 
 **Output:**
@@ -2053,11 +2047,11 @@ Primary key indexes are excluded from listing (accessed via row paths).
 
 ---
 
-#### `.ddl` - Complete DDL
+#### `.info/ddl` - Complete DDL
 
 **Usage:**
 ```bash
-cat /mnt/db/users/.ddl
+cat /mnt/db/users/.info/ddl
 ```
 
 **Output:**
@@ -2096,17 +2090,17 @@ COMMENT ON COLUMN public.users.email IS 'Primary contact email';
 - Triggers
 - Column and table comments
 
-**Difference from `.schema`:**
-- `.schema` - Just the CREATE TABLE statement (fast, minimal)
-- `.ddl` - Complete DDL including indexes, constraints, triggers, comments
+**Difference from `.info/schema`:**
+- `.info/schema` - Just the CREATE TABLE statement (fast, minimal)
+- `.info/ddl` - Complete DDL including indexes, constraints, triggers, comments
 
 ---
 
-#### `.count` - Row Count
+#### `.info/count` - Row Count
 
 **Usage:**
 ```bash
-cat /mnt/db/users/.count
+cat /mnt/db/users/.info/count
 ```
 
 **Output:**
