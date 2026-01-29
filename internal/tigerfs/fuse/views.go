@@ -13,8 +13,9 @@ import (
 )
 
 // ViewsNode represents the .views/ directory at the filesystem root.
-// Lists all views in the default schema and provides navigation to individual view directories.
-// Also provides .create/ for creating new views.
+// Provides .create/ for creating new views via DDL staging.
+// Note: Views are accessed directly from the root directory alongside tables,
+// not through .views/. This directory only provides DDL operations.
 type ViewsNode struct {
 	fs.Inode
 
@@ -59,52 +60,36 @@ func (v *ViewsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Att
 	return 0
 }
 
-// Readdir lists all views plus .create/ for creating new views.
+// Readdir lists .create/ for creating new views.
+// Views themselves are accessed from the root directory, not from .views/.
 func (v *ViewsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("ViewsNode.Readdir called")
 
-	// Get all views from cache (default schema)
-	views, err := v.cache.GetViews(ctx)
-	if err != nil {
-		logging.Error("Failed to get views", zap.Error(err))
-		return nil, syscall.EIO
+	// Only show .create directory for DDL operations
+	entries := []fuse.DirEntry{
+		{
+			Name: DirCreate,
+			Mode: syscall.S_IFDIR,
+		},
 	}
 
-	// Convert views to directory entries (+ 1 for .create)
-	entries := make([]fuse.DirEntry, 0, len(views)+1)
-
-	// Add .create directory first
-	entries = append(entries, fuse.DirEntry{
-		Name: DirCreate,
-		Mode: syscall.S_IFDIR,
-	})
-
-	// Add existing views
-	for _, view := range views {
-		entries = append(entries, fuse.DirEntry{
-			Name: view,
-			Mode: syscall.S_IFDIR, // Views appear as directories
-		})
-	}
-
-	logging.Debug(".views directory listing",
-		zap.Int("view_count", len(views)),
-		zap.Strings("views", views))
+	logging.Debug(".views directory listing (DDL only)")
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a view name or .create in the .views directory.
+// Lookup looks up .create in the .views directory.
+// Views themselves are accessed from the root directory, not from .views/.
 func (v *ViewsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("ViewsNode.Lookup called", zap.String("name", name))
 
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFDIR,
-	}
-
-	// Handle .create directory for creating new views
+	// Only handle .create directory for creating new views
 	if name == DirCreate {
 		logging.Debug("Looking up .create directory for views")
+
+		stableAttr := fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+		}
 
 		// Get the resolved default schema from the cache
 		defaultSchema := v.cache.GetDefaultSchema()
@@ -126,32 +111,8 @@ func (v *ViewsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return child, 0
 	}
 
-	// Check if view exists in cache
-	exists, err := v.cache.HasView(ctx, name)
-	if err != nil {
-		logging.Error("Failed to check view existence",
-			zap.String("view", name),
-			zap.Error(err))
-		return nil, syscall.EIO
-	}
-
-	if !exists {
-		logging.Debug("View not found", zap.String("view", name))
-		return nil, syscall.ENOENT
-	}
-
-	// View exists - create view directory node
-	logging.Debug("View found", zap.String("view", name))
-
-	// Get the resolved default schema from the cache
-	defaultSchema := v.cache.GetDefaultSchema()
-	if defaultSchema == "" {
-		defaultSchema = v.cfg.DefaultSchema
-	}
-
-	// Create a view node (uses the same TableNode with isView=true)
-	viewNode := NewViewNode(v.cfg, v.db, v.cache, defaultSchema, name, v.partialRows, v.staging)
-	child := v.NewPersistentInode(ctx, viewNode, stableAttr)
-
-	return child, 0
+	// Views are accessed from root directory, not from .views/
+	logging.Debug("View lookup in .views/ - views accessed from root",
+		zap.String("name", name))
+	return nil, syscall.ENOENT
 }
