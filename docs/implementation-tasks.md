@@ -2628,7 +2628,87 @@ cat /tmp/testmount/settings/theme/value
 
 ---
 
-### Task 4.15: Support Tables Without Primary Keys
+### Task 4.15: Support Database Views
+
+**Objective:** Expose PostgreSQL views alongside tables with appropriate read/write behavior
+
+**Background:** Views are specified in spec.md to be treated identically to tables for reading.
+This includes JOIN views (e.g., `CREATE VIEW user_orders AS SELECT ... FROM users JOIN orders ...`).
+Updatable views support writes (PostgreSQL handles); non-updatable views return EACCES.
+
+**Key Design Points:**
+- Simple single-table views may have a primary key and be updatable
+- JOIN views typically have no primary key, so they:
+  - Use `ctid` for row identification (like Task 4.16)
+  - Are read-only (JOINs are generally non-updatable)
+  - Can be browsed via `.first/N/` or `.sample/N/` paths
+
+**Steps:**
+1. Update `internal/tigerfs/db/schema.go`:
+   - Modify `GetTables()` to include views, or add separate `GetViews()` function
+   - Add query to determine if a view is updatable:
+     ```sql
+     SELECT is_updatable FROM information_schema.views
+     WHERE table_schema = $1 AND table_name = $2
+     ```
+   - Add function to get view definition for `.schema` file
+2. Update `internal/tigerfs/fuse/root.go`:
+   - Include views in table listing
+3. Handle write operations:
+   - Updatable views: writes work (PostgreSQL handles)
+   - Non-updatable views: return EACCES with clear error message
+4. Ensure JOIN views work:
+   - No PK → falls back to ctid-based access (Task 4.16)
+   - Read-only browsing via `.first/N/`, `.sample/N/`
+
+**Files to Modify:**
+- `internal/tigerfs/db/schema.go`
+- `internal/tigerfs/db/schema_test.go`
+- `internal/tigerfs/fuse/root.go`
+
+**Verification:**
+```bash
+# Create a simple view
+psql -c "CREATE VIEW active_users AS SELECT * FROM users WHERE active = true;"
+
+# Create a JOIN view
+psql -c "CREATE VIEW user_orders AS SELECT u.id as user_id, u.name, o.id as order_id, o.total FROM users u JOIN orders o ON u.id = o.user_id;"
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# Views should appear in listing
+ls /tmp/testmount
+# Should show: active_users/  user_orders/  users/  orders/  ...
+
+# Read from simple view (has PK from underlying table)
+cat /tmp/testmount/active_users/1.json
+
+# Read from JOIN view (no PK, use .first/N/)
+ls /tmp/testmount/user_orders/.first/10/
+cat /tmp/testmount/user_orders/.first/10/1.json
+
+# Check view schema shows CREATE VIEW
+cat /tmp/testmount/user_orders/.schema
+# Should show: CREATE VIEW user_orders AS SELECT ...
+
+# Test write to JOIN view (should fail - non-updatable)
+echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
+# Should fail with EACCES
+```
+
+**Completion Criteria:**
+- Views discovered alongside tables
+- Simple views readable (with PK if available)
+- JOIN views readable via .first/N/ or .sample/N/
+- Updatable views support writes
+- Non-updatable views (including JOINs) return EACCES on write
+- View definition shown in .schema
+- Tests include JOIN view scenario
+- Tests pass
+
+---
+
+### Task 4.16: Support Tables Without Primary Keys
 
 **Objective:** Allow read-only access to tables without primary keys using ctid
 
@@ -2677,86 +2757,6 @@ echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
 - ctid used as row identifier
 - Warning file explains limitations
 - Write operations blocked
-- Tests pass
-
----
-
-### Task 4.16: Support Database Views
-
-**Objective:** Expose PostgreSQL views alongside tables with appropriate read/write behavior
-
-**Background:** Views are specified in spec.md to be treated identically to tables for reading.
-This includes JOIN views (e.g., `CREATE VIEW user_orders AS SELECT ... FROM users JOIN orders ...`).
-Updatable views support writes (PostgreSQL handles); non-updatable views return EACCES.
-
-**Key Design Points:**
-- Simple single-table views may have a primary key and be updatable
-- JOIN views typically have no primary key, so they:
-  - Use `ctid` for row identification (like Task 4.15)
-  - Are read-only (JOINs are generally non-updatable)
-  - Can be browsed via `.first/N/` or `.sample/N/` paths
-
-**Steps:**
-1. Update `internal/tigerfs/db/schema.go`:
-   - Modify `GetTables()` to include views, or add separate `GetViews()` function
-   - Add query to determine if a view is updatable:
-     ```sql
-     SELECT is_updatable FROM information_schema.views
-     WHERE table_schema = $1 AND table_name = $2
-     ```
-   - Add function to get view definition for `.schema` file
-2. Update `internal/tigerfs/fuse/root.go`:
-   - Include views in table listing
-3. Handle write operations:
-   - Updatable views: writes work (PostgreSQL handles)
-   - Non-updatable views: return EACCES with clear error message
-4. Ensure JOIN views work:
-   - No PK → falls back to ctid-based access (Task 4.15)
-   - Read-only browsing via `.first/N/`, `.sample/N/`
-
-**Files to Modify:**
-- `internal/tigerfs/db/schema.go`
-- `internal/tigerfs/db/schema_test.go`
-- `internal/tigerfs/fuse/root.go`
-
-**Verification:**
-```bash
-# Create a simple view
-psql -c "CREATE VIEW active_users AS SELECT * FROM users WHERE active = true;"
-
-# Create a JOIN view
-psql -c "CREATE VIEW user_orders AS SELECT u.id as user_id, u.name, o.id as order_id, o.total FROM users u JOIN orders o ON u.id = o.user_id;"
-
-go run ./cmd/tigerfs postgres://... /tmp/testmount
-
-# Views should appear in listing
-ls /tmp/testmount
-# Should show: active_users/  user_orders/  users/  orders/  ...
-
-# Read from simple view (has PK from underlying table)
-cat /tmp/testmount/active_users/1.json
-
-# Read from JOIN view (no PK, use .first/N/)
-ls /tmp/testmount/user_orders/.first/10/
-cat /tmp/testmount/user_orders/.first/10/1.json
-
-# Check view schema shows CREATE VIEW
-cat /tmp/testmount/user_orders/.schema
-# Should show: CREATE VIEW user_orders AS SELECT ...
-
-# Test write to JOIN view (should fail - non-updatable)
-echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
-# Should fail with EACCES
-```
-
-**Completion Criteria:**
-- Views discovered alongside tables
-- Simple views readable (with PK if available)
-- JOIN views readable via .first/N/ or .sample/N/
-- Updatable views support writes
-- Non-updatable views (including JOINs) return EACCES on write
-- View definition shown in .schema
-- Tests include JOIN view scenario
 - Tests pass
 
 ---

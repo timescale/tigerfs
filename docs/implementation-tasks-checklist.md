@@ -77,8 +77,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.12 | Implement File Sizes | 2508 |
 | ✅ | 4.13 | Implement Schema Flattening | 2531 |
 | ✅ | 4.14 | Support Non-SERIAL Primary Keys | 2579 |
-| ⬜ | 4.15 | Support Tables Without Primary Keys | 2631 |
-| ⬜ | 4.16 | Support Database Views | 2684 |
+| ⬜ | 4.15 | Support Database Views | 2631 |
+| ⬜ | 4.16 | Support Tables Without Primary Keys | 2711 |
 | ⬜ | 4.17 | Support TimescaleDB Hypertables | 2764 |
 | ⬜ | 4.18 | Example Workflows for Advanced Features | 2822 |
 | ✅ | 4.19 | Synthesize Filename Extensions from Column Types | 2860 |
