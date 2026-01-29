@@ -54,6 +54,8 @@ var _ fs.InodeEmbedder = (*StagingDirNode)(nil)
 var _ fs.NodeGetattrer = (*StagingDirNode)(nil)
 var _ fs.NodeReaddirer = (*StagingDirNode)(nil)
 var _ fs.NodeLookuper = (*StagingDirNode)(nil)
+var _ fs.NodeCreater = (*StagingDirNode)(nil)
+var _ fs.NodeUnlinker = (*StagingDirNode)(nil)
 
 // NewStagingDirNode creates a new staging directory node.
 func NewStagingDirNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *StagingDirNode {
@@ -92,6 +94,11 @@ func (s *StagingDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	// Only include test.log if a test has been run
 	if s.staging.GetTestResult(s.ctx.StagingPath) != "" {
 		entries = append(entries, fuse.DirEntry{Name: "test.log", Mode: syscall.S_IFREG})
+	}
+
+	// Include any extra files (editor temp files)
+	for _, name := range s.staging.ListExtraFiles(s.ctx.StagingPath) {
+		entries = append(entries, fuse.DirEntry{Name: name, Mode: syscall.S_IFREG})
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -165,8 +172,71 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return child, 0
 
 	default:
+		// Check for extra files (editor temp files like .sql.swp, sql~, #sql#)
+		if s.staging.HasExtraFile(s.ctx.StagingPath, name) {
+			content := s.staging.GetExtraFile(s.ctx.StagingPath, name)
+			node := NewExtraFileNode(s.staging, s.ctx.StagingPath, name, content)
+			stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
+			child := s.NewPersistentInode(ctx, node, stableAttr)
+			out.Mode = 0644 | syscall.S_IFREG
+			out.Nlink = 1
+			out.Size = uint64(len(content))
+			return child, 0
+		}
 		return nil, syscall.ENOENT
 	}
+}
+
+// Create creates a new file in the staging directory (for editor temp files).
+func (s *StagingDirNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	logging.Debug("StagingDirNode.Create called",
+		zap.String("path", s.ctx.StagingPath),
+		zap.String("name", name))
+
+	// Don't allow overwriting control files
+	switch name {
+	case "sql", ".test", "test.log", ".commit", ".abort":
+		return nil, nil, 0, syscall.EEXIST
+	}
+
+	// Create an empty extra file
+	s.staging.SetExtraFile(s.ctx.StagingPath, name, []byte{})
+
+	node := NewExtraFileNode(s.staging, s.ctx.StagingPath, name, []byte{})
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
+	child := s.NewPersistentInode(ctx, node, stableAttr)
+
+	out.Mode = 0644 | syscall.S_IFREG
+	out.Nlink = 1
+	out.Size = 0
+
+	fh := &ExtraFileHandle{
+		node: node,
+		data: []byte{},
+	}
+
+	return child, fh, fuse.FOPEN_DIRECT_IO, 0
+}
+
+// Unlink removes a file from the staging directory (for editor temp files).
+func (s *StagingDirNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	logging.Debug("StagingDirNode.Unlink called",
+		zap.String("path", s.ctx.StagingPath),
+		zap.String("name", name))
+
+	// Don't allow deleting control files
+	switch name {
+	case "sql", ".test", "test.log", ".commit", ".abort":
+		return syscall.EPERM
+	}
+
+	// Delete extra file if it exists
+	if !s.staging.HasExtraFile(s.ctx.StagingPath, name) {
+		return syscall.ENOENT
+	}
+
+	s.staging.DeleteExtraFile(s.ctx.StagingPath, name)
+	return 0
 }
 
 // CreateDirNode represents a .create/ directory that lists pending creations
@@ -309,4 +379,124 @@ func (c *CreateDirNode) Mkdir(ctx context.Context, name string, mode uint32, out
 		zap.String("stagingPath", stagingPath))
 
 	return child, 0
+}
+
+// ExtraFileNode represents an extra file in a staging directory.
+// Used for editor temp files like .sql.swp, sql~, #sql#, etc.
+type ExtraFileNode struct {
+	fs.Inode
+
+	staging     *StagingTracker
+	stagingPath string
+	filename    string
+	content     []byte
+}
+
+var _ fs.InodeEmbedder = (*ExtraFileNode)(nil)
+var _ fs.NodeGetattrer = (*ExtraFileNode)(nil)
+var _ fs.NodeOpener = (*ExtraFileNode)(nil)
+var _ fs.NodeSetattrer = (*ExtraFileNode)(nil)
+
+// NewExtraFileNode creates a new extra file node.
+func NewExtraFileNode(staging *StagingTracker, stagingPath, filename string, content []byte) *ExtraFileNode {
+	return &ExtraFileNode{
+		staging:     staging,
+		stagingPath: stagingPath,
+		filename:    filename,
+		content:     content,
+	}
+}
+
+// Getattr returns attributes for the extra file.
+func (e *ExtraFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	content := e.staging.GetExtraFile(e.stagingPath, e.filename)
+	out.Mode = 0644 | syscall.S_IFREG
+	out.Nlink = 1
+	out.Size = uint64(len(content))
+	return 0
+}
+
+// Open opens the extra file.
+func (e *ExtraFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	content := e.staging.GetExtraFile(e.stagingPath, e.filename)
+	if content == nil {
+		content = []byte{}
+	}
+
+	fh := &ExtraFileHandle{
+		node: e,
+		data: content,
+	}
+
+	return fh, fuse.FOPEN_DIRECT_IO, 0
+}
+
+// Setattr handles attribute changes (e.g., truncate).
+func (e *ExtraFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	// Handle truncate
+	if sz, ok := in.GetSize(); ok && sz == 0 {
+		e.staging.SetExtraFile(e.stagingPath, e.filename, []byte{})
+	}
+
+	content := e.staging.GetExtraFile(e.stagingPath, e.filename)
+	out.Mode = 0644 | syscall.S_IFREG
+	out.Nlink = 1
+	out.Size = uint64(len(content))
+
+	return 0
+}
+
+// ExtraFileHandle handles read/write operations on extra files.
+type ExtraFileHandle struct {
+	node *ExtraFileNode
+	data []byte
+}
+
+var _ fs.FileReader = (*ExtraFileHandle)(nil)
+var _ fs.FileWriter = (*ExtraFileHandle)(nil)
+var _ fs.FileFsyncer = (*ExtraFileHandle)(nil)
+var _ fs.FileFlusher = (*ExtraFileHandle)(nil)
+
+// Read reads from the extra file.
+func (fh *ExtraFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	end := off + int64(len(dest))
+	if end > int64(len(fh.data)) {
+		end = int64(len(fh.data))
+	}
+
+	if off >= int64(len(fh.data)) {
+		return fuse.ReadResultData([]byte{}), 0
+	}
+
+	return fuse.ReadResultData(fh.data[off:end]), 0
+}
+
+// Write writes to the extra file.
+func (fh *ExtraFileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+	// Handle writes at offset
+	if off == 0 {
+		fh.data = make([]byte, len(data))
+		copy(fh.data, data)
+	} else {
+		// Extend data if needed
+		if int64(len(fh.data)) < off+int64(len(data)) {
+			newData := make([]byte, off+int64(len(data)))
+			copy(newData, fh.data)
+			fh.data = newData
+		}
+		copy(fh.data[off:], data)
+	}
+
+	return uint32(len(data)), 0
+}
+
+// Fsync is a no-op since data is persisted on Flush.
+func (fh *ExtraFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	return 0
+}
+
+// Flush persists the extra file content to the staging tracker.
+func (fh *ExtraFileHandle) Flush(ctx context.Context) syscall.Errno {
+	fh.node.staging.SetExtraFile(fh.node.stagingPath, fh.node.filename, fh.data)
+	return 0
 }

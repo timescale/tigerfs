@@ -13,9 +13,10 @@ import (
 // StagingEntry represents a staged DDL operation.
 // Stores user-provided DDL content and validation results.
 type StagingEntry struct {
-	Content    string    // User-provided DDL content
-	TestResult string    // Last test result (success message or error)
-	CreatedAt  time.Time // When the entry was created
+	Content    string            // User-provided DDL content
+	TestResult string            // Last test result (success message or error)
+	CreatedAt  time.Time         // When the entry was created
+	ExtraFiles map[string][]byte // Editor temp files (backups, swap files, etc.)
 }
 
 // StagingTracker manages in-memory staging state for DDL operations.
@@ -164,6 +165,95 @@ func (t *StagingTracker) ListPending(prefix string) []string {
 		}
 	}
 	return paths
+}
+
+// SetExtraFile stores an extra file (editor temp file) in a staging entry.
+// Creates the entry if it doesn't exist.
+func (t *StagingTracker) SetExtraFile(path string, filename string, content []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	entry, exists := t.entries[path]
+	if !exists {
+		entry = &StagingEntry{
+			CreatedAt:  time.Now(),
+			ExtraFiles: make(map[string][]byte),
+		}
+		t.entries[path] = entry
+	}
+
+	if entry.ExtraFiles == nil {
+		entry.ExtraFiles = make(map[string][]byte)
+	}
+
+	entry.ExtraFiles[filename] = content
+
+	logging.Debug("Set extra file",
+		zap.String("path", path),
+		zap.String("filename", filename),
+		zap.Int("size", len(content)))
+}
+
+// GetExtraFile retrieves an extra file from a staging entry.
+// Returns nil if not found.
+func (t *StagingTracker) GetExtraFile(path string, filename string) []byte {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	entry, exists := t.entries[path]
+	if !exists || entry.ExtraFiles == nil {
+		return nil
+	}
+
+	return entry.ExtraFiles[filename]
+}
+
+// DeleteExtraFile removes an extra file from a staging entry.
+func (t *StagingTracker) DeleteExtraFile(path string, filename string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	entry, exists := t.entries[path]
+	if !exists || entry.ExtraFiles == nil {
+		return
+	}
+
+	delete(entry.ExtraFiles, filename)
+
+	logging.Debug("Deleted extra file",
+		zap.String("path", path),
+		zap.String("filename", filename))
+}
+
+// ListExtraFiles returns the names of all extra files in a staging entry.
+func (t *StagingTracker) ListExtraFiles(path string) []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	entry, exists := t.entries[path]
+	if !exists || entry.ExtraFiles == nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(entry.ExtraFiles))
+	for name := range entry.ExtraFiles {
+		names = append(names, name)
+	}
+	return names
+}
+
+// HasExtraFile checks if an extra file exists in a staging entry.
+func (t *StagingTracker) HasExtraFile(path string, filename string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	entry, exists := t.entries[path]
+	if !exists || entry.ExtraFiles == nil {
+		return false
+	}
+
+	_, exists = entry.ExtraFiles[filename]
+	return exists
 }
 
 // IsEmptyOrCommented checks if content is empty or contains only SQL comments.
