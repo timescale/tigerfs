@@ -2639,7 +2639,7 @@ Updatable views support writes (PostgreSQL handles); non-updatable views return 
 **Key Design Points:**
 - Simple single-table views may have a primary key and be updatable
 - JOIN views typically have no primary key, so they:
-  - Use `ctid` for row identification (like Task 4.16)
+  - Use `ctid` for row identification (like Task 4.16a)
   - Are read-only (JOINs are generally non-updatable)
   - Can be browsed via `.first/N/` or `.sample/N/` paths
 
@@ -2658,7 +2658,7 @@ Updatable views support writes (PostgreSQL handles); non-updatable views return 
    - Updatable views: writes work (PostgreSQL handles)
    - Non-updatable views: return EACCES with clear error message
 4. Ensure JOIN views work:
-   - No PK → falls back to ctid-based access (Task 4.16)
+   - No PK → falls back to ctid-based access (Task 4.16a/4.16b)
    - Read-only browsing via `.first/N/`, `.sample/N/`
 
 **Files to Modify:**
@@ -2708,7 +2708,7 @@ echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
 
 ---
 
-### Task 4.16: Support Tables Without Primary Keys
+### Task 4.16a: Support Tables Without Primary Keys
 
 **Objective:** Allow read-only access to tables without primary keys using ctid
 
@@ -2723,13 +2723,13 @@ echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
 3. Update `internal/tigerfs/fuse/row.go`:
    - Query rows by ctid
    - Disable write operations for ctid-based access
-4. Add `.no_pk_warning` metadata file explaining the limitation
+4. Add `.info/warning` metadata file explaining the limitation
 
 **Files to Modify:**
 - `internal/tigerfs/db/keys.go`
 - `internal/tigerfs/fuse/table.go`
 - `internal/tigerfs/fuse/row.go`
-- `internal/tigerfs/fuse/metadata.go`
+- `internal/tigerfs/fuse/info.go`
 
 **Verification:**
 ```bash
@@ -2744,7 +2744,7 @@ ls /tmp/testmount/logs/
 cat /tmp/testmount/logs/0_1
 # Should show row data
 
-cat /tmp/testmount/logs/.no_pk_warning
+cat /tmp/testmount/logs/.info/warning
 # Should explain ctid limitations
 
 # Write should fail
@@ -2757,6 +2757,79 @@ echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
 - ctid used as row identifier
 - Warning file explains limitations
 - Write operations blocked
+- Tests pass
+
+---
+
+### Task 4.16b: Support Reading Views (No Primary Key)
+
+**Objective:** Allow read-only access to views using ctid-based row identification
+
+**Depends on:** Task 4.16a (ctid infrastructure)
+
+Views don't have primary keys, so they need the same ctid-based access pattern
+implemented in 4.16a. This task extends that support to views.
+
+**Background:**
+- Task 4.15 implemented view discovery and metadata (`.info/schema`, `.info/ddl`)
+- Views currently fail when trying to list rows because `GetPrimaryKey` fails
+- Simple views (single-table filters) could theoretically use the underlying PK,
+  but detecting this reliably is complex
+- Consistent approach: treat all views as "tables without PK" using ctid
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/table.go`:
+   - When `isView=true`, skip primary key lookup
+   - Use ctid-based row listing (from 4.16a)
+   - Views are always read-only for row operations
+2. Update `internal/tigerfs/fuse/info.go`:
+   - Add `.info/warning` for views explaining ctid limitations
+3. Ensure capability directories work for views:
+   - `.info/` - metadata (already working)
+   - `.first/N/`, `.last/N/`, `.sample/N/` - pagination via ctid
+   - `.by/` and `.order/` - may not be applicable (no indexes on views)
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/info.go`
+- `internal/tigerfs/fuse/pagination.go`
+- `internal/tigerfs/fuse/sample.go`
+
+**Verification:**
+```bash
+# Assuming views exist from docker-demo init.sql:
+# - active_users (simple filter view)
+# - order_summary (JOIN view)
+
+go run ./cmd/tigerfs postgres://... /tmp/testmount
+
+# View should be listable
+ls /tmp/testmount/active_users/
+# Should show: .info/  .first/  .last/  .sample/  (0,1)  (0,2)  ...
+
+# Read row from view
+cat /tmp/testmount/active_users/'(0,1)'
+# Should show row data
+
+# Check warning
+cat /tmp/testmount/active_users/.info/warning
+# Should explain ctid limitations and read-only nature
+
+# Pagination should work
+ls /tmp/testmount/order_summary/.first/10/
+cat /tmp/testmount/order_summary/.first/10/'(0,1)'.json
+
+# Write should fail (views are read-only for row ops)
+echo '{"name":"test"}' > /tmp/testmount/active_users/'(0,1)'.json
+# Should fail with EACCES or EROFS
+```
+
+**Completion Criteria:**
+- Views can be listed (showing ctid-based row identifiers)
+- View rows can be read via ctid
+- Pagination (`.first/N/`, `.last/N/`, `.sample/N/`) works for views
+- Write operations return appropriate error
+- `.info/warning` explains limitations
 - Tests pass
 
 ---
