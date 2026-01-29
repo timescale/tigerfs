@@ -3563,6 +3563,257 @@ ls /mnt/db/events/.order/created_at/.last/10/
 
 ---
 
+### Task 4.28: Implement `.export/` Bulk Read Capability
+
+**Objective:** Add single-file materialization of table data in multiple formats.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.export/` capability provides bulk data export as csv, tsv, json, or yaml files.
+
+**Structure:**
+```
+/mnt/db/users/
+├── .export/
+│   ├── csv      # All rows as CSV
+│   ├── tsv      # All rows as TSV
+│   ├── json     # All rows as JSON array
+│   └── yaml     # All rows as multi-document YAML
+```
+
+**Composition:** `.export/` appears in any collection context:
+```
+users/.export/csv                           # Entire table
+users/.first/100/.export/json               # First 100 rows
+users/.order/created_at/.last/50/.export/csv  # Last 50 by date
+users/.by/status/active/.export/yaml        # All active users
+```
+
+**Steps:**
+1. Create `ExportDirNode` in `internal/tigerfs/fuse/export.go`:
+   - `Readdir()`: List format options (csv, tsv, json, yaml)
+   - `Lookup()`: Return `ExportFileNode` for each format
+
+2. Create `ExportFileNode`:
+   - `Read()`: Fetch rows from context, serialize to requested format
+   - `Getattr()`: Return file attributes (size may require full materialization or estimate)
+
+3. Implement bulk serialization in `internal/tigerfs/format/`:
+   - `RowsToCSV(columns []string, rows [][]interface{}) ([]byte, error)`
+   - `RowsToTSV(columns []string, rows [][]interface{}) ([]byte, error)`
+   - `RowsToJSON(columns []string, rows [][]interface{}) ([]byte, error)`
+   - `RowsToYAML(columns []string, rows [][]interface{}) ([]byte, error)`
+
+4. Add db method to fetch multiple rows:
+   - `GetRows(ctx, schema, table, pkColumn string, limit int) ([][]interface{}, error)`
+
+5. Enforce `DirListingLimit` for exports (error if exceeded, suggest pagination)
+
+6. Add `.export/` to `TableNode`, `PaginationNode`, `OrderColumnNode`, `IndexValueNode`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/export.go`
+- `internal/tigerfs/fuse/export_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/format/csv.go`
+- `internal/tigerfs/format/tsv.go`
+- `internal/tigerfs/format/json.go`
+- `internal/tigerfs/format/yaml.go`
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/pagination.go`
+- `internal/tigerfs/fuse/order.go`
+- `internal/tigerfs/fuse/index.go`
+
+**Verification:**
+```bash
+go test ./...
+# Mount and verify
+cat /mnt/db/users/.export/csv
+cat /mnt/db/users/.first/10/.export/json
+cat /mnt/db/users/.order/name/.first/5/.export/yaml
+```
+
+**Completion Criteria:**
+- All four formats work (csv, tsv, json, yaml)
+- Works at table level and with pagination/ordering
+- Enforces row limit with helpful error message
+- Empty tables return empty file (0 bytes for csv/tsv, `[]` for json, empty for yaml)
+- Tests pass
+
+---
+
+### Task 4.29: Implement `.import/` Bulk Write Capability
+
+**Objective:** Add bulk data import with explicit write modes.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.import/` capability provides three write modes with atomic transactions.
+
+**Structure:**
+```
+/mnt/db/users/
+├── .import/
+│   ├── .overwrite/    # Truncate + insert
+│   │   ├── csv
+│   │   ├── tsv
+│   │   ├── json
+│   │   └── yaml
+│   ├── .sync/         # Upsert (requires PK)
+│   │   ├── csv
+│   │   ├── tsv
+│   │   ├── json
+│   │   └── yaml
+│   └── .append/       # Insert only (fail on conflict)
+│       ├── csv
+│       ├── tsv
+│       ├── json
+│       └── yaml
+```
+
+**Usage:**
+```bash
+cat data.csv > /mnt/db/users/.import/.overwrite/csv
+cat updates.json > /mnt/db/users/.import/.sync/json
+cat new_rows.csv > /mnt/db/users/.import/.append/csv
+```
+
+**Steps:**
+1. Create `ImportDirNode` in `internal/tigerfs/fuse/import.go`:
+   - `Readdir()`: List modes (.overwrite, .sync, .append)
+   - `Lookup()`: Return `ImportModeNode`
+
+2. Create `ImportModeNode`:
+   - `Readdir()`: List formats (csv, tsv, json, yaml)
+   - `Lookup()`: Return `ImportFileNode`
+
+3. Create `ImportFileNode`:
+   - `Write()`: Buffer incoming data
+   - `Release()`: Parse format, execute import in transaction
+
+4. Implement import operations in `internal/tigerfs/db/`:
+   - `ImportOverwrite(ctx, schema, table, columns []string, rows [][]interface{}) error`
+     - BEGIN, TRUNCATE, INSERT all rows, COMMIT (or ROLLBACK on error)
+   - `ImportSync(ctx, schema, table, pkColumns []string, columns []string, rows [][]interface{}) error`
+     - BEGIN, UPSERT all rows (INSERT ... ON CONFLICT UPDATE), COMMIT
+     - Return error if table has no PK
+   - `ImportAppend(ctx, schema, table, columns []string, rows [][]interface{}) error`
+     - BEGIN, INSERT all rows (fail on conflict), COMMIT
+
+5. Implement bulk parsing in `internal/tigerfs/format/`:
+   - `ParseCSVBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+   - `ParseTSVBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+   - `ParseJSONBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+   - `ParseYAMLBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+
+6. Add configuration option `DirWritingLimit` (default 100,000)
+
+7. Only allow `.import/` at table level (not in filtered views)
+
+**Files to Create:**
+- `internal/tigerfs/fuse/import.go`
+- `internal/tigerfs/fuse/import_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/client.go` (or new file for bulk operations)
+- `internal/tigerfs/format/csv.go`
+- `internal/tigerfs/format/tsv.go`
+- `internal/tigerfs/format/json.go`
+- `internal/tigerfs/format/yaml.go`
+- `internal/tigerfs/config/config.go` (add DirWritingLimit)
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+go test ./...
+
+# Test overwrite
+echo 'id,name
+1,Alice
+2,Bob' > /mnt/db/users/.import/.overwrite/csv
+
+# Test sync (updates + inserts)
+echo '[{"id":1,"name":"Alice Updated"},{"id":3,"name":"Charlie"}]' > /mnt/db/users/.import/.sync/json
+
+# Test append (insert only)
+echo 'id,name
+4,David' > /mnt/db/users/.import/.append/csv
+
+# Verify .sync fails without PK
+# (create table without PK, attempt sync, expect error)
+```
+
+**Completion Criteria:**
+- All three modes work (.overwrite, .sync, .append)
+- All four formats work (csv, tsv, json, yaml)
+- Atomic transactions (all-or-nothing)
+- `.sync/` returns error for tables without PK
+- Enforces `DirWritingLimit`
+- Only available at table level
+- Tests pass
+
+---
+
+### Task 4.30: Require Headers for CSV/TSV Writes
+
+**Objective:** Make CSV and TSV writes self-describing by requiring header rows.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. This is a breaking change that makes all formats consistently self-describing.
+
+**Change:**
+```bash
+# Old (no longer supported):
+echo 'Alice,alice@example.com' > /mnt/db/users/123.csv
+
+# New (header required):
+echo 'name,email
+Alice,alice@example.com' > /mnt/db/users/123.csv
+```
+
+**Steps:**
+1. Update `ParseCSV()` in `internal/tigerfs/format/csv.go`:
+   - Require first row to be header
+   - Return error if no header row
+   - Map values to columns by header names
+
+2. Update `ParseTSV()` in `internal/tigerfs/format/tsv.go`:
+   - Same changes as CSV
+
+3. Update all tests that write CSV/TSV:
+   - Add header rows to test data
+   - Update expected error cases
+
+4. Update documentation:
+   - README.md examples
+   - specs/spec.md format documentation
+
+**Files to Modify:**
+- `internal/tigerfs/format/csv.go`
+- `internal/tigerfs/format/tsv.go`
+- `internal/tigerfs/format/csv_test.go`
+- `internal/tigerfs/format/tsv_test.go`
+- `internal/tigerfs/fuse/row_test.go`
+- `internal/tigerfs/fuse/column_file_test.go`
+- `test/integration/*.go`
+- `README.md`
+- `specs/spec.md`
+
+**Verification:**
+```bash
+go test ./...
+
+# Verify header required
+echo 'Alice,alice@example.com' > /mnt/db/users/123.csv  # Should fail
+echo 'name,email
+Alice,alice@example.com' > /mnt/db/users/123.csv  # Should work
+```
+
+**Completion Criteria:**
+- CSV writes require header row
+- TSV writes require header row
+- Clear error message when header missing
+- Documentation updated
+- All tests updated and pass
+
+---
+
 ## Phase 5: DDL Operations via Filesystem
 
 ### Overview
@@ -4216,257 +4467,6 @@ go test ./test/integration/... -v -run TestDDL
 - Spec documents full DDL behavior
 - Example scripts work
 - Documentation clear for both humans and scripts
-
----
-
-### Task 5.11: Implement `.export/` Bulk Read Capability
-
-**Objective:** Add single-file materialization of table data in multiple formats.
-
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.export/` capability provides bulk data export as csv, tsv, json, or yaml files.
-
-**Structure:**
-```
-/mnt/db/users/
-├── .export/
-│   ├── csv      # All rows as CSV
-│   ├── tsv      # All rows as TSV
-│   ├── json     # All rows as JSON array
-│   └── yaml     # All rows as multi-document YAML
-```
-
-**Composition:** `.export/` appears in any collection context:
-```
-users/.export/csv                           # Entire table
-users/.first/100/.export/json               # First 100 rows
-users/.order/created_at/.last/50/.export/csv  # Last 50 by date
-users/.by/status/active/.export/yaml        # All active users
-```
-
-**Steps:**
-1. Create `ExportDirNode` in `internal/tigerfs/fuse/export.go`:
-   - `Readdir()`: List format options (csv, tsv, json, yaml)
-   - `Lookup()`: Return `ExportFileNode` for each format
-
-2. Create `ExportFileNode`:
-   - `Read()`: Fetch rows from context, serialize to requested format
-   - `Getattr()`: Return file attributes (size may require full materialization or estimate)
-
-3. Implement bulk serialization in `internal/tigerfs/format/`:
-   - `RowsToCSV(columns []string, rows [][]interface{}) ([]byte, error)`
-   - `RowsToTSV(columns []string, rows [][]interface{}) ([]byte, error)`
-   - `RowsToJSON(columns []string, rows [][]interface{}) ([]byte, error)`
-   - `RowsToYAML(columns []string, rows [][]interface{}) ([]byte, error)`
-
-4. Add db method to fetch multiple rows:
-   - `GetRows(ctx, schema, table, pkColumn string, limit int) ([][]interface{}, error)`
-
-5. Enforce `DirListingLimit` for exports (error if exceeded, suggest pagination)
-
-6. Add `.export/` to `TableNode`, `PaginationNode`, `OrderColumnNode`, `IndexValueNode`
-
-**Files to Create:**
-- `internal/tigerfs/fuse/export.go`
-- `internal/tigerfs/fuse/export_test.go`
-
-**Files to Modify:**
-- `internal/tigerfs/format/csv.go`
-- `internal/tigerfs/format/tsv.go`
-- `internal/tigerfs/format/json.go`
-- `internal/tigerfs/format/yaml.go`
-- `internal/tigerfs/fuse/table.go`
-- `internal/tigerfs/fuse/pagination.go`
-- `internal/tigerfs/fuse/order.go`
-- `internal/tigerfs/fuse/index.go`
-
-**Verification:**
-```bash
-go test ./...
-# Mount and verify
-cat /mnt/db/users/.export/csv
-cat /mnt/db/users/.first/10/.export/json
-cat /mnt/db/users/.order/name/.first/5/.export/yaml
-```
-
-**Completion Criteria:**
-- All four formats work (csv, tsv, json, yaml)
-- Works at table level and with pagination/ordering
-- Enforces row limit with helpful error message
-- Empty tables return empty file (0 bytes for csv/tsv, `[]` for json, empty for yaml)
-- Tests pass
-
----
-
-### Task 5.12: Implement `.import/` Bulk Write Capability
-
-**Objective:** Add bulk data import with explicit write modes.
-
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.import/` capability provides three write modes with atomic transactions.
-
-**Structure:**
-```
-/mnt/db/users/
-├── .import/
-│   ├── .overwrite/    # Truncate + insert
-│   │   ├── csv
-│   │   ├── tsv
-│   │   ├── json
-│   │   └── yaml
-│   ├── .sync/         # Upsert (requires PK)
-│   │   ├── csv
-│   │   ├── tsv
-│   │   ├── json
-│   │   └── yaml
-│   └── .append/       # Insert only (fail on conflict)
-│       ├── csv
-│       ├── tsv
-│       ├── json
-│       └── yaml
-```
-
-**Usage:**
-```bash
-cat data.csv > /mnt/db/users/.import/.overwrite/csv
-cat updates.json > /mnt/db/users/.import/.sync/json
-cat new_rows.csv > /mnt/db/users/.import/.append/csv
-```
-
-**Steps:**
-1. Create `ImportDirNode` in `internal/tigerfs/fuse/import.go`:
-   - `Readdir()`: List modes (.overwrite, .sync, .append)
-   - `Lookup()`: Return `ImportModeNode`
-
-2. Create `ImportModeNode`:
-   - `Readdir()`: List formats (csv, tsv, json, yaml)
-   - `Lookup()`: Return `ImportFileNode`
-
-3. Create `ImportFileNode`:
-   - `Write()`: Buffer incoming data
-   - `Release()`: Parse format, execute import in transaction
-
-4. Implement import operations in `internal/tigerfs/db/`:
-   - `ImportOverwrite(ctx, schema, table, columns []string, rows [][]interface{}) error`
-     - BEGIN, TRUNCATE, INSERT all rows, COMMIT (or ROLLBACK on error)
-   - `ImportSync(ctx, schema, table, pkColumns []string, columns []string, rows [][]interface{}) error`
-     - BEGIN, UPSERT all rows (INSERT ... ON CONFLICT UPDATE), COMMIT
-     - Return error if table has no PK
-   - `ImportAppend(ctx, schema, table, columns []string, rows [][]interface{}) error`
-     - BEGIN, INSERT all rows (fail on conflict), COMMIT
-
-5. Implement bulk parsing in `internal/tigerfs/format/`:
-   - `ParseCSVBulk(data []byte) (columns []string, rows [][]interface{}, error)`
-   - `ParseTSVBulk(data []byte) (columns []string, rows [][]interface{}, error)`
-   - `ParseJSONBulk(data []byte) (columns []string, rows [][]interface{}, error)`
-   - `ParseYAMLBulk(data []byte) (columns []string, rows [][]interface{}, error)`
-
-6. Add configuration option `DirWritingLimit` (default 100,000)
-
-7. Only allow `.import/` at table level (not in filtered views)
-
-**Files to Create:**
-- `internal/tigerfs/fuse/import.go`
-- `internal/tigerfs/fuse/import_test.go`
-
-**Files to Modify:**
-- `internal/tigerfs/db/client.go` (or new file for bulk operations)
-- `internal/tigerfs/format/csv.go`
-- `internal/tigerfs/format/tsv.go`
-- `internal/tigerfs/format/json.go`
-- `internal/tigerfs/format/yaml.go`
-- `internal/tigerfs/config/config.go` (add DirWritingLimit)
-- `internal/tigerfs/fuse/table.go`
-
-**Verification:**
-```bash
-go test ./...
-
-# Test overwrite
-echo 'id,name
-1,Alice
-2,Bob' > /mnt/db/users/.import/.overwrite/csv
-
-# Test sync (updates + inserts)
-echo '[{"id":1,"name":"Alice Updated"},{"id":3,"name":"Charlie"}]' > /mnt/db/users/.import/.sync/json
-
-# Test append (insert only)
-echo 'id,name
-4,David' > /mnt/db/users/.import/.append/csv
-
-# Verify .sync fails without PK
-# (create table without PK, attempt sync, expect error)
-```
-
-**Completion Criteria:**
-- All three modes work (.overwrite, .sync, .append)
-- All four formats work (csv, tsv, json, yaml)
-- Atomic transactions (all-or-nothing)
-- `.sync/` returns error for tables without PK
-- Enforces `DirWritingLimit`
-- Only available at table level
-- Tests pass
-
----
-
-### Task 5.13: Require Headers for CSV/TSV Writes
-
-**Objective:** Make CSV and TSV writes self-describing by requiring header rows.
-
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. This is a breaking change that makes all formats consistently self-describing.
-
-**Change:**
-```bash
-# Old (no longer supported):
-echo 'Alice,alice@example.com' > /mnt/db/users/123.csv
-
-# New (header required):
-echo 'name,email
-Alice,alice@example.com' > /mnt/db/users/123.csv
-```
-
-**Steps:**
-1. Update `ParseCSV()` in `internal/tigerfs/format/csv.go`:
-   - Require first row to be header
-   - Return error if no header row
-   - Map values to columns by header names
-
-2. Update `ParseTSV()` in `internal/tigerfs/format/tsv.go`:
-   - Same changes as CSV
-
-3. Update all tests that write CSV/TSV:
-   - Add header rows to test data
-   - Update expected error cases
-
-4. Update documentation:
-   - README.md examples
-   - specs/spec.md format documentation
-
-**Files to Modify:**
-- `internal/tigerfs/format/csv.go`
-- `internal/tigerfs/format/tsv.go`
-- `internal/tigerfs/format/csv_test.go`
-- `internal/tigerfs/format/tsv_test.go`
-- `internal/tigerfs/fuse/row_test.go`
-- `internal/tigerfs/fuse/column_file_test.go`
-- `test/integration/*.go`
-- `README.md`
-- `specs/spec.md`
-
-**Verification:**
-```bash
-go test ./...
-
-# Verify header required
-echo 'Alice,alice@example.com' > /mnt/db/users/123.csv  # Should fail
-echo 'name,email
-Alice,alice@example.com' > /mnt/db/users/123.csv  # Should work
-```
-
-**Completion Criteria:**
-- CSV writes require header row
-- TSV writes require header row
-- Clear error message when header missing
-- Documentation updated
-- All tests updated and pass
 
 ---
 

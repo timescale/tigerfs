@@ -90,6 +90,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.25 | Implement .by/ Index Navigation | 3337 |
 | ✅ | 4.26 | Remove Legacy Metadata and Index Paths | 3391 |
 | ✅ | 4.27 | Implement .order/<column>/ Capability | 3437 |
+| ⬜ | 4.28 | Implement .export/ Bulk Read Capability | 3565 |
+| ⬜ | 4.29 | Implement .import/ Bulk Write Capability | 3643 |
+| ⬜ | 4.30 | Require Headers for CSV/TSV Writes | 3753 |
 
 ---
 
@@ -97,19 +100,16 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ✅ | 5.1 | Implement Core Staging Infrastructure | 3505 |
-| ✅ | 5.2 | Implement Template Generation Framework | 3600 |
-| ✅ | 5.3 | Implement Schema Create/Delete Operations | 3736 |
-| ✅ | 5.4 | Implement Index Create/Delete Operations | 3796 |
-| ✅ | 5.5 | Implement Table Create Operations | 3856 |
-| ✅ | 5.6 | Implement Table Modify Operations | 3916 |
-| ✅ | 5.7 | Implement Table Delete Operations | 3960 |
-| ✅ | 5.8 | Implement View Create/Delete Operations | 4005 |
-| ⬜ | 5.9 | Integration Tests for DDL Operations | 4066 |
-| ⬜ | 5.10 | Documentation for DDL Operations | 4107 |
-| ⬜ | 5.11 | Implement .export/ Bulk Read Capability | 4147 |
-| ⬜ | 5.12 | Implement .import/ Bulk Write Capability | 4225 |
-| ⬜ | 5.13 | Require Headers for CSV/TSV Writes | 4335 |
+| ✅ | 5.1 | Implement Core Staging Infrastructure | 3817 |
+| ✅ | 5.2 | Implement Template Generation Framework | 3912 |
+| ✅ | 5.3 | Implement Schema Create/Delete Operations | 4048 |
+| ✅ | 5.4 | Implement Index Create/Delete Operations | 4108 |
+| ✅ | 5.5 | Implement Table Create Operations | 4168 |
+| ✅ | 5.6 | Implement Table Modify Operations | 4228 |
+| ✅ | 5.7 | Implement Table Delete Operations | 4272 |
+| ✅ | 5.8 | Implement View Create/Delete Operations | 4317 |
+| ⬜ | 5.9 | Integration Tests for DDL Operations | 4378 |
+| ⬜ | 5.10 | Documentation for DDL Operations | 4419 |
 
 ---
 
@@ -146,8 +146,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 23 | 27 | 85% |
-| Phase 5: DDL Operations | 8 | 13 | 62% |
+| Phase 4: Advanced Features | 23 | 30 | 77% |
+| Phase 5: DDL Operations | 8 | 10 | 80% |
 | Phase 6: Distribution | 0 | 9 | 0% |
 | Phase 7: Performance | 0 | 3 | 0% |
 | **Total** | **63** | **84** | **75%** |
