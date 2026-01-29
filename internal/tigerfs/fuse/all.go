@@ -102,15 +102,15 @@ func (a *AllRowsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	// Add metadata files
 	entries = append(entries,
 		fuse.DirEntry{
-			Name: ".columns",
+			Name: FileColumns,
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
-			Name: ".schema",
+			Name: FileSchema,
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
-			Name: ".count",
+			Name: FileCount,
 			Mode: syscall.S_IFREG,
 		},
 	)
@@ -138,7 +138,7 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		zap.String("name", name))
 
 	// Check if this is a metadata file lookup
-	if name == ".columns" || name == ".schema" || name == ".count" {
+	if name == FileColumns || name == FileSchema || name == FileCount {
 		return a.lookupMetadataFile(ctx, name)
 	}
 
@@ -192,11 +192,11 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 func (a *AllRowsNode) lookupMetadataFile(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
 	var fileType string
 	switch name {
-	case ".columns":
+	case FileColumns:
 		fileType = "columns"
-	case ".schema":
+	case FileSchema:
 		fileType = "schema"
-	case ".count":
+	case FileCount:
 		fileType = "count"
 	default:
 		return nil, syscall.ENOENT

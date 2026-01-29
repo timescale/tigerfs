@@ -127,47 +127,47 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Add metadata files first
 	entries = append(entries,
 		fuse.DirEntry{
-			Name: ".columns",
+			Name: FileColumns,
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
-			Name: ".schema",
+			Name: FileSchema,
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
-			Name: ".ddl",
+			Name: FileDDL,
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
-			Name: ".count",
+			Name: FileCount,
 			Mode: syscall.S_IFREG,
 		},
 		fuse.DirEntry{
-			Name: ".indexes",
+			Name: DirIndexes,
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
-			Name: ".all",
+			Name: DirAll,
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
-			Name: ".delete",
+			Name: DirDelete,
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
-			Name: ".first",
+			Name: DirFirst,
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
-			Name: ".last",
+			Name: DirLast,
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
-			Name: ".modify",
+			Name: DirModify,
 			Mode: syscall.S_IFDIR,
 		},
 		fuse.DirEntry{
-			Name: ".sample",
+			Name: DirSample,
 			Mode: syscall.S_IFDIR,
 		},
 	)
@@ -223,40 +223,40 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("name", name))
 
 	// Check if this is a metadata file lookup
-	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" {
+	if name == FileColumns || name == FileSchema || name == FileDDL || name == FileCount {
 		return t.lookupMetadataFile(ctx, name, out)
 	}
 
 	// Check if this is the .indexes directory (index DDL operations)
-	if name == ".indexes" {
+	if name == DirIndexes {
 		return t.lookupIndexesDirectory(ctx)
 	}
 
 	// Check if this is the .modify directory (ALTER TABLE staging)
-	if name == ".modify" {
+	if name == DirModify {
 		return t.lookupModifyDirectory(ctx)
 	}
 
 	// Check if this is the .delete directory (DROP TABLE staging)
-	if name == ".delete" {
+	if name == DirDelete {
 		return t.lookupDeleteDirectory(ctx)
 	}
 
 	// Check if this is the .all directory (bypass dir_listing_limit)
-	if name == ".all" {
+	if name == DirAll {
 		return t.lookupAllDirectory(ctx)
 	}
 
 	// Check if this is a pagination directory (.first or .last)
-	if name == ".first" {
+	if name == DirFirst {
 		return t.lookupPaginationDirectory(ctx, PaginationFirst)
 	}
-	if name == ".last" {
+	if name == DirLast {
 		return t.lookupPaginationDirectory(ctx, PaginationLast)
 	}
 
 	// Check if this is a sample directory (.sample)
-	if name == ".sample" {
+	if name == DirSample {
 		return t.lookupSampleDirectory(ctx)
 	}
 
@@ -398,13 +398,13 @@ func (t *TableNode) lookupMetadataFile(ctx context.Context, name string, out *fu
 	// Determine metadata file type
 	var fileType string
 	switch name {
-	case ".columns":
+	case FileColumns:
 		fileType = "columns"
-	case ".schema":
+	case FileSchema:
 		fileType = "schema"
-	case ".ddl":
+	case FileDDL:
 		fileType = "ddl"
-	case ".count":
+	case FileCount:
 		fileType = "count"
 	default:
 		logging.Debug("Unknown metadata file",
@@ -581,7 +581,7 @@ func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		zap.String("name", name))
 
 	// Can't delete metadata files
-	if name == ".columns" || name == ".schema" || name == ".ddl" || name == ".count" || name == ".indexes" {
+	if name == FileColumns || name == FileSchema || name == FileDDL || name == FileCount || name == DirIndexes {
 		logging.Debug("Cannot delete metadata file",
 			zap.String("table", t.tableName),
 			zap.String("file", name))

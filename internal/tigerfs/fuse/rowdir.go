@@ -72,7 +72,7 @@ func (r *RowDirectoryNode) Getattr(ctx context.Context, fh fs.FileHandle, out *f
 }
 
 // Format files available in row directories for reading full row in different formats
-var rowFormatFiles = []string{".json", ".csv", ".tsv", ".yaml"}
+var rowFormatFiles = []string{ExtJSON, ExtCSV, ExtTSV, ExtYAML}
 
 // Readdir lists the column names in the row plus format files
 func (r *RowDirectoryNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
@@ -129,14 +129,14 @@ func (r *RowDirectoryNode) Lookup(ctx context.Context, name string, out *fuse.En
 
 	// Check if this is a format file (.json, .csv, .tsv, .yaml)
 	switch name {
-	case ".json":
-		return r.createFormatFileNode(ctx, "json", out)
-	case ".csv":
-		return r.createFormatFileNode(ctx, "csv", out)
-	case ".tsv":
-		return r.createFormatFileNode(ctx, "tsv", out)
-	case ".yaml":
-		return r.createFormatFileNode(ctx, "yaml", out)
+	case ExtJSON:
+		return r.createFormatFileNode(ctx, FmtJSON, out)
+	case ExtCSV:
+		return r.createFormatFileNode(ctx, FmtCSV, out)
+	case ExtTSV:
+		return r.createFormatFileNode(ctx, FmtTSV, out)
+	case ExtYAML:
+		return r.createFormatFileNode(ctx, FmtYAML, out)
 	}
 
 	// Otherwise, look up as a column name

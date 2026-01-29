@@ -85,15 +85,15 @@ func (s *StagingDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		zap.String("path", s.ctx.StagingPath))
 
 	entries := []fuse.DirEntry{
-		{Name: "sql", Mode: syscall.S_IFREG},
-		{Name: ".test", Mode: syscall.S_IFREG},
-		{Name: ".commit", Mode: syscall.S_IFREG},
-		{Name: ".abort", Mode: syscall.S_IFREG},
+		{Name: FileSQL, Mode: syscall.S_IFREG},
+		{Name: FileTest, Mode: syscall.S_IFREG},
+		{Name: FileCommit, Mode: syscall.S_IFREG},
+		{Name: FileAbort, Mode: syscall.S_IFREG},
 	}
 
 	// Only include test.log if a test has been run
 	if s.staging.GetTestResult(s.ctx.StagingPath) != "" {
-		entries = append(entries, fuse.DirEntry{Name: "test.log", Mode: syscall.S_IFREG})
+		entries = append(entries, fuse.DirEntry{Name: FileTestLog, Mode: syscall.S_IFREG})
 	}
 
 	// Include any extra files (editor temp files)
@@ -111,7 +111,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		zap.String("name", name))
 
 	switch name {
-	case "sql":
+	case FileSQL:
 		node := NewSchemaFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
@@ -126,7 +126,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Size = uint64(len(content))
 		return child, 0
 
-	case ".test":
+	case FileTest:
 		node := NewTestFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
@@ -136,7 +136,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Size = 0 // Trigger-only, no content
 		return child, 0
 
-	case "test.log":
+	case FileTestLog:
 		// Only exists if a test has been run
 		result := s.staging.GetTestResult(s.ctx.StagingPath)
 		if result == "" {
@@ -151,7 +151,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Size = uint64(len(result))
 		return child, 0
 
-	case ".commit":
+	case FileCommit:
 		node := NewCommitFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
@@ -161,7 +161,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		out.Size = 0 // Trigger-only, no content
 		return child, 0
 
-	case ".abort":
+	case FileAbort:
 		node := NewAbortFileNode(s.cfg, s.db, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
@@ -195,7 +195,7 @@ func (s *StagingDirNode) Create(ctx context.Context, name string, flags uint32, 
 
 	// Don't allow overwriting control files
 	switch name {
-	case "sql", ".test", "test.log", ".commit", ".abort":
+	case FileSQL, FileTest, FileTestLog, FileCommit, FileAbort:
 		return nil, nil, 0, syscall.EEXIST
 	}
 
@@ -226,7 +226,7 @@ func (s *StagingDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 
 	// Don't allow deleting control files
 	switch name {
-	case "sql", ".test", "test.log", ".commit", ".abort":
+	case FileSQL, FileTest, FileTestLog, FileCommit, FileAbort:
 		return syscall.EPERM
 	}
 

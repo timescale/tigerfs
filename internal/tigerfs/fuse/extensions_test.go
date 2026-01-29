@@ -13,26 +13,26 @@ func TestGetExtensionForType(t *testing.T) {
 		want     string
 	}{
 		// Text types → .txt
-		{"text", "text", ".txt"},
-		{"TEXT uppercase", "TEXT", ".txt"},
-		{"character varying", "character varying", ".txt"},
-		{"varchar", "varchar", ".txt"},
-		{"character", "character", ".txt"},
-		{"char", "char", ".txt"},
-		{"bpchar", "bpchar", ".txt"},
-		{"varchar with length", "character varying(255)", ".txt"},
-		{"char with length", "character(10)", ".txt"},
+		{"text", "text", ExtTxt},
+		{"TEXT uppercase", "TEXT", ExtTxt},
+		{"character varying", "character varying", ExtTxt},
+		{"varchar", "varchar", ExtTxt},
+		{"character", "character", ExtTxt},
+		{"char", "char", ExtTxt},
+		{"bpchar", "bpchar", ExtTxt},
+		{"varchar with length", "character varying(255)", ExtTxt},
+		{"char with length", "character(10)", ExtTxt},
 
 		// JSON types → .json
-		{"json", "json", ".json"},
-		{"jsonb", "jsonb", ".json"},
-		{"JSONB uppercase", "JSONB", ".json"},
+		{"json", "json", ExtJSON},
+		{"jsonb", "jsonb", ExtJSON},
+		{"JSONB uppercase", "JSONB", ExtJSON},
 
 		// XML → .xml
 		{"xml", "xml", ".xml"},
 
 		// Binary → .bin
-		{"bytea", "bytea", ".bin"},
+		{"bytea", "bytea", ExtBin},
 
 		// PostGIS → .wkb
 		{"geometry", "geometry", ".wkb"},

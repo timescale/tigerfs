@@ -379,7 +379,7 @@ func TestCreateDirNode_Creation(t *testing.T) {
 	mockDB := &db.MockDDLExecutor{}
 
 	// Verify CreateDirNode accepts DDLExecutor
-	node := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", ".create")
+	node := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", DirCreate)
 	if node == nil {
 		t.Fatal("NewCreateDirNode returned nil")
 	}
@@ -506,7 +506,7 @@ func TestCreateDirNode_Mkdir(t *testing.T) {
 	staging := NewStagingTracker()
 	mockDB := &db.MockDDLExecutor{}
 
-	node := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", ".create")
+	node := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", DirCreate)
 
 	// Verify staging entry doesn't exist before mkdir
 	if staging.Get(".create/orders") != nil {
@@ -529,7 +529,7 @@ func TestCreateDirNode_Mkdir(t *testing.T) {
 	}
 
 	// Verify entry appears in ListPending
-	pending := staging.ListPending(".create")
+	pending := staging.ListPending(DirCreate)
 	found := false
 	for _, name := range pending {
 		if name == "orders" {
@@ -776,7 +776,7 @@ func TestTableCreateWorkflow_WithMocks(t *testing.T) {
 	}
 
 	// Step 1: Create CreateDirNode (simulates /.create/ directory)
-	createNode := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", ".create")
+	createNode := NewCreateDirNode(cfg, mockDB, nil, staging, "table", "public", "", DirCreate)
 	if createNode == nil {
 		t.Fatal("NewCreateDirNode returned nil")
 	}
@@ -791,7 +791,7 @@ func TestTableCreateWorkflow_WithMocks(t *testing.T) {
 	}
 
 	// Verify the entry appears in ListPending (simulates ls .create/)
-	pending := staging.ListPending(".create")
+	pending := staging.ListPending(DirCreate)
 	found := false
 	for _, name := range pending {
 		if name == "orders" {

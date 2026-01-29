@@ -71,13 +71,13 @@ func (r *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 	// Add .create directory for creating new tables in default schema
 	entries = append(entries, fuse.DirEntry{
-		Name: ".create",
+		Name: DirCreate,
 		Mode: syscall.S_IFDIR,
 	})
 
 	// Add .schemas directory
 	entries = append(entries, fuse.DirEntry{
-		Name: ".schemas",
+		Name: DirSchemas,
 		Mode: syscall.S_IFDIR,
 	})
 
@@ -105,7 +105,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	// Handle .create directory for creating new tables in default schema
-	if name == ".create" {
+	if name == DirCreate {
 		logging.Debug("Looking up .create directory for tables")
 
 		// Get the resolved default schema from the cache
@@ -122,14 +122,14 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 			"table",       // objectType
 			defaultSchema, // schema for the new table
 			"",            // tableName (not applicable for table creation)
-			".create",     // pathPrefix for staging
+			DirCreate,     // pathPrefix for staging
 		)
 		child := r.NewPersistentInode(ctx, createNode, stableAttr)
 		return child, 0
 	}
 
 	// Handle .schemas directory
-	if name == ".schemas" {
+	if name == DirSchemas {
 		logging.Debug("Looking up .schemas directory")
 
 		schemasNode := NewSchemasNode(r.cfg, r.db, r.cache, r.partialRows, r.staging)

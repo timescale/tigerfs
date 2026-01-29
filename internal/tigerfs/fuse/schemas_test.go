@@ -135,7 +135,7 @@ func TestSchemasNode_Readdir(t *testing.T) {
 
 	// Verify .create and all schemas are present
 	expectedNames := make(map[string]bool)
-	expectedNames[".create"] = true
+	expectedNames[DirCreate] = true
 	for _, schema := range schemas {
 		expectedNames[schema] = true
 	}
@@ -184,7 +184,7 @@ func TestSchemasNode_Readdir_Empty(t *testing.T) {
 		t.Errorf("Expected 1 entry (.create), got %d", len(entries))
 	}
 
-	if len(entries) > 0 && entries[0].Name != ".create" {
+	if len(entries) > 0 && entries[0].Name != DirCreate {
 		t.Errorf("Expected .create entry, got %q", entries[0].Name)
 	}
 }
@@ -246,7 +246,7 @@ func TestSchemasNode_Lookup_CreateDir(t *testing.T) {
 	foundCreate := false
 	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		if entry.Name == ".create" {
+		if entry.Name == DirCreate {
 			foundCreate = true
 			if entry.Mode != syscall.S_IFDIR {
 				t.Errorf("Expected .create to be directory, got mode 0x%x", entry.Mode)
@@ -273,7 +273,7 @@ func TestSchemasNode_Readdir_CreateFirst(t *testing.T) {
 	// First entry should be .create
 	if dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		if entry.Name != ".create" {
+		if entry.Name != DirCreate {
 			t.Errorf("Expected first entry to be .create, got %q", entry.Name)
 		}
 	} else {

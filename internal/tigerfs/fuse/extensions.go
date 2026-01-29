@@ -14,22 +14,22 @@ import (
 // Only types where extensions provide meaningful value are included.
 var extensionMap = map[string]string{
 	// Text types → .txt
-	"text":              ".txt",
-	"character varying": ".txt",
-	"varchar":           ".txt",
-	"character":         ".txt",
-	"char":              ".txt",
-	"bpchar":            ".txt", // blank-padded char (internal name)
+	"text":              ExtTxt,
+	"character varying": ExtTxt,
+	"varchar":           ExtTxt,
+	"character":         ExtTxt,
+	"char":              ExtTxt,
+	"bpchar":            ExtTxt, // blank-padded char (internal name)
 
 	// JSON types → .json
-	"json":  ".json",
-	"jsonb": ".json",
+	"json":  ExtJSON,
+	"jsonb": ExtJSON,
 
 	// XML → .xml
 	"xml": ".xml",
 
 	// Binary → .bin
-	"bytea": ".bin",
+	"bytea": ExtBin,
 
 	// PostGIS geometry types → .wkb (hex-encoded Well-Known Binary)
 	"geometry":  ".wkb",
@@ -94,7 +94,7 @@ func AddExtensionToColumn(columnName, dataType string) string {
 // Returns the column name without extension and whether an extension was stripped.
 func StripExtension(filename string) (columnName string, hadExtension bool) {
 	// Check each known extension
-	knownExtensions := []string{".txt", ".json", ".xml", ".bin", ".wkb"}
+	knownExtensions := []string{ExtTxt, ExtJSON, ".xml", ExtBin, ".wkb"}
 	for _, ext := range knownExtensions {
 		if strings.HasSuffix(filename, ext) {
 			return strings.TrimSuffix(filename, ext), true

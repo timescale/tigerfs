@@ -134,11 +134,11 @@ func TestAllRowsNode_Readdir_WithMock(t *testing.T) {
 	hasCount := false
 	for _, name := range entries {
 		switch name {
-		case ".columns":
+		case FileColumns:
 			hasColumns = true
-		case ".schema":
+		case FileSchema:
 			hasSchema = true
-		case ".count":
+		case FileCount:
 			hasCount = true
 		}
 	}

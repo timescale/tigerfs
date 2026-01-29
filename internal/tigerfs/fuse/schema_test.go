@@ -144,8 +144,8 @@ func TestSchemaNode_Readdir(t *testing.T) {
 
 	// Verify .create and .delete are present, plus all tables
 	expectedNames := make(map[string]bool)
-	expectedNames[".create"] = true
-	expectedNames[".delete"] = true
+	expectedNames[DirCreate] = true
+	expectedNames[DirDelete] = true
 	for _, table := range tables {
 		expectedNames[table] = true
 	}
@@ -195,7 +195,7 @@ func TestSchemaNode_Readdir_Empty(t *testing.T) {
 	}
 
 	// Verify .create and .delete are present
-	expectedNames := map[string]bool{".create": true, ".delete": true}
+	expectedNames := map[string]bool{DirCreate: true, DirDelete: true}
 	for _, entry := range entries {
 		if !expectedNames[entry.Name] {
 			t.Errorf("Unexpected entry: %q", entry.Name)
@@ -318,7 +318,7 @@ func TestSchemaNode_Lookup_CreateDir(t *testing.T) {
 	foundCreate := false
 	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		if entry.Name == ".create" {
+		if entry.Name == DirCreate {
 			foundCreate = true
 			if entry.Mode != syscall.S_IFDIR {
 				t.Errorf("Expected .create to be directory, got mode 0x%x", entry.Mode)
@@ -345,7 +345,7 @@ func TestSchemaNode_Lookup_DeleteDir(t *testing.T) {
 	foundDelete := false
 	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		if entry.Name == ".delete" {
+		if entry.Name == DirDelete {
 			foundDelete = true
 			if entry.Mode != syscall.S_IFDIR {
 				t.Errorf("Expected .delete to be directory, got mode 0x%x", entry.Mode)

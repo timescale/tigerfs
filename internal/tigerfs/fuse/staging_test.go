@@ -139,7 +139,7 @@ func TestStagingTracker_ListPending(t *testing.T) {
 	tracker := NewStagingTracker()
 
 	// Empty tracker
-	if len(tracker.ListPending(".create")) != 0 {
+	if len(tracker.ListPending(DirCreate)) != 0 {
 		t.Error("Expected empty list for empty tracker")
 	}
 
@@ -149,7 +149,7 @@ func TestStagingTracker_ListPending(t *testing.T) {
 	tracker.Set(".modify/products", "ALTER TABLE products...")
 
 	// List .create entries
-	createEntries := tracker.ListPending(".create")
+	createEntries := tracker.ListPending(DirCreate)
 	if len(createEntries) != 2 {
 		t.Errorf("Expected 2 create entries, got %d", len(createEntries))
 	}
@@ -164,7 +164,7 @@ func TestStagingTracker_ListPending(t *testing.T) {
 	}
 
 	// List .modify entries
-	modifyEntries := tracker.ListPending(".modify")
+	modifyEntries := tracker.ListPending(DirModify)
 	if len(modifyEntries) != 1 || modifyEntries[0] != "products" {
 		t.Errorf("Expected [products], got %v", modifyEntries)
 	}

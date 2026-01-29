@@ -87,7 +87,7 @@ func (n *IndexesNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 
 	// Start with .create directory
 	entries := []fuse.DirEntry{
-		{Name: ".create", Mode: syscall.S_IFDIR},
+		{Name: DirCreate, Mode: syscall.S_IFDIR},
 	}
 
 	// Get all indexes for this table
@@ -121,7 +121,7 @@ func (n *IndexesNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 		zap.String("name", name))
 
 	// Handle .create directory
-	if name == ".create" {
+	if name == DirCreate {
 		return n.lookupCreateDirectory(ctx, out)
 	}
 
@@ -251,8 +251,8 @@ func (n *IndexDDLNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		zap.String("index", n.index.Name))
 
 	entries := []fuse.DirEntry{
-		{Name: ".delete", Mode: syscall.S_IFDIR},
-		{Name: ".schema", Mode: syscall.S_IFREG}, // Shows CREATE INDEX DDL
+		{Name: DirDelete, Mode: syscall.S_IFDIR},
+		{Name: FileSchema, Mode: syscall.S_IFREG}, // Shows CREATE INDEX DDL
 	}
 
 	return fs.NewListDirStream(entries), 0
@@ -265,9 +265,9 @@ func (n *IndexDDLNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		zap.String("name", name))
 
 	switch name {
-	case ".delete":
+	case DirDelete:
 		return n.lookupDeleteDirectory(ctx, out)
-	case ".schema":
+	case FileSchema:
 		return n.lookupSchemaFile(ctx, out)
 	default:
 		return nil, syscall.ENOENT

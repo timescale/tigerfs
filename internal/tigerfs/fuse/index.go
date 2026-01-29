@@ -116,8 +116,8 @@ func (n *IndexNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Start with pagination directories
 	entries := make([]fuse.DirEntry, 0, len(values)+2)
 	entries = append(entries,
-		fuse.DirEntry{Name: ".first", Mode: syscall.S_IFDIR},
-		fuse.DirEntry{Name: ".last", Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
 	)
 
 	// Each value is shown as a directory (can navigate into it)
@@ -149,7 +149,7 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("value", name))
 
 	// Handle pagination directories
-	if name == ".first" || name == ".last" {
+	if name == DirFirst || name == DirLast {
 		return n.lookupPagination(ctx, name)
 	}
 
@@ -203,7 +203,7 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 // lookupPagination handles .first and .last directory lookups within an index.
 func (n *IndexNode) lookupPagination(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
 	var paginationType PaginationType
-	if name == ".first" {
+	if name == DirFirst {
 		paginationType = PaginationFirst
 	} else {
 		paginationType = PaginationLast
@@ -314,8 +314,8 @@ func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	// Start with pagination directories
 	entries := make([]fuse.DirEntry, 0, len(n.matchingPKs)+2)
 	entries = append(entries,
-		fuse.DirEntry{Name: ".first", Mode: syscall.S_IFDIR},
-		fuse.DirEntry{Name: ".last", Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
 	)
 
 	// Add matching PKs as files
@@ -339,7 +339,7 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		zap.String("name", name))
 
 	// Handle pagination directories
-	if name == ".first" || name == ".last" {
+	if name == DirFirst || name == DirLast {
 		return n.lookupPagination(ctx, name)
 	}
 
@@ -391,7 +391,7 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 // lookupPagination handles .first and .last directory lookups within an index value.
 func (n *IndexValueNode) lookupPagination(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
 	var paginationType PaginationType
-	if name == ".first" {
+	if name == DirFirst {
 		paginationType = PaginationFirst
 	} else {
 		paginationType = PaginationLast

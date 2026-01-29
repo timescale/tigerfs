@@ -62,7 +62,7 @@ func TestIndexesNode_Readdir(t *testing.T) {
 	}
 
 	// Should have .create plus 2 indexes
-	expected := map[string]bool{".create": true, "users_email_idx": true, "users_name_idx": true}
+	expected := map[string]bool{DirCreate: true, "users_email_idx": true, "users_name_idx": true}
 	for _, e := range entries {
 		if !expected[e] {
 			t.Errorf("Unexpected entry: %q", e)
@@ -98,8 +98,8 @@ func TestIndexesNode_Readdir_Empty(t *testing.T) {
 	}
 
 	// Should still have .create even with no indexes
-	if len(entries) != 1 || entries[0] != ".create" {
-		t.Errorf("Expected [.create], got %v", entries)
+	if len(entries) != 1 || entries[0] != DirCreate {
+		t.Errorf("Expected [%s], got %v", DirCreate, entries)
 	}
 }
 
@@ -310,7 +310,7 @@ func TestIndexDDLNode_Readdir(t *testing.T) {
 	}
 
 	// Should have .delete and .schema
-	expected := map[string]bool{".delete": true, ".schema": true}
+	expected := map[string]bool{DirDelete: true, FileSchema: true}
 	for _, e := range entries {
 		if !expected[e] {
 			t.Errorf("Unexpected entry: %q", e)

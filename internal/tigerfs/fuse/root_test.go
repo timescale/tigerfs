@@ -163,8 +163,8 @@ func TestRootNode_Readdir(t *testing.T) {
 	for _, table := range tables {
 		expectedNames[table] = true
 	}
-	expectedNames[".schemas"] = true
-	expectedNames[".create"] = true
+	expectedNames[DirSchemas] = true
+	expectedNames[DirCreate] = true
 
 	for _, entry := range entries {
 		if !expectedNames[entry.Name] {
@@ -204,7 +204,7 @@ func TestRootNode_Readdir_EmptyDatabase(t *testing.T) {
 	}
 
 	// Verify both .create and .schemas are present
-	expectedNames := map[string]bool{".create": true, ".schemas": true}
+	expectedNames := map[string]bool{DirCreate: true, DirSchemas: true}
 	for _, entry := range entries {
 		if !expectedNames[entry.Name] {
 			t.Errorf("Unexpected entry: %q", entry.Name)
@@ -405,7 +405,7 @@ func TestRootNode_Readdir_IncludesSchemasDir(t *testing.T) {
 	// Find .schemas entry
 	foundSchemas := false
 	for _, entry := range entries {
-		if entry.Name == ".schemas" {
+		if entry.Name == DirSchemas {
 			foundSchemas = true
 			if entry.Mode != syscall.S_IFDIR {
 				t.Errorf("Expected .schemas to be directory, got mode 0x%x", entry.Mode)
@@ -437,7 +437,7 @@ func TestRootNode_Readdir_ControlDirsFirst(t *testing.T) {
 	}
 
 	entry, _ := dirStream.Next()
-	if entry.Name != ".create" {
+	if entry.Name != DirCreate {
 		t.Errorf("Expected first entry to be .create, got %q", entry.Name)
 	}
 
@@ -447,7 +447,7 @@ func TestRootNode_Readdir_ControlDirsFirst(t *testing.T) {
 	}
 
 	entry, _ = dirStream.Next()
-	if entry.Name != ".schemas" {
+	if entry.Name != DirSchemas {
 		t.Errorf("Expected second entry to be .schemas, got %q", entry.Name)
 	}
 }
@@ -500,7 +500,7 @@ func TestRootNode_Readdir_NoSchemasAtRoot(t *testing.T) {
 	// Verify no schema names appear at root (except public tables which are flattened)
 	for _, entry := range entries {
 		// .schemas is allowed
-		if entry.Name == ".schemas" {
+		if entry.Name == DirSchemas {
 			continue
 		}
 		// Schema names should not appear at root
@@ -534,7 +534,7 @@ func TestRootNode_Readdir_IncludesCreateDir(t *testing.T) {
 	// Find .create entry
 	foundCreate := false
 	for _, entry := range entries {
-		if entry.Name == ".create" {
+		if entry.Name == DirCreate {
 			foundCreate = true
 			if entry.Mode != syscall.S_IFDIR {
 				t.Errorf("Expected .create to be directory, got mode 0x%x", entry.Mode)
@@ -562,7 +562,7 @@ func TestRootNode_Lookup_CreateDir(t *testing.T) {
 	foundCreate := false
 	for dirStream.HasNext() {
 		entry, _ := dirStream.Next()
-		if entry.Name == ".create" {
+		if entry.Name == DirCreate {
 			foundCreate = true
 			break
 		}
@@ -579,7 +579,7 @@ func TestRootNode_CreateWorkflow(t *testing.T) {
 	staging := root.staging
 
 	// Verify no pending creations initially
-	pending := staging.ListPending(".create")
+	pending := staging.ListPending(DirCreate)
 	if len(pending) != 0 {
 		t.Errorf("Expected no pending creations, got %d", len(pending))
 	}
@@ -595,7 +595,7 @@ func TestRootNode_CreateWorkflow(t *testing.T) {
 	}
 
 	// Verify it appears in ListPending
-	pending = staging.ListPending(".create")
+	pending = staging.ListPending(DirCreate)
 	found := false
 	for _, name := range pending {
 		if name == "orders" {

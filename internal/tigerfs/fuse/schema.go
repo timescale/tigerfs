@@ -80,13 +80,13 @@ func (s *SchemaNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 
 	// Add .create directory for creating new tables in this schema
 	entries = append(entries, fuse.DirEntry{
-		Name: ".create",
+		Name: DirCreate,
 		Mode: syscall.S_IFDIR,
 	})
 
 	// Add .delete directory for deleting this schema
 	entries = append(entries, fuse.DirEntry{
-		Name: ".delete",
+		Name: DirDelete,
 		Mode: syscall.S_IFDIR,
 	})
 
@@ -117,11 +117,11 @@ func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	// Handle .create directory for creating new tables in this schema
-	if name == ".create" {
+	if name == DirCreate {
 		logging.Debug("Looking up .create directory for tables",
 			zap.String("schema", s.schema))
 
-		pathPrefix := ".schemas/" + s.schema + "/.create"
+		pathPrefix := DirSchemas + "/" + s.schema + "/" + DirCreate
 		createNode := NewCreateDirNode(
 			s.cfg,
 			s.db, // db.DDLExecutor
@@ -137,7 +137,7 @@ func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 
 	// Handle .delete directory for deleting this schema
-	if name == ".delete" {
+	if name == DirDelete {
 		logging.Debug("Looking up .delete directory for schema",
 			zap.String("schema", s.schema))
 

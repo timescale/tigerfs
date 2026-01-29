@@ -75,7 +75,7 @@ func (s *SchemasNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 
 	// Add .create directory first
 	entries = append(entries, fuse.DirEntry{
-		Name: ".create",
+		Name: DirCreate,
 		Mode: syscall.S_IFDIR,
 	})
 
@@ -99,7 +99,7 @@ func (s *SchemasNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	logging.Debug("SchemasNode.Lookup called", zap.String("name", name))
 
 	// Handle .create directory for creating new schemas
-	if name == ".create" {
+	if name == DirCreate {
 		logging.Debug("Looking up .create directory for schemas")
 
 		stableAttr := fs.StableAttr{
@@ -111,10 +111,10 @@ func (s *SchemasNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 			s.db, // db.DDLExecutor
 			s.cache,
 			s.staging,
-			"schema",           // objectType
-			"",                 // schema (not applicable for schema creation)
-			"",                 // tableName (not applicable)
-			".schemas/.create", // pathPrefix for staging
+			"schema",                 // objectType
+			"",                       // schema (not applicable for schema creation)
+			"",                       // tableName (not applicable)
+			DirSchemas+"/"+DirCreate, // pathPrefix for staging
 		)
 		child := s.NewPersistentInode(ctx, createNode, stableAttr)
 		return child, 0

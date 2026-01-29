@@ -298,7 +298,7 @@ func TestIndexNode_Readdir_WithMock(t *testing.T) {
 	for _, e := range entries {
 		valueSet[e] = true
 	}
-	for _, expected := range []string{"active", "pending", "inactive", "deleted", ".first", ".last"} {
+	for _, expected := range []string{"active", "pending", "inactive", "deleted", DirFirst, DirLast} {
 		if !valueSet[expected] {
 			t.Errorf("Expected entry %q not found", expected)
 		}
@@ -388,7 +388,7 @@ func TestIndexValueNode_Readdir_WithMock(t *testing.T) {
 	}
 
 	// Verify PKs and pagination are present
-	expected := map[string]bool{"5": true, "12": true, "27": true, "103": true, ".first": true, ".last": true}
+	expected := map[string]bool{"5": true, "12": true, "27": true, "103": true, DirFirst: true, DirLast: true}
 	for _, name := range entries {
 		if !expected[name] {
 			t.Errorf("Unexpected entry: %s", name)
