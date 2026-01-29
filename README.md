@@ -164,8 +164,7 @@ TigerFS provides multiple ways to access and explore your data beyond simple pri
 Access any row as a file with different formats:
 
 ```bash
-cat /mnt/db/users/123         # TSV (default)
-cat /mnt/db/users/123.tsv     # TSV (explicit)
+cat /mnt/db/users/123.tsv     # TSV
 cat /mnt/db/users/123.json    # JSON
 cat /mnt/db/users/123.csv     # CSV
 cat /mnt/db/users/123.yaml    # YAML
