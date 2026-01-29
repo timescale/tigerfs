@@ -258,6 +258,14 @@ type ColumnFileHandle struct {
 var _ fs.FileReader = (*ColumnFileHandle)(nil)
 var _ fs.FileWriter = (*ColumnFileHandle)(nil)
 var _ fs.FileFlusher = (*ColumnFileHandle)(nil)
+var _ fs.FileFsyncer = (*ColumnFileHandle)(nil)
+
+// Fsync is a no-op since data is persisted on Flush.
+// This is needed because editors like vi call fsync after writing.
+func (fh *ColumnFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	logging.Debug("ColumnFileHandle.Fsync called")
+	return 0
+}
 
 // Read reads column data from the file
 func (fh *ColumnFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

@@ -233,6 +233,14 @@ type RowFileHandle struct {
 var _ fs.FileReader = (*RowFileHandle)(nil)
 var _ fs.FileWriter = (*RowFileHandle)(nil)
 var _ fs.FileFlusher = (*RowFileHandle)(nil)
+var _ fs.FileFsyncer = (*RowFileHandle)(nil)
+
+// Fsync is a no-op since data is persisted on Flush.
+// This is needed because editors like vi call fsync after writing.
+func (fh *RowFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	logging.Debug("RowFileHandle.Fsync called")
+	return 0
+}
 
 // Read reads row data from the file
 func (fh *RowFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

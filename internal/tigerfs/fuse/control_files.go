@@ -256,6 +256,14 @@ type SchemaFileHandle struct {
 
 var _ fs.FileReader = (*SchemaFileHandle)(nil)
 var _ fs.FileWriter = (*SchemaFileHandle)(nil)
+var _ fs.FileFsyncer = (*SchemaFileHandle)(nil)
+
+// Fsync is a no-op since data is already stored in the staging tracker.
+// This is needed because editors like vi call fsync after writing.
+func (fh *SchemaFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	logging.Debug("SchemaFileHandle.Fsync called")
+	return 0
+}
 
 // Read reads from the .sql file.
 func (fh *SchemaFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
