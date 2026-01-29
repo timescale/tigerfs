@@ -212,6 +212,49 @@ func TestCommitFileNode_runCommit_Success(t *testing.T) {
 	}
 }
 
+// TestCommitFileNode_runCommit_Idempotent tests that double-commit is handled gracefully.
+// This simulates `touch .commit` which may trigger both Open and Setattr.
+func TestCommitFileNode_runCommit_Idempotent(t *testing.T) {
+	ctx := context.Background()
+	staging := NewStagingTracker()
+	stagingPath := ".create/users"
+
+	// Set up staged DDL content
+	staging.Set(stagingPath, "CREATE TABLE users (id SERIAL PRIMARY KEY);")
+
+	execCount := 0
+	mockDB := &db.MockDDLExecutor{
+		ExecFunc: func(ctx context.Context, sql string, args ...interface{}) error {
+			execCount++
+			return nil
+		},
+	}
+	stagingCtx := StagingContext{
+		StagingPath: stagingPath,
+		Operation:   DDLCreate,
+		ObjectType:  "table",
+		ObjectName:  "users",
+	}
+
+	// First commit should succeed
+	err := runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Errorf("First commit: expected success, got error: %v", err)
+	}
+	if execCount != 1 {
+		t.Errorf("Expected DDL to be executed once, got %d", execCount)
+	}
+
+	// Second commit should be a no-op (staging entry was deleted)
+	err = runCommitWithExecutor(ctx, mockDB, staging, nil, stagingCtx)
+	if err != nil {
+		t.Errorf("Second commit: expected no-op success, got error: %v", err)
+	}
+	if execCount != 1 {
+		t.Errorf("Expected DDL execution count to remain 1, got %d", execCount)
+	}
+}
+
 // TestCommitFileNode_runCommit_ExecutionFails tests that execution errors preserve staging.
 func TestCommitFileNode_runCommit_ExecutionFails(t *testing.T) {
 	ctx := context.Background()
@@ -253,10 +296,14 @@ func TestCommitFileNode_runCommit_ExecutionFails(t *testing.T) {
 }
 
 // TestCommitFileNode_runCommit_NoContent tests that missing content is handled.
+// Simulates: mkdir .create/users && touch .commit (without writing DDL)
 func TestCommitFileNode_runCommit_NoContent(t *testing.T) {
 	ctx := context.Background()
 	staging := NewStagingTracker()
 	stagingPath := ".create/users"
+
+	// Create staging entry (simulates mkdir .create/users)
+	staging.GetOrCreate(stagingPath)
 
 	mockDB := &db.MockDDLExecutor{}
 	stagingCtx := StagingContext{
@@ -416,6 +463,13 @@ func runTestWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *
 // runCommitWithExecutor extracts the commit logic from CommitFileNode.runCommit for unit testing.
 // This allows testing the core DDL execution logic without FUSE dependencies.
 func runCommitWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *StagingTracker, cache *MetadataCache, stagingCtx StagingContext) error {
+	// Check if staging entry exists - be idempotent
+	// (touch may trigger both Open and Setattr, causing double execution)
+	entry := staging.Get(stagingCtx.StagingPath)
+	if entry == nil {
+		return nil
+	}
+
 	// Check if there's content to commit
 	if !staging.HasContent(stagingCtx.StagingPath) {
 		return errors.New("no DDL content to commit. Write DDL to sql first")

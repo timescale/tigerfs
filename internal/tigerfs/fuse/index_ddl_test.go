@@ -264,7 +264,7 @@ func TestIndexCreateDirNode_GenerateTemplate_ColumnInference_WithTableNameColumn
 	mock.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
 		return []db.Column{
 			{Name: "id", DataType: "integer"},
-			{Name: "users", DataType: "integer"},  // column same as table name!
+			{Name: "users", DataType: "integer"}, // column same as table name!
 			{Name: "email", DataType: "text"},
 		}, nil
 	}

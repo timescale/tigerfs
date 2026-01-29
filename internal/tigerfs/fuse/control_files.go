@@ -524,22 +524,15 @@ func (c *CommitFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 	return 0
 }
 
-// Open opens the .commit file. If opened for writing, executes DDL.
+// Open opens the .commit file.
+// This is a trigger-only file - commit is triggered via touch (Setattr), not Open.
 func (c *CommitFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	logging.Debug("CommitFileNode.Open called",
 		zap.String("path", c.ctx.StagingPath),
 		zap.Uint32("flags", flags))
 
-	// If opened for writing, trigger commit
-	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-		if err := c.runCommit(ctx); err != nil {
-			logging.Error("DDL commit failed",
-				zap.String("path", c.ctx.StagingPath),
-				zap.Error(err))
-			return nil, 0, syscall.EIO
-		}
-	}
-
+	// Return nil file handle - this is a trigger-only file
+	// Commit is triggered via Setattr (touch), not Open
 	return nil, 0, 0
 }
 
@@ -566,7 +559,17 @@ func (c *CommitFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse
 }
 
 // runCommit executes the DDL.
+// Idempotent: returns nil if staging entry doesn't exist (already committed or aborted).
 func (c *CommitFileNode) runCommit(ctx context.Context) error {
+	// Check if staging entry exists - be idempotent
+	// (touch may trigger both Open and Setattr, causing double execution)
+	entry := c.staging.Get(c.ctx.StagingPath)
+	if entry == nil {
+		logging.Debug("Commit called but no staging entry exists (already committed/aborted)",
+			zap.String("path", c.ctx.StagingPath))
+		return nil
+	}
+
 	// Check if there's content to commit
 	if !c.staging.HasContent(c.ctx.StagingPath) {
 		return fmt.Errorf("no DDL content to commit. Write DDL to sql first")
@@ -637,17 +640,15 @@ func (a *AbortFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse
 	return 0
 }
 
-// Open opens the .abort file. If opened for writing, clears staging.
+// Open opens the .abort file.
+// This is a trigger-only file - abort is triggered via touch (Setattr), not Open.
 func (a *AbortFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	logging.Debug("AbortFileNode.Open called",
 		zap.String("path", a.ctx.StagingPath),
 		zap.Uint32("flags", flags))
 
-	// If opened for writing, trigger abort
-	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
-		a.runAbort()
-	}
-
+	// Return nil file handle - this is a trigger-only file
+	// Abort is triggered via Setattr (touch), not Open
 	return nil, 0, 0
 }
 
@@ -669,7 +670,16 @@ func (a *AbortFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.
 }
 
 // runAbort clears the staging entry.
+// Idempotent: no-op if staging entry doesn't exist (already aborted or committed).
 func (a *AbortFileNode) runAbort() {
+	// Check if staging entry exists - be idempotent
+	entry := a.staging.Get(a.ctx.StagingPath)
+	if entry == nil {
+		logging.Debug("Abort called but no staging entry exists (already aborted/committed)",
+			zap.String("path", a.ctx.StagingPath))
+		return
+	}
+
 	a.staging.Delete(a.ctx.StagingPath)
 
 	logging.Warn("DDL staging aborted",
