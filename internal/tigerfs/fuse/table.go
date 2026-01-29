@@ -124,8 +124,13 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Convert rows to directory entries
 	entries := make([]fuse.DirEntry, 0, len(rows)+len(singleIndexes)+len(compositeIndexes)+3)
 
-	// Add metadata files first
+	// Add metadata directory and files first
 	entries = append(entries,
+		fuse.DirEntry{
+			Name: DirInfo,
+			Mode: syscall.S_IFDIR,
+		},
+		// Legacy metadata paths (for backward compatibility, removed in Task 4.26)
 		fuse.DirEntry{
 			Name: FileColumns,
 			Mode: syscall.S_IFREG,
@@ -222,7 +227,12 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("table", t.tableName),
 		zap.String("name", name))
 
-	// Check if this is a metadata file lookup
+	// Check if this is the .info metadata directory
+	if name == DirInfo {
+		return t.lookupInfoDirectory(ctx)
+	}
+
+	// Check if this is a legacy metadata file lookup (for backward compatibility)
 	if name == FileColumns || name == FileSchema || name == FileDDL || name == FileCount {
 		return t.lookupMetadataFile(ctx, name, out)
 	}
@@ -804,6 +814,26 @@ func (t *TableNode) lookupDeleteDirectory(ctx context.Context) (*fs.Inode, sysca
 	child := t.NewPersistentInode(ctx, deleteNode, stableAttr)
 
 	logging.Debug("Created .delete directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
+// lookupInfoDirectory handles lookup for the .info metadata directory.
+func (t *TableNode) lookupInfoDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .info directory",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	infoNode := NewInfoDirNode(t.cfg, t.db, t.schema, t.tableName)
+	child := t.NewPersistentInode(ctx, infoNode, stableAttr)
+
+	logging.Debug("Created .info directory node",
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 
