@@ -85,6 +85,11 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.20 | Implement .ddl Extended Schema File | 2936 |
 | ✅ | 4.21 | Implement .indexes Metadata File | 3023 |
 | ✅ | 4.22 | Add Pagination to Index Navigation | 3076 |
+| ⬜ | 4.23 | Centralize Path and Format Constants | 3142 |
+| ⬜ | 4.24 | Implement .info/ Metadata Subdirectory | 3283 |
+| ⬜ | 4.25 | Implement .by/ Index Navigation | 3337 |
+| ⬜ | 4.26 | Remove Legacy Metadata and Index Paths | 3391 |
+| ⬜ | 4.27 | Implement .order/<column>/ Capability | 3437 |
 
 ---
 
@@ -92,16 +97,19 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ✅ | 5.1 | Implement Core Staging Infrastructure | 3156 |
-| ✅ | 5.2 | Implement Template Generation Framework | 3251 |
-| ✅ | 5.3 | Implement Schema Create/Delete Operations | 3387 |
-| ✅ | 5.4 | Implement Index Create/Delete Operations | 3447 |
-| ✅ | 5.5 | Implement Table Create Operations | 3507 |
-| ✅ | 5.6 | Implement Table Modify Operations | 3567 |
-| ✅ | 5.7 | Implement Table Delete Operations | 3611 |
-| ⬜ | 5.8 | Implement View Create/Delete Operations | 3656 |
-| ⬜ | 5.9 | Integration Tests for DDL Operations | 3717 |
-| ⬜ | 5.10 | Documentation for DDL Operations | 3758 |
+| ✅ | 5.1 | Implement Core Staging Infrastructure | 3505 |
+| ✅ | 5.2 | Implement Template Generation Framework | 3600 |
+| ✅ | 5.3 | Implement Schema Create/Delete Operations | 3736 |
+| ✅ | 5.4 | Implement Index Create/Delete Operations | 3796 |
+| ✅ | 5.5 | Implement Table Create Operations | 3856 |
+| ✅ | 5.6 | Implement Table Modify Operations | 3916 |
+| ✅ | 5.7 | Implement Table Delete Operations | 3960 |
+| ⬜ | 5.8 | Implement View Create/Delete Operations | 4005 |
+| ⬜ | 5.9 | Integration Tests for DDL Operations | 4066 |
+| ⬜ | 5.10 | Documentation for DDL Operations | 4107 |
+| ⬜ | 5.11 | Implement .export/ Bulk Read Capability | 4147 |
+| ⬜ | 5.12 | Implement .import/ Bulk Write Capability | 4225 |
+| ⬜ | 5.13 | Require Headers for CSV/TSV Writes | 4335 |
 
 ---
 
@@ -109,15 +117,15 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1 | Create Unix Install Script | 3800 |
-| ⬜ | 6.2 | Create Windows Install Script | 3842 |
-| ⬜ | 6.3 | Finalize GoReleaser Configuration | 3881 |
-| ⬜ | 6.4 | Test Release Workflow | 3924 |
-| ⬜ | 6.5 | Daemon Mode Support | 3970 |
-| ⬜ | 6.6 | Write Documentation | 4039 |
-| ⬜ | 6.7 | Performance Testing | 4086 |
-| ⬜ | 6.8 | Bug Fixes and Polish | 4125 |
-| ⬜ | 6.9 | Final Testing and v0.1 Release | 4158 |
+| ⬜ | 6.1 | Create Unix Install Script | 4400 |
+| ⬜ | 6.2 | Create Windows Install Script | 4442 |
+| ⬜ | 6.3 | Finalize GoReleaser Configuration | 4481 |
+| ⬜ | 6.4 | Test Release Workflow | 4524 |
+| ⬜ | 6.5 | Daemon Mode Support | 4570 |
+| ⬜ | 6.6 | Write Documentation | 4639 |
+| ⬜ | 6.7 | Performance Testing | 4686 |
+| ⬜ | 6.8 | Bug Fixes and Polish | 4725 |
+| ⬜ | 6.9 | Final Testing and v0.1 Release | 4758 |
 
 ---
 
@@ -125,9 +133,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 7.1 | Implement Hybrid Metadata Caching | 4213 |
-| ⬜ | 7.2 | Evaluate Multi-User Mount Support (allow_other) | 4280 |
-| ⬜ | 7.3 | Row Timestamps from Database Columns (Optional) | 4318 |
+| ⬜ | 7.1 | Implement Hybrid Metadata Caching | 4813 |
+| ⬜ | 7.2 | Evaluate Multi-User Mount Support (allow_other) | 4880 |
+| ⬜ | 7.3 | Row Timestamps from Database Columns (Optional) | 4918 |
 
 ---
 
@@ -138,8 +146,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 18 | 22 | 82% |
-| Phase 5: DDL Operations | 7 | 10 | 70% |
+| Phase 4: Advanced Features | 18 | 27 | 67% |
+| Phase 5: DDL Operations | 7 | 13 | 54% |
 | Phase 6: Distribution | 0 | 9 | 0% |
 | Phase 7: Performance | 0 | 3 | 0% |
-| **Total** | **57** | **76** | **75%** |
+| **Total** | **57** | **84** | **68%** |

@@ -3139,6 +3139,355 @@ cat /mnt/db/orders/.user_id/1/.first/3/*.json  # Read them
 
 ---
 
+### Task 4.23: Centralize Path and Format Constants
+
+**Objective:** Create a single source of truth for all special path names, format extensions, and control file names used throughout the codebase.
+
+**Background:** The codebase has accumulated many hard-coded strings for special directories (`.indexes`, `.schemas`, `.views`, `.create`, `.modify`, `.delete`), metadata files (`.count`, `.ddl`, `.schema`, `.columns`), control files (`.sql`, `.test`, `.commit`, `.abort`), and format extensions (`.json`, `.csv`, `.tsv`, `.yaml`). Centralizing these enables single-point changes and reduces typo risk.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/constants.go` with organized constant groups:
+   ```go
+   // Metadata directory and files
+   const DirInfo = ".info"
+   const (
+       FileCount   = "count"
+       FileDDL     = "ddl"
+       FileSchema  = "schema"
+       FileColumns = "columns"
+   )
+
+   // Navigation capabilities
+   const (
+       DirBy     = ".by"
+       DirFirst  = ".first"
+       DirLast   = ".last"
+       DirSample = ".sample"
+       DirAll    = ".all"
+       DirOrder  = ".order"
+   )
+
+   // Bulk data capabilities
+   const (
+       DirExport    = ".export"
+       DirImport    = ".import"
+       DirOverwrite = ".overwrite"
+       DirSync      = ".sync"
+       DirAppend    = ".append"
+   )
+
+   // Schema-level directories
+   const (
+       DirSchemas = ".schemas"
+       DirViews   = ".views"
+   )
+
+   // DDL capabilities
+   const (
+       DirIndexes = ".indexes"
+       DirCreate  = ".create"
+       DirModify  = ".modify"
+       DirDelete  = ".delete"
+   )
+
+   // Control files (DDL staging)
+   const (
+       FileSQL     = ".sql"
+       FileTest    = ".test"
+       FileTestLog = ".test.log"
+       FileCommit  = ".commit"
+       FileAbort   = ".abort"
+   )
+
+   // Format extensions (with dot)
+   const (
+       ExtJSON = ".json"
+       ExtCSV  = ".csv"
+       ExtTSV  = ".tsv"
+       ExtYAML = ".yaml"
+       ExtTxt  = ".txt"
+       ExtBin  = ".bin"
+   )
+
+   // Format names (without dot, for directory entries)
+   const (
+       FmtJSON = "json"
+       FmtCSV  = "csv"
+       FmtTSV  = "tsv"
+       FmtYAML = "yaml"
+   )
+   ```
+
+2. Audit and refactor ALL existing code to use constants:
+   - `internal/tigerfs/fuse/*.go` - all FUSE node implementations
+   - `internal/tigerfs/fuse/*_test.go` - all FUSE tests
+   - `internal/tigerfs/db/*.go` - any path references
+   - `test/integration/*.go` - integration tests
+
+3. Search for hard-coded strings to ensure complete coverage:
+   ```bash
+   grep -r '"\\.indexes"' internal/
+   grep -r '"\\.schemas"' internal/
+   grep -r '"\\.views"' internal/
+   grep -r '"\\.create"' internal/
+   grep -r '"\\.modify"' internal/
+   grep -r '"\\.delete"' internal/
+   grep -r '"\\.sql"' internal/
+   grep -r '"\\.test"' internal/
+   grep -r '"\\.commit"' internal/
+   grep -r '"\\.abort"' internal/
+   grep -r '"\\.first"' internal/
+   grep -r '"\\.last"' internal/
+   grep -r '"\\.sample"' internal/
+   grep -r '"\\.all"' internal/
+   grep -r '"\\.count"' internal/
+   grep -r '"\\.ddl"' internal/
+   grep -r '"\\.schema"' internal/
+   grep -r '"\\.columns"' internal/
+   grep -r '"\\.json"' internal/
+   grep -r '"\\.csv"' internal/
+   grep -r '"\\.tsv"' internal/
+   grep -r '"\\.yaml"' internal/
+   grep -r '"\\.txt"' internal/
+   grep -r '"\\.bin"' internal/
+   ```
+
+4. Update tests to use constants
+
+**Files to Create:**
+- `internal/tigerfs/fuse/constants.go`
+- `internal/tigerfs/fuse/constants_test.go` (optional, for validation)
+
+**Files to Modify:**
+- All files in `internal/tigerfs/fuse/` that reference special paths
+- All test files that reference special paths
+- `test/integration/*.go` as needed
+
+**Verification:**
+```bash
+go build ./...
+go test ./...
+
+# Verify no remaining hard-coded special paths (should return empty)
+grep -rE '"\.(indexes|schemas|views|create|modify|delete|sql|test|commit|abort|first|last|sample|all|count|ddl|schema|columns|json|csv|tsv|yaml|txt|bin)"' internal/ | grep -v constants.go
+```
+
+**Completion Criteria:**
+- All special paths defined in `constants.go`
+- No hard-coded special path strings remain in code (except `constants.go`)
+- All tests pass
+- Code compiles without errors
+
+---
+
+### Task 4.24: Implement `.info/` Metadata Subdirectory
+
+**Objective:** Move metadata files (`.count`, `.ddl`, `.schema`, `.columns`) under a `.info/` subdirectory.
+
+**Background:** See `docs/decisions/005-capability-directory-taxonomy.md` for full rationale. This separates metadata (nouns describing the table) from capabilities (verbs for actions).
+
+**New Structure:**
+```
+/mnt/db/users/
+├── .info/
+│   ├── count      # row count
+│   ├── ddl        # CREATE TABLE statement
+│   ├── schema     # column details
+│   └── columns    # column names (one per line)
+├── .first/
+├── .last/
+└── 1/             # row by PK
+```
+
+**Steps:**
+1. Create `InfoDirNode` in `internal/tigerfs/fuse/info.go`:
+   - Implement `Readdir()` to list: count, ddl, schema, columns
+   - Implement `Lookup()` to return appropriate file nodes
+   - Reuse existing metadata file implementations
+
+2. Update `TableNode.Lookup()` to handle `.info` directory
+3. Update `TableNode.Readdir()` to include `.info` in listing
+4. Update all tests to use new paths
+
+**Files to Create:**
+- `internal/tigerfs/fuse/info.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/table_test.go`
+- `test/integration/*.go` as needed
+
+**Verification:**
+```bash
+go test ./...
+# Mount and verify
+ls /mnt/db/users/.info/
+cat /mnt/db/users/.info/count
+cat /mnt/db/users/.info/ddl
+```
+
+**Completion Criteria:**
+- `.info/` directory appears in table listing
+- All four metadata files accessible under `.info/`
+- Old top-level metadata paths still work (temporary, removed in 4.26)
+- Tests pass
+
+---
+
+### Task 4.25: Implement `.by/` Index Navigation
+
+**Objective:** Move index-based navigation under a `.by/` subdirectory.
+
+**Background:** See `docs/decisions/005-capability-directory-taxonomy.md`. This prevents column names from colliding with reserved capability names.
+
+**New Structure:**
+```
+/mnt/db/users/
+├── .by/
+│   ├── email/           # single-column index
+│   │   └── foo@example.com/
+│   └── last_name.first_name/  # composite index
+│       └── Smith/
+│           └── John/
+├── .info/
+└── 1/
+```
+
+**Steps:**
+1. Create `ByDirNode` in `internal/tigerfs/fuse/by.go`:
+   - Implement `Readdir()` to list indexed columns (single + composite)
+   - Implement `Lookup()` to return `IndexNode` or `CompositeIndexNode`
+
+2. Update `TableNode.Lookup()` to handle `.by` directory
+3. Update `TableNode.Readdir()` to include `.by` in listing
+4. Update all tests to use new paths
+
+**Files to Create:**
+- `internal/tigerfs/fuse/by.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/index.go`
+- `internal/tigerfs/fuse/index_test.go`
+- `test/integration/*.go` as needed
+
+**Verification:**
+```bash
+go test ./...
+# Mount and verify
+ls /mnt/db/users/.by/
+ls /mnt/db/users/.by/email/
+cat /mnt/db/users/.by/email/foo@example.com.json
+```
+
+**Completion Criteria:**
+- `.by/` directory appears in table listing
+- All indexed columns accessible under `.by/`
+- Old top-level index paths still work (temporary, removed in 4.26)
+- Tests pass
+
+---
+
+### Task 4.26: Remove Legacy Metadata and Index Paths
+
+**Objective:** Remove backward-compatible aliases for old paths. This is a breaking change.
+
+**Background:** After 4.24 and 4.25, both old and new paths work. This task removes the old paths to clean up the codebase.
+
+**Paths to Remove:**
+- Table-level metadata: `.count`, `.ddl`, `.schema`, `.columns` (now under `.info/`)
+- Table-level index navigation: `.<column>/` patterns (now under `.by/`)
+
+**Steps:**
+1. Update `TableNode.Lookup()` to remove handling for legacy paths
+2. Update `TableNode.Readdir()` to remove legacy entries from listing
+3. Update all tests to use only new paths
+4. Update README.md and specs/spec.md to reflect new structure
+5. Search for any remaining references to old paths
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/table_test.go`
+- `test/integration/*.go`
+- `README.md`
+- `specs/spec.md`
+
+**Verification:**
+```bash
+go test ./...
+
+# Verify old paths no longer work
+ls /mnt/db/users/.count        # Should fail (ENOENT)
+ls /mnt/db/users/.email/       # Should fail (ENOENT)
+
+# Verify new paths work
+cat /mnt/db/users/.info/count
+ls /mnt/db/users/.by/email/
+```
+
+**Completion Criteria:**
+- Old metadata paths return ENOENT
+- Old index paths return ENOENT
+- New paths work correctly
+- Documentation updated
+- All tests pass
+
+---
+
+### Task 4.27: Implement `.order/<column>/` Capability
+
+**Objective:** Add row ordering capability for any collection context.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.order/<column>/` capability specifies row ordering. Direction is implicit: `.first` = ASC, `.last` = DESC.
+
+**Supported Paths:**
+```
+.order/created_at/.first/100/    # First 100 by created_at ASC
+.order/price/.last/50/           # Last 50 by price DESC (highest prices)
+.order/name/.first/10/.export/csv  # (future: with export)
+```
+
+**Steps:**
+1. Create `OrderDirNode` in `internal/tigerfs/fuse/order.go`:
+   - `Readdir()`: List all table columns as ordering options
+   - `Lookup()`: Return `OrderColumnNode` for valid column names
+
+2. Create `OrderColumnNode`:
+   - `Readdir()`: List `.first`, `.last` (and rows if no pagination)
+   - `Lookup()`: Handle `.first`, `.last`, and row access
+
+3. Update db queries to support ORDER BY with column parameter:
+   - `GetFirstNRowsOrdered(ctx, schema, table, pkColumn, orderColumn, limit)`
+   - `GetLastNRowsOrdered(ctx, schema, table, pkColumn, orderColumn, limit)`
+
+4. Update `TableNode` to include `.order` in listing and lookup
+
+**Files to Create:**
+- `internal/tigerfs/fuse/order.go`
+- `internal/tigerfs/fuse/order_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/db/rows.go` (or appropriate file for queries)
+
+**Verification:**
+```bash
+go test ./...
+# Mount and verify
+ls /mnt/db/events/.order/
+ls /mnt/db/events/.order/created_at/.first/10/
+ls /mnt/db/events/.order/created_at/.last/10/
+```
+
+**Completion Criteria:**
+- `.order/` directory lists all columns
+- `.order/<column>/.first/N/` returns rows ordered ASC
+- `.order/<column>/.last/N/` returns rows ordered DESC
+- Works with any column (not just indexed)
+- Tests pass
+
+---
+
 ## Phase 5: DDL Operations via Filesystem
 
 ### Overview
@@ -3792,6 +4141,257 @@ go test ./test/integration/... -v -run TestDDL
 - Spec documents full DDL behavior
 - Example scripts work
 - Documentation clear for both humans and scripts
+
+---
+
+### Task 5.11: Implement `.export/` Bulk Read Capability
+
+**Objective:** Add single-file materialization of table data in multiple formats.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.export/` capability provides bulk data export as csv, tsv, json, or yaml files.
+
+**Structure:**
+```
+/mnt/db/users/
+├── .export/
+│   ├── csv      # All rows as CSV
+│   ├── tsv      # All rows as TSV
+│   ├── json     # All rows as JSON array
+│   └── yaml     # All rows as multi-document YAML
+```
+
+**Composition:** `.export/` appears in any collection context:
+```
+users/.export/csv                           # Entire table
+users/.first/100/.export/json               # First 100 rows
+users/.order/created_at/.last/50/.export/csv  # Last 50 by date
+users/.by/status/active/.export/yaml        # All active users
+```
+
+**Steps:**
+1. Create `ExportDirNode` in `internal/tigerfs/fuse/export.go`:
+   - `Readdir()`: List format options (csv, tsv, json, yaml)
+   - `Lookup()`: Return `ExportFileNode` for each format
+
+2. Create `ExportFileNode`:
+   - `Read()`: Fetch rows from context, serialize to requested format
+   - `Getattr()`: Return file attributes (size may require full materialization or estimate)
+
+3. Implement bulk serialization in `internal/tigerfs/format/`:
+   - `RowsToCSV(columns []string, rows [][]interface{}) ([]byte, error)`
+   - `RowsToTSV(columns []string, rows [][]interface{}) ([]byte, error)`
+   - `RowsToJSON(columns []string, rows [][]interface{}) ([]byte, error)`
+   - `RowsToYAML(columns []string, rows [][]interface{}) ([]byte, error)`
+
+4. Add db method to fetch multiple rows:
+   - `GetRows(ctx, schema, table, pkColumn string, limit int) ([][]interface{}, error)`
+
+5. Enforce `DirListingLimit` for exports (error if exceeded, suggest pagination)
+
+6. Add `.export/` to `TableNode`, `PaginationNode`, `OrderColumnNode`, `IndexValueNode`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/export.go`
+- `internal/tigerfs/fuse/export_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/format/csv.go`
+- `internal/tigerfs/format/tsv.go`
+- `internal/tigerfs/format/json.go`
+- `internal/tigerfs/format/yaml.go`
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/pagination.go`
+- `internal/tigerfs/fuse/order.go`
+- `internal/tigerfs/fuse/index.go`
+
+**Verification:**
+```bash
+go test ./...
+# Mount and verify
+cat /mnt/db/users/.export/csv
+cat /mnt/db/users/.first/10/.export/json
+cat /mnt/db/users/.order/name/.first/5/.export/yaml
+```
+
+**Completion Criteria:**
+- All four formats work (csv, tsv, json, yaml)
+- Works at table level and with pagination/ordering
+- Enforces row limit with helpful error message
+- Empty tables return empty file (0 bytes for csv/tsv, `[]` for json, empty for yaml)
+- Tests pass
+
+---
+
+### Task 5.12: Implement `.import/` Bulk Write Capability
+
+**Objective:** Add bulk data import with explicit write modes.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.import/` capability provides three write modes with atomic transactions.
+
+**Structure:**
+```
+/mnt/db/users/
+├── .import/
+│   ├── .overwrite/    # Truncate + insert
+│   │   ├── csv
+│   │   ├── tsv
+│   │   ├── json
+│   │   └── yaml
+│   ├── .sync/         # Upsert (requires PK)
+│   │   ├── csv
+│   │   ├── tsv
+│   │   ├── json
+│   │   └── yaml
+│   └── .append/       # Insert only (fail on conflict)
+│       ├── csv
+│       ├── tsv
+│       ├── json
+│       └── yaml
+```
+
+**Usage:**
+```bash
+cat data.csv > /mnt/db/users/.import/.overwrite/csv
+cat updates.json > /mnt/db/users/.import/.sync/json
+cat new_rows.csv > /mnt/db/users/.import/.append/csv
+```
+
+**Steps:**
+1. Create `ImportDirNode` in `internal/tigerfs/fuse/import.go`:
+   - `Readdir()`: List modes (.overwrite, .sync, .append)
+   - `Lookup()`: Return `ImportModeNode`
+
+2. Create `ImportModeNode`:
+   - `Readdir()`: List formats (csv, tsv, json, yaml)
+   - `Lookup()`: Return `ImportFileNode`
+
+3. Create `ImportFileNode`:
+   - `Write()`: Buffer incoming data
+   - `Release()`: Parse format, execute import in transaction
+
+4. Implement import operations in `internal/tigerfs/db/`:
+   - `ImportOverwrite(ctx, schema, table, columns []string, rows [][]interface{}) error`
+     - BEGIN, TRUNCATE, INSERT all rows, COMMIT (or ROLLBACK on error)
+   - `ImportSync(ctx, schema, table, pkColumns []string, columns []string, rows [][]interface{}) error`
+     - BEGIN, UPSERT all rows (INSERT ... ON CONFLICT UPDATE), COMMIT
+     - Return error if table has no PK
+   - `ImportAppend(ctx, schema, table, columns []string, rows [][]interface{}) error`
+     - BEGIN, INSERT all rows (fail on conflict), COMMIT
+
+5. Implement bulk parsing in `internal/tigerfs/format/`:
+   - `ParseCSVBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+   - `ParseTSVBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+   - `ParseJSONBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+   - `ParseYAMLBulk(data []byte) (columns []string, rows [][]interface{}, error)`
+
+6. Add configuration option `DirWritingLimit` (default 100,000)
+
+7. Only allow `.import/` at table level (not in filtered views)
+
+**Files to Create:**
+- `internal/tigerfs/fuse/import.go`
+- `internal/tigerfs/fuse/import_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/client.go` (or new file for bulk operations)
+- `internal/tigerfs/format/csv.go`
+- `internal/tigerfs/format/tsv.go`
+- `internal/tigerfs/format/json.go`
+- `internal/tigerfs/format/yaml.go`
+- `internal/tigerfs/config/config.go` (add DirWritingLimit)
+- `internal/tigerfs/fuse/table.go`
+
+**Verification:**
+```bash
+go test ./...
+
+# Test overwrite
+echo 'id,name
+1,Alice
+2,Bob' > /mnt/db/users/.import/.overwrite/csv
+
+# Test sync (updates + inserts)
+echo '[{"id":1,"name":"Alice Updated"},{"id":3,"name":"Charlie"}]' > /mnt/db/users/.import/.sync/json
+
+# Test append (insert only)
+echo 'id,name
+4,David' > /mnt/db/users/.import/.append/csv
+
+# Verify .sync fails without PK
+# (create table without PK, attempt sync, expect error)
+```
+
+**Completion Criteria:**
+- All three modes work (.overwrite, .sync, .append)
+- All four formats work (csv, tsv, json, yaml)
+- Atomic transactions (all-or-nothing)
+- `.sync/` returns error for tables without PK
+- Enforces `DirWritingLimit`
+- Only available at table level
+- Tests pass
+
+---
+
+### Task 5.13: Require Headers for CSV/TSV Writes
+
+**Objective:** Make CSV and TSV writes self-describing by requiring header rows.
+
+**Background:** See `docs/decisions/006-bulk-export-capability.md`. This is a breaking change that makes all formats consistently self-describing.
+
+**Change:**
+```bash
+# Old (no longer supported):
+echo 'Alice,alice@example.com' > /mnt/db/users/123.csv
+
+# New (header required):
+echo 'name,email
+Alice,alice@example.com' > /mnt/db/users/123.csv
+```
+
+**Steps:**
+1. Update `ParseCSV()` in `internal/tigerfs/format/csv.go`:
+   - Require first row to be header
+   - Return error if no header row
+   - Map values to columns by header names
+
+2. Update `ParseTSV()` in `internal/tigerfs/format/tsv.go`:
+   - Same changes as CSV
+
+3. Update all tests that write CSV/TSV:
+   - Add header rows to test data
+   - Update expected error cases
+
+4. Update documentation:
+   - README.md examples
+   - specs/spec.md format documentation
+
+**Files to Modify:**
+- `internal/tigerfs/format/csv.go`
+- `internal/tigerfs/format/tsv.go`
+- `internal/tigerfs/format/csv_test.go`
+- `internal/tigerfs/format/tsv_test.go`
+- `internal/tigerfs/fuse/row_test.go`
+- `internal/tigerfs/fuse/column_file_test.go`
+- `test/integration/*.go`
+- `README.md`
+- `specs/spec.md`
+
+**Verification:**
+```bash
+go test ./...
+
+# Verify header required
+echo 'Alice,alice@example.com' > /mnt/db/users/123.csv  # Should fail
+echo 'name,email
+Alice,alice@example.com' > /mnt/db/users/123.csv  # Should work
+```
+
+**Completion Criteria:**
+- CSV writes require header row
+- TSV writes require header row
+- Clear error message when header missing
+- Documentation updated
+- All tests updated and pass
 
 ---
 
