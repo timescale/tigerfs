@@ -264,9 +264,10 @@ func GetDistinctValues(ctx context.Context, pool *pgxpool.Pool, schema, table, c
 		}
 		// Convert to string representation using format package
 		// This ensures timestamps use RFC3339 format that PostgreSQL can parse back
+		// and UUIDs are formatted correctly
 		str, err := format.ConvertValueToText(value)
 		if err != nil {
-			str = fmt.Sprintf("%v", value)
+			return nil, fmt.Errorf("failed to convert value: %w", err)
 		}
 		values = append(values, str)
 	}
@@ -329,7 +330,7 @@ func GetDistinctValuesOrdered(ctx context.Context, pool *pgxpool.Pool, schema, t
 		}
 		str, err := format.ConvertValueToText(value)
 		if err != nil {
-			str = fmt.Sprintf("%v", value)
+			return nil, fmt.Errorf("failed to convert value: %w", err)
 		}
 		values = append(values, str)
 	}
@@ -390,7 +391,11 @@ func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -451,7 +456,11 @@ func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema,
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -535,7 +544,7 @@ func GetDistinctValuesFiltered(ctx context.Context, pool *pgxpool.Pool, schema, 
 		// Convert to string representation using format package
 		str, err := format.ConvertValueToText(value)
 		if err != nil {
-			str = fmt.Sprintf("%v", value)
+			return nil, fmt.Errorf("failed to convert value: %w", err)
 		}
 		values = append(values, str)
 	}
@@ -623,7 +632,11 @@ func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, ta
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {

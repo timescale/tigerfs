@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -99,8 +100,12 @@ func ListRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn s
 			return nil, fmt.Errorf("failed to scan primary key value: %w", err)
 		}
 
-		// Convert PK value to string
-		pkStr := fmt.Sprintf("%v", pkValue)
+		// Convert PK value to string using format helper
+		// This properly handles UUID, numeric, and other PostgreSQL types
+		pkStr, err := format.ConvertValueToText(pkValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
 		pkValues = append(pkValues, pkStr)
 	}
 
@@ -159,8 +164,12 @@ func ListAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColum
 			return nil, fmt.Errorf("failed to scan primary key value: %w", err)
 		}
 
-		// Convert PK value to string
-		pkStr := fmt.Sprintf("%v", pkValue)
+		// Convert PK value to string using format helper
+		// This properly handles UUID, numeric, and other PostgreSQL types
+		pkStr, err := format.ConvertValueToText(pkValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
 		pkValues = append(pkValues, pkStr)
 	}
 

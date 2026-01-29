@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -240,8 +241,12 @@ func InsertRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, co
 		return "", fmt.Errorf("insert returned no values")
 	}
 
-	// Convert first value (PK) to string
-	pkValue := fmt.Sprintf("%v", returnedValues[0])
+	// Convert first value (PK) to string using format helper
+	// This properly handles UUID and other PostgreSQL types
+	pkValue, err := format.ConvertValueToText(returnedValues[0])
+	if err != nil {
+		return "", fmt.Errorf("failed to convert returned primary key: %w", err)
+	}
 
 	logging.Debug("Row inserted successfully",
 		zap.String("schema", schema),
@@ -396,7 +401,11 @@ func GetFirstNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkCol
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -453,7 +462,11 @@ func GetLastNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColu
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -539,7 +552,11 @@ func GetRandomSampleRows(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -599,7 +616,11 @@ func GetFirstNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -659,7 +680,11 @@ func GetLastNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		if err := rows.Scan(&pk); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pks = append(pks, fmt.Sprintf("%v", pk))
+		pkStr, err := format.ConvertValueToText(pk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+		}
+		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {

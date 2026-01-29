@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ConvertValueToText converts a PostgreSQL value to its text representation
@@ -58,6 +60,14 @@ func ConvertValueToText(value interface{}) (string, error) {
 			return "", fmt.Errorf("failed to marshal array: %w", err)
 		}
 		return string(data), nil
+
+	case [16]byte:
+		// UUID - pgx returns UUIDs as [16]byte arrays
+		u, err := uuid.FromBytes(v[:])
+		if err != nil {
+			return "", fmt.Errorf("failed to parse UUID bytes: %w", err)
+		}
+		return u.String(), nil
 
 	default:
 		// Check if the value implements fmt.Stringer (e.g., pgtype.UUID)

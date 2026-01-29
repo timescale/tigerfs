@@ -76,7 +76,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.11 | Implement Permission Mapping | 2466 |
 | ✅ | 4.12 | Implement File Sizes | 2508 |
 | ✅ | 4.13 | Implement Schema Flattening | 2531 |
-| ⬜ | 4.14 | Support Non-SERIAL Primary Keys | 2579 |
+| ✅ | 4.14 | Support Non-SERIAL Primary Keys | 2579 |
 | ⬜ | 4.15 | Support Tables Without Primary Keys | 2631 |
 | ⬜ | 4.16 | Support Database Views | 2684 |
 | ⬜ | 4.17 | Support TimescaleDB Hypertables | 2764 |
@@ -146,8 +146,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 21 | 27 | 78% |
+| Phase 4: Advanced Features | 22 | 27 | 81% |
 | Phase 5: DDL Operations | 7 | 13 | 54% |
 | Phase 6: Distribution | 0 | 9 | 0% |
 | Phase 7: Performance | 0 | 3 | 0% |
-| **Total** | **60** | **84** | **71%** |
+| **Total** | **61** | **84** | **73%** |
