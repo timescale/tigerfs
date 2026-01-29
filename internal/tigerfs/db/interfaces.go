@@ -156,7 +156,7 @@ type DDLReader interface {
 }
 
 // PaginationReader provides pagination query operations.
-// Used by .first/N, .last/N, and .sample/N navigation paths.
+// Used by .first/N, .last/N, .sample/N, and .order/<column>/ navigation paths.
 type PaginationReader interface {
 	// GetFirstNRows returns the first N primary key values ordered by PK ascending.
 	GetFirstNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
@@ -166,6 +166,12 @@ type PaginationReader interface {
 
 	// GetRandomSampleRows returns approximately N random primary key values.
 	GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error)
+
+	// GetFirstNRowsOrdered returns the first N primary key values ordered by a specified column ascending.
+	GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
+
+	// GetLastNRowsOrdered returns the last N primary key values ordered by a specified column descending.
+	GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
 }
 
 // DBClient is the composite interface combining all database capabilities.

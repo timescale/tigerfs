@@ -562,3 +562,123 @@ func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table, pkColum
 	}
 	return GetRandomSampleRows(ctx, c.pool, schema, table, pkColumn, limit, estimatedRows)
 }
+
+// GetFirstNRowsOrdered returns the first N primary key values ordered by a specified column ascending.
+// Used by .order/<column>/.first/N/ paths for custom ordering.
+//
+// Parameters:
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//   - pkColumn: Primary key column name (returned in results)
+//   - orderColumn: Column to order by (ascending)
+//   - limit: Maximum number of rows to return
+//
+// Returns primary key values as strings, ordered by orderColumn ASC.
+func GetFirstNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+	logging.Debug("Getting first N rows ordered by column",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.String("order_column", orderColumn),
+		zap.Int("limit", limit))
+
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" ASC NULLS LAST, "%s" ASC LIMIT $1`,
+		pkColumn, schema, table, orderColumn, pkColumn,
+	)
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query first N rows ordered: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Got first N rows ordered",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("order_column", orderColumn),
+		zap.Int("count", len(pks)))
+
+	return pks, nil
+}
+
+// GetFirstNRowsOrdered is a convenience wrapper for Client
+func (c *Client) GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetFirstNRowsOrdered(ctx, c.pool, schema, table, pkColumn, orderColumn, limit)
+}
+
+// GetLastNRowsOrdered returns the last N primary key values ordered by a specified column descending.
+// Used by .order/<column>/.last/N/ paths for custom ordering.
+//
+// Parameters:
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//   - pkColumn: Primary key column name (returned in results)
+//   - orderColumn: Column to order by (descending)
+//   - limit: Maximum number of rows to return
+//
+// Returns primary key values as strings, ordered by orderColumn DESC.
+func GetLastNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+	logging.Debug("Getting last N rows ordered by column",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.String("order_column", orderColumn),
+		zap.Int("limit", limit))
+
+	query := fmt.Sprintf(
+		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" DESC NULLS LAST, "%s" DESC LIMIT $1`,
+		pkColumn, schema, table, orderColumn, pkColumn,
+	)
+
+	rows, err := pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query last N rows ordered: %w", err)
+	}
+	defer rows.Close()
+
+	var pks []string
+	for rows.Next() {
+		var pk interface{}
+		if err := rows.Scan(&pk); err != nil {
+			return nil, fmt.Errorf("failed to scan primary key: %w", err)
+		}
+		pks = append(pks, fmt.Sprintf("%v", pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	logging.Debug("Got last N rows ordered",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("order_column", orderColumn),
+		zap.Int("count", len(pks)))
+
+	return pks, nil
+}
+
+// GetLastNRowsOrdered is a convenience wrapper for Client
+func (c *Client) GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetLastNRowsOrdered(ctx, c.pool, schema, table, pkColumn, orderColumn, limit)
+}

@@ -107,7 +107,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Capability directories come first, then rows
 	entries := make([]fuse.DirEntry, 0, len(rows)+10)
 
-	// Add capability directories
+	// Add capability directories (alphabetical order)
 	entries = append(entries,
 		fuse.DirEntry{Name: DirAll, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirBy, Mode: syscall.S_IFDIR},
@@ -117,6 +117,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		fuse.DirEntry{Name: DirInfo, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirModify, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirOrder, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirSample, Mode: syscall.S_IFDIR},
 	)
 
@@ -161,6 +162,8 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return t.lookupPaginationDirectory(ctx, PaginationLast)
 	case DirModify:
 		return t.lookupModifyDirectory(ctx)
+	case DirOrder:
+		return t.lookupOrderDirectory(ctx)
 	case DirSample:
 		return t.lookupSampleDirectory(ctx)
 	}
@@ -553,6 +556,28 @@ func (t *TableNode) lookupByDirectory(ctx context.Context) (*fs.Inode, syscall.E
 
 	logging.Debug("Created directory node",
 		zap.String("directory", DirBy),
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
+// lookupOrderDirectory handles lookup for the .order directory.
+func (t *TableNode) lookupOrderDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up directory",
+		zap.String("directory", DirOrder),
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	orderNode := NewOrderDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	child := t.NewPersistentInode(ctx, orderNode, stableAttr)
+
+	logging.Debug("Created directory node",
+		zap.String("directory", DirOrder),
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 

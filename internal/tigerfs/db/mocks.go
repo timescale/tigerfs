@@ -369,9 +369,11 @@ func (m *MockDDLReader) GetDependentViews(ctx context.Context, schema, name stri
 
 // MockPaginationReader is a mock implementation of PaginationReader for testing.
 type MockPaginationReader struct {
-	GetFirstNRowsFunc       func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
-	GetLastNRowsFunc        func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
-	GetRandomSampleRowsFunc func(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error)
+	GetFirstNRowsFunc        func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
+	GetLastNRowsFunc         func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
+	GetRandomSampleRowsFunc  func(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error)
+	GetFirstNRowsOrderedFunc func(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
+	GetLastNRowsOrderedFunc  func(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
 }
 
 var _ PaginationReader = (*MockPaginationReader)(nil)
@@ -393,6 +395,20 @@ func (m *MockPaginationReader) GetLastNRows(ctx context.Context, schema, table, 
 func (m *MockPaginationReader) GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
 	if m.GetRandomSampleRowsFunc != nil {
 		return m.GetRandomSampleRowsFunc(ctx, schema, table, pkColumn, limit, estimatedRows)
+	}
+	return []string{}, nil
+}
+
+func (m *MockPaginationReader) GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+	if m.GetFirstNRowsOrderedFunc != nil {
+		return m.GetFirstNRowsOrderedFunc(ctx, schema, table, pkColumn, orderColumn, limit)
+	}
+	return []string{}, nil
+}
+
+func (m *MockPaginationReader) GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+	if m.GetLastNRowsOrderedFunc != nil {
+		return m.GetLastNRowsOrderedFunc(ctx, schema, table, pkColumn, orderColumn, limit)
 	}
 	return []string{}, nil
 }
