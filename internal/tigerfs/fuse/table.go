@@ -124,8 +124,12 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Convert rows to directory entries
 	entries := make([]fuse.DirEntry, 0, len(rows)+len(singleIndexes)+len(compositeIndexes)+3)
 
-	// Add metadata directory and files first
+	// Add capability directories and metadata files first
 	entries = append(entries,
+		fuse.DirEntry{
+			Name: DirBy,
+			Mode: syscall.S_IFDIR,
+		},
 		fuse.DirEntry{
 			Name: DirInfo,
 			Mode: syscall.S_IFDIR,
@@ -226,6 +230,11 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	logging.Debug("TableNode.Lookup called",
 		zap.String("table", t.tableName),
 		zap.String("name", name))
+
+	// Check if this is the .by index navigation directory
+	if name == DirBy {
+		return t.lookupByDirectory(ctx)
+	}
 
 	// Check if this is the .info metadata directory
 	if name == DirInfo {
@@ -834,6 +843,28 @@ func (t *TableNode) lookupInfoDirectory(ctx context.Context) (*fs.Inode, syscall
 	child := t.NewPersistentInode(ctx, infoNode, stableAttr)
 
 	logging.Debug("Created .info directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
+// lookupByDirectory handles lookup for the .by index navigation directory.
+func (t *TableNode) lookupByDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up directory",
+		zap.String("directory", DirBy),
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	byNode := NewByDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	child := t.NewPersistentInode(ctx, byNode, stableAttr)
+
+	logging.Debug("Created directory node",
+		zap.String("directory", DirBy),
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 
