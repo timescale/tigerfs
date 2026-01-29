@@ -85,7 +85,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.20 | Implement .ddl Extended Schema File | 2936 |
 | ✅ | 4.21 | Implement .indexes Metadata File | 3023 |
 | ✅ | 4.22 | Add Pagination to Index Navigation | 3076 |
-| ⬜ | 4.23 | Centralize Path and Format Constants | 3142 |
+| ✅ | 4.23 | Centralize Path and Format Constants | 3142 |
 | ⬜ | 4.24 | Implement .info/ Metadata Subdirectory | 3283 |
 | ⬜ | 4.25 | Implement .by/ Index Navigation | 3337 |
 | ⬜ | 4.26 | Remove Legacy Metadata and Index Paths | 3391 |
