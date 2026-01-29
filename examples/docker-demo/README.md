@@ -29,8 +29,8 @@ mnt  # Alias for: tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db 
 
 # Explore!
 ls /mnt/db
-cat /mnt/db/users/1.tsv
-cat /mnt/db/users/1.json
+ls /mnt/db/users/.first/5/           # First 5 users
+cat /mnt/db/users/.first/1/          # First user as TSV
 ```
 
 ### Option 2: Tiger Cloud
@@ -72,23 +72,27 @@ ls /mnt/db
 
 ## Demo Data (Option 1 only)
 
-The local PostgreSQL demo includes ~9,200 rows across three tables:
+The local PostgreSQL demo includes ~9,200 rows across four tables demonstrating mixed primary key types.
 
-**users** (1,000 rows)
+**users** (1,000 rows) - SERIAL primary key
 - Generated users with realistic name distributions
-- Fields: id, name, first_name, last_name, email, age, active, bio, created_at
+- Fields: id (integer), name, first_name, last_name, email, age, active, bio, created_at
 
-**products** (200 rows)
-- Widgets, Gadgets, Gizmos, Devices, Tools across 4 categories
-- Fields: id, name, price, in_stock, description, category
+**categories** (10 rows) - TEXT primary key (slug-based)
+- Product categories with human-readable slugs as primary keys
+- Fields: slug (text), name, description, icon, display_order, active, created_at
 
-**orders** (8,000 rows)
+**products** (200 rows) - SERIAL primary key
+- Widgets, Gadgets, Gizmos, Devices, Tools across 10 categories
+- Fields: id (integer), name, price, in_stock, description, category (FK)
+
+**orders** (8,000 rows) - UUIDv7 primary key (time-sortable, PostgreSQL 18 native)
 - Realistic order distribution with power users and varied statuses
-- Fields: id, user_id, product_id, quantity, total, status, created_at
+- Fields: id (uuid), user_id (integer), product_id (integer), quantity, total, status, created_at
 
-**Indexes** (for index-based navigation)
-- Single-column: `.email/`, `.category/`, `.user_id/`, `.created_at/`
-- Composite: `.last_name.first_name/`, `.status.created_at/`
+**Indexes** (for index-based navigation via `.by/`)
+- Single-column: `email`, `category`, `user_id`, `created_at`
+- Composite: `last_name.first_name`, `status.created_at`
 
 ## Example Commands
 
@@ -97,43 +101,49 @@ The local PostgreSQL demo includes ~9,200 rows across three tables:
 ls /mnt/db
 
 # Check row counts
-cat /mnt/db/users/.count      # 1000
-cat /mnt/db/products/.count   # 200
-cat /mnt/db/orders/.count     # 8000
+cat /mnt/db/users/.info/count      # 1000
+cat /mnt/db/products/.info/count   # 200
+cat /mnt/db/orders/.info/count     # 8000
 
-# List users by ID (shows first 10000 by default)
-ls /mnt/db/users
+# View table schema
+cat /mnt/db/users/.info/schema
+cat /mnt/db/users/.info/ddl        # Full DDL with indexes
 
-# Read a user row (TSV format)
-cat /mnt/db/users/1.tsv
+# List first 10 users (integer IDs as filenames)
+ls /mnt/db/users/.first/10/
 
-# Read as JSON
-cat /mnt/db/users/500.json
+# Read a user row by ID
+cat /mnt/db/users/1.json
 
 # Read single column
 cat /mnt/db/users/1/email
 
-# View products by category
-cat /mnt/db/products/50.json
+# Order by column
+ls /mnt/db/users/.order/created_at/first/10/   # 10 oldest users
+ls /mnt/db/users/.order/age/last/5/            # 5 oldest by age
 
-# Check orders for a user
-ls /mnt/db/orders
-cat /mnt/db/orders/100.tsv
+# Categories use TEXT primary keys (slug filenames)
+ls /mnt/db/categories/                          # electronics, home, office, outdoor
+cat /mnt/db/categories/electronics.json         # Read by slug directly
 
-# Sort users by age using jq
-for i in $(ls /mnt/db/users | head -20); do
-  cat /mnt/db/users/$i.json
-done | jq -s 'sort_by(.age)'
-
-# Index-based navigation (single-column)
-ls /mnt/db/users/.email/                    # List distinct emails
-ls /mnt/db/products/.category/              # List: Electronics, Home, Office, Outdoor
-ls /mnt/db/products/.category/Electronics/  # Products in Electronics category
+# Index-based navigation (via .by/)
+ls /mnt/db/users/.by/                           # List indexed columns
+ls /mnt/db/users/.by/email/                     # List distinct emails
+ls /mnt/db/products/.by/category/               # List all 10 category slugs
+ls /mnt/db/products/.by/category/electronics/   # Products in electronics category
 
 # Composite index navigation
-ls /mnt/db/users/.last_name.first_name/           # List distinct last names
-ls /mnt/db/users/.last_name.first_name/Smith/     # First names for last_name='Smith'
-ls /mnt/db/users/.last_name.first_name/Smith/Alice/  # Users named Alice Smith
+ls /mnt/db/users/.by/last_name.first_name/              # List distinct last names
+ls /mnt/db/users/.by/last_name.first_name/Smith/        # First names for last_name='Smith'
+ls /mnt/db/users/.by/last_name.first_name/Smith/Alice/  # Users named Alice Smith
+
+# Random sample (orders use UUIDv7 filenames)
+ls /mnt/db/orders/.sample/20/                   # 20 random orders
+
+# Process with jq (users use integer IDs)
+for id in $(ls /mnt/db/users/.first/20/); do
+  cat "/mnt/db/users/$id.json"
+done | jq -s 'sort_by(.age)'
 ```
 
 ## Using Claude Code
