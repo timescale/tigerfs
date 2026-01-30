@@ -365,47 +365,43 @@ func (fh *RowFileHandle) Flush(ctx context.Context) syscall.Errno {
 
 // parseRowData parses the buffered data based on the file format
 // Returns columns and values for INSERT/UPDATE
+//
+// Format semantics:
+//   - .json/.yaml: PATCH semantics - keys in data determine which columns to update
+//   - .tsv/.csv: PATCH semantics - first row is header with column names, second row is values
+//   - bare (default): PUT semantics - values in schema order, all columns required
+//
+// PATCH semantics allow partial updates (only specified columns are updated).
+// PUT semantics require all columns in schema order.
 func (fh *RowFileHandle) parseRowData() ([]string, []interface{}, error) {
-	// Trim trailing newline if present
-	data := fh.data
-	if len(data) > 0 && data[len(data)-1] == '\n' {
-		data = data[:len(data)-1]
-	}
-
 	var columns []string
 	var values []interface{}
 	var err error
 
 	switch fh.node.format {
 	case "json":
-		// JSON includes column names
-		columns, values, err = format.ParseJSON(string(data))
+		// JSON includes column names (PATCH semantics)
+		columns, values, err = format.ParseJSON(string(fh.data))
 	case "yaml":
-		// YAML includes column names
-		columns, values, err = format.ParseYAML(string(data))
-	case "tsv", "csv":
-		// TSV/CSV don't include column names, get from schema
-		ctx := context.Background()
-		var tableColumns []db.Column
-		tableColumns, err = fh.node.db.GetColumns(ctx, fh.node.schema, fh.node.tableName)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get table columns: %w", err)
-		}
-
-		// Extract column names
-		columns = make([]string, len(tableColumns))
-		for i, col := range tableColumns {
-			columns[i] = col.Name
-		}
-
-		// Parse values
-		if fh.node.format == "csv" {
-			_, values, err = format.ParseCSV(string(data))
-		} else {
-			_, values, err = format.ParseTSV(string(data))
-		}
+		// YAML includes column names (PATCH semantics)
+		columns, values, err = format.ParseYAML(string(fh.data))
+	case "tsv":
+		// TSV with explicit extension requires header row (PATCH semantics)
+		// Format: header row with column names, then value row
+		columns, values, err = format.ParseTSVWithHeader(string(fh.data))
+	case "csv":
+		// CSV with explicit extension requires header row (PATCH semantics)
+		// Format: header row with column names, then value row
+		columns, values, err = format.ParseCSVWithHeader(string(fh.data))
 	default:
-		// Default to TSV
+		// Default/bare path: PUT semantics - values in schema column order
+		// This is used when writing to bare paths (e.g., /123) without format extension
+		// All columns must be provided in schema order
+		data := fh.data
+		if len(data) > 0 && data[len(data)-1] == '\n' {
+			data = data[:len(data)-1]
+		}
+
 		ctx := context.Background()
 		var tableColumns []db.Column
 		tableColumns, err = fh.node.db.GetColumns(ctx, fh.node.schema, fh.node.tableName)

@@ -275,8 +275,11 @@ echo "newemail@example.com" > /mnt/db/users/1/email
 # Verify the update
 cat /mnt/db/users/1/email
 
-# Update entire row via JSON
-echo '{"id":1,"name":"Alice Smith","email":"alice.smith@example.com","age":29,"active":true}' > /mnt/db/users/1.json
+# Update specific columns via JSON (PATCH semantics - only specified keys updated)
+echo '{"name":"Alice Smith","email":"alice.smith@example.com"}' > /mnt/db/users/1.json
+
+# Update specific columns via TSV (PATCH semantics - header specifies columns)
+echo -e 'name\temail\nAlice Smith\talice.smith@example.com' > /mnt/db/users/1.tsv
 
 # Insert a new row (use next available ID or specify one)
 echo '{"name":"New Product","price":29.99,"in_stock":true,"category":"gadgets"}' > /mnt/db/products/new.json
@@ -292,9 +295,9 @@ $ echo "newemail@example.com" > /mnt/db/users/1/email
 $ cat /mnt/db/users/1/email
 newemail@example.com
 
-$ echo '{"id":1,"name":"Alice Smith","email":"alice.smith@example.com","age":29,"active":true}' > /mnt/db/users/1.json
+$ echo '{"name":"Alice Smith","email":"alice.smith@example.com"}' > /mnt/db/users/1.json
 $ cat /mnt/db/users/1.json
-{"id":1,"name":"Alice Smith","email":"alice.smith@example.com","age":29,"active":true,"bio":"Software engineer who loves hiking.","created_at":"2024-01-15T10:30:00Z"}
+{"id":1,"name":"Alice Smith","email":"alice.smith@example.com","age":28,"active":true,"bio":"Software engineer who loves hiking.","created_at":"2024-01-15T10:30:00Z"}
 ```
 
 ### Explanation
@@ -304,14 +307,17 @@ TigerFS translates filesystem operations to SQL:
 | Operation | SQL Generated |
 |-----------|---------------|
 | `echo "x" > /users/1/email` | `UPDATE users SET email = 'x' WHERE id = 1` |
-| `echo '{...}' > /users/1.json` | `UPDATE users SET ... WHERE id = 1` |
+| `echo '{...}' > /users/1.json` | `UPDATE users SET name=..., email=... WHERE id = 1` |
+| `echo -e 'col\nval' > /users/1.tsv` | `UPDATE users SET col = 'val' WHERE id = 1` |
 | `echo '{...}' > /products/new.json` | `INSERT INTO products (...) VALUES (...)` |
 | `rm /users/999` | `DELETE FROM users WHERE id = 999` |
+
+**PATCH Semantics:** All format extensions (`.json`, `.yaml`, `.csv`, `.tsv`) use PATCH semantics - only the columns you specify are updated. Columns not included retain their existing values.
 
 **Important notes:**
 - Updates respect database constraints (NOT NULL, UNIQUE, foreign keys)
 - Writes fail with appropriate errors if constraints are violated
-- Partial JSON updates only modify specified fields
+- TSV/CSV writes require a header row specifying column names
 - Delete operations are permanent (no trash/undo)
 
 ---

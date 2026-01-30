@@ -758,3 +758,284 @@ func TestParseTSVBulkNoHeaders_SkipsEmptyLines(t *testing.T) {
 		t.Fatalf("Expected 2 rows, got %d", len(rows))
 	}
 }
+
+// =============================================================================
+// With-Header Single Row Parsing Tests (PATCH semantics)
+// =============================================================================
+
+func TestParseTSVWithHeader_Basic(t *testing.T) {
+	// First line: column names, second line: values
+	data := "name\temail\nAlice\talice@example.com"
+
+	columns, values, err := ParseTSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseTSVWithHeader failed: %v", err)
+	}
+
+	if len(columns) != 2 {
+		t.Fatalf("Expected 2 columns, got %d", len(columns))
+	}
+	if columns[0] != "name" {
+		t.Errorf("Expected columns[0]='name', got %v", columns[0])
+	}
+	if columns[1] != "email" {
+		t.Errorf("Expected columns[1]='email', got %v", columns[1])
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("Expected 2 values, got %d", len(values))
+	}
+	if values[0] != "Alice" {
+		t.Errorf("Expected values[0]='Alice', got %v", values[0])
+	}
+	if values[1] != "alice@example.com" {
+		t.Errorf("Expected values[1]='alice@example.com', got %v", values[1])
+	}
+}
+
+func TestParseTSVWithHeader_WithTrailingNewline(t *testing.T) {
+	data := "name\temail\nAlice\talice@example.com\n"
+
+	columns, values, err := ParseTSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseTSVWithHeader failed: %v", err)
+	}
+
+	if len(columns) != 2 {
+		t.Fatalf("Expected 2 columns, got %d", len(columns))
+	}
+	if len(values) != 2 {
+		t.Fatalf("Expected 2 values, got %d", len(values))
+	}
+}
+
+func TestParseTSVWithHeader_SingleColumn(t *testing.T) {
+	// PATCH: Update just one column
+	data := "email\nnew@example.com"
+
+	columns, values, err := ParseTSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseTSVWithHeader failed: %v", err)
+	}
+
+	if len(columns) != 1 {
+		t.Fatalf("Expected 1 column, got %d", len(columns))
+	}
+	if columns[0] != "email" {
+		t.Errorf("Expected columns[0]='email', got %v", columns[0])
+	}
+	if values[0] != "new@example.com" {
+		t.Errorf("Expected values[0]='new@example.com', got %v", values[0])
+	}
+}
+
+func TestParseTSVWithHeader_NullValue(t *testing.T) {
+	// Empty string in value position = NULL
+	data := "name\temail\nAlice\t"
+
+	_, values, err := ParseTSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseTSVWithHeader failed: %v", err)
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("Expected 2 values, got %d", len(values))
+	}
+	if values[0] != "Alice" {
+		t.Errorf("Expected values[0]='Alice', got %v", values[0])
+	}
+	if values[1] != nil {
+		t.Errorf("Expected values[1]=nil (NULL), got %v", values[1])
+	}
+}
+
+func TestParseTSVWithHeader_EmptyData(t *testing.T) {
+	data := ""
+
+	_, _, err := ParseTSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error for empty TSV data")
+	}
+}
+
+func TestParseTSVWithHeader_MissingValueRow(t *testing.T) {
+	data := "name\temail"
+
+	_, _, err := ParseTSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error when value row is missing")
+	}
+}
+
+func TestParseTSVWithHeader_TooManyRows(t *testing.T) {
+	data := "name\temail\nAlice\talice@example.com\nBob\tbob@example.com"
+
+	_, _, err := ParseTSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error for more than 2 lines")
+	}
+}
+
+func TestParseTSVWithHeader_ColumnMismatch(t *testing.T) {
+	data := "name\temail\nAlice"
+
+	_, _, err := ParseTSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error when value count doesn't match column count")
+	}
+}
+
+func TestParseTSVWithHeader_EmptyHeader(t *testing.T) {
+	data := "\nvalue"
+
+	_, _, err := ParseTSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error for empty header row")
+	}
+}
+
+func TestParseCSVWithHeader_Basic(t *testing.T) {
+	// First line: column names, second line: values
+	data := "name,email\nAlice,alice@example.com"
+
+	columns, values, err := ParseCSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseCSVWithHeader failed: %v", err)
+	}
+
+	if len(columns) != 2 {
+		t.Fatalf("Expected 2 columns, got %d", len(columns))
+	}
+	if columns[0] != "name" {
+		t.Errorf("Expected columns[0]='name', got %v", columns[0])
+	}
+	if columns[1] != "email" {
+		t.Errorf("Expected columns[1]='email', got %v", columns[1])
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("Expected 2 values, got %d", len(values))
+	}
+	if values[0] != "Alice" {
+		t.Errorf("Expected values[0]='Alice', got %v", values[0])
+	}
+	if values[1] != "alice@example.com" {
+		t.Errorf("Expected values[1]='alice@example.com', got %v", values[1])
+	}
+}
+
+func TestParseCSVWithHeader_WithTrailingNewline(t *testing.T) {
+	data := "name,email\nAlice,alice@example.com\n"
+
+	columns, values, err := ParseCSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseCSVWithHeader failed: %v", err)
+	}
+
+	if len(columns) != 2 {
+		t.Fatalf("Expected 2 columns, got %d", len(columns))
+	}
+	if len(values) != 2 {
+		t.Fatalf("Expected 2 values, got %d", len(values))
+	}
+}
+
+func TestParseCSVWithHeader_QuotedFields(t *testing.T) {
+	// CSV supports quoted fields with commas
+	data := `name,description
+Alice,"A person, with commas"`
+
+	_, values, err := ParseCSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseCSVWithHeader failed: %v", err)
+	}
+
+	if values[1] != "A person, with commas" {
+		t.Errorf("Expected values[1]='A person, with commas', got %v", values[1])
+	}
+}
+
+func TestParseCSVWithHeader_SingleColumn(t *testing.T) {
+	// PATCH: Update just one column
+	data := "email\nnew@example.com"
+
+	columns, values, err := ParseCSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseCSVWithHeader failed: %v", err)
+	}
+
+	if len(columns) != 1 {
+		t.Fatalf("Expected 1 column, got %d", len(columns))
+	}
+	if columns[0] != "email" {
+		t.Errorf("Expected columns[0]='email', got %v", columns[0])
+	}
+	if values[0] != "new@example.com" {
+		t.Errorf("Expected values[0]='new@example.com', got %v", values[0])
+	}
+}
+
+func TestParseCSVWithHeader_NullValue(t *testing.T) {
+	// Empty string in value position = NULL
+	data := "name,email\nAlice,"
+
+	_, values, err := ParseCSVWithHeader(data)
+	if err != nil {
+		t.Fatalf("ParseCSVWithHeader failed: %v", err)
+	}
+
+	if len(values) != 2 {
+		t.Fatalf("Expected 2 values, got %d", len(values))
+	}
+	if values[0] != "Alice" {
+		t.Errorf("Expected values[0]='Alice', got %v", values[0])
+	}
+	if values[1] != nil {
+		t.Errorf("Expected values[1]=nil (NULL), got %v", values[1])
+	}
+}
+
+func TestParseCSVWithHeader_EmptyData(t *testing.T) {
+	data := ""
+
+	_, _, err := ParseCSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error for empty CSV data")
+	}
+}
+
+func TestParseCSVWithHeader_MissingValueRow(t *testing.T) {
+	data := "name,email"
+
+	_, _, err := ParseCSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error when value row is missing")
+	}
+}
+
+func TestParseCSVWithHeader_TooManyRows(t *testing.T) {
+	data := "name,email\nAlice,alice@example.com\nBob,bob@example.com"
+
+	_, _, err := ParseCSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error for more than 2 lines")
+	}
+}
+
+func TestParseCSVWithHeader_ColumnMismatch(t *testing.T) {
+	data := "name,email\nAlice"
+
+	_, _, err := ParseCSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error when value count doesn't match column count")
+	}
+}
+
+func TestParseCSVWithHeader_EmptyHeader(t *testing.T) {
+	data := "\nvalue"
+
+	_, _, err := ParseCSVWithHeader(data)
+	if err == nil {
+		t.Error("Expected error for empty header row")
+	}
+}

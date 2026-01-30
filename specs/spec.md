@@ -284,7 +284,7 @@ Single file containing complete row data. Format determined by file extension.
 - `.csv` → Comma-separated values
 - `.json` → JSON object
 
-**Format Details:**
+**Format Details (Reading):**
 
 **TSV (Default, Headerless):**
 ```
@@ -310,12 +310,31 @@ foo@example.com,Foo Bar,25
 ```
 - Compact (single line), not pretty-printed
 - All columns included
-- `null` for NULL values or omit key
+- `null` for NULL values
+
+**Format Details (Writing):**
+
+All format extensions (`.tsv`, `.csv`, `.json`, `.yaml`) use **PATCH semantics**:
+- Only specified columns are updated
+- Omitted columns retain their existing values
+
+**TSV/CSV Writing (Header Required):**
+```bash
+# First line: column names (header)
+# Second line: values
+echo -e "email\tname\nnew@example.com\tNew Name" > /mount/users/123.tsv
+```
+
+**JSON/YAML Writing:**
+```bash
+# Keys specify columns to update
+echo '{"email":"new@example.com","name":"New Name"}' > /mount/users/123.json
+```
 
 **When to Use:**
 - Bulk operations (read/write entire row)
 - Atomic updates (single UPDATE statement)
-- Efficient for complete row replacement
+- Partial updates (PATCH semantics with format extension)
 
 #### 2. Row-as-Directory (Column-Level Operations)
 
@@ -518,37 +537,46 @@ SELECT DISTINCT first_name FROM users WHERE last_name = 'Smith';
 
 **Operation:**
 ```bash
-# TSV
-echo -e "foo@example.com\tFoo Bar\t25" > /mount/users/123
+# TSV with explicit extension (PATCH semantics - header row specifies columns)
+echo -e "email\tname\nfoo@example.com\tFoo Bar" > /mount/users/123.tsv
 
-# JSON
-echo '{"email":"foo@example.com","name":"Foo Bar","age":25}' > /mount/users/123.json
+# CSV with explicit extension (PATCH semantics - header row specifies columns)
+echo -e "email,name\nfoo@example.com,Foo Bar" > /mount/users/123.csv
+
+# JSON (PATCH semantics - keys specify columns)
+echo '{"email":"foo@example.com","name":"Foo Bar"}' > /mount/users/123.json
+
+# YAML (PATCH semantics - keys specify columns)
+echo -e "email: foo@example.com\nname: Foo Bar" > /mount/users/123.yaml
 ```
 
-**SQL Generated (if row exists):**
+**SQL Generated (if row exists - only specified columns updated):**
 ```sql
-UPDATE users SET email='foo@example.com', name='Foo Bar', age=25 WHERE id=123;
+UPDATE users SET email='foo@example.com', name='Foo Bar' WHERE id=123;
 ```
 
 **SQL Generated (if row doesn't exist):**
 ```sql
-INSERT INTO users (id, email, name, age) VALUES (123, 'foo@example.com', 'Foo Bar', 25);
+INSERT INTO users (id, email, name) VALUES (123, 'foo@example.com', 'Foo Bar');
 ```
 
-**Partial Data:**
+**Setting NULL Values:**
 ```bash
-# TSV with NULLs
-echo -e "foo@example.com\t\t25" > /mount/users/123
-# email='foo@example.com', name=NULL, age=25
+# TSV: empty field in value row = NULL
+echo -e "email\tname\nfoo@example.com\t" > /mount/users/123.tsv
+# Sets email='foo@example.com', name=NULL
 
-# JSON with omitted fields
-echo '{"email":"foo@example.com","age":25}' > /mount/users/123.json
-# name=NULL or default
+# JSON: explicit null value
+echo '{"email":"foo@example.com","name":null}' > /mount/users/123.json
+# Sets email='foo@example.com', name=NULL
 ```
 
 **Write Semantics:**
-- TSV/CSV must follow schema column order
-- Empty fields (TSV/CSV) or omitted keys (JSON/YAML) = NULL or column default
+- All format extensions use **PATCH semantics** - only specified columns are updated
+- `.tsv`/`.csv`: First line is header (column names), second line is values
+- `.json`/`.yaml`: Keys in the object specify which columns to update
+- Empty fields (TSV/CSV) or explicit null (JSON/YAML) set the column to NULL
+- Omitted columns are NOT modified (retain existing value)
 - Constraint violations return EACCES with detailed logs
 
 #### Column Write (UPDATE or INSERT)

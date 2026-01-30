@@ -12,7 +12,8 @@ import (
 // ParseTSV parses a TSV line into columns and values
 // Format: value1\tvalue2\tvalue3
 // Empty values are treated as NULL
-// Note: This requires column names to be known externally
+// Note: This requires column names to be known externally (schema order)
+// Used for bare row writes without explicit format extension.
 func ParseTSV(line string) ([]string, []interface{}, error) {
 	// Split by tabs
 	parts := strings.Split(line, "\t")
@@ -32,9 +33,60 @@ func ParseTSV(line string) ([]string, []interface{}, error) {
 	return nil, values, nil
 }
 
+// ParseTSVWithHeader parses TSV data with a header row (two lines).
+// First line is column names, second line is values.
+// Returns columns from header and corresponding values.
+// Empty values are treated as NULL.
+// Used for .tsv format writes which support PATCH semantics.
+func ParseTSVWithHeader(data string) ([]string, []interface{}, error) {
+	lines := strings.Split(data, "\n")
+
+	// Remove empty trailing lines
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	if len(lines) == 0 {
+		return nil, nil, fmt.Errorf("empty TSV data")
+	}
+
+	if len(lines) == 1 {
+		return nil, nil, fmt.Errorf("TSV data missing value row (only header found)")
+	}
+
+	if len(lines) > 2 {
+		return nil, nil, fmt.Errorf("TSV single-row write expects exactly 2 lines (header + values), got %d", len(lines))
+	}
+
+	// First line is header
+	columns := strings.Split(lines[0], "\t")
+	if len(columns) == 0 || (len(columns) == 1 && columns[0] == "") {
+		return nil, nil, fmt.Errorf("TSV header row is empty")
+	}
+
+	// Second line is values
+	valueParts := strings.Split(lines[1], "\t")
+	if len(valueParts) != len(columns) {
+		return nil, nil, fmt.Errorf("column count mismatch: header has %d columns, values has %d", len(columns), len(valueParts))
+	}
+
+	values := make([]interface{}, len(valueParts))
+	for i, part := range valueParts {
+		if part == "" {
+			values[i] = nil // NULL
+		} else {
+			values[i] = part
+		}
+	}
+
+	return columns, values, nil
+}
+
 // ParseCSV parses a CSV line into columns and values
 // Format: value1,value2,"quoted value, with comma"
 // Empty values are treated as NULL
+// Note: This requires column names to be known externally (schema order)
+// Used for bare row writes without explicit format extension.
 func ParseCSV(line string) ([]string, []interface{}, error) {
 	// Use csv.Reader to handle quoted fields
 	reader := csv.NewReader(strings.NewReader(line))
@@ -57,6 +109,58 @@ func ParseCSV(line string) ([]string, []interface{}, error) {
 
 	// CSV doesn't include column names in data, return empty column list
 	return nil, values, nil
+}
+
+// ParseCSVWithHeader parses CSV data with a header row (two lines).
+// First line is column names, second line is values.
+// Returns columns from header and corresponding values.
+// Empty values are treated as NULL.
+// Used for .csv format writes which support PATCH semantics.
+func ParseCSVWithHeader(data string) ([]string, []interface{}, error) {
+	reader := csv.NewReader(strings.NewReader(data))
+	reader.TrimLeadingSpace = true
+	reader.FieldsPerRecord = -1 // Allow variable field count to give better error
+
+	// Read all records
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse CSV: %w", err)
+	}
+
+	if len(records) == 0 {
+		return nil, nil, fmt.Errorf("empty CSV data")
+	}
+
+	if len(records) == 1 {
+		return nil, nil, fmt.Errorf("CSV data missing value row (only header found)")
+	}
+
+	if len(records) > 2 {
+		return nil, nil, fmt.Errorf("CSV single-row write expects exactly 2 lines (header + values), got %d", len(records))
+	}
+
+	// First record is header
+	columns := records[0]
+	if len(columns) == 0 || (len(columns) == 1 && columns[0] == "") {
+		return nil, nil, fmt.Errorf("CSV header row is empty")
+	}
+
+	// Second record is values
+	valueRecord := records[1]
+	if len(valueRecord) != len(columns) {
+		return nil, nil, fmt.Errorf("column count mismatch: header has %d columns, values has %d", len(columns), len(valueRecord))
+	}
+
+	values := make([]interface{}, len(valueRecord))
+	for i, field := range valueRecord {
+		if field == "" {
+			values[i] = nil // NULL
+		} else {
+			values[i] = field
+		}
+	}
+
+	return columns, values, nil
 }
 
 // ParseJSON parses a JSON object into columns and values

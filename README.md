@@ -143,8 +143,14 @@ cat /mnt/db/users/.email/foo@example.com/name.txt
 # Update a column
 echo 'newemail@example.com' > /mnt/db/users/123/email.txt
 
-# Update entire row (JSON)
+# Update entire row (JSON) - only specified keys are updated
 echo '{"email":"new@example.com","name":"New Name"}' > /mnt/db/users/123.json
+
+# Update specific columns (TSV) - header row specifies which columns to update
+echo -e 'email\tname\nnew@example.com\tNew Name' > /mnt/db/users/123.tsv
+
+# Update specific columns (CSV) - header row specifies which columns to update
+echo -e 'email,name\nnew@example.com,New Name' > /mnt/db/users/123.csv
 
 # Create new row
 mkdir /mnt/db/users/456
@@ -154,6 +160,8 @@ echo 'User Name' > /mnt/db/users/456/name.txt
 # Delete row
 rm -r /mnt/db/users/456/
 ```
+
+**Write Semantics:** All format extensions (`.json`, `.yaml`, `.csv`, `.tsv`) use PATCH semantics - only the columns/keys you specify are updated. Omitted columns retain their existing values.
 
 ## Filesystem Navigation
 

@@ -852,6 +852,7 @@ func TestRowFileNode_Open_WithMock(t *testing.T) {
 }
 
 // TestRowFileHandle_Flush_WithMock_ExistingRow tests Flush for an existing row (UPDATE)
+// TSV with explicit extension uses PATCH semantics (header row + value row)
 func TestRowFileHandle_Flush_WithMock_ExistingRow(t *testing.T) {
 	cfg := &config.Config{}
 
@@ -879,9 +880,10 @@ func TestRowFileHandle_Flush_WithMock_ExistingRow(t *testing.T) {
 
 	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
 
+	// TSV format uses PATCH semantics: header row + value row
 	fh := &RowFileHandle{
 		node:      node,
-		data:      []byte("1\tJane\n"),
+		data:      []byte("id\tname\n1\tJane\n"),
 		rowExists: true,
 		dirty:     true, // Must set dirty=true for Flush to write
 	}
@@ -907,6 +909,7 @@ func TestRowFileHandle_Flush_WithMock_ExistingRow(t *testing.T) {
 }
 
 // TestRowFileHandle_Flush_WithMock_NewRow tests Flush for a new row (INSERT)
+// TSV with explicit extension uses PATCH semantics (header row + value row)
 func TestRowFileHandle_Flush_WithMock_NewRow(t *testing.T) {
 	cfg := &config.Config{}
 
@@ -928,9 +931,10 @@ func TestRowFileHandle_Flush_WithMock_NewRow(t *testing.T) {
 
 	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
 
+	// TSV format uses PATCH semantics: header row + value row
 	fh := &RowFileHandle{
 		node:      node,
-		data:      []byte("1\tJohn\n"),
+		data:      []byte("id\tname\n1\tJohn\n"),
 		rowExists: false,
 		dirty:     true, // Must set dirty=true for Flush to write
 	}
@@ -951,6 +955,7 @@ func TestRowFileHandle_Flush_WithMock_NewRow(t *testing.T) {
 }
 
 // TestRowFileHandle_Flush_WithMock_Error tests Flush when database update fails
+// TSV with explicit extension uses PATCH semantics (header row + value row)
 func TestRowFileHandle_Flush_WithMock_Error(t *testing.T) {
 	cfg := &config.Config{}
 
@@ -967,9 +972,10 @@ func TestRowFileHandle_Flush_WithMock_Error(t *testing.T) {
 
 	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
 
+	// TSV format uses PATCH semantics: header row + value row
 	fh := &RowFileHandle{
 		node:      node,
-		data:      []byte("1\tJohn\n"),
+		data:      []byte("id\tname\n1\tJohn\n"),
 		rowExists: true,
 		dirty:     true, // Must set dirty=true for Flush to attempt write
 	}
@@ -979,6 +985,178 @@ func TestRowFileHandle_Flush_WithMock_Error(t *testing.T) {
 	// Should return EIO on database error
 	if errno != syscall.EIO {
 		t.Errorf("Expected errno=EIO, got %d", errno)
+	}
+}
+
+// TestRowFileHandle_Flush_TSV_PatchSemantics tests PATCH semantics for TSV format.
+// Only columns specified in the header are updated.
+func TestRowFileHandle_Flush_TSV_PatchSemantics(t *testing.T) {
+	cfg := &config.Config{}
+
+	var updatedColumns []string
+	var updatedValues []interface{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowWriter.UpdateRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+		updatedColumns = columns
+		updatedValues = values
+		return nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	// PATCH: Only update name column (omit id and email)
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte("name\nJane\n"),
+		rowExists: true,
+		dirty:     true,
+	}
+
+	errno := fh.Flush(context.Background())
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Should only update the 'name' column
+	if len(updatedColumns) != 1 {
+		t.Errorf("Expected 1 column (PATCH), got %d", len(updatedColumns))
+	}
+	if len(updatedColumns) > 0 && updatedColumns[0] != "name" {
+		t.Errorf("Expected column 'name', got %v", updatedColumns[0])
+	}
+	if len(updatedValues) > 0 && updatedValues[0] != "Jane" {
+		t.Errorf("Expected value 'Jane', got %v", updatedValues[0])
+	}
+}
+
+// TestRowFileHandle_Flush_CSV_PatchSemantics tests PATCH semantics for CSV format.
+// Only columns specified in the header are updated.
+func TestRowFileHandle_Flush_CSV_PatchSemantics(t *testing.T) {
+	cfg := &config.Config{}
+
+	var updatedColumns []string
+	var updatedValues []interface{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowWriter.UpdateRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+		updatedColumns = columns
+		updatedValues = values
+		return nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "csv")
+
+	// PATCH: Only update email column
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte("email\nnewemail@example.com\n"),
+		rowExists: true,
+		dirty:     true,
+	}
+
+	errno := fh.Flush(context.Background())
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Should only update the 'email' column
+	if len(updatedColumns) != 1 {
+		t.Errorf("Expected 1 column (PATCH), got %d", len(updatedColumns))
+	}
+	if len(updatedColumns) > 0 && updatedColumns[0] != "email" {
+		t.Errorf("Expected column 'email', got %v", updatedColumns[0])
+	}
+	if len(updatedValues) > 0 && updatedValues[0] != "newemail@example.com" {
+		t.Errorf("Expected value 'newemail@example.com', got %v", updatedValues[0])
+	}
+}
+
+// TestRowFileHandle_Flush_JSON_PatchSemantics tests PATCH semantics for JSON format.
+// Only keys in the JSON object are updated.
+func TestRowFileHandle_Flush_JSON_PatchSemantics(t *testing.T) {
+	cfg := &config.Config{}
+
+	var updatedColumns []string
+	var updatedValues []interface{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowWriter.UpdateRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+		updatedColumns = columns
+		updatedValues = values
+		return nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "json")
+
+	// PATCH: Only update name (JSON only includes the key being updated)
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte(`{"name": "NewName"}`),
+		rowExists: true,
+		dirty:     true,
+	}
+
+	errno := fh.Flush(context.Background())
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Should only update the 'name' column
+	if len(updatedColumns) != 1 {
+		t.Errorf("Expected 1 column (PATCH), got %d", len(updatedColumns))
+	}
+	if len(updatedColumns) > 0 && updatedColumns[0] != "name" {
+		t.Errorf("Expected column 'name', got %v", updatedColumns[0])
+	}
+	if len(updatedValues) > 0 && updatedValues[0] != "NewName" {
+		t.Errorf("Expected value 'NewName', got %v", updatedValues[0])
+	}
+}
+
+// TestRowFileHandle_Flush_TSV_SetNull tests setting a column to NULL via empty value.
+func TestRowFileHandle_Flush_TSV_SetNull(t *testing.T) {
+	cfg := &config.Config{}
+
+	var updatedColumns []string
+	var updatedValues []interface{}
+
+	mock := db.NewMockDBClient()
+	mock.MockRowWriter.UpdateRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+		updatedColumns = columns
+		updatedValues = values
+		return nil
+	}
+
+	node := NewRowFileNode(cfg, mock, nil, "public", "users", "id", "1", "tsv")
+
+	// Set name to value, email to NULL (empty value)
+	// TSV format: header + value row where empty field = NULL
+	fh := &RowFileHandle{
+		node:      node,
+		data:      []byte("name\temail\nJane\t\n"),
+		rowExists: true,
+		dirty:     true,
+	}
+
+	errno := fh.Flush(context.Background())
+	if errno != 0 {
+		t.Errorf("Expected errno=0, got %d", errno)
+	}
+
+	// Should update both columns
+	if len(updatedColumns) != 2 {
+		t.Errorf("Expected 2 columns, got %d", len(updatedColumns))
+	}
+
+	// First column (name) should have value
+	if len(updatedValues) > 0 && updatedValues[0] != "Jane" {
+		t.Errorf("Expected 'Jane', got %v", updatedValues[0])
+	}
+
+	// Second column (email) should be NULL
+	if len(updatedValues) > 1 && updatedValues[1] != nil {
+		t.Errorf("Expected nil (NULL), got %v", updatedValues[1])
 	}
 }
 
