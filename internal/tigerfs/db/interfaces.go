@@ -122,6 +122,10 @@ type CountReader interface {
 
 	// GetRowCountEstimates returns fast row count estimates for multiple tables.
 	GetRowCountEstimates(ctx context.Context, schema string, tables []string) (map[string]int64, error)
+
+	// GetTableRowCountEstimate returns the estimated row count for a single table.
+	// Uses pg_class.reltuples for fast estimation. Returns -1 if table not found.
+	GetTableRowCountEstimate(ctx context.Context, schema, table string) (int64, error)
 }
 
 // DDLReader provides DDL generation operations.

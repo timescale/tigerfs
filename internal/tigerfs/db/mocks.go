@@ -261,9 +261,10 @@ func (m *MockIndexReader) GetRowsByCompositeIndex(ctx context.Context, schema, t
 
 // MockCountReader is a mock implementation of CountReader for testing.
 type MockCountReader struct {
-	GetRowCountFunc          func(ctx context.Context, schema, table string) (int64, error)
-	GetRowCountSmartFunc     func(ctx context.Context, schema, table string) (int64, error)
-	GetRowCountEstimatesFunc func(ctx context.Context, schema string, tables []string) (map[string]int64, error)
+	GetRowCountFunc              func(ctx context.Context, schema, table string) (int64, error)
+	GetRowCountSmartFunc         func(ctx context.Context, schema, table string) (int64, error)
+	GetRowCountEstimatesFunc     func(ctx context.Context, schema string, tables []string) (map[string]int64, error)
+	GetTableRowCountEstimateFunc func(ctx context.Context, schema, table string) (int64, error)
 }
 
 var _ CountReader = (*MockCountReader)(nil)
@@ -287,6 +288,13 @@ func (m *MockCountReader) GetRowCountEstimates(ctx context.Context, schema strin
 		return m.GetRowCountEstimatesFunc(ctx, schema, tables)
 	}
 	return make(map[string]int64), nil
+}
+
+func (m *MockCountReader) GetTableRowCountEstimate(ctx context.Context, schema, table string) (int64, error) {
+	if m.GetTableRowCountEstimateFunc != nil {
+		return m.GetTableRowCountEstimateFunc(ctx, schema, table)
+	}
+	return -1, nil // Default: table not found
 }
 
 // MockDDLReader is a mock implementation of DDLReader for testing.
