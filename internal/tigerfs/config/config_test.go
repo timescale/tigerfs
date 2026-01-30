@@ -111,6 +111,7 @@ func TestInit_SetsDefaults(t *testing.T) {
 		{"attr_timeout", 1 * time.Second},
 		{"entry_timeout", 1 * time.Second},
 		{"query_timeout", 30 * time.Second},
+		{"dir_filter_limit", 100000},
 		{"metadata_refresh_interval", 30 * time.Second},
 		{"log_level", "info"},
 		{"log_format", "text"},
@@ -787,5 +788,57 @@ func TestConfig_QueryTimeoutEnvVarSeconds(t *testing.T) {
 
 	if cfg.QueryTimeout != 45*time.Second {
 		t.Errorf("Expected QueryTimeout=45s from env, got %v", cfg.QueryTimeout)
+	}
+}
+
+// TestConfig_DirFilterLimit tests DirFilterLimit configuration
+func TestConfig_DirFilterLimit(t *testing.T) {
+	resetViper()
+
+	err := Init()
+	if err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Default should be 100000
+	if cfg.DirFilterLimit != 100000 {
+		t.Errorf("Expected DirFilterLimit=100000, got %d", cfg.DirFilterLimit)
+	}
+}
+
+// TestConfig_DirFilterLimitEnvVar tests TIGERFS_DIR_FILTER_LIMIT environment variable
+func TestConfig_DirFilterLimitEnvVar(t *testing.T) {
+	resetViper()
+
+	// Save and restore env
+	origValue := os.Getenv("TIGERFS_DIR_FILTER_LIMIT")
+	defer func() {
+		if origValue == "" {
+			_ = os.Unsetenv("TIGERFS_DIR_FILTER_LIMIT")
+		} else {
+			_ = os.Setenv("TIGERFS_DIR_FILTER_LIMIT", origValue)
+		}
+	}()
+
+	// Set env var to 50000
+	_ = os.Setenv("TIGERFS_DIR_FILTER_LIMIT", "50000")
+
+	err := Init()
+	if err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.DirFilterLimit != 50000 {
+		t.Errorf("Expected DirFilterLimit=50000 from env, got %d", cfg.DirFilterLimit)
 	}
 }

@@ -34,7 +34,8 @@ type Config struct {
 	EntryTimeout         time.Duration `mapstructure:"entry_timeout"`
 
 	// Query Safety
-	QueryTimeout time.Duration `mapstructure:"query_timeout"` // Global statement timeout for all queries (default: 30s)
+	QueryTimeout   time.Duration `mapstructure:"query_timeout"`    // Global statement timeout for all queries (default: 30s)
+	DirFilterLimit int           `mapstructure:"dir_filter_limit"` // Row count threshold for .filter/ value listing (default: 100000)
 
 	// Metadata
 	MetadataRefreshInterval time.Duration `mapstructure:"metadata_refresh_interval"`
@@ -68,6 +69,7 @@ func Init() error {
 	viper.SetDefault("attr_timeout", 1*time.Second)
 	viper.SetDefault("entry_timeout", 1*time.Second)
 	viper.SetDefault("query_timeout", 30*time.Second)
+	viper.SetDefault("dir_filter_limit", 100000)
 	viper.SetDefault("metadata_refresh_interval", 30*time.Second)
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("log_format", "text")

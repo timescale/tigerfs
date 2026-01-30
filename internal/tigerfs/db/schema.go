@@ -313,6 +313,60 @@ func (c *Client) GetRowCount(ctx context.Context, schema, table string) (int64, 
 // to avoid expensive full table scans.
 const SmallTableThreshold = 100000
 
+// GetTableRowCountEstimate returns the estimated row count for a single table from pg_class.reltuples.
+// This is a fast operation that uses PostgreSQL statistics rather than scanning the table.
+// The estimate is updated by VACUUM and ANALYZE operations.
+//
+// This is the canonical function for getting row count estimates. Other functions
+// like GetRowCountSmart use this internally.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - pool: PostgreSQL connection pool
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//
+// Returns the estimated row count, or -1 if the table is not found in pg_class.
+func GetTableRowCountEstimate(ctx context.Context, pool *pgxpool.Pool, schema, table string) (int64, error) {
+	logging.Debug("Getting table row count estimate",
+		zap.String("schema", schema),
+		zap.String("table", table))
+
+	query := `
+		SELECT reltuples::bigint
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2
+	`
+
+	var estimate int64
+	err := pool.QueryRow(ctx, query, schema, table).Scan(&estimate)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			logging.Debug("Table not found in pg_class",
+				zap.String("schema", schema),
+				zap.String("table", table))
+			return -1, nil
+		}
+		return 0, fmt.Errorf("failed to get row count estimate: %w", err)
+	}
+
+	logging.Debug("Got table row count estimate",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Int64("estimate", estimate))
+
+	return estimate, nil
+}
+
+// GetTableRowCountEstimate is a convenience wrapper for Client.
+func (c *Client) GetTableRowCountEstimate(ctx context.Context, schema, table string) (int64, error) {
+	if c.pool == nil {
+		return 0, fmt.Errorf("database connection not initialized")
+	}
+	return GetTableRowCountEstimate(ctx, c.pool, schema, table)
+}
+
 // GetRowCountSmart returns the row count using an adaptive strategy.
 // For small tables (< 100K rows estimated), performs exact COUNT(*).
 // For large tables (>= 100K rows estimated), returns the pg_class.reltuples estimate.
@@ -333,31 +387,19 @@ func GetRowCountSmart(ctx context.Context, pool *pgxpool.Pool, schema, table str
 		zap.String("schema", schema),
 		zap.String("table", table))
 
-	// First, get the pg_class.reltuples estimate
-	estimateQuery := `
-		SELECT COALESCE(c.reltuples::bigint, 0)
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = $1 AND c.relname = $2
-	`
-
-	var estimate int64
-	err := pool.QueryRow(ctx, estimateQuery, schema, table).Scan(&estimate)
+	// Get the pg_class.reltuples estimate using shared helper
+	estimate, err := GetTableRowCountEstimate(ctx, pool, schema, table)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			// Table not found in pg_class - fall back to exact count
-			logging.Debug("Table not found in pg_class, using exact count",
-				zap.String("schema", schema),
-				zap.String("table", table))
-			return GetRowCount(ctx, pool, schema, table)
-		}
-		return 0, fmt.Errorf("failed to get row count estimate: %w", err)
+		return 0, err
 	}
 
-	logging.Debug("Got row count estimate from pg_class",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.Int64("estimate", estimate))
+	// Table not found in pg_class - fall back to exact count
+	if estimate == -1 {
+		logging.Debug("Table not found in pg_class, using exact count",
+			zap.String("schema", schema),
+			zap.String("table", table))
+		return GetRowCount(ctx, pool, schema, table)
+	}
 
 	// For small tables, use exact count for accuracy
 	if estimate < SmallTableThreshold {

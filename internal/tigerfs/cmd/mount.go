@@ -46,6 +46,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var foreground bool
 	var noFilenameExtensions bool
 	var queryTimeout time.Duration
+	var dirFilterLimit int
 	// TODO: allow-other support has inconsistent cross-platform behavior
 	// (works on Linux, limited on macOS, different model on Windows).
 	// Revisit in Phase 6 Task 6.2. For now, mounts are single-user only.
@@ -118,6 +119,11 @@ Examples:
 				cfg.QueryTimeout = queryTimeout
 			}
 
+			// Apply --dir-filter-limit flag if set (overrides config/env)
+			if dirFilterLimit > 0 {
+				cfg.DirFilterLimit = dirFilterLimit
+			}
+
 			// Mount the FUSE filesystem
 			fs, err := fuse.Mount(ctx, cfg, connStr, absMountpoint)
 			if err != nil {
@@ -172,6 +178,7 @@ Examples:
 
 	// Query safety flags
 	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
+	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
 
 	return cmd
 }

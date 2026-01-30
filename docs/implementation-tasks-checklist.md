@@ -101,7 +101,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
 | ✅ | 5.1 | Add Global Query Timeout Configuration | ~3840 |
-| ⬜ | 5.2 | Add DirFilterLimit Configuration | ~3910 |
+| ✅ | 5.2 | Add DirFilterLimit Configuration | ~3910 |
 | ⬜ | 5.3 | Implement PipelineContext | ~3970 |
 | ⬜ | 5.4 | Implement Pipeline Query Functions | ~4070 |
 | ⬜ | 5.5 | Implement FilterDirNode for .filter/ | ~4160 |
@@ -175,9 +175,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
-| Phase 5: Pipeline Query Architecture | 1 | 11 | 9% |
+| Phase 5: Pipeline Query Architecture | 2 | 11 | 18% |
 | Phase 6: Synthesized Applications | 0 | 3 | 0% |
 | Phase 7: DDL Operations | 8 | 10 | 80% |
 | Phase 8: Distribution | 0 | 9 | 0% |
 | Phase 9: Performance | 0 | 3 | 0% |
-| **Total** | **67** | **98** | **68%** |
+| **Total** | **68** | **98** | **69%** |
