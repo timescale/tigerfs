@@ -214,6 +214,16 @@ type ImportWriter interface {
 	ImportAppend(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
 }
 
+// PipelineReader provides pipeline query operations for capability chaining.
+// Used by PipelineNode to execute queries with accumulated filters, ordering, and limits.
+type PipelineReader interface {
+	// QueryRowsPipeline executes a pipeline query and returns primary key values.
+	QueryRowsPipeline(ctx context.Context, params QueryParams) ([]string, error)
+
+	// QueryRowsWithDataPipeline executes a pipeline query and returns full row data.
+	QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error)
+}
+
 // DBClient is the composite interface combining all database capabilities.
 // FUSE nodes that need multiple capabilities can accept this interface.
 // *db.Client satisfies this interface automatically.
@@ -228,6 +238,7 @@ type DBClient interface {
 	PaginationReader
 	ExportReader
 	ImportWriter
+	PipelineReader
 }
 
 // Compile-time verification that *Client implements DBClient

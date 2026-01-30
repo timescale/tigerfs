@@ -497,6 +497,28 @@ func (m *MockImportWriter) ImportAppend(ctx context.Context, schema, table strin
 	return nil
 }
 
+// MockPipelineReader is a mock implementation of PipelineReader for testing.
+type MockPipelineReader struct {
+	QueryRowsPipelineFunc         func(ctx context.Context, params QueryParams) ([]string, error)
+	QueryRowsWithDataPipelineFunc func(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error)
+}
+
+var _ PipelineReader = (*MockPipelineReader)(nil)
+
+func (m *MockPipelineReader) QueryRowsPipeline(ctx context.Context, params QueryParams) ([]string, error) {
+	if m.QueryRowsPipelineFunc != nil {
+		return m.QueryRowsPipelineFunc(ctx, params)
+	}
+	return []string{}, nil
+}
+
+func (m *MockPipelineReader) QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error) {
+	if m.QueryRowsWithDataPipelineFunc != nil {
+		return m.QueryRowsWithDataPipelineFunc(ctx, params)
+	}
+	return []string{}, [][]interface{}{}, nil
+}
+
 // MockDBClient is a composite mock implementing DBClient for full FUSE node testing.
 // Embeds individual mocks for each interface.
 type MockDBClient struct {
@@ -510,6 +532,7 @@ type MockDBClient struct {
 	*MockPaginationReader
 	*MockExportReader
 	*MockImportWriter
+	*MockPipelineReader
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -527,5 +550,6 @@ func NewMockDBClient() *MockDBClient {
 		MockPaginationReader: &MockPaginationReader{},
 		MockExportReader:     &MockExportReader{},
 		MockImportWriter:     &MockImportWriter{},
+		MockPipelineReader:   &MockPipelineReader{},
 	}
 }
