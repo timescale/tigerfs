@@ -42,6 +42,9 @@ type ByDirNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*ByDirNode)(nil)
@@ -66,6 +69,20 @@ func NewByDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 		schema:      schema,
 		tableName:   tableName,
 		partialRows: partialRows,
+	}
+}
+
+// NewByDirNodeWithPipeline creates a new .by directory node with pipeline context.
+// The pipeline context is passed through to child nodes for capability chaining.
+func NewByDirNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *ByDirNode {
+	return &ByDirNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		partialRows: partialRows,
+		pipeline:    pipeline,
 	}
 }
 
@@ -205,7 +222,7 @@ func (b *ByDirNode) lookupSingleIndex(ctx context.Context, columnName string) (*
 		Mode: syscall.S_IFDIR,
 	}
 
-	indexNode := NewIndexNode(b.cfg, b.db, b.cache, b.schema, b.tableName, columnName, idx, b.partialRows)
+	indexNode := NewIndexNodeWithPipeline(b.cfg, b.db, b.cache, b.schema, b.tableName, columnName, idx, b.partialRows, b.pipeline)
 	child := b.NewPersistentInode(ctx, indexNode, stableAttr)
 
 	logging.Debug("Created index node",

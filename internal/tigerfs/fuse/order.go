@@ -37,6 +37,9 @@ type OrderDirNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*OrderDirNode)(nil)
@@ -53,6 +56,20 @@ func NewOrderDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCa
 		schema:      schema,
 		tableName:   tableName,
 		partialRows: partialRows,
+	}
+}
+
+// NewOrderDirNodeWithPipeline creates a new .order directory node with pipeline context.
+// The pipeline context is passed through to child nodes for capability chaining.
+func NewOrderDirNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderDirNode {
+	return &OrderDirNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		partialRows: partialRows,
+		pipeline:    pipeline,
 	}
 }
 
@@ -133,7 +150,7 @@ func (o *OrderDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		Mode: syscall.S_IFDIR,
 	}
 
-	columnNode := NewOrderColumnNode(o.cfg, o.db, o.cache, o.schema, o.tableName, name, o.partialRows)
+	columnNode := NewOrderColumnNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, name, o.partialRows, o.pipeline)
 	child := o.NewPersistentInode(ctx, columnNode, stableAttr)
 
 	logging.Debug("Created order column node",
@@ -168,6 +185,9 @@ type OrderColumnNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*OrderColumnNode)(nil)
@@ -185,6 +205,21 @@ func NewOrderColumnNode(cfg *config.Config, dbClient db.DBClient, cache *Metadat
 		tableName:   tableName,
 		orderColumn: orderColumn,
 		partialRows: partialRows,
+	}
+}
+
+// NewOrderColumnNodeWithPipeline creates a new order column node with pipeline context.
+// The pipeline context is passed through to child nodes for capability chaining.
+func NewOrderColumnNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderColumnNode {
+	return &OrderColumnNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		orderColumn: orderColumn,
+		partialRows: partialRows,
+		pipeline:    pipeline,
 	}
 }
 
@@ -224,11 +259,14 @@ func (o *OrderColumnNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 
 	// Check for pagination directories (without leading dot in this context)
 	var paginationType PaginationType
+	var orderDesc bool
 	switch name {
 	case DirFirst[1:]: // "first"
 		paginationType = PaginationFirst
+		orderDesc = false // ASC for first
 	case DirLast[1:]: // "last"
 		paginationType = PaginationLast
+		orderDesc = true // DESC for last
 	default:
 		logging.Debug("Invalid order direction",
 			zap.String("name", name))
@@ -239,7 +277,13 @@ func (o *OrderColumnNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 		Mode: syscall.S_IFDIR,
 	}
 
-	paginationNode := NewOrderedPaginationNode(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, paginationType, o.partialRows)
+	// Apply order to pipeline if present
+	var orderedPipeline *PipelineContext
+	if o.pipeline != nil {
+		orderedPipeline = o.pipeline.WithOrder(o.orderColumn, orderDesc)
+	}
+
+	paginationNode := NewOrderedPaginationNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, paginationType, o.partialRows, orderedPipeline)
 	child := o.NewPersistentInode(ctx, paginationNode, stableAttr)
 
 	logging.Debug("Created ordered pagination node",
@@ -278,6 +322,9 @@ type OrderedPaginationNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*OrderedPaginationNode)(nil)
@@ -296,6 +343,22 @@ func NewOrderedPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *M
 		orderColumn:    orderColumn,
 		paginationType: paginationType,
 		partialRows:    partialRows,
+	}
+}
+
+// NewOrderedPaginationNodeWithPipeline creates a new ordered pagination node with pipeline context.
+// The pipeline context has the order already applied; it's passed through to child nodes.
+func NewOrderedPaginationNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderedPaginationNode {
+	return &OrderedPaginationNode{
+		cfg:            cfg,
+		db:             dbClient,
+		cache:          cache,
+		schema:         schema,
+		tableName:      tableName,
+		orderColumn:    orderColumn,
+		paginationType: paginationType,
+		partialRows:    partialRows,
+		pipeline:       pipeline,
 	}
 }
 
@@ -343,7 +406,7 @@ func (o *OrderedPaginationNode) Lookup(ctx context.Context, name string, out *fu
 		Mode: syscall.S_IFDIR,
 	}
 
-	limitNode := NewOrderedPaginationLimitNode(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, o.paginationType, limit, o.partialRows)
+	limitNode := NewOrderedPaginationLimitNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, o.paginationType, limit, o.partialRows, o.pipeline)
 	child := o.NewPersistentInode(ctx, limitNode, stableAttr)
 
 	logging.Debug("Created ordered pagination limit node",
@@ -357,6 +420,7 @@ func (o *OrderedPaginationNode) Lookup(ctx context.Context, name string, out *fu
 
 // OrderedPaginationLimitNode represents .order/<column>/first/N/ or .order/<column>/last/N/.
 // Lists the first or last N rows ordered by the specified column.
+// When pipeline context is present, also exposes pipeline capabilities.
 type OrderedPaginationLimitNode struct {
 	fs.Inode
 
@@ -386,6 +450,9 @@ type OrderedPaginationLimitNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context with order and limit applied (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*OrderedPaginationLimitNode)(nil)
@@ -394,7 +461,25 @@ var _ fs.NodeReaddirer = (*OrderedPaginationLimitNode)(nil)
 var _ fs.NodeLookuper = (*OrderedPaginationLimitNode)(nil)
 
 // NewOrderedPaginationLimitNode creates a new ordered pagination limit node.
+// For backward compatibility, this creates a node without pipeline context.
 func NewOrderedPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *OrderedPaginationLimitNode {
+	return NewOrderedPaginationLimitNodeWithPipeline(cfg, dbClient, cache, schema, tableName, orderColumn, paginationType, limit, partialRows, nil)
+}
+
+// NewOrderedPaginationLimitNodeWithPipeline creates a new ordered pagination limit node with pipeline context.
+// When basePipeline is provided, the limit is applied to create the node's pipeline.
+func NewOrderedPaginationLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *OrderedPaginationLimitNode {
+	var pipeline *PipelineContext
+
+	// Apply limit to pipeline if context exists
+	if basePipeline != nil {
+		limitType := LimitFirst
+		if paginationType == PaginationLast {
+			limitType = LimitLast
+		}
+		pipeline = basePipeline.WithLimit(limit, limitType)
+	}
+
 	return &OrderedPaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -405,6 +490,7 @@ func NewOrderedPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cac
 		paginationType: paginationType,
 		limit:          limit,
 		partialRows:    partialRows,
+		pipeline:       pipeline,
 	}
 }
 
@@ -424,12 +510,14 @@ func (o *OrderedPaginationLimitNode) Getattr(ctx context.Context, fh fs.FileHand
 }
 
 // Readdir lists rows ordered by the specified column.
+// When pipeline context is present, also lists available capabilities.
 func (o *OrderedPaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("OrderedPaginationLimitNode.Readdir called",
 		zap.String("table", o.tableName),
 		zap.String("column", o.orderColumn),
 		zap.String("type", string(o.paginationType)),
-		zap.Int("limit", o.limit))
+		zap.Int("limit", o.limit),
+		zap.Bool("has_pipeline", o.pipeline != nil))
 
 	// Get primary key for table
 	pk, err := o.db.GetPrimaryKey(ctx, o.schema, o.tableName)
@@ -442,12 +530,17 @@ func (o *OrderedPaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream,
 
 	pkColumn := pk.Columns[0]
 
-	// Get rows ordered by the specified column
+	// Get rows - use pipeline query if context exists
 	var rows []string
-	if o.paginationType == PaginationFirst {
-		rows, err = o.db.GetFirstNRowsOrdered(ctx, o.schema, o.tableName, pkColumn, o.orderColumn, o.limit)
+	if o.pipeline != nil {
+		rows, err = o.db.QueryRowsPipeline(ctx, o.pipeline.ToQueryParams())
 	} else {
-		rows, err = o.db.GetLastNRowsOrdered(ctx, o.schema, o.tableName, pkColumn, o.orderColumn, o.limit)
+		// Legacy behavior: direct query
+		if o.paginationType == PaginationFirst {
+			rows, err = o.db.GetFirstNRowsOrdered(ctx, o.schema, o.tableName, pkColumn, o.orderColumn, o.limit)
+		} else {
+			rows, err = o.db.GetLastNRowsOrdered(ctx, o.schema, o.tableName, pkColumn, o.orderColumn, o.limit)
+		}
 	}
 
 	if err != nil {
@@ -460,7 +553,21 @@ func (o *OrderedPaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream,
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, 0, len(rows))
+	// Build entries: capabilities first (if pipeline), then rows
+	var entries []fuse.DirEntry
+
+	// Add pipeline capabilities if context exists
+	if o.pipeline != nil {
+		caps := o.pipeline.AvailableCapabilities()
+		for _, cap := range caps {
+			entries = append(entries, fuse.DirEntry{
+				Name: cap,
+				Mode: syscall.S_IFDIR,
+			})
+		}
+	}
+
+	// Add rows
 	for _, rowPK := range rows {
 		entries = append(entries, fuse.DirEntry{
 			Name: rowPK,
@@ -473,12 +580,12 @@ func (o *OrderedPaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream,
 		zap.String("column", o.orderColumn),
 		zap.String("type", string(o.paginationType)),
 		zap.Int("limit", o.limit),
-		zap.Int("row_count", len(entries)))
+		zap.Int("row_count", len(rows)))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a row within the ordered results.
+// Lookup looks up a row or capability within the ordered results.
 func (o *OrderedPaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("OrderedPaginationLimitNode.Lookup called",
 		zap.String("table", o.tableName),
@@ -486,6 +593,24 @@ func (o *OrderedPaginationLimitNode) Lookup(ctx context.Context, name string, ou
 		zap.String("type", string(o.paginationType)),
 		zap.Int("limit", o.limit),
 		zap.String("name", name))
+
+	// Check for pipeline capabilities first
+	if o.pipeline != nil {
+		switch name {
+		case DirExport:
+			if o.pipeline.CanExport() {
+				return o.lookupExport(ctx)
+			}
+		case DirBy:
+			if o.pipeline.CanAddFilter() {
+				return o.lookupBy(ctx)
+			}
+		case DirFilter:
+			if o.pipeline.CanAddFilter() {
+				return o.lookupFilter(ctx)
+			}
+		}
+	}
 
 	pkValue, format := util.ParseRowFilename(name)
 
@@ -528,5 +653,29 @@ func (o *OrderedPaginationLimitNode) Lookup(ctx context.Context, name string, ou
 
 	rowDirNode := NewRowDirectoryNode(o.cfg, o.db, o.cache, o.schema, o.tableName, pkColumn, pkValue, o.partialRows)
 	child := o.NewPersistentInode(ctx, rowDirNode, stableAttr)
+	return child, 0
+}
+
+// lookupExport creates an export node using the pipeline context.
+func (o *OrderedPaginationLimitNode) lookupExport(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	exportNode := NewPipelineExportDirNode(o.cfg, o.db, o.cache, o.schema, o.tableName, o.pipeline)
+	child := o.NewPersistentInode(ctx, exportNode, stableAttr)
+	return child, 0
+}
+
+// lookupBy creates a .by/ node using the pipeline context.
+func (o *OrderedPaginationLimitNode) lookupBy(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	byNode := NewByDirNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.partialRows, o.pipeline)
+	child := o.NewPersistentInode(ctx, byNode, stableAttr)
+	return child, 0
+}
+
+// lookupFilter creates a .filter/ node using the pipeline context.
+func (o *OrderedPaginationLimitNode) lookupFilter(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	filterNode := NewFilterDirNode(o.cfg, o.db, o.cache, o.schema, o.tableName, o.pipeline, o.partialRows)
+	child := o.NewPersistentInode(ctx, filterNode, stableAttr)
 	return child, 0
 }

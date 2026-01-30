@@ -35,6 +35,9 @@ type PaginationNode struct {
 	tableName      string             // Table this pagination belongs to
 	paginationType PaginationType     // Whether this is .first or .last
 	partialRows    *PartialRowTracker // Tracker for partial row writes
+
+	// pipeline is the current pipeline context (may be nil for table root)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*PaginationNode)(nil)
@@ -61,6 +64,22 @@ func NewPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *Metadata
 		tableName:      tableName,
 		paginationType: paginationType,
 		partialRows:    partialRows,
+		pipeline:       nil, // No pipeline context at table root
+	}
+}
+
+// NewPaginationNodeWithPipeline creates a new pagination node with pipeline context.
+// Used when .first/ or .last/ appears within a pipeline path.
+func NewPaginationNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker, pipeline *PipelineContext) *PaginationNode {
+	return &PaginationNode{
+		cfg:            cfg,
+		db:             dbClient,
+		cache:          cache,
+		schema:         schema,
+		tableName:      tableName,
+		paginationType: paginationType,
+		partialRows:    partialRows,
+		pipeline:       pipeline,
 	}
 }
 
@@ -108,7 +127,7 @@ func (p *PaginationNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		Mode: syscall.S_IFDIR,
 	}
 
-	limitNode := NewPaginationLimitNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.paginationType, limit, p.partialRows)
+	limitNode := NewPaginationLimitNodeWithPipeline(p.cfg, p.db, p.cache, p.schema, p.tableName, p.paginationType, limit, p.partialRows, p.pipeline)
 	child := p.NewPersistentInode(ctx, limitNode, stableAttr)
 
 	logging.Debug("Created pagination limit node",
@@ -121,6 +140,7 @@ func (p *PaginationNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 
 // PaginationLimitNode represents the .first/N/ or .last/N/ directory.
 // Lists the first or last N rows from the table ordered by primary key.
+// When pipeline context is present, also exposes pipeline capabilities.
 type PaginationLimitNode struct {
 	fs.Inode
 
@@ -132,6 +152,9 @@ type PaginationLimitNode struct {
 	paginationType PaginationType     // Whether this is .first or .last
 	limit          int                // Maximum number of rows to return
 	partialRows    *PartialRowTracker // Tracker for partial row writes
+
+	// pipeline is the current pipeline context with this limit applied
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*PaginationLimitNode)(nil)
@@ -140,6 +163,7 @@ var _ fs.NodeReaddirer = (*PaginationLimitNode)(nil)
 var _ fs.NodeLookuper = (*PaginationLimitNode)(nil)
 
 // NewPaginationLimitNode creates a new .first/N/ or .last/N/ directory node.
+// For backward compatibility, this creates a node without pipeline context.
 //
 // Parameters:
 //   - cfg: TigerFS configuration
@@ -151,6 +175,23 @@ var _ fs.NodeLookuper = (*PaginationLimitNode)(nil)
 //   - limit: Maximum number of rows to list
 //   - partialRows: Tracker for partial row writes
 func NewPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *PaginationLimitNode {
+	return NewPaginationLimitNodeWithPipeline(cfg, dbClient, cache, schema, tableName, paginationType, limit, partialRows, nil)
+}
+
+// NewPaginationLimitNodeWithPipeline creates a new pagination limit node with pipeline context.
+// When basePipeline is provided, the limit is applied to create the node's pipeline.
+func NewPaginationLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *PaginationLimitNode {
+	var pipeline *PipelineContext
+
+	// Apply limit to pipeline if context exists
+	if basePipeline != nil {
+		limitType := LimitFirst
+		if paginationType == PaginationLast {
+			limitType = LimitLast
+		}
+		pipeline = basePipeline.WithLimit(limit, limitType)
+	}
+
 	return &PaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -160,6 +201,7 @@ func NewPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *Met
 		paginationType: paginationType,
 		limit:          limit,
 		partialRows:    partialRows,
+		pipeline:       pipeline,
 	}
 }
 
@@ -178,12 +220,14 @@ func (p *PaginationLimitNode) Getattr(ctx context.Context, fh fs.FileHandle, out
 }
 
 // Readdir lists the first or last N rows ordered by primary key.
+// When pipeline context is present, also lists available capabilities.
 // Returns EIO if the database query fails.
 func (p *PaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("PaginationLimitNode.Readdir called",
 		zap.String("table", p.tableName),
 		zap.String("type", string(p.paginationType)),
-		zap.Int("limit", p.limit))
+		zap.Int("limit", p.limit),
+		zap.Bool("has_pipeline", p.pipeline != nil))
 
 	// Get primary key for table
 	pk, err := p.db.GetPrimaryKey(ctx, p.schema, p.tableName)
@@ -198,10 +242,16 @@ func (p *PaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscal
 
 	// Get rows based on pagination type
 	var rows []string
-	if p.paginationType == PaginationFirst {
-		rows, err = p.db.GetFirstNRows(ctx, p.schema, p.tableName, pkColumn, p.limit)
+	if p.pipeline != nil {
+		// Use pipeline query
+		rows, err = p.db.QueryRowsPipeline(ctx, p.pipeline.ToQueryParams())
 	} else {
-		rows, err = p.db.GetLastNRows(ctx, p.schema, p.tableName, pkColumn, p.limit)
+		// Legacy behavior: direct query
+		if p.paginationType == PaginationFirst {
+			rows, err = p.db.GetFirstNRows(ctx, p.schema, p.tableName, pkColumn, p.limit)
+		} else {
+			rows, err = p.db.GetLastNRows(ctx, p.schema, p.tableName, pkColumn, p.limit)
+		}
 	}
 
 	if err != nil {
@@ -213,8 +263,21 @@ func (p *PaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscal
 		return nil, syscall.EIO
 	}
 
-	// Convert rows to directory entries
-	entries := make([]fuse.DirEntry, 0, len(rows))
+	// Build entries: capabilities first (if pipeline), then rows
+	var entries []fuse.DirEntry
+
+	// Add pipeline capabilities if context exists
+	if p.pipeline != nil {
+		caps := p.pipeline.AvailableCapabilities()
+		for _, cap := range caps {
+			entries = append(entries, fuse.DirEntry{
+				Name: cap,
+				Mode: syscall.S_IFDIR,
+			})
+		}
+	}
+
+	// Add rows
 	for _, rowPK := range rows {
 		entries = append(entries, fuse.DirEntry{
 			Name: rowPK,
@@ -226,12 +289,12 @@ func (p *PaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscal
 		zap.String("table", p.tableName),
 		zap.String("type", string(p.paginationType)),
 		zap.Int("limit", p.limit),
-		zap.Int("row_count", len(entries)))
+		zap.Int("row_count", len(rows)))
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a row within the paginated results.
+// Lookup looks up a row or capability within the paginated results.
 // Returns ENOENT if the row doesn't exist, EIO on database errors.
 func (p *PaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("PaginationLimitNode.Lookup called",
@@ -239,6 +302,40 @@ func (p *PaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse
 		zap.String("type", string(p.paginationType)),
 		zap.Int("limit", p.limit),
 		zap.String("name", name))
+
+	// Check for pipeline capabilities first
+	if p.pipeline != nil {
+		switch name {
+		case DirExport:
+			if p.pipeline.CanExport() {
+				return p.lookupExport(ctx)
+			}
+		case DirFirst:
+			if p.pipeline.CanAddLimit(LimitFirst) {
+				return p.lookupNestedLimit(ctx, PaginationFirst)
+			}
+		case DirLast:
+			if p.pipeline.CanAddLimit(LimitLast) {
+				return p.lookupNestedLimit(ctx, PaginationLast)
+			}
+		case DirSample:
+			if p.pipeline.CanAddLimit(LimitSample) {
+				return p.lookupSample(ctx)
+			}
+		case DirOrder:
+			if p.pipeline.CanAddOrder() {
+				return p.lookupOrder(ctx)
+			}
+		case DirBy:
+			if p.pipeline.CanAddFilter() {
+				return p.lookupBy(ctx)
+			}
+		case DirFilter:
+			if p.pipeline.CanAddFilter() {
+				return p.lookupFilter(ctx)
+			}
+		}
+	}
 
 	// Parse filename to extract PK value and format
 	pkValue, format := util.ParseRowFilename(name)
@@ -283,5 +380,53 @@ func (p *PaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse
 
 	rowDirNode := NewRowDirectoryNode(p.cfg, p.db, p.cache, p.schema, p.tableName, pkColumn, pkValue, p.partialRows)
 	child := p.NewPersistentInode(ctx, rowDirNode, stableAttr)
+	return child, 0
+}
+
+// lookupExport creates an export node using the pipeline context.
+func (p *PaginationLimitNode) lookupExport(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	exportNode := NewPipelineExportDirNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.pipeline)
+	child := p.NewPersistentInode(ctx, exportNode, stableAttr)
+	return child, 0
+}
+
+// lookupNestedLimit creates a nested pagination node for .first/ or .last/.
+func (p *PaginationLimitNode) lookupNestedLimit(ctx context.Context, paginationType PaginationType) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	limitNode := NewPaginationNodeWithPipeline(p.cfg, p.db, p.cache, p.schema, p.tableName, paginationType, p.partialRows, p.pipeline)
+	child := p.NewPersistentInode(ctx, limitNode, stableAttr)
+	return child, 0
+}
+
+// lookupSample creates a sample node using the pipeline context.
+func (p *PaginationLimitNode) lookupSample(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	sampleNode := NewSampleNodeWithPipeline(p.cfg, p.db, p.cache, p.schema, p.tableName, p.partialRows, p.pipeline)
+	child := p.NewPersistentInode(ctx, sampleNode, stableAttr)
+	return child, 0
+}
+
+// lookupOrder creates an order node using the pipeline context.
+func (p *PaginationLimitNode) lookupOrder(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	orderNode := NewOrderDirNodeWithPipeline(p.cfg, p.db, p.cache, p.schema, p.tableName, p.partialRows, p.pipeline)
+	child := p.NewPersistentInode(ctx, orderNode, stableAttr)
+	return child, 0
+}
+
+// lookupBy creates a .by/ node using the pipeline context.
+func (p *PaginationLimitNode) lookupBy(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	byNode := NewByDirNodeWithPipeline(p.cfg, p.db, p.cache, p.schema, p.tableName, p.partialRows, p.pipeline)
+	child := p.NewPersistentInode(ctx, byNode, stableAttr)
+	return child, 0
+}
+
+// lookupFilter creates a .filter/ node using the pipeline context.
+func (p *PaginationLimitNode) lookupFilter(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	filterNode := NewFilterDirNode(p.cfg, p.db, p.cache, p.schema, p.tableName, p.pipeline, p.partialRows)
+	child := p.NewPersistentInode(ctx, filterNode, stableAttr)
 	return child, 0
 }

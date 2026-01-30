@@ -46,6 +46,9 @@ type IndexNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*IndexNode)(nil)
@@ -74,6 +77,22 @@ func NewIndexNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 		column:      column,
 		index:       index,
 		partialRows: partialRows,
+	}
+}
+
+// NewIndexNodeWithPipeline creates a new index directory node with pipeline context.
+// The pipeline context is passed through to child nodes for capability chaining.
+func NewIndexNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *IndexNode {
+	return &IndexNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		column:      column,
+		index:       index,
+		partialRows: partialRows,
+		pipeline:    pipeline,
 	}
 }
 
@@ -189,12 +208,18 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("value", name),
 		zap.Int("count", len(rows)))
 
+	// Apply filter to pipeline if present
+	var filteredPipeline *PipelineContext
+	if n.pipeline != nil {
+		filteredPipeline = n.pipeline.WithFilter(n.column, name, true) // true = indexed
+	}
+
 	// Create an IndexValueNode to handle the result
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	valueNode := NewIndexValueNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.column, name, pkColumn, rows, n.partialRows)
+	valueNode := NewIndexValueNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.column, name, pkColumn, rows, n.partialRows, filteredPipeline)
 	child := n.NewPersistentInode(ctx, valueNode, stableAttr)
 
 	return child, 0
@@ -221,6 +246,7 @@ func (n *IndexNode) lookupPagination(ctx context.Context, name string) (*fs.Inod
 
 // IndexValueNode represents the result of an index lookup (e.g., .email/foo@x.com/).
 // Contains the rows that match the index value.
+// When pipeline context is present, also exposes pipeline capabilities.
 type IndexValueNode struct {
 	fs.Inode
 
@@ -253,6 +279,9 @@ type IndexValueNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context with the filter applied (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*IndexValueNode)(nil)
@@ -288,6 +317,24 @@ func NewIndexValueNode(cfg *config.Config, dbClient db.DBClient, cache *Metadata
 	}
 }
 
+// NewIndexValueNodeWithPipeline creates a node for an index value lookup result with pipeline context.
+// The pipeline context has the filter already applied.
+func NewIndexValueNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker, pipeline *PipelineContext) *IndexValueNode {
+	return &IndexValueNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		column:      column,
+		value:       value,
+		pkColumn:    pkColumn,
+		matchingPKs: matchingPKs,
+		partialRows: partialRows,
+		pipeline:    pipeline,
+	}
+}
+
 // Getattr returns directory attributes for the index value node.
 func (n *IndexValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("IndexValueNode.Getattr called",
@@ -303,20 +350,34 @@ func (n *IndexValueNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 }
 
 // Readdir lists the primary keys of rows matching the index value.
+// When pipeline context is present, lists available capabilities.
 // Also includes .first and .last for ordered pagination access.
 func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("IndexValueNode.Readdir called",
 		zap.String("table", n.tableName),
 		zap.String("column", n.column),
 		zap.String("value", n.value),
-		zap.Int("match_count", len(n.matchingPKs)))
+		zap.Int("match_count", len(n.matchingPKs)),
+		zap.Bool("has_pipeline", n.pipeline != nil))
 
-	// Start with pagination directories
-	entries := make([]fuse.DirEntry, 0, len(n.matchingPKs)+2)
-	entries = append(entries,
-		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
-		fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
-	)
+	var entries []fuse.DirEntry
+
+	// Add pipeline capabilities if context exists
+	if n.pipeline != nil {
+		caps := n.pipeline.AvailableCapabilities()
+		for _, cap := range caps {
+			entries = append(entries, fuse.DirEntry{
+				Name: cap,
+				Mode: syscall.S_IFDIR,
+			})
+		}
+	} else {
+		// Legacy behavior: add pagination directories
+		entries = append(entries,
+			fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
+			fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
+		)
+	}
 
 	// Add matching PKs as files
 	for _, pk := range n.matchingPKs {
@@ -330,7 +391,7 @@ func (n *IndexValueNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 }
 
 // Lookup handles access to a specific row within the index value results.
-// Supports bare PKs, PKs with format extensions, and pagination directories.
+// Supports bare PKs, PKs with format extensions, and pipeline capabilities.
 func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("IndexValueNode.Lookup called",
 		zap.String("table", n.tableName),
@@ -338,9 +399,43 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		zap.String("value", n.value),
 		zap.String("name", name))
 
-	// Handle pagination directories
-	if name == DirFirst || name == DirLast {
-		return n.lookupPagination(ctx, name)
+	// Check for pipeline capabilities first
+	if n.pipeline != nil {
+		switch name {
+		case DirExport:
+			if n.pipeline.CanExport() {
+				return n.lookupExport(ctx)
+			}
+		case DirFirst:
+			if n.pipeline.CanAddLimit(LimitFirst) {
+				return n.lookupPipelineLimit(ctx, PaginationFirst)
+			}
+		case DirLast:
+			if n.pipeline.CanAddLimit(LimitLast) {
+				return n.lookupPipelineLimit(ctx, PaginationLast)
+			}
+		case DirSample:
+			if n.pipeline.CanAddLimit(LimitSample) {
+				return n.lookupSample(ctx)
+			}
+		case DirOrder:
+			if n.pipeline.CanAddOrder() {
+				return n.lookupOrder(ctx)
+			}
+		case DirBy:
+			if n.pipeline.CanAddFilter() {
+				return n.lookupBy(ctx)
+			}
+		case DirFilter:
+			if n.pipeline.CanAddFilter() {
+				return n.lookupFilter(ctx)
+			}
+		}
+	} else {
+		// Legacy behavior: handle pagination directories
+		if name == DirFirst || name == DirLast {
+			return n.lookupPagination(ctx, name)
+		}
 	}
 
 	// Parse filename to extract PK value and format
@@ -385,6 +480,54 @@ func (n *IndexValueNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	rowDirNode := NewRowDirectoryNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pkColumn, pkValue, n.partialRows)
 	child := n.NewPersistentInode(ctx, rowDirNode, stableAttr)
 
+	return child, 0
+}
+
+// lookupExport creates an export node using the pipeline context.
+func (n *IndexValueNode) lookupExport(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	exportNode := NewPipelineExportDirNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pipeline)
+	child := n.NewPersistentInode(ctx, exportNode, stableAttr)
+	return child, 0
+}
+
+// lookupPipelineLimit creates a pagination node using the pipeline context.
+func (n *IndexValueNode) lookupPipelineLimit(ctx context.Context, paginationType PaginationType) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	limitNode := NewPaginationNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, paginationType, n.partialRows, n.pipeline)
+	child := n.NewPersistentInode(ctx, limitNode, stableAttr)
+	return child, 0
+}
+
+// lookupSample creates a sample node using the pipeline context.
+func (n *IndexValueNode) lookupSample(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	sampleNode := NewSampleNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.partialRows, n.pipeline)
+	child := n.NewPersistentInode(ctx, sampleNode, stableAttr)
+	return child, 0
+}
+
+// lookupOrder creates an order node using the pipeline context.
+func (n *IndexValueNode) lookupOrder(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	orderNode := NewOrderDirNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.partialRows, n.pipeline)
+	child := n.NewPersistentInode(ctx, orderNode, stableAttr)
+	return child, 0
+}
+
+// lookupBy creates a .by/ node using the pipeline context.
+func (n *IndexValueNode) lookupBy(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	byNode := NewByDirNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.partialRows, n.pipeline)
+	child := n.NewPersistentInode(ctx, byNode, stableAttr)
+	return child, 0
+}
+
+// lookupFilter creates a .filter/ node using the pipeline context.
+func (n *IndexValueNode) lookupFilter(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	filterNode := NewFilterDirNode(n.cfg, n.db, n.cache, n.schema, n.tableName, n.pipeline, n.partialRows)
+	child := n.NewPersistentInode(ctx, filterNode, stableAttr)
 	return child, 0
 }
 
