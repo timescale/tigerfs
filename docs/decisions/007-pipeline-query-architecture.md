@@ -1,4 +1,4 @@
-# ADR-001: Pipeline Query Architecture
+# ADR-007: Pipeline Query Architecture
 
 **Status:** Accepted
 **Date:** 2026-01-30
