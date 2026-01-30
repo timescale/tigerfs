@@ -232,3 +232,125 @@ name: Alice`
 		t.Errorf("Expected name='Alice', got %v", colMap["name"])
 	}
 }
+
+// TestRowToYAML_PreservesEmoji verifies that emoji are output as literal Unicode,
+// not as escape sequences like \U0001F50C.
+// Regression test: yaml.v3 library escapes non-BMP Unicode chars by default.
+func TestRowToYAML_PreservesEmoji(t *testing.T) {
+	columns := []string{"icon"}
+	values := []interface{}{"🔌"}
+
+	result, err := RowToYAML(columns, values)
+	if err != nil {
+		t.Fatalf("RowToYAML failed: %v", err)
+	}
+
+	yaml := string(result)
+
+	// Should contain literal emoji
+	if !strings.Contains(yaml, "🔌") {
+		t.Errorf("Expected literal emoji in output, got: %s", yaml)
+	}
+
+	// Should NOT contain Unicode escape sequences
+	if strings.Contains(yaml, "\\U") || strings.Contains(yaml, "\\u") {
+		t.Errorf("Emoji should not be escaped, got: %s", yaml)
+	}
+}
+
+// TestRowToYAML_PreservesMultipleEmoji tests various emoji are preserved.
+func TestRowToYAML_PreservesMultipleEmoji(t *testing.T) {
+	tests := []struct {
+		name  string
+		emoji string
+	}{
+		{"plug", "🔌"},
+		{"rocket", "🚀"},
+		{"earth", "🌍"},
+		{"fire", "🔥"},
+		{"check", "✅"},
+		{"flag", "🇺🇸"},
+		{"family", "👨‍👩‍👧‍👦"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			columns := []string{"icon"}
+			values := []interface{}{tt.emoji}
+
+			result, err := RowToYAML(columns, values)
+			if err != nil {
+				t.Fatalf("RowToYAML failed: %v", err)
+			}
+
+			yaml := string(result)
+
+			// Should contain literal emoji
+			if !strings.Contains(yaml, tt.emoji) {
+				t.Errorf("Expected literal emoji %s in output, got: %s", tt.emoji, yaml)
+			}
+
+			// Should NOT contain Unicode escape sequences
+			if strings.Contains(yaml, "\\U") || strings.Contains(yaml, "\\u") {
+				t.Errorf("Emoji should not be escaped, got: %s", yaml)
+			}
+		})
+	}
+}
+
+// TestRowsToYAML_PreservesEmoji tests bulk YAML output preserves emoji.
+func TestRowsToYAML_PreservesEmoji(t *testing.T) {
+	columns := []string{"id", "status"}
+	rows := [][]interface{}{
+		{1, "🔌 Connected"},
+		{2, "🚀 Launched"},
+		{3, "🔥 Hot"},
+	}
+
+	result, err := RowsToYAML(columns, rows)
+	if err != nil {
+		t.Fatalf("RowsToYAML failed: %v", err)
+	}
+
+	yaml := string(result)
+
+	// Should contain literal emoji
+	if !strings.Contains(yaml, "🔌") {
+		t.Errorf("Expected 🔌 in output, got: %s", yaml)
+	}
+	if !strings.Contains(yaml, "🚀") {
+		t.Errorf("Expected 🚀 in output, got: %s", yaml)
+	}
+	if !strings.Contains(yaml, "🔥") {
+		t.Errorf("Expected 🔥 in output, got: %s", yaml)
+	}
+
+	// Should NOT contain Unicode escape sequences
+	if strings.Contains(yaml, "\\U") || strings.Contains(yaml, "\\u") {
+		t.Errorf("Emoji should not be escaped, got: %s", yaml)
+	}
+}
+
+// TestRowToYAML_PreservesUnicode tests that various Unicode chars are preserved.
+func TestRowToYAML_PreservesUnicode(t *testing.T) {
+	columns := []string{"text"}
+	values := []interface{}{"Hello 世界 مرحبا שלום"}
+
+	result, err := RowToYAML(columns, values)
+	if err != nil {
+		t.Fatalf("RowToYAML failed: %v", err)
+	}
+
+	yaml := string(result)
+
+	// Should contain literal Unicode
+	if !strings.Contains(yaml, "世界") {
+		t.Errorf("Expected Chinese characters in output, got: %s", yaml)
+	}
+	if !strings.Contains(yaml, "مرحبا") {
+		t.Errorf("Expected Arabic characters in output, got: %s", yaml)
+	}
+	if !strings.Contains(yaml, "שלום") {
+		t.Errorf("Expected Hebrew characters in output, got: %s", yaml)
+	}
+}

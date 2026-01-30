@@ -573,3 +573,188 @@ func TestParseJSON_SpecialCharacters(t *testing.T) {
 		t.Errorf("Expected text=%q, got %v", expected, colMap["text"])
 	}
 }
+
+// =============================================================================
+// No-Headers Bulk Parsing Tests
+// =============================================================================
+
+func TestParseCSVBulkNoHeaders_Basic(t *testing.T) {
+	columns := []string{"id", "name", "email"}
+	data := []byte("1,Alice,alice@example.com\n2,Bob,bob@example.com\n")
+
+	resultColumns, rows, err := ParseCSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseCSVBulkNoHeaders failed: %v", err)
+	}
+
+	// Should return the provided columns
+	if len(resultColumns) != 3 {
+		t.Errorf("Expected 3 columns, got %d", len(resultColumns))
+	}
+	for i, col := range columns {
+		if resultColumns[i] != col {
+			t.Errorf("Expected column %d to be %q, got %q", i, col, resultColumns[i])
+		}
+	}
+
+	// Should have 2 rows
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+
+	// Check first row
+	if rows[0][0] != "1" {
+		t.Errorf("Expected rows[0][0]='1', got %v", rows[0][0])
+	}
+	if rows[0][1] != "Alice" {
+		t.Errorf("Expected rows[0][1]='Alice', got %v", rows[0][1])
+	}
+	if rows[0][2] != "alice@example.com" {
+		t.Errorf("Expected rows[0][2]='alice@example.com', got %v", rows[0][2])
+	}
+
+	// Check second row
+	if rows[1][0] != "2" {
+		t.Errorf("Expected rows[1][0]='2', got %v", rows[1][0])
+	}
+	if rows[1][1] != "Bob" {
+		t.Errorf("Expected rows[1][1]='Bob', got %v", rows[1][1])
+	}
+}
+
+func TestParseCSVBulkNoHeaders_EmptyData(t *testing.T) {
+	columns := []string{"id", "name"}
+	data := []byte("")
+
+	resultColumns, rows, err := ParseCSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseCSVBulkNoHeaders failed: %v", err)
+	}
+
+	if len(resultColumns) != 2 {
+		t.Errorf("Expected 2 columns, got %d", len(resultColumns))
+	}
+	if len(rows) != 0 {
+		t.Errorf("Expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestParseCSVBulkNoHeaders_ColumnMismatch(t *testing.T) {
+	columns := []string{"id", "name"}
+	data := []byte("1,Alice,extra\n")
+
+	_, _, err := ParseCSVBulkNoHeaders(data, columns)
+	if err == nil {
+		t.Error("Expected error for column count mismatch")
+	}
+}
+
+func TestParseCSVBulkNoHeaders_NullValues(t *testing.T) {
+	columns := []string{"id", "name", "email"}
+	data := []byte("1,Alice,\n2,,bob@example.com\n")
+
+	_, rows, err := ParseCSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseCSVBulkNoHeaders failed: %v", err)
+	}
+
+	// First row: email is NULL
+	if rows[0][2] != nil {
+		t.Errorf("Expected rows[0][2]=nil, got %v", rows[0][2])
+	}
+
+	// Second row: name is NULL
+	if rows[1][1] != nil {
+		t.Errorf("Expected rows[1][1]=nil, got %v", rows[1][1])
+	}
+}
+
+func TestParseTSVBulkNoHeaders_Basic(t *testing.T) {
+	columns := []string{"id", "name", "email"}
+	data := []byte("1\tAlice\talice@example.com\n2\tBob\tbob@example.com\n")
+
+	resultColumns, rows, err := ParseTSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseTSVBulkNoHeaders failed: %v", err)
+	}
+
+	// Should return the provided columns
+	if len(resultColumns) != 3 {
+		t.Errorf("Expected 3 columns, got %d", len(resultColumns))
+	}
+
+	// Should have 2 rows
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+
+	// Check first row
+	if rows[0][0] != "1" {
+		t.Errorf("Expected rows[0][0]='1', got %v", rows[0][0])
+	}
+	if rows[0][1] != "Alice" {
+		t.Errorf("Expected rows[0][1]='Alice', got %v", rows[0][1])
+	}
+}
+
+func TestParseTSVBulkNoHeaders_EmptyData(t *testing.T) {
+	columns := []string{"id", "name"}
+	data := []byte("")
+
+	resultColumns, rows, err := ParseTSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseTSVBulkNoHeaders failed: %v", err)
+	}
+
+	if len(resultColumns) != 2 {
+		t.Errorf("Expected 2 columns, got %d", len(resultColumns))
+	}
+	if len(rows) != 0 {
+		t.Errorf("Expected 0 rows, got %d", len(rows))
+	}
+}
+
+func TestParseTSVBulkNoHeaders_ColumnMismatch(t *testing.T) {
+	columns := []string{"id", "name"}
+	data := []byte("1\tAlice\textra\n")
+
+	_, _, err := ParseTSVBulkNoHeaders(data, columns)
+	if err == nil {
+		t.Error("Expected error for column count mismatch")
+	}
+}
+
+func TestParseTSVBulkNoHeaders_NullValues(t *testing.T) {
+	columns := []string{"id", "name", "email"}
+	data := []byte("1\tAlice\t\n2\t\tbob@example.com\n")
+
+	_, rows, err := ParseTSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseTSVBulkNoHeaders failed: %v", err)
+	}
+
+	// First row: email is NULL
+	if rows[0][2] != nil {
+		t.Errorf("Expected rows[0][2]=nil, got %v", rows[0][2])
+	}
+
+	// Second row: name is NULL
+	if rows[1][1] != nil {
+		t.Errorf("Expected rows[1][1]=nil, got %v", rows[1][1])
+	}
+}
+
+func TestParseTSVBulkNoHeaders_SkipsEmptyLines(t *testing.T) {
+	columns := []string{"id", "name"}
+	data := []byte("1\tAlice\n\n2\tBob\n")
+
+	_, rows, err := ParseTSVBulkNoHeaders(data, columns)
+	if err != nil {
+		t.Fatalf("ParseTSVBulkNoHeaders failed: %v", err)
+	}
+
+	// Should have 2 rows (empty line skipped)
+	if len(rows) != 2 {
+		t.Fatalf("Expected 2 rows, got %d", len(rows))
+	}
+}

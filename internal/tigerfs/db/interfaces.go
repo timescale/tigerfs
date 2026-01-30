@@ -194,6 +194,22 @@ type ExportReader interface {
 	GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
 }
 
+// ImportWriter provides bulk data import operations.
+// Used by .import/ capability for bulk data loading.
+type ImportWriter interface {
+	// ImportOverwrite replaces all table data with new rows.
+	// Executes TRUNCATE followed by bulk INSERT in a single transaction.
+	ImportOverwrite(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
+
+	// ImportSync performs upsert operations for all rows.
+	// Uses INSERT ... ON CONFLICT DO UPDATE. Requires table to have a primary key.
+	ImportSync(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
+
+	// ImportAppend inserts new rows without modifying existing data.
+	// Fails on primary key conflicts (duplicate key errors).
+	ImportAppend(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
+}
+
 // DBClient is the composite interface combining all database capabilities.
 // FUSE nodes that need multiple capabilities can accept this interface.
 // *db.Client satisfies this interface automatically.
@@ -207,6 +223,7 @@ type DBClient interface {
 	DDLReader
 	PaginationReader
 	ExportReader
+	ImportWriter
 }
 
 // Compile-time verification that *Client implements DBClient

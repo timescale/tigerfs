@@ -90,25 +90,46 @@ func (e *ExportDirNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse
 	return 0
 }
 
-// Readdir lists available export formats.
+// Readdir lists available export formats and options.
 func (e *ExportDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("ExportDirNode.Readdir called", zap.String("table", e.tableName))
 
 	entries := []fuse.DirEntry{
+		{Name: DirWithHeaders, Mode: syscall.S_IFDIR}, // .with-headers/ option
 		{Name: FmtCSV, Mode: syscall.S_IFREG},
-		{Name: FmtTSV, Mode: syscall.S_IFREG},
 		{Name: FmtJSON, Mode: syscall.S_IFREG},
+		{Name: FmtTSV, Mode: syscall.S_IFREG},
 		{Name: FmtYAML, Mode: syscall.S_IFREG},
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a format name (csv, tsv, json, yaml).
+// Lookup looks up a format name (csv, tsv, json, yaml) or the .with-headers option.
 func (e *ExportDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("ExportDirNode.Lookup called",
 		zap.String("table", e.tableName),
 		zap.String("name", name))
+
+	// Handle .with-headers option directory
+	if name == DirWithHeaders {
+		stableAttr := fs.StableAttr{
+			Mode: syscall.S_IFDIR,
+		}
+		optNode := &ExportWithHeadersNode{
+			cfg:       e.cfg,
+			db:        e.db,
+			cache:     e.cache,
+			schema:    e.schema,
+			tableName: e.tableName,
+			limit:     e.limit,
+			pkColumn:  e.pkColumn,
+			orderBy:   e.orderBy,
+			ascending: e.ascending,
+		}
+		child := e.NewPersistentInode(ctx, optNode, stableAttr)
+		return child, 0
+	}
 
 	// Validate format name
 	switch name {
@@ -123,16 +144,17 @@ func (e *ExportDirNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 	}
 
 	fileNode := &ExportFileNode{
-		cfg:       e.cfg,
-		db:        e.db,
-		cache:     e.cache,
-		schema:    e.schema,
-		tableName: e.tableName,
-		format:    name,
-		limit:     e.limit,
-		pkColumn:  e.pkColumn,
-		orderBy:   e.orderBy,
-		ascending: e.ascending,
+		cfg:         e.cfg,
+		db:          e.db,
+		cache:       e.cache,
+		schema:      e.schema,
+		tableName:   e.tableName,
+		format:      name,
+		limit:       e.limit,
+		pkColumn:    e.pkColumn,
+		orderBy:     e.orderBy,
+		ascending:   e.ascending,
+		withHeaders: false, // Default: no headers
 	}
 
 	child := e.NewPersistentInode(ctx, fileNode, stableAttr)
@@ -144,16 +166,17 @@ func (e *ExportDirNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 type ExportFileNode struct {
 	fs.Inode
 
-	cfg       *config.Config // TigerFS configuration
-	db        db.DBClient    // Database client for queries
-	cache     *MetadataCache // Cache for row count estimates
-	schema    string         // PostgreSQL schema name
-	tableName string         // Table to export from
-	format    string         // Export format (csv, tsv, json, yaml)
-	limit     int            // Row limit for export (0 = use DirListingLimit)
-	pkColumn  string         // Primary key column (empty = no ordering)
-	orderBy   string         // Column to order by (empty = default order)
-	ascending bool           // Order direction (true = ASC, false = DESC)
+	cfg         *config.Config // TigerFS configuration
+	db          db.DBClient    // Database client for queries
+	cache       *MetadataCache // Cache for row count estimates
+	schema      string         // PostgreSQL schema name
+	tableName   string         // Table to export from
+	format      string         // Export format (csv, tsv, json, yaml)
+	limit       int            // Row limit for export (0 = use DirListingLimit)
+	pkColumn    string         // Primary key column (empty = no ordering)
+	orderBy     string         // Column to order by (empty = default order)
+	ascending   bool           // Order direction (true = ASC, false = DESC)
+	withHeaders bool           // Include header row in CSV/TSV output
 
 	// Cached data (materialized on first access)
 	data []byte
@@ -253,9 +276,17 @@ func (e *ExportFileNode) materialize(ctx context.Context) error {
 	// Serialize to requested format
 	switch e.format {
 	case FmtCSV:
-		e.data, err = format.RowsToCSV(columns, rows)
+		if e.withHeaders {
+			e.data, err = format.RowsToCSVWithHeaders(columns, rows)
+		} else {
+			e.data, err = format.RowsToCSV(columns, rows)
+		}
 	case FmtTSV:
-		e.data, err = format.RowsToTSV(columns, rows)
+		if e.withHeaders {
+			e.data, err = format.RowsToTSVWithHeaders(columns, rows)
+		} else {
+			e.data, err = format.RowsToTSV(columns, rows)
+		}
 	case FmtJSON:
 		e.data, err = format.RowsToJSON(columns, rows)
 	case FmtYAML:
@@ -321,4 +352,74 @@ type unknownFormatError struct {
 
 func (e *unknownFormatError) Error() string {
 	return "unknown export format: " + e.format
+}
+
+// ExportWithHeadersNode represents the .with-headers/ directory under .export/.
+// Only lists CSV and TSV formats since JSON/YAML already have keys as headers.
+type ExportWithHeadersNode struct {
+	fs.Inode
+
+	cfg       *config.Config
+	db        db.DBClient
+	cache     *MetadataCache
+	schema    string
+	tableName string
+	limit     int
+	pkColumn  string
+	orderBy   string
+	ascending bool
+}
+
+var _ fs.InodeEmbedder = (*ExportWithHeadersNode)(nil)
+var _ fs.NodeGetattrer = (*ExportWithHeadersNode)(nil)
+var _ fs.NodeReaddirer = (*ExportWithHeadersNode)(nil)
+var _ fs.NodeLookuper = (*ExportWithHeadersNode)(nil)
+
+// Getattr returns attributes for the .with-headers directory.
+func (w *ExportWithHeadersNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0500 | syscall.S_IFDIR
+	out.Nlink = 2
+	out.Size = 4096
+	return 0
+}
+
+// Readdir lists formats that support headers (csv, tsv only).
+func (w *ExportWithHeadersNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	entries := []fuse.DirEntry{
+		{Name: FmtCSV, Mode: syscall.S_IFREG},
+		{Name: FmtTSV, Mode: syscall.S_IFREG},
+	}
+	return fs.NewListDirStream(entries), 0
+}
+
+// Lookup looks up a format file with headers enabled.
+func (w *ExportWithHeadersNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// Only CSV and TSV support explicit headers option
+	switch name {
+	case FmtCSV, FmtTSV:
+		// Valid
+	default:
+		return nil, syscall.ENOENT
+	}
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFREG,
+	}
+
+	fileNode := &ExportFileNode{
+		cfg:         w.cfg,
+		db:          w.db,
+		cache:       w.cache,
+		schema:      w.schema,
+		tableName:   w.tableName,
+		format:      name,
+		limit:       w.limit,
+		pkColumn:    w.pkColumn,
+		orderBy:     w.orderBy,
+		ascending:   w.ascending,
+		withHeaders: true, // Include headers
+	}
+
+	child := w.NewPersistentInode(ctx, fileNode, stableAttr)
+	return child, 0
 }

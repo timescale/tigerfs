@@ -320,3 +320,158 @@ func TestRowToJSON_NestedTypes(t *testing.T) {
 		t.Error("Expected metadata object to exist")
 	}
 }
+
+// TestRowToJSON_PreservesAmpersand verifies that & is not escaped as \u0026.
+// Regression test: encoding/json with SetEscapeHTML(true) escapes HTML chars.
+func TestRowToJSON_PreservesAmpersand(t *testing.T) {
+	columns := []string{"name"}
+	values := []interface{}{"Tom & Jerry"}
+
+	result, err := RowToJSON(columns, values)
+	if err != nil {
+		t.Fatalf("RowToJSON() failed: %v", err)
+	}
+
+	resultStr := string(result)
+
+	// Should contain literal ampersand
+	if !strings.Contains(resultStr, "Tom & Jerry") {
+		t.Errorf("Expected 'Tom & Jerry' in output, got: %s", resultStr)
+	}
+
+	// Should NOT contain escaped ampersand
+	if strings.Contains(resultStr, "\\u0026") {
+		t.Errorf("Ampersand should not be escaped as \\u0026, got: %s", resultStr)
+	}
+
+	// Verify it's still valid JSON that parses correctly
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Result is not valid JSON: %v", err)
+	}
+	if parsed["name"] != "Tom & Jerry" {
+		t.Errorf("Expected name='Tom & Jerry', got %v", parsed["name"])
+	}
+}
+
+// TestRowToJSON_PreservesHTMLChars verifies that < > & are not escaped.
+// These are valid in JSON but encoding/json escapes them by default for HTML safety.
+func TestRowToJSON_PreservesHTMLChars(t *testing.T) {
+	columns := []string{"html"}
+	values := []interface{}{"<script>alert('xss')</script> & more"}
+
+	result, err := RowToJSON(columns, values)
+	if err != nil {
+		t.Fatalf("RowToJSON() failed: %v", err)
+	}
+
+	resultStr := string(result)
+
+	// Should NOT contain HTML-escaped characters
+	if strings.Contains(resultStr, "\\u003c") || strings.Contains(resultStr, "\\u003e") || strings.Contains(resultStr, "\\u0026") {
+		t.Errorf("HTML characters should not be escaped, got: %s", resultStr)
+	}
+
+	// Verify round-trip works
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Result is not valid JSON: %v", err)
+	}
+	if parsed["html"] != "<script>alert('xss')</script> & more" {
+		t.Errorf("HTML chars not preserved in round-trip, got %v", parsed["html"])
+	}
+}
+
+// TestRowsToJSON_PreservesAmpersand tests bulk JSON output preserves ampersand.
+func TestRowsToJSON_PreservesAmpersand(t *testing.T) {
+	columns := []string{"id", "name"}
+	rows := [][]interface{}{
+		{1, "Ben & Jerry's"},
+		{2, "AT&T"},
+	}
+
+	result, err := RowsToJSON(columns, rows)
+	if err != nil {
+		t.Fatalf("RowsToJSON() failed: %v", err)
+	}
+
+	resultStr := string(result)
+
+	// Should contain literal ampersands
+	if !strings.Contains(resultStr, "Ben & Jerry's") {
+		t.Errorf("Expected 'Ben & Jerry's' in output, got: %s", resultStr)
+	}
+	if !strings.Contains(resultStr, "AT&T") {
+		t.Errorf("Expected 'AT&T' in output, got: %s", resultStr)
+	}
+
+	// Should NOT contain escaped ampersands
+	if strings.Contains(resultStr, "\\u0026") {
+		t.Errorf("Ampersand should not be escaped, got: %s", resultStr)
+	}
+}
+
+// TestRowToJSON_UUID tests that UUIDs are serialized as strings, not byte arrays.
+// Regression test: pgx returns UUIDs as [16]byte which json.Marshal outputs as array.
+func TestRowToJSON_UUID(t *testing.T) {
+	// Simulate pgx returning a UUID as [16]byte
+	uuidBytes := [16]byte{
+		0x01, 0x9c, 0x0d, 0x00, 0x86, 0xea, 0x75, 0x14,
+		0xa6, 0x8d, 0xc4, 0x92, 0x1b, 0xc7, 0x6e, 0x25,
+	}
+
+	columns := []string{"id", "name"}
+	values := []interface{}{uuidBytes, "test"}
+
+	result, err := RowToJSON(columns, values)
+	if err != nil {
+		t.Fatalf("RowToJSON() failed: %v", err)
+	}
+
+	resultStr := string(result)
+	t.Logf("JSON output: %s", resultStr)
+
+	// Should contain UUID as string, not as array
+	if !strings.Contains(resultStr, "019c0d00-86ea-7514-a68d-c4921bc76e25") {
+		t.Errorf("Expected UUID string in output, got: %s", resultStr)
+	}
+
+	// Should NOT contain array representation
+	if strings.Contains(resultStr, "[1,156,") {
+		t.Errorf("UUID should not be serialized as byte array, got: %s", resultStr)
+	}
+}
+
+// TestRowsToJSON_UUID tests bulk JSON with UUIDs.
+func TestRowsToJSON_UUID(t *testing.T) {
+	// Simulate pgx returning UUIDs as [16]byte
+	uuid1 := [16]byte{0x01, 0x9c, 0x0d, 0x00, 0x86, 0xea, 0x75, 0x14, 0xa6, 0x8d, 0xc4, 0x92, 0x1b, 0xc7, 0x6e, 0x25}
+	uuid2 := [16]byte{0x01, 0x9c, 0x0d, 0x01, 0x86, 0xea, 0x75, 0x14, 0xa6, 0x8d, 0xc4, 0x92, 0x1b, 0xc7, 0x6e, 0x26}
+
+	columns := []string{"id", "name"}
+	rows := [][]interface{}{
+		{uuid1, "Alice"},
+		{uuid2, "Bob"},
+	}
+
+	result, err := RowsToJSON(columns, rows)
+	if err != nil {
+		t.Fatalf("RowsToJSON() failed: %v", err)
+	}
+
+	resultStr := string(result)
+	t.Logf("JSON output: %s", resultStr)
+
+	// Should contain UUIDs as strings
+	if !strings.Contains(resultStr, "019c0d00-86ea-7514-a68d-c4921bc76e25") {
+		t.Errorf("Expected first UUID string in output, got: %s", resultStr)
+	}
+	if !strings.Contains(resultStr, "019c0d01-86ea-7514-a68d-c4921bc76e26") {
+		t.Errorf("Expected second UUID string in output, got: %s", resultStr)
+	}
+
+	// Should NOT contain array representations
+	if strings.Contains(resultStr, "[1,156,") {
+		t.Errorf("UUIDs should not be serialized as byte arrays, got: %s", resultStr)
+	}
+}

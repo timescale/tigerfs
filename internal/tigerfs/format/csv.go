@@ -80,3 +80,35 @@ func RowsToCSV(columns []string, rows [][]interface{}) ([]byte, error) {
 
 	return []byte(sb.String()), nil
 }
+
+// RowsToCSVWithHeaders converts multiple database rows to CSV format with a header row.
+// First row is column names, subsequent rows are data.
+// Used for round-trip compatibility with import.
+func RowsToCSVWithHeaders(columns []string, rows [][]interface{}) ([]byte, error) {
+	var sb strings.Builder
+
+	// Write header row
+	for i, col := range columns {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString(valueToCSVField(col))
+	}
+	sb.WriteString("\n")
+
+	// Write data rows
+	for _, row := range rows {
+		if len(row) != len(columns) {
+			return nil, fmt.Errorf("column count mismatch: %d columns, %d values", len(columns), len(row))
+		}
+		for i, value := range row {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			sb.WriteString(valueToCSVField(value))
+		}
+		sb.WriteString("\n")
+	}
+
+	return []byte(sb.String()), nil
+}

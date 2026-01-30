@@ -169,14 +169,7 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return child, 0
 	}
 
-	// Get the resolved default schema from the cache
-	defaultSchema := r.cache.GetDefaultSchema()
-	if defaultSchema == "" {
-		// Fallback to config if cache hasn't resolved it yet
-		defaultSchema = r.cfg.DefaultSchema
-	}
-
-	// Check if table exists in cache
+	// Check if table exists in cache (this triggers cache refresh if needed)
 	isTable, err := r.cache.HasTable(ctx, name)
 	if err != nil {
 		logging.Error("Failed to check table existence", zap.String("table", name), zap.Error(err))
@@ -184,6 +177,11 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	if isTable {
+		// Get the resolved default schema from the cache (now refreshed)
+		defaultSchema := r.cache.GetDefaultSchema()
+		if defaultSchema == "" {
+			defaultSchema = r.cfg.DefaultSchema
+		}
 		// Table exists - create table directory node
 		logging.Debug("Table found", zap.String("table", name))
 		tableNode := NewTableNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows, r.staging)
@@ -199,6 +197,11 @@ func (r *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	if isView {
+		// Get the resolved default schema from the cache
+		defaultSchema := r.cache.GetDefaultSchema()
+		if defaultSchema == "" {
+			defaultSchema = r.cfg.DefaultSchema
+		}
 		// View exists - create view directory node
 		logging.Debug("View found", zap.String("view", name))
 		viewNode := NewViewNode(r.cfg, r.db, r.cache, defaultSchema, name, r.partialRows, r.staging)

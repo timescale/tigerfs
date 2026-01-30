@@ -459,6 +459,36 @@ func (m *MockExportReader) GetLastNRowsWithData(ctx context.Context, schema, tab
 	return []string{}, [][]interface{}{}, nil
 }
 
+// MockImportWriter is a mock implementation of ImportWriter for testing.
+type MockImportWriter struct {
+	ImportOverwriteFunc func(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
+	ImportSyncFunc      func(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
+	ImportAppendFunc    func(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error
+}
+
+var _ ImportWriter = (*MockImportWriter)(nil)
+
+func (m *MockImportWriter) ImportOverwrite(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error {
+	if m.ImportOverwriteFunc != nil {
+		return m.ImportOverwriteFunc(ctx, schema, table, columns, rows)
+	}
+	return nil
+}
+
+func (m *MockImportWriter) ImportSync(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error {
+	if m.ImportSyncFunc != nil {
+		return m.ImportSyncFunc(ctx, schema, table, columns, rows)
+	}
+	return nil
+}
+
+func (m *MockImportWriter) ImportAppend(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error {
+	if m.ImportAppendFunc != nil {
+		return m.ImportAppendFunc(ctx, schema, table, columns, rows)
+	}
+	return nil
+}
+
 // MockDBClient is a composite mock implementing DBClient for full FUSE node testing.
 // Embeds individual mocks for each interface.
 type MockDBClient struct {
@@ -471,6 +501,7 @@ type MockDBClient struct {
 	*MockDDLReader
 	*MockPaginationReader
 	*MockExportReader
+	*MockImportWriter
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -487,5 +518,6 @@ func NewMockDBClient() *MockDBClient {
 		MockDDLReader:        &MockDDLReader{},
 		MockPaginationReader: &MockPaginationReader{},
 		MockExportReader:     &MockExportReader{},
+		MockImportWriter:     &MockImportWriter{},
 	}
 }

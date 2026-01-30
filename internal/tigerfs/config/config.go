@@ -27,6 +27,7 @@ type Config struct {
 
 	// Filesystem
 	DirListingLimit      int           `mapstructure:"dir_listing_limit"`
+	DirWritingLimit      int           `mapstructure:"dir_writing_limit"`
 	TrailingNewlines     bool          `mapstructure:"trailing_newlines"`
 	NoFilenameExtensions bool          `mapstructure:"no_filename_extensions"`
 	AttrTimeout          time.Duration `mapstructure:"attr_timeout"`
@@ -58,6 +59,7 @@ func Init() error {
 	viper.SetDefault("pool_size", 10)
 	viper.SetDefault("pool_max_idle", 5)
 	viper.SetDefault("dir_listing_limit", 10000)
+	viper.SetDefault("dir_writing_limit", 100000)
 	viper.SetDefault("trailing_newlines", true)
 	viper.SetDefault("no_filename_extensions", false)
 	viper.SetDefault("attr_timeout", 1*time.Second)

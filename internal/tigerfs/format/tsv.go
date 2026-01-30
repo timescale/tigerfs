@@ -75,3 +75,29 @@ func RowsToTSV(columns []string, rows [][]interface{}) ([]byte, error) {
 
 	return []byte(sb.String()), nil
 }
+
+// RowsToTSVWithHeaders converts multiple database rows to TSV format with a header row.
+// First row is column names, subsequent rows are data.
+// Used for round-trip compatibility with import.
+func RowsToTSVWithHeaders(columns []string, rows [][]interface{}) ([]byte, error) {
+	var sb strings.Builder
+
+	// Write header row
+	sb.WriteString(strings.Join(columns, "\t"))
+	sb.WriteString("\n")
+
+	// Write data rows
+	for _, row := range rows {
+		if len(row) != len(columns) {
+			return nil, fmt.Errorf("column count mismatch: %d columns, %d values", len(columns), len(row))
+		}
+		fields := make([]string, len(row))
+		for i, value := range row {
+			fields[i] = ValueToString(value)
+		}
+		sb.WriteString(strings.Join(fields, "\t"))
+		sb.WriteString("\n")
+	}
+
+	return []byte(sb.String()), nil
+}

@@ -88,6 +88,46 @@ func ConvertValueToText(value interface{}) (string, error) {
 	}
 }
 
+// NormalizeForJSON converts PostgreSQL-specific types to JSON-compatible types.
+// Unlike ConvertValueToText, this preserves JSON-native types (strings, numbers, bools, nil)
+// while converting problematic types like [16]byte UUIDs to strings.
+func NormalizeForJSON(value interface{}) interface{} {
+	if value == nil {
+		return nil
+	}
+
+	switch v := value.(type) {
+	case string, bool, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, float32, float64:
+		// JSON-native types - keep as-is
+		return v
+
+	case [16]byte:
+		// UUID - convert to string
+		u, err := uuid.FromBytes(v[:])
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return u.String()
+
+	case []byte:
+		// Could be text or binary - try as string
+		return string(v)
+
+	case time.Time:
+		// Convert to ISO 8601 string
+		return v.Format(time.RFC3339Nano)
+
+	default:
+		// Check if implements Stringer (e.g., pgtype.UUID)
+		if s, ok := value.(fmt.Stringer); ok {
+			return s.String()
+		}
+		// Return as-is and let json.Marshal handle it
+		return v
+	}
+}
+
 // BoolToPostgresText converts a boolean to PostgreSQL text format (t/f)
 func BoolToPostgresText(value bool) string {
 	if value {

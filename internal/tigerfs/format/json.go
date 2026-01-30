@@ -15,10 +15,10 @@ func RowToJSON(columns []string, values []interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("column count mismatch: %d columns, %d values", len(columns), len(values))
 	}
 
-	// Build map of column name -> value
+	// Build map of column name -> normalized value
 	rowMap := make(map[string]interface{}, len(columns))
 	for i, column := range columns {
-		rowMap[column] = values[i]
+		rowMap[column] = NormalizeForJSON(values[i])
 	}
 
 	// Marshal to JSON without HTML escaping
@@ -45,7 +45,7 @@ func RowToJSON(columns []string, values []interface{}) ([]byte, error) {
 //
 // Returns JSON array with pretty printing for readability.
 func RowsToJSON(columns []string, rows [][]interface{}) ([]byte, error) {
-	// Build array of row objects
+	// Build array of row objects with normalized values
 	result := make([]map[string]interface{}, len(rows))
 	for i, row := range rows {
 		if len(row) != len(columns) {
@@ -53,7 +53,7 @@ func RowsToJSON(columns []string, rows [][]interface{}) ([]byte, error) {
 		}
 		rowMap := make(map[string]interface{}, len(columns))
 		for j, column := range columns {
-			rowMap[column] = row[j]
+			rowMap[column] = NormalizeForJSON(row[j])
 		}
 		result[i] = rowMap
 	}

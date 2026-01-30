@@ -29,11 +29,13 @@ const (
 // Bulk data capabilities
 // These directories enable bulk import/export operations.
 const (
-	DirExport    = ".export"    // Bulk export
-	DirImport    = ".import"    // Bulk import
-	DirOverwrite = ".overwrite" // Import mode: replace all rows
-	DirSync      = ".sync"      // Import mode: upsert by primary key
-	DirAppend    = ".append"    // Import mode: insert only
+	DirExport      = ".export"       // Bulk export
+	DirImport      = ".import"       // Bulk import
+	DirOverwrite   = ".overwrite"    // Import mode: replace all rows
+	DirSync        = ".sync"         // Import mode: upsert by primary key
+	DirAppend      = ".append"       // Import mode: insert only
+	DirWithHeaders = ".with-headers" // Export option: include header row
+	DirNoHeaders   = ".no-headers"   // Import option: no header row, use schema order
 )
 
 // Schema-level directories
