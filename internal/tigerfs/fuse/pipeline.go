@@ -6,45 +6,28 @@
 
 package fuse
 
-// LimitType represents the type of row limiting operation.
-type LimitType int
-
-const (
-	// LimitNone indicates no limit has been applied.
-	LimitNone LimitType = iota
-	// LimitFirst limits to the first N rows.
-	LimitFirst
-	// LimitLast limits to the last N rows.
-	LimitLast
-	// LimitSample randomly samples N rows.
-	LimitSample
+import (
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
-// String returns a human-readable name for the LimitType.
-func (lt LimitType) String() string {
-	switch lt {
-	case LimitFirst:
-		return "first"
-	case LimitLast:
-		return "last"
-	case LimitSample:
-		return "sample"
-	default:
-		return "none"
-	}
-}
+// Type aliases for db package types to simplify usage in fuse package.
+// These are used throughout the pipeline to track query state.
+type (
+	// LimitType represents the type of row limiting operation.
+	LimitType = db.LimitType
+	// FilterCondition represents a column equality filter.
+	FilterCondition = db.FilterCondition
+	// QueryParams contains the parameters needed to build a pipeline query.
+	QueryParams = db.QueryParams
+)
 
-// FilterCondition represents a column equality filter.
-// Multiple filters are combined with AND.
-type FilterCondition struct {
-	// Column is the column name to filter on.
-	Column string
-	// Value is the value to match (equality comparison).
-	Value string
-	// Indexed indicates whether this filter came from .by/ (true) or .filter/ (false).
-	// This affects query planning but not semantics.
-	Indexed bool
-}
+// Re-export LimitType constants for convenience.
+const (
+	LimitNone   = db.LimitNone
+	LimitFirst  = db.LimitFirst
+	LimitLast   = db.LimitLast
+	LimitSample = db.LimitSample
+)
 
 // PipelineContext accumulates query state as users navigate through capability paths.
 // It is immutable - all mutation methods return a new instance.
@@ -316,22 +299,6 @@ func (p *PipelineContext) AvailableCapabilities() []string {
 	}
 
 	return caps
-}
-
-// QueryParams contains the parameters needed to build a pipeline query.
-// This is used to pass context from the FUSE layer to the database layer.
-type QueryParams struct {
-	Schema    string
-	Table     string
-	PKColumn  string
-	Filters   []FilterCondition
-	OrderBy   string
-	OrderDesc bool
-	Limit     int
-	LimitType LimitType
-	// For nested limits (subquery needed)
-	PreviousLimit     int
-	PreviousLimitType LimitType
 }
 
 // ToQueryParams converts the PipelineContext to QueryParams for the database layer.
