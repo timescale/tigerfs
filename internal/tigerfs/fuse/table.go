@@ -155,6 +155,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		fuse.DirEntry{Name: DirBy, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirDelete, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirExport, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirFilter, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirImport, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirIndexes, Mode: syscall.S_IFDIR},
@@ -198,6 +199,8 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return t.lookupDeleteDirectory(ctx)
 	case DirExport:
 		return t.lookupExportDirectory(ctx)
+	case DirFilter:
+		return t.lookupFilterDirectory(ctx)
 	case DirFirst:
 		return t.lookupPaginationDirectory(ctx, PaginationFirst)
 	case DirImport:
@@ -289,11 +292,25 @@ func (t *TableNode) lookupSampleDirectory(ctx context.Context) (*fs.Inode, sysca
 	logging.Debug("Looking up .sample directory",
 		zap.String("table", t.tableName))
 
+	// Get primary key for table to create pipeline context
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key for sample directory",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Create initial pipeline context for table root
+	pipeline := NewPipelineContext(t.schema, t.tableName, pkColumn)
+
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	sampleNode := NewSampleNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	sampleNode := NewSampleNodeWithPipeline(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows, pipeline)
 	child := t.NewPersistentInode(ctx, sampleNode, stableAttr)
 
 	logging.Debug("Created .sample directory node",
@@ -308,11 +325,25 @@ func (t *TableNode) lookupPaginationDirectory(ctx context.Context, paginationTyp
 		zap.String("table", t.tableName),
 		zap.String("type", string(paginationType)))
 
+	// Get primary key for table to create pipeline context
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key for pagination directory",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Create initial pipeline context for table root
+	pipeline := NewPipelineContext(t.schema, t.tableName, pkColumn)
+
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	paginationNode := NewPaginationNode(t.cfg, t.db, t.cache, t.schema, t.tableName, paginationType, t.partialRows)
+	paginationNode := NewPaginationNodeWithPipeline(t.cfg, t.db, t.cache, t.schema, t.tableName, paginationType, t.partialRows, pipeline)
 	child := t.NewPersistentInode(ctx, paginationNode, stableAttr)
 
 	logging.Debug("Created pagination directory node",
@@ -603,6 +634,40 @@ func (t *TableNode) lookupExportDirectory(ctx context.Context) (*fs.Inode, sysca
 	return child, 0
 }
 
+// lookupFilterDirectory handles lookup for the .filter directory (column filtering).
+func (t *TableNode) lookupFilterDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up .filter directory",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	// Get primary key for table to create pipeline context
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key for filter directory",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Create initial pipeline context for table root
+	pipeline := NewPipelineContext(t.schema, t.tableName, pkColumn)
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	filterNode := NewFilterDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName, pipeline, t.partialRows)
+	child := t.NewPersistentInode(ctx, filterNode, stableAttr)
+
+	logging.Debug("Created .filter directory node",
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
 // lookupImportDirectory handles lookup for the .import directory (bulk data import).
 func (t *TableNode) lookupImportDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
 	logging.Debug("Looking up .import directory",
@@ -657,11 +722,25 @@ func (t *TableNode) lookupByDirectory(ctx context.Context) (*fs.Inode, syscall.E
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 
+	// Get primary key for table to create pipeline context
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key for .by directory",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Create initial pipeline context for table root
+	pipeline := NewPipelineContext(t.schema, t.tableName, pkColumn)
+
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	byNode := NewByDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	byNode := NewByDirNodeWithPipeline(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows, pipeline)
 	child := t.NewPersistentInode(ctx, byNode, stableAttr)
 
 	logging.Debug("Created directory node",
@@ -679,11 +758,25 @@ func (t *TableNode) lookupOrderDirectory(ctx context.Context) (*fs.Inode, syscal
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 
+	// Get primary key for table to create pipeline context
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key for .order directory",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Create initial pipeline context for table root
+	pipeline := NewPipelineContext(t.schema, t.tableName, pkColumn)
+
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	orderNode := NewOrderDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows)
+	orderNode := NewOrderDirNodeWithPipeline(t.cfg, t.db, t.cache, t.schema, t.tableName, t.partialRows, pipeline)
 	child := t.NewPersistentInode(ctx, orderNode, stableAttr)
 
 	logging.Debug("Created directory node",
