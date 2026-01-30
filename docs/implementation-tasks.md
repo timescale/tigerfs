@@ -3814,7 +3814,657 @@ Alice,alice@example.com' > /mnt/db/users/123.csv  # Should work
 
 ---
 
-## Phase 5: DDL Operations via Filesystem
+## Phase 5: Pipeline Query Architecture
+
+### Overview
+
+Enable composable capability chaining for complex queries. Users can combine filters, ordering, pagination, and export in flexible pipelines like:
+- `.filter/status/active/.first/1000/.sample/50/.export/csv`
+- `.by/customer_id/123/.order/created_at/.last/10/.export/json`
+- `.first/100/.last/50/` (rows 51-100)
+
+**Architecture:** See `docs/decisions/007-pipeline-query-architecture.md` for full design.
+
+**Key Concepts:**
+- `PipelineContext` accumulates query state as users navigate paths
+- Each capability exposes valid next capabilities based on semantic rules
+- Permissive model allows all meaningful combinations, disallows only redundant operations
+- `.by/` for indexed columns (guaranteed fast), `.filter/` for any column (may be slow)
+
+---
+
+### Task 5.1: Add Global Query Timeout Configuration
+
+**Objective:** Protect against slow queries causing filesystem hangs
+
+**Background:**
+All database queries should have a configurable timeout. This is especially important for `.filter/` operations that may require full table scans on large tables.
+
+**Steps:**
+1. Add to `internal/tigerfs/config/config.go`:
+   - `QueryTimeout time.Duration` (default: 30 seconds)
+   - Support via config file, env var (`TIGERFS_QUERY_TIMEOUT`), and CLI flag
+   - Validate range (1s - 10m)
+
+2. Update `internal/tigerfs/db/client.go`:
+   - Apply `statement_timeout` to query context
+   - Create helper function `withQueryTimeout(ctx context.Context) context.Context`
+
+3. Update all query functions to use timeout context:
+   - `QueryRows`, `QueryRowData`, `QueryIndexValues`, etc.
+
+4. Map timeout errors to `syscall.EIO` in FUSE operations:
+   - Detect `context.DeadlineExceeded` or PostgreSQL timeout error
+   - Log descriptive message with query details
+   - Return EIO to caller
+
+5. Add unit tests for timeout behavior
+
+**Files to Modify:**
+- `internal/tigerfs/config/config.go`
+- `internal/tigerfs/db/client.go`
+- `internal/tigerfs/cmd/mount.go` (add --query-timeout flag)
+
+**Files to Create:**
+- `internal/tigerfs/db/timeout_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/config/... -v -run TestQueryTimeout
+go test ./internal/tigerfs/db/... -v -run TestTimeout
+
+# Manual test with short timeout
+TIGERFS_QUERY_TIMEOUT=1ms tigerfs mount ...
+# Queries should fail with EIO
+```
+
+**Completion Criteria:**
+- QueryTimeout config option works via all methods
+- Queries respect statement timeout
+- Timeout errors map to EIO with clear log message
+- Unit tests pass
+
+---
+
+### Task 5.2: Add DirFilterLimit Configuration
+
+**Objective:** Configure threshold for large table safety in `.filter/` operations
+
+**Steps:**
+1. Add to `internal/tigerfs/config/config.go`:
+   - `DirFilterLimit int` (default: 100000)
+   - Support via config file, env var (`TIGERFS_DIR_FILTER_LIMIT`), and CLI flag
+
+2. Add database function `GetTableRowCountEstimate` in `internal/tigerfs/db/schema.go`:
+   ```sql
+   SELECT reltuples::bigint FROM pg_class
+   WHERE relname = $1 AND relnamespace = (
+       SELECT oid FROM pg_namespace WHERE nspname = $2
+   )
+   ```
+
+3. Add unit tests
+
+**Files to Modify:**
+- `internal/tigerfs/config/config.go`
+- `internal/tigerfs/db/schema.go`
+- `internal/tigerfs/cmd/mount.go` (add --dir-filter-limit flag)
+
+**Files to Create:**
+- `internal/tigerfs/db/schema_estimate_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/config/... -v -run TestDirFilterLimit
+go test ./internal/tigerfs/db/... -v -run TestRowCountEstimate
+```
+
+**Completion Criteria:**
+- DirFilterLimit config option works
+- Row count estimation function works
+- Unit tests pass
+
+---
+
+### Task 5.3: Implement PipelineContext
+
+**Objective:** Create the core data structure for accumulating query state
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/pipeline.go`:
+   ```go
+   type PipelineContext struct {
+       Schema    string
+       TableName string
+       PKColumn  string
+
+       // Filters (from .by and .filter)
+       Filters   []FilterCondition  // AND-combined
+
+       // Ordering (from .order)
+       OrderBy   string
+       OrderDesc bool
+
+       // Limit (from .first, .last, .sample)
+       Limit     int
+       LimitType LimitType  // None, First, Last, Sample
+
+       // For nested limit operations
+       PreviousLimit     int
+       PreviousLimitType LimitType
+   }
+
+   type FilterCondition struct {
+       Column  string
+       Value   string
+       Indexed bool
+   }
+
+   type LimitType int
+   const (
+       LimitNone LimitType = iota
+       LimitFirst
+       LimitLast
+       LimitSample
+   )
+   ```
+
+2. Implement methods:
+   - `NewPipelineContext(schema, table, pkColumn string) *PipelineContext`
+   - `Clone() *PipelineContext` (immutable pattern)
+   - `WithFilter(col, val string, indexed bool) *PipelineContext`
+   - `WithOrder(col string, desc bool) *PipelineContext`
+   - `WithLimit(limit int, limitType LimitType) *PipelineContext`
+
+3. Implement capability availability:
+   - `CanAddFilter() bool` - true unless after .order/
+   - `CanAddOrder() bool` - true unless already ordered or after sample
+   - `CanAddLimit(limitType LimitType) bool` - check redundancy rules
+   - `AvailableCapabilities() []string` - list valid next steps
+
+4. Implement SQL generation helpers:
+   - `NeedsSubquery() bool` - true if nested limits
+   - `ToQueryParams() QueryParams` - convert to db layer params
+
+5. Write comprehensive unit tests
+
+**Files to Create:**
+- `internal/tigerfs/fuse/pipeline.go`
+- `internal/tigerfs/fuse/pipeline_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v -run TestPipeline
+```
+
+**Completion Criteria:**
+- PipelineContext accumulates state correctly
+- Clone creates independent copies
+- Capability availability rules enforced
+- All method combinations tested
+- Unit tests pass
+
+---
+
+### Task 5.4: Implement Pipeline Query Functions
+
+**Objective:** Add database query functions that support full pipeline semantics
+
+**Steps:**
+1. Add `QueryParams` struct to `internal/tigerfs/db/query.go`:
+   ```go
+   type QueryParams struct {
+       Schema, Table, PKColumn string
+       Filters      []FilterCondition
+       OrderBy      string
+       OrderDesc    bool
+       Limit        int
+       LimitType    LimitType
+       // For nested limits (subquery)
+       PreviousLimit     int
+       PreviousLimitType LimitType
+   }
+   ```
+
+2. Implement `QueryRowsPipeline(ctx, pool, params) ([]string, error)`:
+   - Build SQL with filters, order, limit
+   - Handle subquery for nested limits
+   - Return primary key values
+
+3. Implement `QueryRowsWithDataPipeline(ctx, pool, params) ([]string, [][]interface{}, error)`:
+   - Same as above but returns full row data
+   - Used for `.export/` operations
+
+4. SQL generation examples:
+   ```sql
+   -- Simple: .filter/status/active/.order/name/.first/100/
+   SELECT pk FROM t WHERE status = 'active' ORDER BY name LIMIT 100
+
+   -- Nested: .first/100/.last/50/
+   SELECT pk FROM (
+       SELECT pk FROM t ORDER BY pk LIMIT 100
+   ) sub ORDER BY pk DESC LIMIT 50
+
+   -- Complex: .first/1000/.filter/status/active/.sample/50/
+   SELECT pk FROM (
+       SELECT * FROM (
+           SELECT * FROM t ORDER BY pk LIMIT 1000
+       ) sub1 WHERE status = 'active'
+   ) sub2 ORDER BY RANDOM() LIMIT 50
+   ```
+
+5. Add unit tests with SQL verification
+
+**Files to Modify:**
+- `internal/tigerfs/db/query.go`
+
+**Files to Create:**
+- `internal/tigerfs/db/query_pipeline_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/db/... -v -run TestQueryPipeline
+```
+
+**Completion Criteria:**
+- Simple pipelines generate correct SQL
+- Nested limits use subqueries
+- Complex combinations work
+- SQL injection prevented
+- Unit tests pass
+
+---
+
+### Task 5.5: Implement FilterDirNode for `.filter/`
+
+**Objective:** Add `.filter/` capability for filtering by any column
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/filter.go`:
+   - `FilterDirNode` - shows available columns at `.filter/`
+   - `FilterColumnNode` - shows available values at `.filter/<col>/`
+   - `FilterValueNode` - applies filter, shows next capabilities
+
+2. Implement column listing in `FilterDirNode.Readdir()`:
+   - List all columns from table schema (not just indexed)
+
+3. Implement value listing in `FilterColumnNode.Readdir()`:
+   - Check if column is indexed (reuse existing index discovery)
+   - If indexed: Always run `SELECT DISTINCT col` (fast)
+   - If non-indexed:
+     - Get table row count estimate
+     - If < DirFilterLimit: Run `SELECT DISTINCT col`
+     - If >= DirFilterLimit: Return `.table-too-large` indicator only
+   - All DISTINCT queries respect QueryTimeout
+
+4. Implement `FilterValueNode`:
+   - Create `PipelineContext` with filter applied
+   - `Readdir()` lists available capabilities
+   - `Lookup()` routes to next capability or row nodes
+
+5. Handle direct path access:
+   - `.filter/<col>/<val>/` always works even if value not listed
+
+6. Write unit tests
+
+**Files to Create:**
+- `internal/tigerfs/fuse/filter.go`
+- `internal/tigerfs/fuse/filter_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v -run TestFilter
+
+# Manual test
+ls /mnt/db/users/.filter/           # Shows columns
+ls /mnt/db/users/.filter/status/    # Shows values (if small table)
+ls /mnt/db/large_table/.filter/col/ # Shows .table-too-large
+```
+
+**Completion Criteria:**
+- `.filter/` shows all columns
+- Value listing respects safety mechanisms
+- Large table indicator works
+- Direct path access works regardless of listing
+- Unit tests pass
+
+---
+
+### Task 5.6: Implement PipelineNode
+
+**Objective:** Create unified node that exposes capabilities based on context
+
+**Steps:**
+1. Create `PipelineNode` in `internal/tigerfs/fuse/pipeline_node.go`:
+   ```go
+   type PipelineNode struct {
+       fs      *FS
+       ctx     *PipelineContext
+       baseDir string  // For constructing child paths
+   }
+   ```
+
+2. Implement `Readdir()`:
+   - List available capabilities from `ctx.AvailableCapabilities()`
+   - List row files if context has data (PKs from query)
+
+3. Implement `Lookup(name)`:
+   - Route `.by/` to index capability (with new context)
+   - Route `.filter/` to FilterDirNode (with new context)
+   - Route `.order/` to order capability (with new context)
+   - Route `.first/`, `.last/`, `.sample/` to limit capability
+   - Route `.export/` to ExportDirNode (with context)
+   - Route row PKs to RowNode
+
+4. Implement `Getattr()`:
+   - Standard directory attributes
+
+5. Write unit tests
+
+**Files to Create:**
+- `internal/tigerfs/fuse/pipeline_node.go`
+- `internal/tigerfs/fuse/pipeline_node_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v -run TestPipelineNode
+```
+
+**Completion Criteria:**
+- PipelineNode routes to correct child nodes
+- Capabilities exposed based on context
+- Row listing works with pipeline context
+- Unit tests pass
+
+---
+
+### Task 5.7: Update Existing Capability Nodes for Pipeline
+
+**Objective:** Modify pagination, order, and index nodes to work with PipelineContext
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/pagination.go`:
+   - Add `PipelineContext` field to `FirstDirNode`, `LastDirNode`, `SampleDirNode`
+   - Update constructors to accept optional context
+   - In value nodes (e.g., `FirstValueNode`):
+     - Create new context with limit applied
+     - Expose capabilities via `Readdir()` based on new context
+     - Route via `Lookup()` to PipelineNode or rows
+
+2. Update `internal/tigerfs/fuse/order.go`:
+   - Add `PipelineContext` field to `OrderDirNode`, `OrderColumnNode`
+   - Update constructors to accept optional context
+   - In `OrderColumnNode`:
+     - Create new context with order applied
+     - Expose capabilities via `Readdir()`
+     - Route via `Lookup()` to next capability
+
+3. Update `internal/tigerfs/fuse/index.go`:
+   - Add `PipelineContext` field to index nodes
+   - Update to expose pipeline capabilities after value selection
+   - Add composite index parsing (`.by/col1.col2/val1.val2/`)
+
+4. Update `internal/tigerfs/fuse/export.go`:
+   - Ensure `ExportDirNode` accepts `PipelineContext`
+   - Use context for query execution
+
+5. Maintain backward compatibility:
+   - Nodes without context work as before
+   - Context is optional, defaults to "table root" behavior
+
+6. Update existing tests
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/pagination.go`
+- `internal/tigerfs/fuse/order.go`
+- `internal/tigerfs/fuse/index.go`
+- `internal/tigerfs/fuse/export.go`
+- `internal/tigerfs/fuse/*_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v
+```
+
+**Completion Criteria:**
+- All capability nodes accept PipelineContext
+- Pipeline capabilities exposed correctly
+- Backward compatibility maintained
+- Existing tests still pass
+- New pipeline paths work
+
+---
+
+### Task 5.8: Update TableNode for Pipeline Integration
+
+**Objective:** Wire up pipeline capabilities at table root
+
+**Steps:**
+1. Update `internal/tigerfs/fuse/table.go`:
+   - Add `.filter/` to `Readdir()` entries
+   - Update `Lookup()` to route `.filter/` to FilterDirNode
+   - Create initial `PipelineContext` for table root
+   - Pass context to capability nodes
+
+2. Ensure all existing paths still work:
+   - `.by/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/`
+   - Direct row access
+   - Metadata files
+
+3. Update tests
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/table.go`
+- `internal/tigerfs/fuse/table_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/... -v -run TestTable
+
+# Manual verification
+ls /mnt/db/users/           # Should show .filter/ now
+ls /mnt/db/users/.filter/   # Should show columns
+```
+
+**Completion Criteria:**
+- `.filter/` exposed at table root
+- All capabilities have pipeline context
+- Existing functionality preserved
+- Tests pass
+
+---
+
+### Task 5.9: Implement Composite Index Support
+
+**Objective:** Support `.by/col1.col2/val1.val2/` syntax for composite indexes
+
+**Steps:**
+1. Add composite index detection to `internal/tigerfs/db/schema.go`:
+   - `GetCompositeIndexColumns(schema, table string) ([][]string, error)`
+   - Returns list of column combinations that have indexes
+
+2. Update `internal/tigerfs/fuse/index.go`:
+   - Parse composite column syntax in `IndexByDirNode.Readdir()`:
+     - Show single columns AND composite combinations
+     - E.g., `status`, `customer_id`, `status.customer_id`
+   - Parse composite value syntax in `IndexColumnNode.Lookup()`:
+     - Split `val1.val2` into separate values
+     - Match with column order
+
+3. Handle edge cases:
+   - Column names with dots (escape mechanism?)
+   - Value mismatch (wrong number of values)
+   - No matching composite index (decompose to separate filters)
+
+4. Write unit tests
+
+**Files to Modify:**
+- `internal/tigerfs/db/schema.go`
+- `internal/tigerfs/fuse/index.go`
+
+**Files to Create:**
+- `internal/tigerfs/db/composite_index_test.go`
+
+**Verification:**
+```bash
+go test ./... -v -run TestComposite
+
+# Manual test
+ls /mnt/db/users/.by/                          # Shows columns and composites
+ls /mnt/db/users/.by/last_name.first_name/     # Shows composite values
+cat /mnt/db/users/.by/last_name.first_name/Smith.John/1.json
+```
+
+**Completion Criteria:**
+- Composite columns shown in `.by/` listing
+- Composite value lookup works
+- Fallback to separate filters when no composite index
+- Unit tests pass
+
+---
+
+### Task 5.10: Pipeline Integration Tests
+
+**Objective:** Verify end-to-end pipeline functionality
+
+**Steps:**
+1. Create `test/integration/pipeline_test.go`:
+   - Test simple pipelines:
+     - `.by/status/active/.first/50/`
+     - `.filter/name/Alice/.first/10/`
+   - Test nested pagination:
+     - `.first/100/.last/50/` (rows 51-100)
+     - `.last/100/.first/50/`
+     - `.first/1000/.sample/50/`
+   - Test mixed filters:
+     - `.by/customer_id/123/.filter/notes/urgent/`
+   - Test full pipelines:
+     - `.by/a/1/.order/b/.last/10/.export/json`
+   - Test disallowed combinations (should return ENOENT):
+     - `.first/100/.first/50/`
+     - `.order/a/.order/b/`
+     - `.export/csv/.first/10/`
+
+2. Test large table safety:
+   - Create table with >100k rows
+   - Verify `.filter/<col>/` shows `.table-too-large`
+   - Verify direct access still works
+
+3. Test timeout behavior:
+   - Configure short timeout
+   - Verify slow query returns EIO
+
+4. Test backward compatibility:
+   - Existing `.by/<col>/<val>/` paths work
+   - Existing `.first/N/` paths work
+   - Direct `.export/csv` at table root works
+
+**Files to Create:**
+- `test/integration/pipeline_test.go`
+
+**Verification:**
+```bash
+go test ./test/integration/... -v -run TestPipeline
+```
+
+**Completion Criteria:**
+- All pipeline combinations work correctly
+- Disallowed combinations fail gracefully
+- Large table safety verified
+- Timeout behavior verified
+- Backward compatibility confirmed
+
+---
+
+### Task 5.11: Pipeline Documentation
+
+**Objective:** Document pipeline capability for users
+
+**Steps:**
+1. Update `specs/spec.md`:
+   - Add Pipeline Query Architecture section
+   - Document all capabilities and combinations
+   - Add SQL generation examples
+   - Document safety mechanisms
+
+2. Update `README.md`:
+   - Add pipeline examples to usage section
+
+3. Create `docs/pipeline-queries.md`:
+   - Comprehensive guide with examples
+   - Performance considerations
+   - Limitations
+
+**Files to Modify:**
+- `specs/spec.md`
+- `README.md`
+
+**Files to Create:**
+- `docs/pipeline-queries.md`
+
+**Verification:**
+```bash
+# Verify documentation accuracy by following examples
+```
+
+**Completion Criteria:**
+- Spec updated with full pipeline documentation
+- README has pipeline examples
+- Standalone guide comprehensive
+- All examples tested and working
+
+---
+
+## Phase 6: Synthesized Applications
+
+### Overview
+
+This phase covers higher-level features that synthesize multiple TigerFS capabilities into coherent user-facing applications. These are features that span multiple subsystems and provide significant user value.
+
+**Note:** Tasks in this phase are intentionally kept as placeholders. Specific tasks will be defined based on user feedback and evolving requirements after the core pipeline architecture is complete.
+
+---
+
+### Task 6.1: Placeholder - Data Pipeline Integration
+
+**Objective:** TBD - Integration with data pipeline tools
+
+**Status:** Placeholder for future work
+
+**Potential Features:**
+- Stream processing integration
+- Change data capture (CDC) support
+- Real-time data sync capabilities
+
+---
+
+### Task 6.2: Placeholder - Query Caching
+
+**Objective:** TBD - Intelligent caching of pipeline query results
+
+**Status:** Placeholder for future work
+
+**Potential Features:**
+- Cache frequent pipeline results
+- Invalidation on data changes
+- Configurable cache policies
+
+---
+
+### Task 6.3: Placeholder - Advanced Export Formats
+
+**Objective:** TBD - Additional export format support
+
+**Status:** Placeholder for future work
+
+**Potential Features:**
+- Parquet export for analytics
+- Arrow format for interop
+- Streaming export for large datasets
+
+---
+
+## Phase 7: DDL Operations via Filesystem
 
 ### Overview
 
@@ -3828,7 +4478,7 @@ Add ability to create, modify, and delete tables, indexes, schemas, and views vi
 
 ---
 
-### Task 5.1: Implement Core Staging Infrastructure
+### Task 7.1: Implement Core Staging Infrastructure
 
 **Objective:** Create the foundational staging system for DDL operations
 
@@ -3923,7 +4573,7 @@ go test ./internal/tigerfs/db/... -v -run TestExec
 
 ---
 
-### Task 5.2: Implement Template Generation Framework
+### Task 7.2: Implement Template Generation Framework
 
 **Objective:** Generate context-aware DDL templates for each operation type
 
@@ -4059,7 +4709,7 @@ go test ./internal/tigerfs/fuse/... -v -run TestTemplate
 
 ---
 
-### Task 5.3: Implement Schema Create/Delete Operations
+### Task 7.3: Implement Schema Create/Delete Operations
 
 **Objective:** Enable `mkdir .schemas/.create/name` and `.schemas/name/.delete/`
 
@@ -4119,7 +4769,7 @@ ls /mnt/db/.schemas/
 
 ---
 
-### Task 5.4: Implement Index Create/Delete Operations
+### Task 7.4: Implement Index Create/Delete Operations
 
 **Objective:** Enable `mkdir table/.indexes/.create/idx` and `table/.indexes/idx/.delete/`
 
@@ -4179,7 +4829,7 @@ touch /mnt/db/users/.indexes/email_idx/.delete/.commit
 
 ---
 
-### Task 5.5: Implement Table Create Operations
+### Task 7.5: Implement Table Create Operations
 
 **Objective:** Enable `mkdir .create/tablename` at root and schema levels
 
@@ -4239,7 +4889,7 @@ touch /mnt/db/.schemas/public/.create/foo/.commit
 
 ---
 
-### Task 5.6: Implement Table Modify Operations
+### Task 7.6: Implement Table Modify Operations
 
 **Objective:** Enable `table/.modify/` for ALTER TABLE operations
 
@@ -4283,7 +4933,7 @@ cat /mnt/db/users/.schema
 
 ---
 
-### Task 5.7: Implement Table Delete Operations
+### Task 7.7: Implement Table Delete Operations
 
 **Objective:** Enable `table/.delete/` for DROP TABLE operations
 
@@ -4328,7 +4978,7 @@ ls /mnt/db/
 
 ---
 
-### Task 5.8: Implement View Create/Delete Operations
+### Task 7.8: Implement View Create/Delete Operations
 
 **Objective:** Enable `.views/.create/name` and `.views/name/.delete/`
 
@@ -4389,7 +5039,7 @@ touch /mnt/db/.views/active_users/.delete/.commit
 
 ---
 
-### Task 5.9: Integration Tests for DDL Operations
+### Task 7.9: Integration Tests for DDL Operations
 
 **Objective:** Comprehensive integration tests for all DDL operations
 
@@ -4430,7 +5080,7 @@ go test ./test/integration/... -v -run TestDDL
 
 ---
 
-### Task 5.10: Documentation for DDL Operations
+### Task 7.10: Documentation for DDL Operations
 
 **Objective:** Document DDL operations in README and spec
 
@@ -4470,9 +5120,9 @@ go test ./test/integration/... -v -run TestDDL
 
 ---
 
-## Phase 6: Distribution & Release
+## Phase 8: Distribution & Release
 
-### Task 6.1: Create Unix Install Script
+### Task 8.1: Create Unix Install Script
 
 **Objective:** Write install.sh for Unix/Linux/macOS
 
@@ -4514,7 +5164,7 @@ bash scripts/install.sh
 
 ---
 
-### Task 6.2: Create Windows Install Script
+### Task 8.2: Create Windows Install Script
 
 **Objective:** Write install.ps1 for Windows
 
@@ -4553,7 +5203,7 @@ tigerfs version
 
 ---
 
-### Task 6.3: Finalize GoReleaser Configuration
+### Task 8.3: Finalize GoReleaser Configuration
 
 **Objective:** Complete .goreleaser.yaml for releases
 
@@ -4596,7 +5246,7 @@ ls dist/
 
 ---
 
-### Task 6.4: Test Release Workflow
+### Task 8.4: Test Release Workflow
 
 **Objective:** Verify GitHub Actions release workflow
 
@@ -4642,7 +5292,7 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 6.5: Daemon Mode Support
+### Task 8.5: Daemon Mode Support
 
 **Objective:** Add `--daemon` flag for proper background execution with PID file management
 
@@ -4711,7 +5361,7 @@ tigerfs unmount /mnt/db
 
 ---
 
-### Task 6.6: Write Documentation
+### Task 8.6: Write Documentation
 
 **Objective:** Expand README and create guides
 
@@ -4758,7 +5408,7 @@ tigerfs unmount /mnt/db
 
 ---
 
-### Task 6.7: Performance Testing
+### Task 8.7: Performance Testing
 
 **Objective:** Benchmark operations, document performance
 
@@ -4797,7 +5447,7 @@ go test -bench=. ./test/benchmark/
 
 ---
 
-### Task 6.8: Bug Fixes and Polish
+### Task 8.8: Bug Fixes and Polish
 
 **Objective:** Fix remaining issues, improve UX
 
@@ -4830,7 +5480,7 @@ grep -r "TODO" internal/
 
 ---
 
-### Task 6.9: Final Testing and v0.1 Release
+### Task 8.9: Final Testing and v0.1 Release
 
 **Objective:** Release v0.1
 
@@ -4883,9 +5533,9 @@ git push origin v0.1.0
 
 ---
 
-## Phase 7: Performance & Scalability
+## Phase 9: Performance & Scalability
 
-### Task 7.1: Implement Hybrid Metadata Caching
+### Task 9.1: Implement Hybrid Metadata Caching
 
 **Objective:** Optimize metadata caching for databases with many tables (100s-1000s)
 
@@ -4952,7 +5602,7 @@ TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
 
 ---
 
-### Task 7.2: Evaluate Multi-User Mount Support (allow_other)
+### Task 9.2: Evaluate Multi-User Mount Support (allow_other)
 
 **Objective:** Research and potentially implement `--allow-other` flag for multi-user mount access
 
@@ -4990,7 +5640,7 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 
 ---
 
-### Task 7.3: Row Timestamps from Database Columns (Optional)
+### Task 9.3: Row Timestamps from Database Columns (Optional)
 
 **Objective:** Show file modification times based on table timestamp columns
 
@@ -5078,7 +5728,7 @@ FUSE filesystems can report mtime (modification time) for files. For row files, 
 ## Success Criteria for Implementation
 
 ### Functional Requirements
-- All Phase 6 tasks completed
+- All Phase 8 (Distribution) tasks completed
 - All CLI commands functional
 - CRUD operations working
 - Index navigation operational

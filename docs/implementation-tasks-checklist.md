@@ -96,46 +96,74 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
-## Phase 5: DDL Operations via Filesystem
+## Phase 5: Pipeline Query Architecture
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ✅ | 5.1 | Implement Core Staging Infrastructure | 3817 |
-| ✅ | 5.2 | Implement Template Generation Framework | 3912 |
-| ✅ | 5.3 | Implement Schema Create/Delete Operations | 4048 |
-| ✅ | 5.4 | Implement Index Create/Delete Operations | 4108 |
-| ✅ | 5.5 | Implement Table Create Operations | 4168 |
-| ✅ | 5.6 | Implement Table Modify Operations | 4228 |
-| ✅ | 5.7 | Implement Table Delete Operations | 4272 |
-| ✅ | 5.8 | Implement View Create/Delete Operations | 4317 |
-| ⬜ | 5.9 | Integration Tests for DDL Operations | 4378 |
-| ⬜ | 5.10 | Documentation for DDL Operations | 4419 |
+| ⬜ | 5.1 | Add Global Query Timeout Configuration | ~3840 |
+| ⬜ | 5.2 | Add DirFilterLimit Configuration | ~3910 |
+| ⬜ | 5.3 | Implement PipelineContext | ~3970 |
+| ⬜ | 5.4 | Implement Pipeline Query Functions | ~4070 |
+| ⬜ | 5.5 | Implement FilterDirNode for .filter/ | ~4160 |
+| ⬜ | 5.6 | Implement PipelineNode | ~4260 |
+| ⬜ | 5.7 | Update Existing Capability Nodes for Pipeline | ~4330 |
+| ⬜ | 5.8 | Update TableNode for Pipeline Integration | ~4430 |
+| ⬜ | 5.9 | Implement Composite Index Support | ~4490 |
+| ⬜ | 5.10 | Pipeline Integration Tests | ~4580 |
+| ⬜ | 5.11 | Pipeline Documentation | ~4670 |
 
 ---
 
-## Phase 6: Distribution & Release
+## Phase 6: Synthesized Applications
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1 | Create Unix Install Script | 4400 |
-| ⬜ | 6.2 | Create Windows Install Script | 4442 |
-| ⬜ | 6.3 | Finalize GoReleaser Configuration | 4481 |
-| ⬜ | 6.4 | Test Release Workflow | 4524 |
-| ⬜ | 6.5 | Daemon Mode Support | 4570 |
-| ⬜ | 6.6 | Write Documentation | 4639 |
-| ⬜ | 6.7 | Performance Testing | 4686 |
-| ⬜ | 6.8 | Bug Fixes and Polish | 4725 |
-| ⬜ | 6.9 | Final Testing and v0.1 Release | 4758 |
+| ⬜ | 6.1 | Placeholder - Data Pipeline Integration | ~4740 |
+| ⬜ | 6.2 | Placeholder - Query Caching | ~4760 |
+| ⬜ | 6.3 | Placeholder - Advanced Export Formats | ~4780 |
 
 ---
 
-## Phase 7: Performance & Scalability
+## Phase 7: DDL Operations via Filesystem
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 7.1 | Implement Hybrid Metadata Caching | 4813 |
-| ⬜ | 7.2 | Evaluate Multi-User Mount Support (allow_other) | 4880 |
-| ⬜ | 7.3 | Row Timestamps from Database Columns (Optional) | 4918 |
+| ✅ | 7.1 | Implement Core Staging Infrastructure | ~4830 |
+| ✅ | 7.2 | Implement Template Generation Framework | ~4920 |
+| ✅ | 7.3 | Implement Schema Create/Delete Operations | ~5060 |
+| ✅ | 7.4 | Implement Index Create/Delete Operations | ~5120 |
+| ✅ | 7.5 | Implement Table Create Operations | ~5180 |
+| ✅ | 7.6 | Implement Table Modify Operations | ~5240 |
+| ✅ | 7.7 | Implement Table Delete Operations | ~5285 |
+| ✅ | 7.8 | Implement View Create/Delete Operations | ~5330 |
+| ⬜ | 7.9 | Integration Tests for DDL Operations | ~5390 |
+| ⬜ | 7.10 | Documentation for DDL Operations | ~5430 |
+
+---
+
+## Phase 8: Distribution & Release
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 8.1 | Create Unix Install Script | ~5475 |
+| ⬜ | 8.2 | Create Windows Install Script | ~5515 |
+| ⬜ | 8.3 | Finalize GoReleaser Configuration | ~5555 |
+| ⬜ | 8.4 | Test Release Workflow | ~5600 |
+| ⬜ | 8.5 | Daemon Mode Support | ~5645 |
+| ⬜ | 8.6 | Write Documentation | ~5715 |
+| ⬜ | 8.7 | Performance Testing | ~5760 |
+| ⬜ | 8.8 | Bug Fixes and Polish | ~5800 |
+| ⬜ | 8.9 | Final Testing and v0.1 Release | ~5835 |
+
+---
+
+## Phase 9: Performance & Scalability
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 9.1 | Implement Hybrid Metadata Caching | ~5890 |
+| ⬜ | 9.2 | Evaluate Multi-User Mount Support (allow_other) | ~5955 |
+| ⬜ | 9.3 | Row Timestamps from Database Columns (Optional) | ~5995 |
 
 ---
 
@@ -147,7 +175,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
-| Phase 5: DDL Operations | 8 | 10 | 80% |
-| Phase 6: Distribution | 0 | 9 | 0% |
-| Phase 7: Performance | 0 | 3 | 0% |
-| **Total** | **66** | **84** | **79%** |
+| Phase 5: Pipeline Query Architecture | 0 | 11 | 0% |
+| Phase 6: Synthesized Applications | 0 | 3 | 0% |
+| Phase 7: DDL Operations | 8 | 10 | 80% |
+| Phase 8: Distribution | 0 | 9 | 0% |
+| Phase 9: Performance | 0 | 3 | 0% |
+| **Total** | **66** | **98** | **67%** |
