@@ -110,6 +110,7 @@ func TestInit_SetsDefaults(t *testing.T) {
 		{"dir_listing_limit", 10000},
 		{"attr_timeout", 1 * time.Second},
 		{"entry_timeout", 1 * time.Second},
+		{"query_timeout", 30 * time.Second},
 		{"metadata_refresh_interval", 30 * time.Second},
 		{"log_level", "info"},
 		{"log_format", "text"},
@@ -702,5 +703,89 @@ func TestLoad_MultipleLoadCalls(t *testing.T) {
 
 	if cfg1.Port != cfg2.Port {
 		t.Errorf("Config values should match: %d != %d", cfg1.Port, cfg2.Port)
+	}
+}
+
+// TestConfig_QueryTimeout tests QueryTimeout configuration
+func TestConfig_QueryTimeout(t *testing.T) {
+	resetViper()
+
+	err := Init()
+	if err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Default should be 30 seconds
+	if cfg.QueryTimeout != 30*time.Second {
+		t.Errorf("Expected QueryTimeout=30s, got %v", cfg.QueryTimeout)
+	}
+}
+
+// TestConfig_QueryTimeoutEnvVar tests TIGERFS_QUERY_TIMEOUT environment variable
+func TestConfig_QueryTimeoutEnvVar(t *testing.T) {
+	resetViper()
+
+	// Save and restore env
+	origValue := os.Getenv("TIGERFS_QUERY_TIMEOUT")
+	defer func() {
+		if origValue == "" {
+			_ = os.Unsetenv("TIGERFS_QUERY_TIMEOUT")
+		} else {
+			_ = os.Setenv("TIGERFS_QUERY_TIMEOUT", origValue)
+		}
+	}()
+
+	// Set env var to 1 minute
+	_ = os.Setenv("TIGERFS_QUERY_TIMEOUT", "1m")
+
+	err := Init()
+	if err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.QueryTimeout != 1*time.Minute {
+		t.Errorf("Expected QueryTimeout=1m from env, got %v", cfg.QueryTimeout)
+	}
+}
+
+// TestConfig_QueryTimeoutEnvVarSeconds tests TIGERFS_QUERY_TIMEOUT with seconds format
+func TestConfig_QueryTimeoutEnvVarSeconds(t *testing.T) {
+	resetViper()
+
+	// Save and restore env
+	origValue := os.Getenv("TIGERFS_QUERY_TIMEOUT")
+	defer func() {
+		if origValue == "" {
+			_ = os.Unsetenv("TIGERFS_QUERY_TIMEOUT")
+		} else {
+			_ = os.Setenv("TIGERFS_QUERY_TIMEOUT", origValue)
+		}
+	}()
+
+	// Set env var to 45 seconds
+	_ = os.Setenv("TIGERFS_QUERY_TIMEOUT", "45s")
+
+	err := Init()
+	if err != nil {
+		t.Fatalf("Init() failed: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.QueryTimeout != 45*time.Second {
+		t.Errorf("Expected QueryTimeout=45s from env, got %v", cfg.QueryTimeout)
 	}
 }

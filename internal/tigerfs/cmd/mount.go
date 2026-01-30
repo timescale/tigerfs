@@ -45,6 +45,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var maxLsRows int
 	var foreground bool
 	var noFilenameExtensions bool
+	var queryTimeout time.Duration
 	// TODO: allow-other support has inconsistent cross-platform behavior
 	// (works on Linux, limited on macOS, different model on Windows).
 	// Revisit in Phase 6 Task 6.2. For now, mounts are single-user only.
@@ -112,6 +113,11 @@ Examples:
 				cfg.NoFilenameExtensions = true
 			}
 
+			// Apply --query-timeout flag if set (overrides config/env)
+			if queryTimeout > 0 {
+				cfg.QueryTimeout = queryTimeout
+			}
+
 			// Mount the FUSE filesystem
 			fs, err := fuse.Mount(ctx, cfg, connStr, absMountpoint)
 			if err != nil {
@@ -163,6 +169,9 @@ Examples:
 	cmd.Flags().IntVar(&maxLsRows, "max-ls-rows", 10000, "large table threshold")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run in foreground (don't daemonize)")
 	cmd.Flags().BoolVar(&noFilenameExtensions, "no-filename-extensions", false, "disable automatic file extensions based on column type")
+
+	// Query safety flags
+	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
 
 	return cmd
 }

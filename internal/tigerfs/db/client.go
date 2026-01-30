@@ -2,8 +2,12 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
@@ -14,6 +18,48 @@ import (
 type Client struct {
 	pool *pgxpool.Pool
 	cfg  *config.Config
+}
+
+// WithQueryTimeout returns a context with the configured query timeout applied.
+// If the config has no timeout or timeout is zero, returns the original context.
+// The returned cancel function should be called when the query completes.
+func (c *Client) WithQueryTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.cfg == nil || c.cfg.QueryTimeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, c.cfg.QueryTimeout)
+}
+
+// QueryTimeout returns the configured query timeout duration.
+func (c *Client) QueryTimeout() time.Duration {
+	if c.cfg == nil {
+		return 0
+	}
+	return c.cfg.QueryTimeout
+}
+
+// IsTimeoutError checks if an error is a query timeout error.
+// Returns true for context deadline exceeded or PostgreSQL statement_timeout errors.
+func IsTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for context deadline exceeded
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// Check for PostgreSQL statement_timeout error (SQLSTATE 57014)
+	// The error message contains "canceling statement due to statement timeout"
+	errStr := err.Error()
+	if strings.Contains(errStr, "statement timeout") ||
+		strings.Contains(errStr, "57014") ||
+		strings.Contains(errStr, "canceling statement") {
+		return true
+	}
+
+	return false
 }
 
 // NewClient creates a new database client
@@ -45,9 +91,26 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 	poolConfig.MaxConns = int32(cfg.PoolSize)
 	poolConfig.MinConns = int32(cfg.PoolMaxIdle)
 
+	// Set statement_timeout on each new connection for belt-and-suspenders timeout protection
+	if cfg.QueryTimeout > 0 {
+		timeoutMs := int(cfg.QueryTimeout.Milliseconds())
+		poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+			// SET statement_timeout in milliseconds
+			_, err := conn.Exec(ctx, fmt.Sprintf("SET statement_timeout = %d", timeoutMs))
+			if err != nil {
+				logging.Warn("Failed to set statement_timeout on connection",
+					zap.Int("timeout_ms", timeoutMs),
+					zap.Error(err))
+				// Don't fail the connection, just warn
+			}
+			return nil
+		}
+	}
+
 	logging.Debug("Configuring connection pool",
 		zap.Int("max_conns", cfg.PoolSize),
 		zap.Int("min_conns", cfg.PoolMaxIdle),
+		zap.Duration("query_timeout", cfg.QueryTimeout),
 	)
 
 	// Create connection pool
