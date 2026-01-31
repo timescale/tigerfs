@@ -733,3 +733,584 @@ func TestPipelineContext_ComplexPipelines(t *testing.T) {
 		}
 	})
 }
+
+// =============================================================================
+// Deep Nesting Tests
+// =============================================================================
+
+// TestPipelineContext_DeepFilterNesting tests deep filter chains like
+// .by/col1/.by/col2/.by/col3/.filter/col4/.by/col5
+func TestPipelineContext_DeepFilterNesting(t *testing.T) {
+	t.Run("5 indexed filters (.by chains)", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "orders", "id")
+
+		// Build: .by/customer_id/123/.by/status/pending/.by/region/us/.by/tier/premium/.by/channel/web/
+		ctx = ctx.WithFilter("customer_id", "123", true)
+		ctx = ctx.WithFilter("status", "pending", true)
+		ctx = ctx.WithFilter("region", "us", true)
+		ctx = ctx.WithFilter("tier", "premium", true)
+		ctx = ctx.WithFilter("channel", "web", true)
+
+		if len(ctx.Filters) != 5 {
+			t.Fatalf("Expected 5 filters, got %d", len(ctx.Filters))
+		}
+
+		// All filters should be AND-combined
+		expectedFilters := []struct {
+			col, val string
+			indexed  bool
+		}{
+			{"customer_id", "123", true},
+			{"status", "pending", true},
+			{"region", "us", true},
+			{"tier", "premium", true},
+			{"channel", "web", true},
+		}
+
+		for i, exp := range expectedFilters {
+			if ctx.Filters[i].Column != exp.col {
+				t.Errorf("Filter %d column = %q, want %q", i, ctx.Filters[i].Column, exp.col)
+			}
+			if ctx.Filters[i].Value != exp.val {
+				t.Errorf("Filter %d value = %q, want %q", i, ctx.Filters[i].Value, exp.val)
+			}
+			if ctx.Filters[i].Indexed != exp.indexed {
+				t.Errorf("Filter %d indexed = %v, want %v", i, ctx.Filters[i].Indexed, exp.indexed)
+			}
+		}
+
+		// Should still allow more filters (not after order)
+		if !ctx.CanAddFilter() {
+			t.Error("Should still allow filters after 5 .by/ chains")
+		}
+	})
+
+	t.Run("mixed .by and .filter chains", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "events", "id")
+
+		// Build: .by/col1/v1/.by/col2/v2/.filter/col3/v3/.by/col4/v4/.filter/col5/v5/
+		ctx = ctx.WithFilter("user_id", "123", true)     // .by/ (indexed)
+		ctx = ctx.WithFilter("type", "click", true)      // .by/ (indexed)
+		ctx = ctx.WithFilter("browser", "chrome", false) // .filter/ (non-indexed)
+		ctx = ctx.WithFilter("campaign", "summer", true) // .by/ (indexed)
+		ctx = ctx.WithFilter("country", "us", false)     // .filter/ (non-indexed)
+
+		if len(ctx.Filters) != 5 {
+			t.Fatalf("Expected 5 filters, got %d", len(ctx.Filters))
+		}
+
+		// Verify indexed flags
+		indexedCounts := map[bool]int{}
+		for _, f := range ctx.Filters {
+			indexedCounts[f.Indexed]++
+		}
+
+		if indexedCounts[true] != 3 {
+			t.Errorf("Expected 3 indexed filters, got %d", indexedCounts[true])
+		}
+		if indexedCounts[false] != 2 {
+			t.Errorf("Expected 2 non-indexed filters, got %d", indexedCounts[false])
+		}
+	})
+
+	t.Run("filter chain with limit and more filters", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "logs", "id")
+
+		// Build: .by/level/error/.first/1000/.filter/source/api/.by/user_id/456/
+		ctx = ctx.WithFilter("level", "error", true)
+		ctx = ctx.WithLimit(1000, LimitFirst)
+		ctx = ctx.WithFilter("source", "api", false)
+		ctx = ctx.WithFilter("user_id", "456", true)
+
+		if len(ctx.Filters) != 3 {
+			t.Fatalf("Expected 3 filters, got %d", len(ctx.Filters))
+		}
+
+		if ctx.Limit != 1000 || ctx.LimitType != LimitFirst {
+			t.Error("Limit should be preserved with filters")
+		}
+
+		// First filter before limit, other two after
+		if ctx.Filters[0].Column != "level" {
+			t.Error("First filter should be 'level'")
+		}
+		if ctx.Filters[1].Column != "source" {
+			t.Error("Second filter should be 'source'")
+		}
+		if ctx.Filters[2].Column != "user_id" {
+			t.Error("Third filter should be 'user_id'")
+		}
+	})
+}
+
+// TestPipelineContext_DeepPaginationNesting tests nested limit operations.
+func TestPipelineContext_DeepPaginationNesting(t *testing.T) {
+	t.Run(".first/1000/.last/100/ (rows 901-1000)", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithLimit(1000, LimitFirst)
+		ctx = ctx.WithLimit(100, LimitLast)
+
+		if !ctx.NeedsSubquery() {
+			t.Error("Should need subquery for nested limits")
+		}
+		if ctx.PreviousLimit != 1000 || ctx.PreviousLimitType != LimitFirst {
+			t.Error("Previous limit incorrect")
+		}
+		if ctx.Limit != 100 || ctx.LimitType != LimitLast {
+			t.Error("Current limit incorrect")
+		}
+	})
+
+	t.Run(".last/1000/.first/100/ (rows n-999 to n-900)", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithLimit(1000, LimitLast)
+		ctx = ctx.WithLimit(100, LimitFirst)
+
+		if !ctx.NeedsSubquery() {
+			t.Error("Should need subquery for nested limits")
+		}
+		if ctx.PreviousLimit != 1000 || ctx.PreviousLimitType != LimitLast {
+			t.Error("Previous limit incorrect")
+		}
+		if ctx.Limit != 100 || ctx.LimitType != LimitFirst {
+			t.Error("Current limit incorrect")
+		}
+	})
+
+	t.Run(".first/10000/.sample/100/ (sample from first 10k)", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "events", "id")
+		ctx = ctx.WithLimit(10000, LimitFirst)
+		ctx = ctx.WithLimit(100, LimitSample)
+
+		if !ctx.NeedsSubquery() {
+			t.Error("Should need subquery for first+sample")
+		}
+		if ctx.PreviousLimitType != LimitFirst {
+			t.Error("Previous should be First")
+		}
+		if ctx.LimitType != LimitSample {
+			t.Error("Current should be Sample")
+		}
+	})
+}
+
+// =============================================================================
+// ADR-007 Capability Matrix Tests
+// =============================================================================
+
+// TestPipelineContext_ADR007_CapabilityMatrix tests all parent→child combinations
+// from the ADR-007 capability matrix.
+func TestPipelineContext_ADR007_CapabilityMatrix(t *testing.T) {
+	// Test each row of the capability matrix
+
+	t.Run("Table root - all capabilities allowed", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+
+		if !ctx.CanAddFilter() {
+			t.Error(".by and .filter should be allowed from table root")
+		}
+		if !ctx.CanAddOrder() {
+			t.Error(".order should be allowed from table root")
+		}
+		if !ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be allowed from table root")
+		}
+		if !ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be allowed from table root")
+		}
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be allowed from table root")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed from table root")
+		}
+	})
+
+	t.Run(".by/<col>/<val>/ - all capabilities allowed", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithFilter("status", "active", true)
+
+		if !ctx.CanAddFilter() {
+			t.Error(".by and .filter should be allowed after .by")
+		}
+		if !ctx.CanAddOrder() {
+			t.Error(".order should be allowed after .by")
+		}
+		if !ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be allowed after .by")
+		}
+		if !ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be allowed after .by")
+		}
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be allowed after .by")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed after .by")
+		}
+	})
+
+	t.Run(".filter/<col>/<val>/ - all capabilities allowed", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithFilter("name", "Alice", false) // non-indexed
+
+		if !ctx.CanAddFilter() {
+			t.Error(".by and .filter should be allowed after .filter")
+		}
+		if !ctx.CanAddOrder() {
+			t.Error(".order should be allowed after .filter")
+		}
+		if !ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be allowed after .filter")
+		}
+		if !ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be allowed after .filter")
+		}
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be allowed after .filter")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed after .filter")
+		}
+	})
+
+	t.Run(".order/<col>/ - only limits and export allowed", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithOrder("name", false)
+
+		// Disallowed
+		if ctx.CanAddFilter() {
+			t.Error(".by and .filter should be DISALLOWED after .order")
+		}
+		if ctx.CanAddOrder() {
+			t.Error(".order should be DISALLOWED after .order (redundant)")
+		}
+
+		// Allowed
+		if !ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be allowed after .order")
+		}
+		if !ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be allowed after .order")
+		}
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be allowed after .order")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed after .order")
+		}
+	})
+
+	t.Run(".first/N/ - no double-first", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithLimit(100, LimitFirst)
+
+		// Allowed
+		if !ctx.CanAddFilter() {
+			t.Error(".by and .filter should be allowed after .first")
+		}
+		if !ctx.CanAddOrder() {
+			t.Error(".order should be allowed after .first")
+		}
+		if !ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be allowed after .first (nested pagination)")
+		}
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be allowed after .first")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed after .first")
+		}
+
+		// Disallowed
+		if ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be DISALLOWED after .first (redundant)")
+		}
+	})
+
+	t.Run(".last/N/ - no double-last", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithLimit(100, LimitLast)
+
+		// Allowed
+		if !ctx.CanAddFilter() {
+			t.Error(".by and .filter should be allowed after .last")
+		}
+		if !ctx.CanAddOrder() {
+			t.Error(".order should be allowed after .last")
+		}
+		if !ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be allowed after .last (nested pagination)")
+		}
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be allowed after .last")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed after .last")
+		}
+
+		// Disallowed
+		if ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be DISALLOWED after .last (redundant)")
+		}
+	})
+
+	t.Run(".sample/N/ - no limits allowed", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithLimit(50, LimitSample)
+
+		// Allowed
+		if !ctx.CanAddFilter() {
+			t.Error(".by and .filter should be allowed after .sample")
+		}
+		if !ctx.CanAddOrder() {
+			t.Error(".order should be allowed after .sample")
+		}
+		if !ctx.CanExport() {
+			t.Error(".export should be allowed after .sample")
+		}
+
+		// Disallowed
+		if ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be DISALLOWED after .sample")
+		}
+		if ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be DISALLOWED after .sample")
+		}
+		if ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be DISALLOWED after .sample")
+		}
+	})
+
+	t.Run(".export/ - terminal, nothing allowed", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "users", "id")
+		ctx = ctx.WithTerminal()
+
+		if ctx.CanAddFilter() {
+			t.Error(".by and .filter should be DISALLOWED after .export")
+		}
+		if ctx.CanAddOrder() {
+			t.Error(".order should be DISALLOWED after .export")
+		}
+		if ctx.CanAddLimit(LimitFirst) {
+			t.Error(".first should be DISALLOWED after .export")
+		}
+		if ctx.CanAddLimit(LimitLast) {
+			t.Error(".last should be DISALLOWED after .export")
+		}
+		if ctx.CanAddLimit(LimitSample) {
+			t.Error(".sample should be DISALLOWED after .export")
+		}
+		if ctx.CanExport() {
+			t.Error(".export should be DISALLOWED after .export")
+		}
+	})
+}
+
+// =============================================================================
+// Full Pipeline Path Tests
+// =============================================================================
+
+// TestPipelineContext_FullPaths tests complete pipeline paths from ADR-007 examples.
+func TestPipelineContext_FullPaths(t *testing.T) {
+	t.Run(".by/customer_id/123/.order/created_at/.last/10/.export/json", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "orders", "id")
+
+		// Step 1: .by/customer_id/123/
+		ctx = ctx.WithFilter("customer_id", "123", true)
+		if len(ctx.Filters) != 1 {
+			t.Fatal("Filter not added")
+		}
+
+		// Step 2: .order/created_at/
+		if !ctx.CanAddOrder() {
+			t.Fatal("Order should be allowed after .by")
+		}
+		ctx = ctx.WithOrder("created_at", false)
+
+		// Step 3: .last/10/
+		if !ctx.CanAddLimit(LimitLast) {
+			t.Fatal(".last should be allowed after .order")
+		}
+		ctx = ctx.WithLimit(10, LimitLast)
+
+		// Step 4: .export/json
+		if !ctx.CanExport() {
+			t.Fatal(".export should be allowed")
+		}
+		ctx = ctx.WithTerminal()
+
+		// Final verification
+		if len(ctx.Filters) != 1 {
+			t.Error("Should have 1 filter")
+		}
+		if ctx.OrderBy != "created_at" {
+			t.Error("Order should be created_at")
+		}
+		if ctx.Limit != 10 || ctx.LimitType != LimitLast {
+			t.Error("Limit should be last 10")
+		}
+		if !ctx.IsTerminal {
+			t.Error("Should be terminal")
+		}
+	})
+
+	t.Run(".filter/status/active/.first/1000/.sample/50/.export/csv", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "events", "id")
+
+		// Step 1: .filter/status/active/
+		ctx = ctx.WithFilter("status", "active", false)
+
+		// Step 2: .first/1000/
+		ctx = ctx.WithLimit(1000, LimitFirst)
+
+		// Step 3: .sample/50/
+		if !ctx.CanAddLimit(LimitSample) {
+			t.Fatal(".sample should be allowed after .first")
+		}
+		ctx = ctx.WithLimit(50, LimitSample)
+
+		// Step 4: .export/csv
+		ctx = ctx.WithTerminal()
+
+		// Final verification
+		if !ctx.NeedsSubquery() {
+			t.Error("Should need subquery for nested limits")
+		}
+		if ctx.PreviousLimit != 1000 {
+			t.Error("Previous limit should be 1000")
+		}
+		if ctx.Limit != 50 || ctx.LimitType != LimitSample {
+			t.Error("Current limit should be sample 50")
+		}
+	})
+
+	t.Run(".by/a/1/.by/b/2/.first/100/.last/50/.export/json", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "data", "id")
+
+		// Build path
+		ctx = ctx.WithFilter("a", "1", true)
+		ctx = ctx.WithFilter("b", "2", true)
+		ctx = ctx.WithLimit(100, LimitFirst)
+		ctx = ctx.WithLimit(50, LimitLast)
+		ctx = ctx.WithTerminal()
+
+		// Verify
+		if len(ctx.Filters) != 2 {
+			t.Errorf("Expected 2 filters, got %d", len(ctx.Filters))
+		}
+		if ctx.PreviousLimit != 100 || ctx.PreviousLimitType != LimitFirst {
+			t.Error("Previous limit incorrect")
+		}
+		if ctx.Limit != 50 || ctx.LimitType != LimitLast {
+			t.Error("Current limit incorrect")
+		}
+	})
+
+	t.Run(".sample/100/.order/price/.export/csv", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "products", "id")
+
+		// Step 1: .sample/100/
+		ctx = ctx.WithLimit(100, LimitSample)
+
+		// Step 2: .order/price/ (sort the sample)
+		if !ctx.CanAddOrder() {
+			t.Fatal(".order should be allowed after .sample")
+		}
+		ctx = ctx.WithOrder("price", false)
+
+		// Step 3: .export/csv
+		ctx = ctx.WithTerminal()
+
+		// Verify
+		if ctx.LimitType != LimitSample {
+			t.Error("Should be sample limit")
+		}
+		if ctx.OrderBy != "price" {
+			t.Error("Should be ordered by price")
+		}
+	})
+
+	t.Run("deep nesting: .by/col1/.filter/col2/.by/col3/.first/500/.by/col4/.order/col5/.last/100/", func(t *testing.T) {
+		ctx := NewPipelineContext("public", "complex", "id")
+
+		// Build deep pipeline
+		ctx = ctx.WithFilter("col1", "v1", true)  // .by/
+		ctx = ctx.WithFilter("col2", "v2", false) // .filter/
+		ctx = ctx.WithFilter("col3", "v3", true)  // .by/
+		ctx = ctx.WithLimit(500, LimitFirst)      // .first/500/
+		ctx = ctx.WithFilter("col4", "v4", true)  // .by/ (filter after limit!)
+
+		// After limit, can still filter
+		if len(ctx.Filters) != 4 {
+			t.Errorf("Expected 4 filters, got %d", len(ctx.Filters))
+		}
+
+		// Then order
+		ctx = ctx.WithOrder("col5", false) // .order/
+
+		// After order, no more filters allowed
+		if ctx.CanAddFilter() {
+			t.Error("Filters should be disallowed after .order")
+		}
+
+		// But can still add .last
+		ctx = ctx.WithLimit(100, LimitLast) // .last/100/
+
+		// Verify final state
+		if len(ctx.Filters) != 4 {
+			t.Errorf("Should still have 4 filters, got %d", len(ctx.Filters))
+		}
+		if ctx.OrderBy != "col5" {
+			t.Error("Order should be col5")
+		}
+		if ctx.Limit != 100 || ctx.LimitType != LimitLast {
+			t.Error("Final limit should be last 100")
+		}
+	})
+}
+
+// TestPipelineContext_ImmutabilityUnderDeepNesting verifies immutability is preserved
+// across many operations.
+func TestPipelineContext_ImmutabilityUnderDeepNesting(t *testing.T) {
+	// Create a chain of contexts
+	ctx0 := NewPipelineContext("public", "test", "id")
+	ctx1 := ctx0.WithFilter("a", "1", true)
+	ctx2 := ctx1.WithFilter("b", "2", true)
+	ctx3 := ctx2.WithFilter("c", "3", false)
+	ctx4 := ctx3.WithLimit(100, LimitFirst)
+	ctx5 := ctx4.WithFilter("d", "4", true)
+	ctx6 := ctx5.WithOrder("e", true)
+	ctx7 := ctx6.WithLimit(50, LimitLast)
+	ctx8 := ctx7.WithTerminal()
+
+	// Verify each context has the correct number of filters
+	expectedFilters := []int{0, 1, 2, 3, 3, 4, 4, 4, 4}
+	contexts := []*PipelineContext{ctx0, ctx1, ctx2, ctx3, ctx4, ctx5, ctx6, ctx7, ctx8}
+
+	for i, ctx := range contexts {
+		if len(ctx.Filters) != expectedFilters[i] {
+			t.Errorf("ctx%d: expected %d filters, got %d", i, expectedFilters[i], len(ctx.Filters))
+		}
+	}
+
+	// Verify no context was mutated by later operations
+	if ctx0.HasFilters() {
+		t.Error("ctx0 should have no filters")
+	}
+	if ctx1.Filters[0].Column != "a" {
+		t.Error("ctx1 filter should be 'a'")
+	}
+	if ctx4.HasOrdered {
+		t.Error("ctx4 should not be ordered")
+	}
+	if ctx6.LimitType != LimitFirst {
+		t.Error("ctx6 should still have first limit type")
+	}
+	if ctx7.IsTerminal {
+		t.Error("ctx7 should not be terminal")
+	}
+	if !ctx8.IsTerminal {
+		t.Error("ctx8 should be terminal")
+	}
+}
