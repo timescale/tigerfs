@@ -71,16 +71,30 @@ const (
 
 The system uses a **permissive model** that allows all semantically meaningful combinations, disallowing only redundant operations.
 
-| After... | Expose | Disallow | Rationale |
-|----------|--------|----------|-----------|
-| **Table root** | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/`, rows | - | Starting point |
-| **`.by/<col>/<val>/`** | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/`, rows | - | Filters combine with AND |
-| **`.filter/<col>/<val>/`** | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/`, rows | - | Filters combine with AND |
-| **`.order/<col>/`** | `.first/`, `.last/`, `.sample/`, `.export/` | `.by/`, `.filter/`, `.order/` | Filter before ordering; second order is redundant |
-| **`.first/N/`** | `.by/`, `.filter/`, `.order/`, `.last/`, `.sample/`, `.export/`, rows | `.first/` | No double-first (redundant) |
-| **`.last/N/`** | `.by/`, `.filter/`, `.order/`, `.first/`, `.sample/`, `.export/`, rows | `.last/` | No double-last (redundant) |
-| **`.sample/N/`** | `.by/`, `.filter/`, `.order/`, `.export/`, rows | `.first/`, `.last/`, `.sample/` | No limit after sample (just sample fewer) |
-| **`.export/<fmt>`** | format files only | Everything | Terminal |
+#### Capability Matrix
+
+| Parent ↓ / Child → | `.by/` | `.filter/` | `.order/` | `.first/` | `.last/` | `.sample/` | `.export/` |
+|--------------------|:------:|:----------:|:---------:|:---------:|:--------:|:----------:|:----------:|
+| **Table root**           | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.by/<col>/<val>/`**   | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.filter/<col>/<val>/`** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.order/<col>/`**      | ⛔ | ⛔ | ⛔ | ✅ | ✅ | ✅ | ✅ |
+| **`.first/N/`**          | ✅ | ✅ | ✅ | ⛔ | ✅ | ✅ | ✅ |
+| **`.last/N/`**           | ✅ | ✅ | ✅ | ✅ | ⛔ | ✅ | ✅ |
+| **`.sample/N/`**         | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ | ✅ |
+| **`.export/<fmt>`**      | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ |
+
+**Legend:** ✅ = Allowed, ⛔ = Disallowed
+
+#### Disallow Rationale
+
+| Parent | Disallowed Children | Rationale |
+|--------|---------------------|-----------|
+| `.order/<col>/` | `.by/`, `.filter/`, `.order/` | Filter before ordering; second order is redundant |
+| `.first/N/` | `.first/` | No double-first (redundant—just use smaller N) |
+| `.last/N/` | `.last/` | No double-last (redundant—just use smaller N) |
+| `.sample/N/` | `.first/`, `.last/`, `.sample/` | No limit after sample (just sample fewer) |
+| `.export/<fmt>` | Everything | Terminal—export produces files, not directories |
 
 ### Allowed Combinations
 
