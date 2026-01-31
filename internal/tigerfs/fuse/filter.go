@@ -346,6 +346,14 @@ func (f *FilterColumnNode) Lookup(ctx context.Context, name string, out *fuse.En
 		return child, 0
 	}
 
+	// Reject capability directory names - they're only valid after selecting a value
+	// (i.e., in FilterValueNode, not FilterColumnNode)
+	if isCapabilityDirectory(name) {
+		logging.Debug("Rejected capability directory in FilterColumnNode",
+			zap.String("name", name))
+		return nil, syscall.ENOENT
+	}
+
 	// Create FilterValueNode for this value
 	// Direct path access always works, even if value wasn't in listing
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}

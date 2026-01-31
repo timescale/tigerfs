@@ -3,8 +3,10 @@ package fuse
 import (
 	"context"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
@@ -278,6 +280,32 @@ func TestFilterValueNode_Pipeline(t *testing.T) {
 	// The new filter should be marked as non-indexed (.filter/)
 	if node.pipeline.Filters[1].Indexed {
 		t.Error("Filter from .filter/ should not be marked as indexed")
+	}
+}
+
+// TestFilterColumnNode_RejectsCapabilityDirectories tests that FilterColumnNode
+// rejects capability directory names like .filter, .by, .order, etc.
+// These should only be valid after selecting a value (in FilterValueNode).
+// Note: .first and .last are excluded because they have special pagination handlers.
+func TestFilterColumnNode_RejectsCapabilityDirectories(t *testing.T) {
+	cfg := &config.Config{DirFilterLimit: 100000}
+	mockDB := db.NewMockDBClient()
+
+	node := NewFilterColumnNode(cfg, mockDB, nil, "public", "users", "name", nil, nil)
+
+	// Capability directory names (excluding .first/.last which have pagination handlers)
+	// should be rejected - they're only valid after selecting a value
+	capabilityDirs := []string{
+		".by", ".filter", ".order", ".sample", ".export", ".import", ".all",
+	}
+
+	ctx := context.Background()
+	for _, capDir := range capabilityDirs {
+		var out fuse.EntryOut
+		_, errno := node.Lookup(ctx, capDir, &out)
+		if errno != syscall.ENOENT {
+			t.Errorf("Expected ENOENT for capability directory %q, got errno %d", capDir, errno)
+		}
 	}
 }
 

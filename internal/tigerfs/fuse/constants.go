@@ -83,3 +83,23 @@ const (
 	FmtTSV  = "tsv"
 	FmtYAML = "yaml"
 )
+
+// capabilityDirectories lists all pipeline capability directory names.
+// Used to prevent these names from being interpreted as column values.
+var capabilityDirectories = map[string]bool{
+	DirBy:     true,
+	DirFirst:  true,
+	DirLast:   true,
+	DirSample: true,
+	DirAll:    true,
+	DirOrder:  true,
+	DirExport: true,
+	DirImport: true,
+	".filter": true, // DirFilter is defined in filter.go
+}
+
+// isCapabilityDirectory returns true if name is a reserved capability directory.
+// This prevents capability names from being interpreted as column values.
+func isCapabilityDirectory(name string) bool {
+	return capabilityDirectories[name]
+}
