@@ -3477,7 +3477,7 @@ cat /mnt/db/users/.by/email/foo@example.com.json
 1. Update `TableNode.Lookup()` to remove handling for legacy paths
 2. Update `TableNode.Readdir()` to remove legacy entries from listing
 3. Update all tests to use only new paths
-4. Update README.md and specs/spec.md to reflect new structure
+4. Update README.md and docs/spec.md to reflect new structure
 5. Search for any remaining references to old paths
 
 **Files to Modify:**
@@ -3485,7 +3485,7 @@ cat /mnt/db/users/.by/email/foo@example.com.json
 - `internal/tigerfs/fuse/table_test.go`
 - `test/integration/*.go`
 - `README.md`
-- `specs/spec.md`
+- `docs/spec.md`
 
 **Verification:**
 ```bash
@@ -3782,7 +3782,7 @@ Alice,alice@example.com' > /mnt/db/users/123.csv
 
 4. Update documentation:
    - README.md examples
-   - specs/spec.md format documentation
+   - docs/spec.md format documentation
 
 **Files to Modify:**
 - `internal/tigerfs/format/csv.go`
@@ -3793,7 +3793,7 @@ Alice,alice@example.com' > /mnt/db/users/123.csv
 - `internal/tigerfs/fuse/column_file_test.go`
 - `test/integration/*.go`
 - `README.md`
-- `specs/spec.md`
+- `docs/spec.md`
 
 **Verification:**
 ```bash
@@ -4381,7 +4381,7 @@ go test ./test/integration/... -v -run TestPipeline
 **Objective:** Document pipeline capability for users
 
 **Steps:**
-1. Update `specs/spec.md`:
+1. Update `docs/spec.md`:
    - Add Pipeline Query Architecture section
    - Document all capabilities and combinations
    - Add SQL generation examples
@@ -4396,7 +4396,7 @@ go test ./test/integration/... -v -run TestPipeline
    - Limitations
 
 **Files to Modify:**
-- `specs/spec.md`
+- `docs/spec.md`
 - `README.md`
 
 **Files to Create:**
@@ -5840,7 +5840,7 @@ go test ./test/integration/... -v -run TestDDL
    - Show index and view examples
    - Explain staging pattern (read template, write DDL, commit)
 
-2. Update `specs/spec.md`:
+2. Update `docs/spec.md`:
    - Add "DDL Operations" section
    - Document directory structure
    - Document control files (`.schema`, `.test`, `.commit`, `.abort`)
@@ -5854,7 +5854,7 @@ go test ./test/integration/... -v -run TestDDL
 
 **Files to Modify:**
 - `README.md`
-- `specs/spec.md`
+- `docs/spec.md`
 
 **Files to Create:**
 - `examples/ddl/create-table.sh`
@@ -6321,14 +6321,14 @@ The current cache fetches all table metadata (row counts, permissions) at once d
    - Test lazy behavior when table count > threshold
    - Test per-table TTL expiration
 
-4. Document in `specs/spec.md`:
+4. Document in `docs/spec.md`:
    - Add `metadata_preload_limit` to Configuration System section
 
 **Files to Modify:**
 - `internal/tigerfs/config/config.go`
 - `internal/tigerfs/fuse/cache.go`
 - `internal/tigerfs/fuse/cache_test.go`
-- `specs/spec.md`
+- `docs/spec.md`
 
 **Verification:**
 ```bash
@@ -6383,7 +6383,7 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 **Files to Modify:**
 - `internal/tigerfs/cmd/mount.go` (uncomment and wire up flag)
 - `internal/tigerfs/fuse/fs.go` (pass AllowOther to mount options)
-- `specs/spec.md` (document behavior)
+- `docs/spec.md` (document behavior)
 
 **Completion Criteria:**
 - Decision made on whether to support allow_other

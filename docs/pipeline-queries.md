@@ -303,5 +303,5 @@ export TIGERFS_QUERY_TIMEOUT=30s
 
 ## See Also
 
-- [ADR-007: Pipeline Query Architecture](decisions/007-pipeline-query-architecture.md) - Technical design document
-- [spec.md](../specs/spec.md) - Complete TigerFS specification
+- [ADR-007: Pipeline Query Architecture](adr/007-pipeline-query-architecture.md) - Technical design document
+- [spec.md](spec.md) - Complete TigerFS specification

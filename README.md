@@ -393,7 +393,7 @@ export PGDATABASE=mydb
 
 ## Documentation
 
-- **Complete Specification**: See [specs/spec.md](specs/spec.md)
+- **Complete Specification**: See [docs/spec.md](docs/spec.md)
 - **Design Plans**: See [docs/.plans/](docs/.plans/)
 
 ## Development

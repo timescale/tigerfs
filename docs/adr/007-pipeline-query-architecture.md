@@ -248,7 +248,7 @@ SELECT * FROM (
 
 ## Implementation
 
-See `docs/implementation-tasks.md` Phase 5: Pipeline Query Architecture for detailed implementation tasks.
+See `docs/implementation/implementation-tasks.md` Phase 5: Pipeline Query Architecture for detailed implementation tasks.
 
 ### Files to Create
 - `internal/tigerfs/fuse/pipeline.go` - PipelineContext and PipelineNode

@@ -8,7 +8,7 @@ TigerFS is a FUSE-based filesystem that exposes PostgreSQL databases as mountabl
 
 **Primary Goal:** Enable Claude Code to explore and manipulate database data using Read/Glob/Grep operations.
 
-**Full specification:** See `specs/spec.md` for complete technical details including filesystem structure, data formats, SQL patterns, and error codes.
+**Full specification:** See `docs/spec.md` for complete technical details including filesystem structure, data formats, SQL patterns, and error codes.
 
 ## Development Commands
 
@@ -107,7 +107,7 @@ func buildRootCmd(ctx context.Context) *cobra.Command {
 2. Load config once at command start, pass down to functions
 3. Bind flags in `PreRunE`, not at build time
 
-**Full configuration options:** See `specs/spec.md` § Configuration System
+**Full configuration options:** See `docs/spec.md` § Configuration System
 
 ## Logging
 
@@ -206,7 +206,7 @@ Existing code may not meet these standards. When modifying files, update comment
 
 1. Add field to `Config` struct in `config/config.go`
 2. Set default in `Init()`
-3. Document in `specs/spec.md` § Configuration System
+3. Document in `docs/spec.md` § Configuration System
 
 ### Adding a FUSE Operation
 
@@ -243,18 +243,18 @@ test: add integration tests for index navigation
 
 | Topic | Location |
 |-------|----------|
-| Filesystem structure & paths | `specs/spec.md` § Filesystem Structure |
-| Data formats (TSV, CSV, JSON) | `specs/spec.md` § Data Representation |
-| SQL query patterns | `specs/spec.md` § Appendix D |
-| Error codes (errno mapping) | `specs/spec.md` § Error Handling |
-| CLI commands & flags | `specs/spec.md` § CLI Interface |
-| Tiger Cloud integration | `specs/spec.md` § Tiger Cloud Integration |
-| Implementation tasks | `docs/implementation-tasks.md` |
-| Task checklist | `docs/implementation-tasks-checklist.md` |
+| Filesystem structure & paths | `docs/spec.md` § Filesystem Structure |
+| Data formats (TSV, CSV, JSON) | `docs/spec.md` § Data Representation |
+| SQL query patterns | `docs/spec.md` § Appendix D |
+| Error codes (errno mapping) | `docs/spec.md` § Error Handling |
+| CLI commands & flags | `docs/spec.md` § CLI Interface |
+| Tiger Cloud integration | `docs/spec.md` § Tiger Cloud Integration |
+| Implementation tasks | `docs/implementation/implementation-tasks.md` |
+| Task checklist | `docs/implementation/implementation-tasks-checklist.md` |
 
 ## Implementation Tasks Checklist
 
-Keep `docs/implementation-tasks-checklist.md` in sync with `docs/implementation-tasks.md`:
+Keep `docs/implementation/implementation-tasks-checklist.md` in sync with `docs/implementation/implementation-tasks.md`:
 
 - **Task completed:** Mark ⬜ → ✅ and update Summary table
 - **Tasks modified:** New tasks added, tasks removed, or tasks renumbered
