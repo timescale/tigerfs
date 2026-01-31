@@ -322,21 +322,18 @@ ls /mnt/db/sprint/.by/assignee/alice/
 
 ### Agent Task Management
 
-AI agents can find and claim the next task using sequential numbering:
+AI agents can find and claim the next task:
 
 ```bash
-# List todo tasks - already sorted by number
-ls /mnt/db/work/*-o.md
-# 1-research-o.md  2-summarize-o.md  3-draft-o.md
+# Find the first todo task
+TASK=$(ls /mnt/db/work/*-o.md | head -1 | sed 's/-o.md$//')  # "1-research"
 
-# Get the prefix of the first todo task (e.g., "1-research")
-TASK=$(ls /mnt/db/work/*-o.md | head -1 | sed 's/-o.md$//')
-
-# Claim it: change status and set assignee
+# Claim it
 mv "$TASK-o.md" "$TASK-~.md"
-echo "agent-1" > /mnt/db/_work/.by/number/1/assignee
 
-# When done, mark complete
+# ... do the work ...
+
+# Mark complete
 mv "$TASK-~.md" "$TASK-x.md"
 ```
 
