@@ -47,17 +47,17 @@ Implement **Synthesized Apps** that present database tables as synthesized files
 
 | Method | What it does | Use when |
 |--------|--------------|----------|
+| `.build/` | Creates table + view (+ triggers) from scratch | Starting fresh (most common) |
 | `.format/` | Creates view (+ triggers) on existing table | Table already exists |
-| `.build/` | Creates table + view (+ triggers) from scratch | Starting fresh |
 
 ```bash
-# Method 1: Add format to existing table
-echo "markdown" > /mnt/db/public/posts/.format/markdown
-# Creates: posts_md view
-
-# Method 2: Build complete app from scratch
+# Method 1: Build complete app from scratch
 echo "markdown" > /mnt/db/public/.build/posts
 # Creates: _posts table + posts view
+
+# Method 2: Add format to existing table
+echo "markdown" > /mnt/db/public/posts/.format/markdown
+# Creates: posts_md view
 ```
 
 ### Architecture: Standalone Views
@@ -95,13 +95,13 @@ COMMENT ON VIEW posts_md IS 'tigerfs:md';
 
 ### Naming Conventions
 
-**`.format/` (existing table):** View gets suffix, table keeps name
-- Table: `posts` → View: `posts_md`
-- Access: `/posts_md/hello.md` (synthesized), `/posts/1/title` (native)
-
 **`.build/` (new app):** View gets clean name, table prefixed with `_`
 - Table: `_posts` → View: `posts`
 - Access: `/posts/hello.md` (synthesized), `/_posts/1/title` (native)
+
+**`.format/` (existing table):** View gets suffix, table keeps name
+- Table: `posts` → View: `posts_md`
+- Access: `/posts_md/hello.md` (synthesized), `/posts/1/title` (native)
 
 ### Markdown Synthesis
 
@@ -322,15 +322,15 @@ CREATE INDEX ON _work (number_sort);
 
 ### Integration Tests
 ```bash
-# Create markdown view on existing table
-echo "markdown" > /mnt/db/posts/.format/markdown
-ls /mnt/db/posts_md/
-cat /mnt/db/posts_md/hello-world.md
-
 # Build new markdown app
 echo "markdown" > /mnt/db/.build/notes
 echo "---\ntitle: Test\n---\nContent" > /mnt/db/notes/test.md
 cat /mnt/db/notes/test.md
+
+# Create markdown view on existing table
+echo "markdown" > /mnt/db/posts/.format/markdown
+ls /mnt/db/posts_md/
+cat /mnt/db/posts_md/hello-world.md
 
 # Build tasks app
 echo "tasks" > /mnt/db/.build/work

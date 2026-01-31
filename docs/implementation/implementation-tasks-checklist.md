@@ -122,8 +122,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ⬜ | 6.2 | Implement Markdown Synthesis | ~4512 |
 | ⬜ | 6.3 | Implement Markdown Parsing (Write Support) | ~4565 |
 | ⬜ | 6.4 | Implement Plain Text Format | ~4616 |
-| ⬜ | 6.5 | Implement .format/ Handler | ~4648 |
-| ⬜ | 6.6 | Implement .build/ Scaffolding Handler | ~4714 |
+| ⬜ | 6.5 | Implement .build/ Scaffolding Handler | ~4648 |
+| ⬜ | 6.6 | Implement .format/ Handler | ~4714 |
 | ⬜ | 6.7 | Implement SynthesizedViewNode | ~4778 |
 | ⬜ | 6.8 | Implement Tasks Filename Synthesis (with dynamic padding) | ~4838 |
 | ⬜ | 6.9 | Implement Tasks Triggers and Renumber Function | ~4926 |
