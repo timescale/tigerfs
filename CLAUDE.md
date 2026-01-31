@@ -122,6 +122,29 @@ logging.Warn("message", zap.Error(err))
 logging.Error("message", zap.Error(err))
 ```
 
+## User Feedback via Logging
+
+FUSE can only return errno codes, not messages. **Log detailed errors before returning errno** - output goes to stderr and user sees it:
+
+```go
+logging.Error("invalid task number",
+    zap.String("number", number),
+    zap.String("hint", "must be positive integers (e.g., 1, 1.2)"))
+return syscall.EINVAL
+```
+
+```
+$ mv 1-foo-o.md a-foo-o.md
+{"message":"invalid task number","number":"a","hint":"must be positive integers (e.g., 1, 1.2)"}
+mv: cannot move '1-foo-o.md' to 'a-foo-o.md': Invalid argument
+```
+
+- `logging.Error()` for failures returning errno
+- `logging.Warn()` for successful operations user should know about
+- Include `zap.String("hint", "...")` for guidance
+
+See `internal/tigerfs/fuse/control_files.go` for examples.
+
 ## Testing Requirements
 
 For each implementation task:

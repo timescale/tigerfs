@@ -4415,52 +4415,801 @@ go test ./test/integration/... -v -run TestPipeline
 
 ---
 
-## Phase 6: Synthesized Applications
+## Phase 6: Synthesized Apps
 
 ### Overview
 
-This phase covers higher-level features that synthesize multiple TigerFS capabilities into coherent user-facing applications. These are features that span multiple subsystems and provide significant user value.
+Enable TigerFS to present database tables as synthesized files (markdown, plain text, task lists) rather than native row-as-directory format. Users access content as actual files with appropriate extensions and structure.
 
-**Note:** Tasks in this phase are intentionally kept as placeholders. Specific tasks will be defined based on user feedback and evolving requirements after the core pipeline architecture is complete.
+**Supported Formats:**
+- **Markdown (.md)** - filename + YAML frontmatter + body
+- **Plain Text (.txt)** - filename + body (no metadata)
+- **Tasks (.md)** - ordered task items with `{number}-{name}-{status}.md` filenames
 
----
+**Two Creation Methods:**
+- `.format/` - Creates view (+ triggers) on existing table
+- `.build/` - Creates table + view (+ triggers) from scratch
 
-### Task 6.1: Placeholder - Data Pipeline Integration
-
-**Objective:** TBD - Integration with data pipeline tools
-
-**Status:** Placeholder for future work
-
-**Potential Features:**
-- Stream processing integration
-- Change data capture (CDC) support
-- Real-time data sync capabilities
+**Reference:** See ADR-008 for full design details.
 
 ---
 
-### Task 6.2: Placeholder - Query Caching
+### Task 6.1: Implement Format Detection
 
-**Objective:** TBD - Intelligent caching of pipeline query results
+**Objective:** Detect synthesized format from view name suffix or column patterns
 
-**Status:** Placeholder for future work
+**Background:**
+TigerFS needs to determine how to render a view based on naming conventions or column patterns. Explicit suffix takes priority over column convention detection.
 
-**Potential Features:**
-- Cache frequent pipeline results
-- Invalidation on data changes
-- Configurable cache policies
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/format.go`:
+   - Define format types:
+     ```go
+     type SynthFormat int
+     const (
+         FormatNative SynthFormat = iota  // Row-as-directory
+         FormatMarkdown                   // .md files
+         FormatPlainText                  // .txt files
+         FormatTasks                      // Task list .md files
+     )
+     ```
+   - Implement `DetectFormat(viewName string, columns []string) SynthFormat`:
+     - Check suffix: `_md` → Markdown, `_txt` → PlainText, `_tasks`/`_todo`/`_items` → Tasks
+     - If no suffix match, check columns:
+       - `filename` + `body` + others → Markdown
+       - `filename` + `body` only → PlainText
+       - `number` + `name` + `status` + `body` → Tasks
+       - Otherwise → Native
+
+2. Create `internal/tigerfs/fuse/synthesized/columns.go`:
+   - Define column role detection:
+     ```go
+     type ColumnRoles struct {
+         Filename    string   // Column for filename
+         Body        string   // Column for body content
+         Frontmatter []string // Columns for YAML frontmatter
+         // Tasks-specific
+         Number      string
+         Name        string
+         Status      string
+         Assignee    string
+         Timestamps  map[string]string // todo_at, doing_at, done_at, etc.
+     }
+     ```
+   - Implement `DetectColumnRoles(columns []string, format SynthFormat) (*ColumnRoles, error)`:
+     - Filename conventions: `name`, `filename`, `title`, `slug`
+     - Body conventions: `body`, `content`, `description`, `text`
+     - Number conventions: `number`, `sort_key`, `order`
+     - Status conventions: `status`, `state`
+     - Return error if required columns not found
+
+3. Add view introspection query to `internal/tigerfs/db/query.go`:
+   ```go
+   func (c *Client) GetViewColumns(ctx context.Context, schema, view string) ([]string, error)
+   ```
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/format.go`
+- `internal/tigerfs/fuse/synthesized/columns.go`
+- `internal/tigerfs/fuse/synthesized/format_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/query.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestFormat
+```
+
+**Completion Criteria:**
+- Format detection works by suffix and column patterns
+- Suffix takes priority over column detection
+- Column role detection finds filename/body/frontmatter columns
+- Unit tests pass
 
 ---
 
-### Task 6.3: Placeholder - Advanced Export Formats
+### Task 6.2: Implement Markdown Synthesis
 
-**Objective:** TBD - Additional export format support
+**Objective:** Generate markdown files from database rows with YAML frontmatter
 
-**Status:** Placeholder for future work
+**Background:**
+When reading a markdown-format view, TigerFS synthesizes a `.md` file with YAML frontmatter from non-filename/body columns, followed by the body content.
 
-**Potential Features:**
-- Parquet export for analytics
-- Arrow format for interop
-- Streaming export for large datasets
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/markdown.go`:
+   - Implement `SynthesizeMarkdown(row map[string]any, roles *ColumnRoles) ([]byte, error)`:
+     - Build YAML frontmatter from frontmatter columns
+     - Add `---` delimiters
+     - Append body content
+     - Handle empty frontmatter (no delimiters)
+   - Implement `GetMarkdownFilename(row map[string]any, roles *ColumnRoles, pk string) string`:
+     - Return filename from column value
+     - Add `.md` extension
+     - Handle duplicates with PK suffix
+
+2. Add YAML dependency to `go.mod`:
+   ```
+   gopkg.in/yaml.v3
+   ```
+
+3. Implement frontmatter ordering:
+   - Output keys in column order (as defined in view)
+   - Handle various types: strings, numbers, arrays, timestamps
+
+4. Handle edge cases:
+   - NULL filename → hide row or show as `<null>-{pk}.md`
+   - Filename contains `.md` → strip to avoid `hello.md.md`
+   - Invalid filesystem characters → replace with `-`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/markdown.go`
+- `internal/tigerfs/fuse/synthesized/markdown_test.go`
+
+**Files to Modify:**
+- `go.mod` (add yaml dependency)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestMarkdown
+```
+
+**Completion Criteria:**
+- Markdown synthesis produces valid YAML frontmatter + body
+- Empty frontmatter omits `---` delimiters
+- Filename generation handles duplicates and edge cases
+- Unit tests pass
+
+---
+
+### Task 6.3: Implement Markdown Parsing (Write Support)
+
+**Objective:** Parse edited markdown files back to column values for UPDATE/INSERT
+
+**Background:**
+When a user edits and saves a markdown file, TigerFS must parse it back into column values and execute the appropriate SQL operation.
+
+**Steps:**
+1. Add to `internal/tigerfs/fuse/synthesized/markdown.go`:
+   - Implement `ParseMarkdown(content []byte) (*ParsedMarkdown, error)`:
+     ```go
+     type ParsedMarkdown struct {
+         Frontmatter map[string]any
+         Body        string
+     }
+     ```
+     - Split on `---` delimiters
+     - Parse YAML frontmatter
+     - Extract body content
+
+2. Implement `MapToColumns(parsed *ParsedMarkdown, roles *ColumnRoles) (map[string]any, error)`:
+   - Map frontmatter keys to column names
+   - Set body column value
+   - Return error for unknown frontmatter keys
+
+3. Handle unknown frontmatter keys:
+   - Return error with list of unknown keys
+   - Hint to remove keys or update view
+
+4. Handle filename changes:
+   - Parse old filename from path
+   - If frontmatter includes new filename, update that column
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/synthesized/markdown.go`
+- `internal/tigerfs/fuse/synthesized/markdown_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestMarkdownParse
+```
+
+**Completion Criteria:**
+- Parsing splits frontmatter from body correctly
+- Column mapping handles all frontmatter types
+- Unknown keys produce helpful error
+- Round-trip (synthesize → parse) preserves data
+- Unit tests pass
+
+---
+
+### Task 6.4: Implement Plain Text Format
+
+**Objective:** Support plain text files (no frontmatter)
+
+**Background:**
+Plain text format is simpler than markdown—just filename + body, no YAML frontmatter.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/plaintext.go`:
+   - Implement `SynthesizePlainText(row map[string]any, roles *ColumnRoles) ([]byte, error)`:
+     - Return body content directly (no frontmatter)
+   - Implement `ParsePlainText(content []byte) string`:
+     - Return content as body (trivial)
+   - Implement `GetPlainTextFilename(row map[string]any, roles *ColumnRoles, pk string) string`:
+     - Return filename with `.txt` extension
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/plaintext.go`
+- `internal/tigerfs/fuse/synthesized/plaintext_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestPlainText
+```
+
+**Completion Criteria:**
+- Plain text synthesis returns body only
+- Filename uses `.txt` extension
+- Unit tests pass
+
+---
+
+### Task 6.5: Implement .format/ Handler
+
+**Objective:** Create views via filesystem interface for existing tables
+
+**Background:**
+Users can create synthesized views by writing to `.format/` directory instead of using SQL directly. TigerFS generates the appropriate CREATE VIEW statement.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/format_node.go`:
+   - Implement `FormatDirNode` for `table/.format/` directory:
+     - `Readdir()`: List existing format files (markdown, txt, tasks)
+     - `Lookup()`: Return FormatFileNode for each format
+     - `Create()`: Handle new format creation
+
+2. Implement `FormatFileNode`:
+   - `Read()`: Return current config as JSON:
+     ```json
+     {
+       "format": "markdown",
+       "view": "posts_md",
+       "columns": {"filename": "slug", "body": "content"},
+       "frontmatter": ["author", "date", "tags"],
+       "source": "convention"
+     }
+     ```
+   - `Write()`: Parse JSON5 config, generate and execute CREATE VIEW
+
+3. Add JSON5 dependency to `go.mod`:
+   ```
+   github.com/yosuke-furukawa/json5
+   ```
+
+4. Implement view generation in `internal/tigerfs/db/ddl.go`:
+   ```go
+   func (c *Client) CreateSynthesizedView(ctx context.Context, schema, table, viewName string, roles *ColumnRoles, format SynthFormat) error
+   ```
+   - Generate CREATE VIEW with column aliases
+   - Add COMMENT with format marker (e.g., `tigerfs:md`)
+
+5. Handle existing view:
+   - Return warning if view exists with custom SQL
+   - Support `--force` to overwrite
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/format_node.go`
+- `internal/tigerfs/fuse/synthesized/format_node_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/ddl.go`
+- `internal/tigerfs/fuse/table.go` (expose `.format/` directory)
+- `go.mod` (add json5 dependency)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestFormatNode
+```
+
+**Completion Criteria:**
+- `.format/` directory appears under tables
+- Writing format config creates view
+- Reading format returns current config
+- View comment includes format marker
+- Unit tests pass
+
+---
+
+### Task 6.6: Implement .build/ Scaffolding Handler
+
+**Objective:** Create table + view from scratch via filesystem
+
+**Background:**
+`.build/` provides full scaffolding—creates the underlying table with default columns, then creates the synthesized view on top.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/build_node.go`:
+   - Implement `BuildDirNode` for `schema/.build/` directory:
+     - `Readdir()`: Empty (write-only)
+     - `Create()`: Handle new app creation
+
+2. Implement `BuildFileNode`:
+   - `Write()`: Parse format (or JSON5 with custom columns), create table + view
+
+3. Implement default table schemas in `internal/tigerfs/db/ddl.go`:
+   ```go
+   func (c *Client) CreateMarkdownTable(ctx context.Context, schema, tableName string, extraColumns map[string]string) error
+   func (c *Client) CreatePlainTextTable(ctx context.Context, schema, tableName string) error
+   func (c *Client) CreateTasksTable(ctx context.Context, schema, tableName string) error
+   ```
+
+4. Implement naming convention:
+   - View gets clean name (e.g., `posts`)
+   - Table gets underscore prefix (e.g., `_posts`)
+
+5. Create `modified_at` trigger:
+   ```sql
+   CREATE FUNCTION update_modified_at() RETURNS TRIGGER AS $$
+   BEGIN
+       NEW.modified_at := now();
+       RETURN NEW;
+   END;
+   $$ LANGUAGE plpgsql;
+   ```
+
+6. Handle errors:
+   - View already exists → error with hint
+   - Table already exists → error with hint
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/build_node.go`
+- `internal/tigerfs/fuse/synthesized/build_node_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/ddl.go`
+- `internal/tigerfs/fuse/schema.go` (expose `.build/` directory)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestBuildNode
+```
+
+**Completion Criteria:**
+- `.build/` directory appears under schemas
+- Writing format creates table + view
+- Default columns match ADR-008 specification
+- Naming convention applied correctly
+- `modified_at` trigger created
+- Unit tests pass
+
+---
+
+### Task 6.7: Implement SynthesizedViewNode
+
+**Objective:** Create FUSE node that presents synthesized files for a view
+
+**Background:**
+When TigerFS detects a synthesized view, it should present the view as a directory of synthesized files (e.g., `.md` files) instead of native row-as-directory format.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/view_node.go`:
+   - Implement `SynthesizedViewNode`:
+     ```go
+     type SynthesizedViewNode struct {
+         fs.Inode
+         fs      *FS
+         schema  string
+         view    string
+         format  SynthFormat
+         roles   *ColumnRoles
+     }
+     ```
+   - `Readdir()`: Query view, return list of synthesized filenames
+   - `Lookup()`: Return `SynthesizedFileNode` for each file
+
+2. Implement `SynthesizedFileNode`:
+   - `Read()`: Query row, synthesize content based on format
+   - `Write()`: Parse content, execute UPDATE
+   - `Getattr()`: Return file size, mode 0644
+
+3. Handle file operations:
+   - Create (write new file) → INSERT
+   - Delete (rm file) → DELETE
+   - Rename (mv file) → UPDATE filename column
+
+4. Integrate with table discovery:
+   - In `internal/tigerfs/fuse/table.go`, detect synthesized views
+   - Route to `SynthesizedViewNode` instead of `TableNode`
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/view_node.go`
+- `internal/tigerfs/fuse/synthesized/file_node.go`
+- `internal/tigerfs/fuse/synthesized/view_node_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/schema.go` (route synthesized views)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestViewNode
+```
+
+**Completion Criteria:**
+- Synthesized views appear as directories of files
+- Files have correct extensions (.md, .txt)
+- Read returns synthesized content
+- Write parses and updates database
+- Create/delete/rename work
+- Unit tests pass
+
+---
+
+### Task 6.8: Implement Tasks Filename Synthesis
+
+**Objective:** Generate task filenames in `{number}-{name}-{status}.md` format with dynamic padding
+
+**Background:**
+Tasks format uses composite filenames with number, name, and status symbol. Status is stored as word but displayed as symbol in filename. Numbers use integers only (no letters) and are zero-padded per-level for correct `ls` sorting.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/tasks.go`:
+   - Define status mapping:
+     ```go
+     var StatusToSymbol = map[string]string{
+         "todo":  "o",
+         "doing": "~",
+         "done":  "x",
+     }
+     var SymbolToStatus = map[string]string{
+         "o": "todo",
+         "~": "doing",
+         "x": "done",
+     }
+     var StatusAliases = map[string]string{
+         "pending": "todo", "new": "todo",
+         "active": "doing", "wip": "doing",
+         "complete": "doing", "finished": "done",
+     }
+     ```
+
+2. Implement dynamic per-level padding:
+   - `ComputePaddingWidths(numbers []string) map[int]int`:
+     - Parse each number into components (split on `.`)
+     - Track max value at each level
+     - Return width needed per level: `width = len(strconv.Itoa(max))`
+   - Example: numbers `["1", "2", "1.15", "1.2"]` → `{0: 1, 1: 2}` (level 0 max=2, level 1 max=15)
+
+3. Implement filename synthesis:
+   - `SynthesizeTaskFilename(row map[string]any, roles *ColumnRoles, widths map[int]int) string`:
+     - Pad each number component to its level's width
+     - Format: `{padded_number}-{name}-{symbol}.md`
+     - Example: number=`"1.2"`, widths=`{0:1, 1:2}` → `"1.02-task-o.md"`
+
+4. Implement filename parsing with validation:
+   - `ParseTaskFilename(filename string) (number, name, status string, err error)`:
+     - Extract components from filename
+     - Strip leading zeros from number components
+     - **Validate number format** (must match `^[1-9][0-9]*(\.[1-9][0-9]*)*$`)
+     - Convert symbol to canonical status word
+     - Example: `"1.02-task-o.md"` → number=`"1.2"`, name=`"task"`, status=`"todo"`
+   - On invalid number, log error for user feedback before returning errno:
+     ```go
+     if !isValidTaskNumber(number) {
+         logging.Error("invalid task number",
+             zap.String("number", number),
+             zap.String("hint", "must be positive integers (e.g., 1, 1.2, 10.15)"))
+         return "", "", "", fmt.Errorf("invalid task number: %s", number)
+     }
+     ```
+   - User sees: `{"message":"invalid task number","number":"a","hint":"..."}`
+
+5. Implement `SynthesizeTaskMarkdown(row map[string]any, roles *ColumnRoles) ([]byte, error)`:
+   - Frontmatter: number (unpadded), name, status, assignee, timestamps
+   - Body: description/body column
+
+6. Implement status normalization:
+   - Accept symbol or word on input
+   - Store canonical word (todo/doing/done)
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/tasks.go`
+- `internal/tigerfs/fuse/synthesized/tasks_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestTasks
+```
+
+**Completion Criteria:**
+- Task filenames use correct format with per-level padding
+- Padding widths computed correctly from all numbers in view
+- Status symbol/word conversion works both directions
+- Aliases normalized to canonical values
+- Frontmatter includes all task fields (unpadded numbers)
+- Filename parsing strips leading zeros correctly
+- Invalid numbers rejected with user-friendly error (logged to stderr)
+- Unit tests pass
+
+---
+
+### Task 6.9: Implement Tasks Triggers and Renumber Function
+
+**Objective:** Generate PostgreSQL triggers for shift-on-insert and status timestamps, plus explicit compact function
+
+**Background:**
+Tasks format requires automatic shift-on-insert (prevent overwrites) and status timestamps. Gap closing is NOT automatic—users explicitly call compact via `.renumber` file.
+
+**Steps:**
+1. Add trigger generation to `internal/tigerfs/db/ddl.go`:
+   - `CreateShiftOnInsertTrigger(ctx, schema, table string)`:
+     ```sql
+     CREATE FUNCTION {schema}.{table}_shift_numbers() RETURNS TRIGGER AS $$
+     DECLARE
+         r RECORD;
+         new_sort INT[];
+     BEGIN
+         -- Compute sort array for NEW.number
+         new_sort := string_to_array(NEW.number, '.')::int[];
+
+         -- If target number is occupied, shift siblings down
+         -- Process one row at a time in descending order to avoid UNIQUE conflicts
+         -- IMPORTANT: Use number_sort for comparison, not TEXT (TEXT sort is wrong: '2' > '10')
+         IF EXISTS (SELECT 1 FROM {schema}.{table} WHERE number = NEW.number AND id != NEW.id) THEN
+             FOR r IN
+                 SELECT * FROM {schema}.{table}
+                 WHERE number_sort >= new_sort
+                   AND parse_parent(number) = parse_parent(NEW.number)
+                   AND id != NEW.id
+                 ORDER BY number_sort DESC
+             LOOP
+                 UPDATE {schema}.{table} SET number = increment_number(r.number) WHERE id = r.id;
+             END LOOP;
+         END IF;
+         RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql;
+
+     CREATE TRIGGER {table}_shift_trigger
+         BEFORE INSERT OR UPDATE OF number ON {schema}.{table}
+         FOR EACH ROW EXECUTE FUNCTION {schema}.{table}_shift_numbers();
+     ```
+   - `CreateStatusTimestampTrigger(ctx, schema, table string)`:
+     ```sql
+     CREATE FUNCTION {table}_status_timestamp() RETURNS TRIGGER AS $$
+     BEGIN
+         IF NEW.status != OLD.status THEN
+             CASE NEW.status
+                 WHEN 'todo' THEN NEW.todo_at := now();
+                 WHEN 'doing' THEN NEW.doing_at := now();
+                 WHEN 'done' THEN NEW.done_at := now();
+             END CASE;
+         END IF;
+         RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql;
+     ```
+
+2. Implement hierarchical number helper functions (integers only):
+   - `parse_parent(number TEXT) RETURNS TEXT`: Extract parent (e.g., `'1.2.3'` → `'1.2'`, `'1'` → `''`)
+   - `increment_number(number TEXT) RETURNS TEXT`: Increment last component (e.g., `'1.2'` → `'1.3'`, `'9'` → `'10'`)
+   ```sql
+   CREATE FUNCTION parse_parent(number TEXT) RETURNS TEXT AS $$
+   BEGIN
+       IF position('.' in number) = 0 THEN
+           RETURN '';
+       END IF;
+       RETURN left(number, length(number) - position('.' in reverse(number)));
+   END;
+   $$ LANGUAGE plpgsql IMMUTABLE;
+
+   CREATE FUNCTION increment_number(number TEXT) RETURNS TEXT AS $$
+   DECLARE
+       parts TEXT[];
+       last_part INT;
+   BEGIN
+       parts := string_to_array(number, '.');
+       last_part := parts[array_length(parts, 1)]::INT + 1;
+       parts[array_length(parts, 1)] := last_part::TEXT;
+       RETURN array_to_string(parts, '.');
+   END;
+   $$ LANGUAGE plpgsql IMMUTABLE;
+   ```
+
+   **Note:** `decrement_number` is not needed - compact function assigns sequential numbers directly.
+
+3. Add CHECK constraint for valid task numbers:
+   ```sql
+   -- Numbers must be positive integers (starting at 1) separated by dots
+   -- Valid: '1', '1.2', '10.15.3'
+   -- Invalid: '0', '01', 'abc', '1.a', '-1', '1.0'
+   ALTER TABLE {schema}.{table}
+       ADD CONSTRAINT {table}_number_format
+       CHECK (number ~ '^[1-9][0-9]*(\.[1-9][0-9]*)*$');
+   ```
+
+3. Implement compact function for explicit renumbering (called via `.renumber` file):
+   ```sql
+   CREATE FUNCTION {schema}.{table}_compact(scope TEXT DEFAULT NULL) RETURNS void AS $$
+   DECLARE
+       r RECORD;
+       current_parent TEXT;
+       counter INT;
+       parent_filter TEXT;
+   BEGIN
+       -- Compact numbers within each parent group
+       -- If scope provided, only compact that subtree
+       parent_filter := COALESCE(scope, '');
+
+       FOR current_parent IN
+           SELECT DISTINCT parse_parent(number) as parent
+           FROM {schema}.{table}
+           WHERE (scope IS NULL OR number LIKE scope || '%' OR number LIKE scope || '.%')
+           ORDER BY parent
+       LOOP
+           counter := 1;
+           FOR r IN
+               SELECT * FROM {schema}.{table}
+               WHERE parse_parent(number) = current_parent
+               ORDER BY number_sort
+           LOOP
+               IF current_parent = '' THEN
+                   UPDATE {schema}.{table} SET number = counter::TEXT WHERE id = r.id;
+               ELSE
+                   UPDATE {schema}.{table} SET number = current_parent || '.' || counter::TEXT WHERE id = r.id;
+               END IF;
+               counter := counter + 1;
+           END LOOP;
+       END LOOP;
+   END;
+   $$ LANGUAGE plpgsql;
+   ```
+
+5. Implement `.renumber` file handler in FUSE layer:
+   - `touch .renumber` or `echo "" > .renumber` → calls `{table}_compact(NULL)`
+   - `echo "2" > .renumber` → calls `{table}_compact('2')`
+   - `echo "2.1" > .renumber` → calls `{table}_compact('2.1')`
+   - Log success/failure for user feedback:
+     ```go
+     // On success:
+     logging.Warn("tasks renumbered",
+         zap.String("scope", scope),
+         zap.Int("count", rowsAffected))
+
+     // On invalid scope:
+     logging.Error("invalid renumber scope",
+         zap.String("scope", scope),
+         zap.String("hint", "must be a valid task number prefix (e.g., 2, 2.1)"))
+     return syscall.EINVAL
+     ```
+
+6. Update `.format/tasks` and `.build/tasks` to:
+   - Create helper functions if not exists
+   - Create shift trigger (no gap-close trigger)
+   - Create status timestamp trigger
+   - Create compact function
+   - Add CHECK constraint for number format validation
+   - For `.build/`, include `number_sort INT[] GENERATED ALWAYS AS (string_to_array(number, '.')::int[]) STORED` column with index
+
+**Files to Modify:**
+- `internal/tigerfs/db/ddl.go`
+- `internal/tigerfs/fuse/synthesized/format_node.go`
+- `internal/tigerfs/fuse/synthesized/build_node.go`
+- `internal/tigerfs/fuse/synthesized/view_node.go` (handle `.renumber` file)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/db/... -v -run TestTasksTriggers
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestRenumber
+```
+
+**Completion Criteria:**
+- Shift trigger uses `number_sort` for comparison (not TEXT - TEXT sort is wrong)
+- Shift trigger works with UNIQUE constraint
+- Status timestamp trigger created and works
+- Compact function created and closes gaps correctly
+- Compact function respects scope parameter
+- `.renumber` file triggers compact via FUSE
+- CHECK constraint validates number format (positive integers, no leading zeros)
+- Hierarchical number functions handle integers at all depths
+- Helper functions installed in schema
+- `.build/tasks` creates table with `number_sort` generated column
+- Unit tests pass
+
+**Future extension:** Support `echo "flatten" > .renumber` to collapse hierarchy (e.g., `1.1, 1.2, 2.1` → `1, 2, 3`).
+
+---
+
+### Task 6.10: Integration Tests for Synthesized Apps
+
+**Objective:** End-to-end tests for all synthesized app functionality
+
+**Background:**
+Verify that markdown, plain text, and tasks formats work correctly through the full filesystem interface.
+
+**Steps:**
+1. Create `test/integration/synthesized_test.go`:
+   - Test markdown via `.format/`:
+     ```bash
+     # Create view on existing table
+     echo "markdown" > /mnt/db/posts/.format/markdown
+     ls /mnt/db/posts_md/
+     cat /mnt/db/posts_md/hello-world.md
+     # Edit file
+     echo "new content" >> /mnt/db/posts_md/hello-world.md
+     # Create new file
+     echo "---\ntitle: New\n---\nContent" > /mnt/db/posts_md/new-post.md
+     ```
+   - Test markdown via `.build/`:
+     ```bash
+     echo "markdown" > /mnt/db/public/.build/notes
+     ls /mnt/db/public/notes/
+     cat /mnt/db/public/_notes/  # Native access
+     ```
+   - Test tasks:
+     ```bash
+     echo "tasks" > /mnt/db/public/.build/work
+     echo "First task" > /mnt/db/public/work/1-setup-o.md
+     mv /mnt/db/public/work/1-setup-o.md /mnt/db/public/work/1-setup-~.md
+     # Verify doing_at timestamp set
+     cat /mnt/db/public/work/1-setup-~.md
+     # Test shift-on-insert
+     echo "New task" > /mnt/db/public/work/1-new-task-o.md
+     ls /mnt/db/public/work/  # Verify numbering shifted
+     ```
+   - Test explicit renumbering via `.renumber`:
+     ```bash
+     # Create tasks with gaps
+     echo "Task 1" > /mnt/db/public/work/1-first-o.md
+     echo "Task 3" > /mnt/db/public/work/3-third-o.md
+     echo "Task 5" > /mnt/db/public/work/5-fifth-o.md
+     ls /mnt/db/public/work/  # Shows 1, 3, 5 (gaps)
+
+     # Compact all
+     touch /mnt/db/public/work/.renumber
+     ls /mnt/db/public/work/  # Shows 1, 2, 3 (compacted)
+
+     # Test scoped compact
+     echo "Sub 1" > /mnt/db/public/work/2.1-sub1-o.md
+     echo "Sub 3" > /mnt/db/public/work/2.3-sub3-o.md
+     echo "2" > /mnt/db/public/work/.renumber  # Compact only 2.*
+     ls /mnt/db/public/work/  # 2.1, 2.2 (2.* compacted)
+     ```
+   - Test dynamic filename padding:
+     ```bash
+     # With max < 10 at level 0, no padding needed
+     ls /mnt/db/public/work/  # 1-task-o.md, 2-task-o.md
+
+     # Add task 10+
+     echo "Task" > /mnt/db/public/work/15-task-o.md
+     ls /mnt/db/public/work/  # 01-task-o.md, 02-task-o.md, 15-task-o.md (padded)
+     ```
+   - Test plain text:
+     ```bash
+     echo "txt" > /mnt/db/public/.build/snippets
+     echo "Hello world" > /mnt/db/public/snippets/hello.txt
+     cat /mnt/db/public/snippets/hello.txt
+     ```
+
+2. Test error cases:
+   - Unknown frontmatter keys
+   - Missing required columns for format detection
+   - View already exists
+   - Invalid task status
+
+3. Test config reading:
+   ```bash
+   cat /mnt/db/posts/.format/markdown  # Returns JSON config
+   ```
+
+**Files to Create:**
+- `test/integration/synthesized_test.go`
+
+**Verification:**
+```bash
+go test ./test/integration/... -v -run TestSynthesized
+```
+
+**Completion Criteria:**
+- All formats work via `.format/` and `.build/`
+- Read, write, create, delete operations work
+- Tasks shift-on-insert trigger functions correctly
+- Tasks status timestamp trigger functions correctly
+- `.renumber` file compacts all when touched
+- `.renumber` file compacts scoped subtree when written to
+- Dynamic filename padding adjusts based on max number at each level
+- Error cases handled gracefully
+- Integration tests pass
 
 ---
 

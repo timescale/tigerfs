@@ -118,16 +118,16 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1 | Implement Format Detection | ~4430 |
-| ⬜ | 6.2 | Implement Markdown Synthesis | ~4530 |
-| ⬜ | 6.3 | Implement Markdown Parsing (Write Support) | ~4620 |
-| ⬜ | 6.4 | Implement Plain Text Format | ~4700 |
-| ⬜ | 6.5 | Implement .format/ Handler | ~4760 |
-| ⬜ | 6.6 | Implement .build/ Scaffolding Handler | ~4860 |
-| ⬜ | 6.7 | Implement SynthesizedViewNode | ~4960 |
-| ⬜ | 6.8 | Implement Tasks Filename Synthesis | ~5060 |
-| ⬜ | 6.9 | Implement Tasks Triggers | ~5150 |
-| ⬜ | 6.10 | Integration Tests for Synthesized Apps | ~5270 |
+| ⬜ | 6.1 | Implement Format Detection | ~4437 |
+| ⬜ | 6.2 | Implement Markdown Synthesis | ~4512 |
+| ⬜ | 6.3 | Implement Markdown Parsing (Write Support) | ~4565 |
+| ⬜ | 6.4 | Implement Plain Text Format | ~4616 |
+| ⬜ | 6.5 | Implement .format/ Handler | ~4648 |
+| ⬜ | 6.6 | Implement .build/ Scaffolding Handler | ~4714 |
+| ⬜ | 6.7 | Implement SynthesizedViewNode | ~4778 |
+| ⬜ | 6.8 | Implement Tasks Filename Synthesis (with dynamic padding) | ~4838 |
+| ⬜ | 6.9 | Implement Tasks Triggers and Renumber Function | ~4926 |
+| ⬜ | 6.10 | Integration Tests for Synthesized Apps | ~5113 |
 
 ---
 
