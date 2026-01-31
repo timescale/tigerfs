@@ -17,6 +17,7 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Automatic file extensions based on column type (.txt, .json, .bin)
 - Multiple data formats for row-based exploration (TSV, CSV, JSON, YAML)
 - Index-based navigation for fast lookups
+- Pipeline queries with database query pushdown—chain filters, ordering, and pagination in paths
 - Full CRUD operations (create, read, update, delete)
 - Respects database constraints and permissions
 - Multi-user access, across local dev, containers, and in the cloud
@@ -220,6 +221,36 @@ ls /mnt/db/events/.sample/100/      # Random sample of 100 rows
 cat /mnt/db/events/.info/count      # Total row count
 ```
 
+### Pipeline Queries
+
+Chain multiple operations into a single path. TigerFS pushes the entire pipeline down to the database as one optimized SQL query:
+
+```bash
+# Filter by indexed column, order, limit, and export
+cat /mnt/db/orders/.by/customer_id/123/.order/created_at/.last/10/.export/json
+
+# Multiple filters (AND-combined)
+ls /mnt/db/orders/.by/status/pending/.by/priority/high/
+
+# Filter by any column (not just indexed)
+ls /mnt/db/users/.filter/role/admin/.first/50/
+
+# Nested pagination: last 50 of first 100
+ls /mnt/db/events/.first/100/.last/50/
+
+# Sample, then sort and export
+cat /mnt/db/products/.sample/100/.order/price/.export/csv
+```
+
+**Available capabilities:**
+- `.by/<col>/<val>/` - Filter by indexed column (fast)
+- `.filter/<col>/<val>/` - Filter by any column
+- `.order/<col>/` - Sort results
+- `.first/N/`, `.last/N/`, `.sample/N/` - Pagination
+- `.export/csv`, `.export/json`, `.export/tsv` - Bulk export
+
+For complete documentation, see [docs/pipeline-queries.md](docs/pipeline-queries.md).
+
 ### Table Metadata
 
 Inspect table structure without querying the database directly:
@@ -398,7 +429,9 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - Incremental row creation via mkdir
 - Metadata directory (`.info/` with schema, columns, count, ddl files)
 - Index-based navigation (`.by/column/value/`) with `.first/N/` and `.last/N/` pagination
+- Pipeline queries with database query pushdown (`.by/`, `.filter/`, `.order/`, chained pagination)
 - Large table handling (`.first/N/`, `.last/N/`, `.sample/N/`, `.info/count`)
+- Bulk export (`.export/csv`, `.export/json`, `.export/tsv`)
 - Schema flattening (default schema at root, `.schemas/` for explicit access)
 - Metadata caching with configurable refresh
 - CLI with mount, unmount, status, list, and config commands

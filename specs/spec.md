@@ -14,24 +14,25 @@
 6. [Operations (CRUD)](#operations-crud)
 7. [Index-Based Navigation](#index-based-navigation)
 8. [Large Table Handling](#large-table-handling)
-9. [Configuration System](#configuration-system)
-10. [CLI Interface](#cli-interface)
-11. [Connection and Authentication](#connection-and-authentication)
-12. [Tiger Cloud Integration](#tiger-cloud-integration)
-13. [File Metadata and Permissions](#file-metadata-and-permissions)
-14. [Error Handling](#error-handling)
-15. [Schema Metadata](#schema-metadata)
-16. [Database Objects](#database-objects)
-17. [Special PostgreSQL Types](#special-postgresql-types)
-18. [Concurrency and Multi-User](#concurrency-and-multi-user)
-19. [Unmounting and Shutdown](#unmounting-and-shutdown)
-20. [Logging](#logging)
-21. [Performance Monitoring](#performance-monitoring)
-22. [Testing Strategy](#testing-strategy)
-23. [Distribution and Installation](#distribution-and-installation)
-24. [Documentation Plan](#documentation-plan)
-25. [Implementation Priorities](#implementation-priorities)
-26. [Open Questions](#open-questions)
+9. [Pipeline Query Architecture](#pipeline-query-architecture)
+10. [Configuration System](#configuration-system)
+11. [CLI Interface](#cli-interface)
+12. [Connection and Authentication](#connection-and-authentication)
+13. [Tiger Cloud Integration](#tiger-cloud-integration)
+14. [File Metadata and Permissions](#file-metadata-and-permissions)
+15. [Error Handling](#error-handling)
+16. [Schema Metadata](#schema-metadata)
+17. [Database Objects](#database-objects)
+18. [Special PostgreSQL Types](#special-postgresql-types)
+19. [Concurrency and Multi-User](#concurrency-and-multi-user)
+20. [Unmounting and Shutdown](#unmounting-and-shutdown)
+21. [Logging](#logging)
+22. [Performance Monitoring](#performance-monitoring)
+23. [Testing Strategy](#testing-strategy)
+24. [Distribution and Installation](#distribution-and-installation)
+25. [Documentation Plan](#documentation-plan)
+26. [Implementation Priorities](#implementation-priorities)
+27. [Open Questions](#open-questions)
 
 ---
 
@@ -949,6 +950,153 @@ cat /mnt/db/users/123456789/email
 **Rationale:**
 - Primary key lookups are O(log n), fast regardless of table size
 - Don't need to list all rows to access specific row
+
+---
+
+## Pipeline Query Architecture
+
+TigerFS supports composable pipeline queries that chain multiple operations into a single path. The entire pipeline is pushed down to the database as one optimized SQL query, ensuring efficient index usage and minimal data transfer.
+
+### Overview
+
+Pipeline queries allow users to:
+- Chain filters, ordering, and pagination in filesystem paths
+- Combine indexed (`.by/`) and non-indexed (`.filter/`) filters
+- Nest pagination operations (e.g., `.first/100/.last/50/`)
+- Export filtered results in multiple formats
+
+**Example:**
+```bash
+# Find last 10 pending orders for customer 123, sorted by date
+cat /mnt/db/orders/.by/customer_id/123/.by/status/pending/.order/created_at/.last/10/.export/json
+```
+
+**Generated SQL:**
+```sql
+SELECT * FROM orders
+WHERE customer_id = '123' AND status = 'pending'
+ORDER BY created_at DESC
+LIMIT 10
+```
+
+### Available Capabilities
+
+| Capability | Purpose | Performance |
+|------------|---------|-------------|
+| `.by/<col>/<val>/` | Filter by indexed column | Fast (index scan) |
+| `.filter/<col>/<val>/` | Filter by any column | May scan table |
+| `.order/<col>/` | Sort results | Uses index if available |
+| `.first/N/` | First N rows | Fast (LIMIT) |
+| `.last/N/` | Last N rows | Fast (ORDER DESC + LIMIT) |
+| `.sample/N/` | Random N rows | Full scan (ORDER BY RANDOM()) |
+| `.export/<fmt>` | Export as csv/tsv/json | Terminal operation |
+
+### Capability Chaining Rules
+
+| Parent | Allowed Children |
+|--------|------------------|
+| Table root | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.by/<col>/<val>/` | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.filter/<col>/<val>/` | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.order/<col>/` | `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.first/N/` | `.by/`, `.filter/`, `.order/`, `.last/`, `.sample/`, `.export/` |
+| `.last/N/` | `.by/`, `.filter/`, `.order/`, `.first/`, `.sample/`, `.export/` |
+| `.sample/N/` | `.by/`, `.filter/`, `.order/`, `.export/` |
+| `.export/<fmt>` | None (terminal) |
+
+**Disallowed (redundant):**
+- `.first/N/.first/M/` - Use `.first/M/`
+- `.last/N/.last/M/` - Use `.last/M/`
+- `.sample/N/.sample/M/` - Use `.sample/M/`
+- `.sample/N/.first/M/` or `.sample/N/.last/M/` - Use `.sample/M/`
+- `.order/a/.order/b/` - Second order replaces first
+
+### `.by/` vs `.filter/`
+
+| Aspect | `.by/` | `.filter/` |
+|--------|--------|------------|
+| Columns shown | Indexed only | All columns |
+| Value listing | Always fast | May show `.table-too-large` |
+| Query performance | Guaranteed fast | May scan table |
+| Use case | Efficient lookups | Ad-hoc filtering |
+
+### Filter Semantics
+
+Multiple filters are AND-combined:
+```bash
+.by/status/active/.by/tier/premium/     # status='active' AND tier='premium'
+.by/customer/123/.filter/notes/urgent/  # customer_id=123 AND notes='urgent'
+```
+
+### Nested Pagination Semantics
+
+Each pagination step operates on the previous result:
+
+| Path | Meaning | Result |
+|------|---------|--------|
+| `.first/100/.last/50/` | Last 50 of first 100 | Rows 51-100 |
+| `.last/100/.first/50/` | First 50 of last 100 | Rows (n-99) to (n-50) |
+| `.first/1000/.sample/50/` | Random 50 from first 1000 | 50 random rows |
+
+**SQL Generation for Nested Pagination:**
+```sql
+-- .first/100/.last/50/
+SELECT * FROM (
+    SELECT * FROM t ORDER BY pk ASC LIMIT 100
+) sub ORDER BY pk DESC LIMIT 50
+
+-- .first/1000/.sample/50/
+SELECT * FROM (
+    SELECT * FROM t ORDER BY pk ASC LIMIT 1000
+) sub ORDER BY RANDOM() LIMIT 50
+```
+
+### Large Table Safety for `.filter/`
+
+For non-indexed columns on large tables, value listing is disabled:
+
+```bash
+$ ls /mnt/db/large_events/.filter/type/
+.table-too-large    # Indicates value listing unavailable
+```
+
+Direct access still works:
+```bash
+cat /mnt/db/large_events/.filter/type/click/.first/100/.export/json
+```
+
+**Configuration:**
+- `DirFilterLimit`: Tables larger than this skip value listing (default: 100,000)
+- `QueryTimeout`: Maximum query time before EIO (default: 30 seconds)
+
+### Composite Index Support
+
+Two syntaxes for multi-column indexes:
+```bash
+# Sequential filters (two separate lookups)
+.by/last_name/Smith/.by/first_name/John/
+
+# Composite syntax (single index lookup)
+.by/last_name.first_name/Smith.John/
+```
+
+### Examples
+
+```bash
+# Customer's 10 most recent orders
+cat /mnt/db/orders/.by/customer_id/123/.order/created_at/.last/10/.export/json
+
+# Random sample of active users
+cat /mnt/db/users/.by/status/active/.sample/100/.export/csv
+
+# Paginated browse (page 2)
+ls /mnt/db/events/.first/200/.last/100/
+
+# Complex filter chain
+cat /mnt/db/orders/.by/status/pending/.filter/priority/high/.order/amount/.last/20/.export/json
+```
+
+For complete documentation, see [docs/pipeline-queries.md](../docs/pipeline-queries.md).
 
 ---
 
