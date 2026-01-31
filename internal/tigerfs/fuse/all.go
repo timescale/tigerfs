@@ -166,4 +166,3 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	child := a.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }
-

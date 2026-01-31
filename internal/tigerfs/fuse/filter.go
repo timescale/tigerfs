@@ -249,7 +249,7 @@ func (f *FilterColumnNode) Readdir(ctx context.Context) (fs.DirStream, syscall.E
 		return f.listDistinctValues(ctx)
 	}
 
-	// Large table with non-indexed column: show indicator only
+	// Large table with non-indexed column: show indicator and pagination only
 	logging.Debug("Table too large for non-indexed column value listing",
 		zap.String("table", f.table),
 		zap.String("column", f.column),
@@ -257,6 +257,8 @@ func (f *FilterColumnNode) Readdir(ctx context.Context) (fs.DirStream, syscall.E
 		zap.Int("limit", f.cfg.DirFilterLimit))
 
 	entries := []fuse.DirEntry{
+		{Name: DirFirst, Mode: syscall.S_IFDIR},
+		{Name: DirLast, Mode: syscall.S_IFDIR},
 		{Name: FileTableTooLarge, Mode: syscall.S_IFREG},
 	}
 	return fs.NewListDirStream(entries), 0
@@ -285,6 +287,8 @@ func (f *FilterColumnNode) listDistinctValues(ctx context.Context) (fs.DirStream
 				zap.String("column", f.column),
 				zap.Error(err))
 			entries := []fuse.DirEntry{
+				{Name: DirFirst, Mode: syscall.S_IFDIR},
+				{Name: DirLast, Mode: syscall.S_IFDIR},
 				{Name: FileTableTooLarge, Mode: syscall.S_IFREG},
 			}
 			return fs.NewListDirStream(entries), 0
@@ -297,7 +301,14 @@ func (f *FilterColumnNode) listDistinctValues(ctx context.Context) (fs.DirStream
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, 0, len(values))
+	// Start with pagination directories
+	entries := make([]fuse.DirEntry, 0, len(values)+2)
+	entries = append(entries,
+		fuse.DirEntry{Name: DirFirst, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirLast, Mode: syscall.S_IFDIR},
+	)
+
+	// Add distinct values
 	for _, val := range values {
 		entries = append(entries, fuse.DirEntry{
 			Name: val,
@@ -313,7 +324,7 @@ func (f *FilterColumnNode) listDistinctValues(ctx context.Context) (fs.DirStream
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup handles access to a value or the .table-too-large indicator.
+// Lookup handles access to a value, pagination directories, or the .table-too-large indicator.
 // Direct path access always works, even if the value wasn't listed.
 func (f *FilterColumnNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("FilterColumnNode.Lookup called",
@@ -321,6 +332,11 @@ func (f *FilterColumnNode) Lookup(ctx context.Context, name string, out *fuse.En
 		zap.String("table", f.table),
 		zap.String("column", f.column),
 		zap.String("value", name))
+
+	// Handle pagination directories for distinct values
+	if name == DirFirst || name == DirLast {
+		return f.lookupPagination(ctx, name)
+	}
 
 	// Handle .table-too-large indicator file
 	if name == FileTableTooLarge {
@@ -335,6 +351,24 @@ func (f *FilterColumnNode) Lookup(ctx context.Context, name string, out *fuse.En
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
 	valueNode := NewFilterValueNode(f.cfg, f.db, f.cache, f.schema, f.table, f.column, name, f.pipeline, f.partialRows)
 	child := f.NewPersistentInode(ctx, valueNode, stableAttr)
+
+	return child, 0
+}
+
+// lookupPagination handles .first and .last directory lookups for paginating distinct values.
+func (f *FilterColumnNode) lookupPagination(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
+	var paginationType PaginationType
+	if name == DirFirst {
+		paginationType = PaginationFirst
+	} else {
+		paginationType = PaginationLast
+	}
+
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+
+	// Reuse IndexPaginationNode - it works for any column, not just indexed ones
+	pagNode := NewIndexPaginationNode(f.cfg, f.db, f.cache, f.schema, f.table, f.column, paginationType, f.partialRows)
+	child := f.NewPersistentInode(ctx, pagNode, stableAttr)
 
 	return child, 0
 }
@@ -466,24 +500,56 @@ func (f *FilterValueNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	case DirBy:
 		if f.pipeline.CanAddFilter() {
 			stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
-			byNode := NewByDirNode(f.cfg, f.db, f.cache, f.schema, f.table, f.partialRows)
+			byNode := NewByDirNodeWithPipeline(f.cfg, f.db, f.cache, f.schema, f.table, f.partialRows, f.pipeline)
 			child := f.NewPersistentInode(ctx, byNode, stableAttr)
 			return child, 0
 		}
 		return nil, syscall.ENOENT
 
 	case DirExport:
-		// Export will be fully supported when PipelineNode is implemented (Task 5.6/5.7)
-		// For now, export at filter value level is not yet supported
 		if f.pipeline.CanExport() {
 			stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
-			exportNode := NewExportDirNode(f.cfg, f.db, f.cache, f.schema, f.table)
+			exportNode := NewPipelineExportDirNode(f.cfg, f.db, f.cache, f.schema, f.table, f.pipeline)
 			child := f.NewPersistentInode(ctx, exportNode, stableAttr)
 			return child, 0
 		}
 		return nil, syscall.ENOENT
 
-		// TODO: Add routing for .order, .first, .last, .sample in Task 5.6/5.7
+	case DirOrder:
+		if f.pipeline.CanAddOrder() {
+			stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+			orderNode := NewOrderDirNodeWithPipeline(f.cfg, f.db, f.cache, f.schema, f.table, f.partialRows, f.pipeline)
+			child := f.NewPersistentInode(ctx, orderNode, stableAttr)
+			return child, 0
+		}
+		return nil, syscall.ENOENT
+
+	case DirFirst:
+		if f.pipeline.CanAddLimit(LimitFirst) {
+			stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+			paginationNode := NewPaginationNodeWithPipeline(f.cfg, f.db, f.cache, f.schema, f.table, PaginationFirst, f.partialRows, f.pipeline)
+			child := f.NewPersistentInode(ctx, paginationNode, stableAttr)
+			return child, 0
+		}
+		return nil, syscall.ENOENT
+
+	case DirLast:
+		if f.pipeline.CanAddLimit(LimitLast) {
+			stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+			paginationNode := NewPaginationNodeWithPipeline(f.cfg, f.db, f.cache, f.schema, f.table, PaginationLast, f.partialRows, f.pipeline)
+			child := f.NewPersistentInode(ctx, paginationNode, stableAttr)
+			return child, 0
+		}
+		return nil, syscall.ENOENT
+
+	case DirSample:
+		if f.pipeline.CanAddLimit(LimitSample) {
+			stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+			sampleNode := NewSampleNodeWithPipeline(f.cfg, f.db, f.cache, f.schema, f.table, f.partialRows, f.pipeline)
+			child := f.NewPersistentInode(ctx, sampleNode, stableAttr)
+			return child, 0
+		}
+		return nil, syscall.ENOENT
 	}
 
 	// For now, return ENOENT for unrecognized names

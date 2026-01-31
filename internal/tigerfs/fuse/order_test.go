@@ -102,7 +102,8 @@ func TestOrderColumnNode_Getattr(t *testing.T) {
 	}
 }
 
-// TestOrderColumnNode_Readdir tests that Readdir returns first and last
+// TestOrderColumnNode_Readdir tests that Readdir returns capabilities per ADR-007.
+// After .order/<col>/, should expose: .first/, .last/, .sample/, .export/
 func TestOrderColumnNode_Readdir(t *testing.T) {
 	cfg := &config.Config{}
 	node := NewOrderColumnNode(cfg, nil, nil, "public", "users", "created_at", nil)
@@ -125,27 +126,40 @@ func TestOrderColumnNode_Readdir(t *testing.T) {
 		entries = append(entries, entry)
 	}
 
-	if len(entries) != 2 {
-		t.Errorf("Expected 2 entries, got %d", len(entries))
+	// Per ADR-007: .first/, .last/, .sample/, .export/ are allowed after .order/<col>/
+	if len(entries) != 4 {
+		t.Errorf("Expected 4 entries, got %d", len(entries))
 	}
 
-	// Check for "first" and "last" entries
+	// Check for all expected entries
 	hasFirst := false
 	hasLast := false
+	hasSample := false
+	hasExport := false
 	for _, e := range entries {
-		if e.Name == "first" {
+		switch e.Name {
+		case DirFirst:
 			hasFirst = true
-		}
-		if e.Name == "last" {
+		case DirLast:
 			hasLast = true
+		case DirSample:
+			hasSample = true
+		case DirExport:
+			hasExport = true
 		}
 	}
 
 	if !hasFirst {
-		t.Error("Expected 'first' entry")
+		t.Errorf("Expected %q entry", DirFirst)
 	}
 	if !hasLast {
-		t.Error("Expected 'last' entry")
+		t.Errorf("Expected %q entry", DirLast)
+	}
+	if !hasSample {
+		t.Errorf("Expected %q entry", DirSample)
+	}
+	if !hasExport {
+		t.Errorf("Expected %q entry", DirExport)
 	}
 }
 

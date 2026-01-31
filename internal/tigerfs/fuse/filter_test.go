@@ -84,9 +84,14 @@ func TestFilterColumnNode_Readdir_IndexedColumn(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Should have 3 distinct values
-	if len(entries) != 3 {
-		t.Errorf("Expected 3 values, got %d: %v", len(entries), entries)
+	// Should have 2 pagination dirs + 3 distinct values = 5 entries
+	if len(entries) != 5 {
+		t.Errorf("Expected 5 entries (.first, .last + 3 values), got %d: %v", len(entries), entries)
+	}
+
+	// First two should be pagination directories
+	if entries[0] != DirFirst || entries[1] != DirLast {
+		t.Errorf("Expected .first and .last first, got %v", entries[:2])
 	}
 }
 
@@ -121,9 +126,14 @@ func TestFilterColumnNode_Readdir_SmallTable(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Should have 2 distinct values (small table, so values are listed)
-	if len(entries) != 2 {
-		t.Errorf("Expected 2 values, got %d: %v", len(entries), entries)
+	// Should have 2 pagination dirs + 2 distinct values = 4 entries
+	if len(entries) != 4 {
+		t.Errorf("Expected 4 entries (.first, .last + 2 values), got %d: %v", len(entries), entries)
+	}
+
+	// First two should be pagination directories
+	if entries[0] != DirFirst || entries[1] != DirLast {
+		t.Errorf("Expected .first and .last first, got %v", entries[:2])
 	}
 }
 
@@ -155,12 +165,17 @@ func TestFilterColumnNode_Readdir_LargeTable(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Should only have the .table-too-large indicator
-	if len(entries) != 1 {
-		t.Errorf("Expected 1 entry (.table-too-large), got %d: %v", len(entries), entries)
+	// Should have 2 pagination dirs + .table-too-large = 3 entries
+	if len(entries) != 3 {
+		t.Errorf("Expected 3 entries (.first, .last, .table-too-large), got %d: %v", len(entries), entries)
 	}
-	if len(entries) > 0 && entries[0] != FileTableTooLarge {
-		t.Errorf("Expected %q, got %q", FileTableTooLarge, entries[0])
+
+	// First two should be pagination directories, third is .table-too-large
+	if entries[0] != DirFirst || entries[1] != DirLast {
+		t.Errorf("Expected .first and .last first, got %v", entries[:2])
+	}
+	if entries[2] != FileTableTooLarge {
+		t.Errorf("Expected %q third, got %q", FileTableTooLarge, entries[2])
 	}
 }
 

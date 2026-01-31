@@ -236,62 +236,85 @@ func (o *OrderColumnNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fu
 	return 0
 }
 
-// Readdir lists .first and .last directories.
+// Readdir lists available capabilities after .order/<col>/.
+// Per ADR-007: .first/, .last/, .sample/, .export/ are allowed after ordering.
 func (o *OrderColumnNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	logging.Debug("OrderColumnNode.Readdir called",
 		zap.String("table", o.tableName),
 		zap.String("column", o.orderColumn))
 
 	entries := []fuse.DirEntry{
-		{Name: DirFirst[1:], Mode: syscall.S_IFDIR}, // "first" without leading dot
-		{Name: DirLast[1:], Mode: syscall.S_IFDIR},  // "last" without leading dot
+		{Name: DirExport, Mode: syscall.S_IFDIR},
+		{Name: DirFirst, Mode: syscall.S_IFDIR},
+		{Name: DirLast, Mode: syscall.S_IFDIR},
+		{Name: DirSample, Mode: syscall.S_IFDIR},
 	}
 
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup handles .first and .last lookups.
+// Lookup handles .first, .last, .sample, and .export lookups.
+// Per ADR-007: .first/, .last/, .sample/, .export/ are allowed after .order/<col>/.
 func (o *OrderColumnNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("OrderColumnNode.Lookup called",
 		zap.String("table", o.tableName),
 		zap.String("column", o.orderColumn),
 		zap.String("name", name))
 
-	// Check for pagination directories (without leading dot in this context)
-	var paginationType PaginationType
-	var orderDesc bool
-	switch name {
-	case DirFirst[1:]: // "first"
-		paginationType = PaginationFirst
-		orderDesc = false // ASC for first
-	case DirLast[1:]: // "last"
-		paginationType = PaginationLast
-		orderDesc = true // DESC for last
-	default:
-		logging.Debug("Invalid order direction",
-			zap.String("name", name))
-		return nil, syscall.ENOENT
-	}
-
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	// Apply order to pipeline if present
-	var orderedPipeline *PipelineContext
+	// Build ordered pipeline - order is ASC for all cases except .last pagination
+	var orderedPipelineAsc *PipelineContext
+	var orderedPipelineDesc *PipelineContext
 	if o.pipeline != nil {
-		orderedPipeline = o.pipeline.WithOrder(o.orderColumn, orderDesc)
+		orderedPipelineAsc = o.pipeline.WithOrder(o.orderColumn, false)
+		orderedPipelineDesc = o.pipeline.WithOrder(o.orderColumn, true)
 	}
 
-	paginationNode := NewOrderedPaginationNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, paginationType, o.partialRows, orderedPipeline)
-	child := o.NewPersistentInode(ctx, paginationNode, stableAttr)
+	switch name {
+	case DirFirst:
+		paginationNode := NewOrderedPaginationNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, PaginationFirst, o.partialRows, orderedPipelineAsc)
+		child := o.NewPersistentInode(ctx, paginationNode, stableAttr)
+		logging.Debug("Created ordered pagination node",
+			zap.String("table", o.tableName),
+			zap.String("column", o.orderColumn),
+			zap.String("type", string(PaginationFirst)))
+		return child, 0
 
-	logging.Debug("Created ordered pagination node",
-		zap.String("table", o.tableName),
-		zap.String("column", o.orderColumn),
-		zap.String("type", string(paginationType)))
+	case DirLast:
+		paginationNode := NewOrderedPaginationNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.orderColumn, PaginationLast, o.partialRows, orderedPipelineDesc)
+		child := o.NewPersistentInode(ctx, paginationNode, stableAttr)
+		logging.Debug("Created ordered pagination node",
+			zap.String("table", o.tableName),
+			zap.String("column", o.orderColumn),
+			zap.String("type", string(PaginationLast)))
+		return child, 0
 
-	return child, 0
+	case DirSample:
+		// Sample after order uses ASC ordering
+		sampleNode := NewSampleNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.partialRows, orderedPipelineAsc)
+		child := o.NewPersistentInode(ctx, sampleNode, stableAttr)
+		logging.Debug("Created sample node after order",
+			zap.String("table", o.tableName),
+			zap.String("column", o.orderColumn))
+		return child, 0
+
+	case DirExport:
+		// Export after order uses ASC ordering
+		exportNode := NewPipelineExportDirNode(o.cfg, o.db, o.cache, o.schema, o.tableName, orderedPipelineAsc)
+		child := o.NewPersistentInode(ctx, exportNode, stableAttr)
+		logging.Debug("Created export node after order",
+			zap.String("table", o.tableName),
+			zap.String("column", o.orderColumn))
+		return child, 0
+
+	default:
+		logging.Debug("Unknown name in OrderColumnNode",
+			zap.String("name", name))
+		return nil, syscall.ENOENT
+	}
 }
 
 // OrderedPaginationNode represents .order/<column>/first/ or .order/<column>/last/.
@@ -586,6 +609,8 @@ func (o *OrderedPaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream,
 }
 
 // Lookup looks up a row or capability within the ordered results.
+// Per ADR-007: After .first/N/ or .last/N/ (ordered), expose .by/, .filter/, .order/,
+// .first/ (if in .last), .last/ (if in .first), .sample/, .export/.
 func (o *OrderedPaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("OrderedPaginationLimitNode.Lookup called",
 		zap.String("table", o.tableName),
@@ -608,6 +633,22 @@ func (o *OrderedPaginationLimitNode) Lookup(ctx context.Context, name string, ou
 		case DirFilter:
 			if o.pipeline.CanAddFilter() {
 				return o.lookupFilter(ctx)
+			}
+		case DirOrder:
+			if o.pipeline.CanAddOrder() {
+				return o.lookupOrder(ctx)
+			}
+		case DirFirst:
+			if o.pipeline.CanAddLimit(LimitFirst) {
+				return o.lookupPagination(ctx, PaginationFirst)
+			}
+		case DirLast:
+			if o.pipeline.CanAddLimit(LimitLast) {
+				return o.lookupPagination(ctx, PaginationLast)
+			}
+		case DirSample:
+			if o.pipeline.CanAddLimit(LimitSample) {
+				return o.lookupSample(ctx)
 			}
 		}
 	}
@@ -677,5 +718,29 @@ func (o *OrderedPaginationLimitNode) lookupFilter(ctx context.Context) (*fs.Inod
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
 	filterNode := NewFilterDirNode(o.cfg, o.db, o.cache, o.schema, o.tableName, o.pipeline, o.partialRows)
 	child := o.NewPersistentInode(ctx, filterNode, stableAttr)
+	return child, 0
+}
+
+// lookupOrder creates a .order/ node using the pipeline context.
+func (o *OrderedPaginationLimitNode) lookupOrder(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	orderNode := NewOrderDirNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.partialRows, o.pipeline)
+	child := o.NewPersistentInode(ctx, orderNode, stableAttr)
+	return child, 0
+}
+
+// lookupPagination creates a .first/ or .last/ node for nested pagination.
+func (o *OrderedPaginationLimitNode) lookupPagination(ctx context.Context, paginationType PaginationType) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	paginationNode := NewPaginationNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, paginationType, o.partialRows, o.pipeline)
+	child := o.NewPersistentInode(ctx, paginationNode, stableAttr)
+	return child, 0
+}
+
+// lookupSample creates a .sample/ node using the pipeline context.
+func (o *OrderedPaginationLimitNode) lookupSample(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	sampleNode := NewSampleNodeWithPipeline(o.cfg, o.db, o.cache, o.schema, o.tableName, o.partialRows, o.pipeline)
+	child := o.NewPersistentInode(ctx, sampleNode, stableAttr)
 	return child, 0
 }
