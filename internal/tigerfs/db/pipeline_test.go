@@ -437,6 +437,93 @@ func TestQueryParams_HasMethods(t *testing.T) {
 	})
 }
 
+// TestBuildPipelineSQL_ConflictingFilters tests AND semantics for impossible conditions.
+// This verifies the SQL is correctly generated - actual empty results require DB execution.
+func TestBuildPipelineSQL_ConflictingFilters(t *testing.T) {
+	tests := []struct {
+		name       string
+		params     QueryParams
+		wantSQL    string // fragment to verify
+		wantParams int
+	}{
+		{
+			name: "same column different values (.by/user_id/90/.by/user_id/71/)",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "users",
+				PKColumn: "id",
+				Filters: []FilterCondition{
+					{Column: "user_id", Value: "90", Indexed: true},
+					{Column: "user_id", Value: "71", Indexed: true},
+				},
+			},
+			// This generates user_id = $1 AND user_id = $2 which returns 0 rows
+			wantSQL:    `WHERE "user_id" = $1 AND "user_id" = $2`,
+			wantParams: 2,
+		},
+		{
+			name: "mixed indexed and non-indexed on same column",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "users",
+				PKColumn: "id",
+				Filters: []FilterCondition{
+					{Column: "status", Value: "active", Indexed: true},
+					{Column: "status", Value: "inactive", Indexed: false},
+				},
+			},
+			// Different values = 0 results when executed
+			wantSQL:    `WHERE "status" = $1 AND "status" = $2`,
+			wantParams: 2,
+		},
+		{
+			name: "three filters on same column",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "events",
+				PKColumn: "id",
+				Filters: []FilterCondition{
+					{Column: "type", Value: "click", Indexed: true},
+					{Column: "type", Value: "view", Indexed: true},
+					{Column: "type", Value: "scroll", Indexed: true},
+				},
+			},
+			wantSQL:    `"type" = $1 AND "type" = $2 AND "type" = $3`,
+			wantParams: 3,
+		},
+		{
+			name: "conflicting filter with limit",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "users",
+				PKColumn: "id",
+				Filters: []FilterCondition{
+					{Column: "id", Value: "1", Indexed: true},
+					{Column: "id", Value: "2", Indexed: true},
+				},
+				Limit:     100,
+				LimitType: LimitFirst,
+			},
+			wantSQL:    `WHERE "id" = $1 AND "id" = $2`,
+			wantParams: 3, // 2 filter values + 1 limit
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, params := BuildPipelineSQLForTest(tt.params, true)
+
+			if !strings.Contains(sql, tt.wantSQL) {
+				t.Errorf("SQL does not contain expected fragment:\n  got: %s\n  want: %s", sql, tt.wantSQL)
+			}
+
+			if len(params) != tt.wantParams {
+				t.Errorf("Parameter count = %d, want %d\nSQL: %s", len(params), tt.wantParams, sql)
+			}
+		})
+	}
+}
+
 // TestBuildPipelineSQL_ComplexScenarios tests complex real-world scenarios.
 func TestBuildPipelineSQL_ComplexScenarios(t *testing.T) {
 	tests := []struct {

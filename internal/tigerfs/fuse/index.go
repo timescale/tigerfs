@@ -183,13 +183,24 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	pkColumn := pk.Columns[0]
 
-	// Get rows matching this index value
-	rows, err := n.db.GetRowsByIndexValue(ctx, n.schema, n.tableName, n.column, name, pkColumn, 100)
+	// Apply filter to pipeline (or create new pipeline with this filter)
+	var filteredPipeline *PipelineContext
+	if n.pipeline != nil {
+		filteredPipeline = n.pipeline.WithFilter(n.column, name, true) // true = indexed
+	} else {
+		// Create a new pipeline with just this filter
+		filteredPipeline = NewPipelineContext(n.schema, n.tableName, pkColumn)
+		filteredPipeline = filteredPipeline.WithFilter(n.column, name, true)
+	}
+
+	// Query using the full pipeline (includes all accumulated filters)
+	rows, err := n.db.QueryRowsPipeline(ctx, filteredPipeline.ToQueryParams())
 	if err != nil {
-		logging.Error("Failed to query by index value",
+		logging.Error("Failed to query by index value with pipeline",
 			zap.String("table", n.tableName),
 			zap.String("column", n.column),
 			zap.String("value", name),
+			zap.Int("filter_count", len(filteredPipeline.Filters)),
 			zap.Error(err))
 		return nil, syscall.EIO
 	}
@@ -198,7 +209,8 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		logging.Debug("No rows found for index value",
 			zap.String("table", n.tableName),
 			zap.String("column", n.column),
-			zap.String("value", name))
+			zap.String("value", name),
+			zap.Int("filter_count", len(filteredPipeline.Filters)))
 		return nil, syscall.ENOENT
 	}
 
@@ -206,13 +218,8 @@ func (n *IndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		zap.String("table", n.tableName),
 		zap.String("column", n.column),
 		zap.String("value", name),
-		zap.Int("count", len(rows)))
-
-	// Apply filter to pipeline if present
-	var filteredPipeline *PipelineContext
-	if n.pipeline != nil {
-		filteredPipeline = n.pipeline.WithFilter(n.column, name, true) // true = indexed
-	}
+		zap.Int("count", len(rows)),
+		zap.Int("filter_count", len(filteredPipeline.Filters)))
 
 	// Create an IndexValueNode to handle the result
 	stableAttr := fs.StableAttr{

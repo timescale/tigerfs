@@ -142,6 +142,124 @@ func TestPipelineContext_WithFilter(t *testing.T) {
 	}
 }
 
+// TestPipelineContext_WithFilter_Conflicting tests adding conflicting filters.
+// This simulates paths like .by/user_id/90/.by/user_id/71/ which should result
+// in user_id=90 AND user_id=71 (impossible condition = empty results).
+func TestPipelineContext_WithFilter_Conflicting(t *testing.T) {
+	ctx := NewPipelineContext("public", "users", "id")
+
+	// Add first filter: user_id = 90
+	ctx2 := ctx.WithFilter("user_id", "90", true)
+	if len(ctx2.Filters) != 1 {
+		t.Fatalf("Expected 1 filter, got %d", len(ctx2.Filters))
+	}
+
+	// Add conflicting filter on same column: user_id = 71
+	ctx3 := ctx2.WithFilter("user_id", "71", true)
+	if len(ctx3.Filters) != 2 {
+		t.Fatalf("Expected 2 filters (both accumulated), got %d", len(ctx3.Filters))
+	}
+
+	// Verify both filters are present
+	if ctx3.Filters[0].Column != "user_id" || ctx3.Filters[0].Value != "90" {
+		t.Errorf("First filter incorrect: %+v", ctx3.Filters[0])
+	}
+	if ctx3.Filters[1].Column != "user_id" || ctx3.Filters[1].Value != "71" {
+		t.Errorf("Second filter incorrect: %+v", ctx3.Filters[1])
+	}
+
+	// Verify ToQueryParams includes both filters
+	params := ctx3.ToQueryParams()
+	if len(params.Filters) != 2 {
+		t.Fatalf("QueryParams should have 2 filters, got %d", len(params.Filters))
+	}
+	if params.Filters[0].Column != "user_id" || params.Filters[0].Value != "90" {
+		t.Errorf("QueryParams first filter incorrect: %+v", params.Filters[0])
+	}
+	if params.Filters[1].Column != "user_id" || params.Filters[1].Value != "71" {
+		t.Errorf("QueryParams second filter incorrect: %+v", params.Filters[1])
+	}
+}
+
+// TestPipelineContext_MultipleFilters_SameColumn tests chaining multiple filters on the same column.
+// This represents navigating .filter/status/active/.filter/status/inactive/ which is logically impossible.
+func TestPipelineContext_MultipleFilters_SameColumn(t *testing.T) {
+	tests := []struct {
+		name    string
+		filters []struct {
+			col, val string
+			indexed  bool
+		}
+		want int // expected filter count
+	}{
+		{
+			name: "two .by/ on same column",
+			filters: []struct {
+				col, val string
+				indexed  bool
+			}{
+				{"status", "active", true},
+				{"status", "inactive", true},
+			},
+			want: 2,
+		},
+		{
+			name: "three .by/ on same column",
+			filters: []struct {
+				col, val string
+				indexed  bool
+			}{
+				{"type", "a", true},
+				{"type", "b", true},
+				{"type", "c", true},
+			},
+			want: 3,
+		},
+		{
+			name: "mixed .by/ and .filter/ on same column",
+			filters: []struct {
+				col, val string
+				indexed  bool
+			}{
+				{"status", "pending", true},   // .by/
+				{"status", "approved", false}, // .filter/
+			},
+			want: 2,
+		},
+		{
+			name: "filters on different columns then same",
+			filters: []struct {
+				col, val string
+				indexed  bool
+			}{
+				{"status", "active", true},
+				{"role", "admin", true},
+				{"status", "pending", true}, // conflicts with first
+			},
+			want: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := NewPipelineContext("public", "users", "id")
+			for _, f := range tt.filters {
+				ctx = ctx.WithFilter(f.col, f.val, f.indexed)
+			}
+
+			if len(ctx.Filters) != tt.want {
+				t.Errorf("Expected %d filters, got %d", tt.want, len(ctx.Filters))
+			}
+
+			// All filters should be properly accumulated
+			params := ctx.ToQueryParams()
+			if len(params.Filters) != tt.want {
+				t.Errorf("QueryParams: expected %d filters, got %d", tt.want, len(params.Filters))
+			}
+		})
+	}
+}
+
 // TestPipelineContext_WithOrder tests setting order.
 func TestPipelineContext_WithOrder(t *testing.T) {
 	ctx := NewPipelineContext("public", "users", "id")
