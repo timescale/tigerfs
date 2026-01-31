@@ -110,17 +110,24 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 5.8 | Update TableNode for Pipeline Integration | ~4430 |
 | ✅ | 5.9 | Implement Composite Index Support | ~4490 |
 | ✅ | 5.10 | Pipeline Integration Tests | ~4580 |
-| ⬜ | 5.11 | Pipeline Documentation | ~4670 |
+| ✅ | 5.11 | Pipeline Documentation | ~4670 |
 
 ---
 
-## Phase 6: Synthesized Applications
+## Phase 6: Synthesized Apps
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1 | Placeholder - Data Pipeline Integration | ~4740 |
-| ⬜ | 6.2 | Placeholder - Query Caching | ~4760 |
-| ⬜ | 6.3 | Placeholder - Advanced Export Formats | ~4780 |
+| ⬜ | 6.1 | Implement Format Detection | ~4430 |
+| ⬜ | 6.2 | Implement Markdown Synthesis | ~4530 |
+| ⬜ | 6.3 | Implement Markdown Parsing (Write Support) | ~4620 |
+| ⬜ | 6.4 | Implement Plain Text Format | ~4700 |
+| ⬜ | 6.5 | Implement .format/ Handler | ~4760 |
+| ⬜ | 6.6 | Implement .build/ Scaffolding Handler | ~4860 |
+| ⬜ | 6.7 | Implement SynthesizedViewNode | ~4960 |
+| ⬜ | 6.8 | Implement Tasks Filename Synthesis | ~5060 |
+| ⬜ | 6.9 | Implement Tasks Triggers | ~5150 |
+| ⬜ | 6.10 | Integration Tests for Synthesized Apps | ~5270 |
 
 ---
 
@@ -175,9 +182,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
-| Phase 5: Pipeline Query Architecture | 10 | 11 | 91% |
-| Phase 6: Synthesized Applications | 0 | 3 | 0% |
+| Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
+| Phase 6: Synthesized Apps | 0 | 10 | 0% |
 | Phase 7: DDL Operations | 8 | 10 | 80% |
 | Phase 8: Distribution | 0 | 9 | 0% |
 | Phase 9: Performance | 0 | 3 | 0% |
-| **Total** | **76** | **98** | **78%** |
+| **Total** | **77** | **105** | **73%** |
