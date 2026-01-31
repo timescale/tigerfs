@@ -2442,109 +2442,270 @@ echo 'nextval' > /mnt/db/.sequences/user_id_seq
 - Could expose as executable files or special invocation mechanism
 - Defer until clear use case
 
-### DDL Operations (Out of Scope)
+### DDL Operations
 
-**Decision:** TigerFS does NOT support DDL (Data Definition Language) operations in MVP.
+TigerFS supports DDL (Data Definition Language) operations via a staging pattern that provides safety, validation, and consistent workflows for schema changes.
 
-**DDL Operations Excluded:**
-- `CREATE TABLE` - Creating new tables
-- `ALTER TABLE` - Modifying table structure (add/drop columns, constraints)
-- `DROP TABLE` - Deleting tables
-- `CREATE INDEX` - Creating indexes
-- `CREATE VIEW` - Creating views
-- `DROP VIEW` - Deleting views
-- `CREATE SCHEMA` - Creating schemas
+**Supported Operations:**
+- **Tables:** Create, modify (ALTER), delete (DROP)
+- **Indexes:** Create, delete
+- **Schemas:** Create, delete
+- **Views:** Create, delete
 
-**Rationale for Exclusion:**
+#### Staging Pattern Overview
 
-**1. Poor Filesystem Metaphor:**
-- DDL operations don't map naturally to filesystem operations
-- Creating tables via filesystem feels forced and unintuitive
-- Schema changes are structural, not data-level operations
+All DDL operations follow the same workflow using staging directories with control files. This pattern provides:
+- **Preview before commit** - See templates with context before writing DDL
+- **Validation** - Test DDL via BEGIN/ROLLBACK before executing
+- **Safety** - Explicit commit required; abort clears staging
+- **Consistency** - Same workflow for all DDL types
 
-**2. Better Tools Exist:**
-- Tiger CLI provides `tiger db connect` for psql access
-- Full SQL DDL capabilities available via psql
-- Migration tools (Flyway, Liquibase) handle versioned schema changes
-- SQL is the standard, expressive language for DDL
+**Workflow:**
 
-**3. Complexity vs. Value:**
-- Implementing DDL adds significant complexity
-- Filesystem metaphor works well for data (DML), poorly for schema (DDL)
-- Limited user demand for DDL via filesystem
-- Core value proposition is data access, not schema management
+| Step | Action | Effect |
+|------|--------|--------|
+| 1 | Read `sql` | See template with context (current schema, hints) |
+| 2 | Write `sql` | Stage your DDL statement (stored in memory) |
+| 3 | Touch `.test` | Validate via BEGIN/ROLLBACK (optional) |
+| 3b | Read `test.log` | See validation result (optional) |
+| 4 | Touch `.commit` | Execute DDL |
+| — | Touch `.abort` | Cancel and clear staging |
 
-**4. Schema Change Detection:**
-- TigerFS automatically detects schema changes via metadata refresh
-- Changes made externally (psql, Tiger CLI) reflected in filesystem
-- No need for TigerFS to manage schema lifecycle
+#### Staging Directory Structure
 
-**How Users Manage Schemas:**
+**Table Operations:**
 
-**Option 1: Tiger CLI (Recommended for Tiger Cloud)**
-```bash
-# Connect to database with psql
-tiger db connect
+| Operation | Path | Purpose |
+|-----------|------|---------|
+| Create table | `/.create/<name>/` | Create new table |
+| Modify table | `/<table>/.modify/` | ALTER existing table |
+| Delete table | `/<table>/.delete/` | DROP table |
 
-# Run DDL statements
-CREATE TABLE new_table (
-  id SERIAL PRIMARY KEY,
-  name TEXT NOT NULL
+**Index Operations:**
+
+| Operation | Path | Purpose |
+|-----------|------|---------|
+| Create index | `/<table>/.indexes/.create/<name>/` | Create new index |
+| Delete index | `/<table>/.indexes/<name>/.delete/` | DROP index |
+
+**Schema Operations:**
+
+| Operation | Path | Purpose |
+|-----------|------|---------|
+| Create schema | `/.schemas/.create/<name>/` | Create new schema |
+| Delete schema | `/.schemas/<name>/.delete/` | DROP schema |
+
+**View Operations:**
+
+| Operation | Path | Purpose |
+|-----------|------|---------|
+| Create view | `/.views/.create/<name>/` | Create new view |
+| Delete view | `/.views/<name>/.delete/` | DROP view |
+
+#### Control Files
+
+Each staging directory contains these control files:
+
+**`sql`** - DDL statement file
+- **Read:** Returns template with context-aware hints
+- **Write:** Stages the DDL statement (validated on commit)
+- **Size:** Reflects staged content size (0 if empty)
+
+**`.test`** - Validation trigger
+- **Touch:** Executes `BEGIN; <staged sql>; ROLLBACK;`
+- **Effect:** Validates syntax and constraints without changes
+- **Result:** Written to `test.log`
+
+**`test.log`** - Validation result
+- **Read:** Returns validation output
+- **Content:** "OK" on success, or error message with details
+- **Empty:** If no test has been run
+
+**`.commit`** - Execution trigger
+- **Touch:** Executes the staged DDL
+- **Effect:** Applies changes to database
+- **On success:** Clears staging, refreshes metadata
+- **On failure:** Returns error, staging preserved
+
+**`.abort`** - Cancel trigger
+- **Touch:** Clears all staged content
+- **Effect:** Resets staging directory to initial state
+
+#### Template Generation
+
+Reading the `sql` file before writing shows a context-aware template:
+
+**CREATE TABLE template:**
+```sql
+-- Create table: orders
+-- Schema: public
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    -- Add your columns here
+    created_at TIMESTAMP DEFAULT NOW()
 );
-
-# TigerFS automatically discovers new table
-ls /mnt/db/new_table/
 ```
 
-**Option 2: Direct psql Connection**
+**ALTER TABLE template (shows current schema):**
+```sql
+-- Modify table: users
+-- Current schema:
+--   id: integer (NOT NULL, PRIMARY KEY)
+--   email: text (NOT NULL, UNIQUE)
+--   name: text
+--   created_at: timestamp with time zone
+
+-- Examples:
+-- ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active';
+-- ALTER TABLE users DROP COLUMN old_field;
+-- ALTER TABLE users ALTER COLUMN name SET NOT NULL;
+
+ALTER TABLE users
+    -- Add your modifications here
+;
+```
+
+**DROP TABLE template (shows impact):**
+```sql
+-- Drop table: orders
+-- Row count: 1,247
+-- Foreign keys referencing this table:
+--   order_items.order_id -> orders.id
+--
+-- WARNING: This will permanently delete all data.
+-- Use CASCADE to also drop dependent objects.
+
+DROP TABLE orders;
+-- Or: DROP TABLE orders CASCADE;
+```
+
+#### Error Handling
+
+**Validation Errors (via `.test`):**
 ```bash
-# Connect with standard psql
-psql postgres://user@host/database
-
-# Run DDL statements
-ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT NOW();
-
-# Changes visible in TigerFS after metadata refresh
-cat /mnt/db/users/123/created_at
+touch /mnt/db/.create/orders/.test
+cat /mnt/db/.create/orders/test.log
+# ERROR: syntax error at or near "CREAT"
+# LINE 1: CREAT TABLE orders ...
+#         ^
 ```
 
-**Option 3: Migration Tools**
+**Commit Failures:**
 ```bash
-# Use Flyway, Liquibase, or similar
-flyway migrate
-
-# Versioned, repeatable, auditable schema changes
-# TigerFS reflects changes automatically
+touch /mnt/db/.create/orders/.commit
+# Returns EEXIST if table already exists
+# Returns EIO with logged error details
 ```
 
-**Metadata Refresh:**
+**Recovery:**
 ```bash
-# Force immediate metadata refresh
-echo 1 > /mnt/db/.refresh
+# After failed commit, staging is preserved
+cat /mnt/db/.create/orders/sql    # See what was staged
+vi /mnt/db/.create/orders/sql     # Fix the issue
+touch /mnt/db/.create/orders/.test # Re-validate
+touch /mnt/db/.create/orders/.commit # Retry
 
-# Or wait for automatic refresh (default: 30 seconds)
+# Or abort and start over
+touch /mnt/db/.create/orders/.abort
 ```
 
-**Automatic Schema Detection:**
-- TigerFS queries `information_schema` on mount
-- Periodic refresh every 30 seconds (configurable)
-- Manual refresh via `.refresh` file
-- New tables, columns, indexes automatically discovered
+#### Examples
 
-**Future Consideration:**
+**Create Table (Interactive):**
+```bash
+# Create staging directory
+mkdir /mnt/db/.create/orders
 
-If user demand emerges, could consider:
-- **Read-only DDL exposure** - View CREATE TABLE statements via `.schema` files (already planned)
-- **Simple CREATE TABLE** - Create tables via directory creation with schema file
-- **Column addition** - Add columns via special operations
+# View template
+cat /mnt/db/.create/orders/sql
 
-However, these remain deferred until clear use cases justify the complexity.
+# Write DDL
+cat > /mnt/db/.create/orders/sql << 'EOF'
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    total NUMERIC(10,2) NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+EOF
 
-**Summary:**
-- **TigerFS Focus:** Data access (DML) - SELECT, INSERT, UPDATE, DELETE
-- **Schema Management:** Use Tiger CLI (`tiger db connect`), psql, or migration tools
-- **Automatic Reflection:** Schema changes made externally are automatically detected
-- **Clean Separation:** Schema management (DDL) stays in SQL, data access (DML) works via filesystem
+# Validate (optional)
+touch /mnt/db/.create/orders/.test
+cat /mnt/db/.create/orders/test.log
+# OK
+
+# Execute
+touch /mnt/db/.create/orders/.commit
+
+# Verify
+ls /mnt/db/orders/
+```
+
+**Create Table (Script):**
+```bash
+mkdir /mnt/db/.create/orders && \
+echo "CREATE TABLE orders (id SERIAL PRIMARY KEY, name TEXT)" > /mnt/db/.create/orders/sql && \
+touch /mnt/db/.create/orders/.commit
+```
+
+**Modify Table:**
+```bash
+# View current schema in template
+cat /mnt/db/users/.modify/sql
+
+# Add a column
+echo "ALTER TABLE users ADD COLUMN last_login TIMESTAMP" > /mnt/db/users/.modify/sql
+
+# Validate
+touch /mnt/db/users/.modify/.test
+cat /mnt/db/users/.modify/test.log
+
+# Execute
+touch /mnt/db/users/.modify/.commit
+```
+
+**Delete Table:**
+```bash
+# Review what will be deleted
+cat /mnt/db/temp_table/.delete/sql
+
+# Write DROP statement
+echo "DROP TABLE temp_table" > /mnt/db/temp_table/.delete/sql
+
+# Execute
+touch /mnt/db/temp_table/.delete/.commit
+```
+
+**Create Index:**
+```bash
+mkdir /mnt/db/users/.indexes/.create/email_idx && \
+echo "CREATE INDEX email_idx ON users(email)" > /mnt/db/users/.indexes/.create/email_idx/sql && \
+touch /mnt/db/users/.indexes/.create/email_idx/.commit
+```
+
+**Create View:**
+```bash
+mkdir /mnt/db/.views/.create/active_users && \
+echo "CREATE VIEW active_users AS SELECT * FROM users WHERE active = true" > /mnt/db/.views/.create/active_users/sql && \
+touch /mnt/db/.views/.create/active_users/.commit
+```
+
+#### Best Practices
+
+1. **Always validate first** - Use `.test` before `.commit` for complex DDL
+2. **Review templates** - Read `sql` before writing to understand context
+3. **Use transactions wisely** - Complex multi-statement DDL should be done via psql
+4. **Check test.log** - Validation errors include line numbers and hints
+5. **Abort on uncertainty** - Use `.abort` if unsure; staging is cleared safely
+
+#### Limitations
+
+- **Single statement per commit** - Multi-statement DDL requires multiple operations or psql
+- **No transaction grouping** - Each `.commit` is a separate transaction
+- **Read-only templates** - Cannot customize template generation
+
+For complex schema migrations, consider using migration tools (Flyway, Liquibase) or direct psql access via `tiger db connect`
 
 ---
 

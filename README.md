@@ -264,7 +264,7 @@ ls /mnt/db/users/.indexes/          # Index names
 
 ### Schema Management
 
-TigerFS supports creating, modifying, and deleting database tables, indexes, and other objects via a unified staging pattern.  (This work is currently in progress 🚧)
+TigerFS supports creating, modifying, and deleting database tables, indexes, and other objects via a unified staging pattern.
 
 #### Staging Pattern
 
@@ -441,7 +441,6 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - Comprehensive unit and integration test coverage
 
 **Planned:**
-- DDL operations via filesystem (create/modify/delete tables, indexes, schemas, views)
 - Non-serial primary keys (UUID, text, composite)
 - Tables without primary keys (read-only via ctid)
 - Database views (read-only for JOINs, updatable for simple views)
