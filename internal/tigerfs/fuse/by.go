@@ -288,7 +288,7 @@ func (b *ByDirNode) lookupCompositeIndex(ctx context.Context, columns []string) 
 		Mode: syscall.S_IFDIR,
 	}
 
-	compositeNode := NewCompositeIndexNode(b.cfg, b.db, b.cache, b.schema, b.tableName, columns, matchingIdx, b.partialRows)
+	compositeNode := NewCompositeIndexNodeWithPipeline(b.cfg, b.db, b.cache, b.schema, b.tableName, columns, matchingIdx, b.partialRows, b.pipeline)
 	child := b.NewPersistentInode(ctx, compositeNode, stableAttr)
 
 	logging.Debug("Created composite index node",

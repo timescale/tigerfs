@@ -740,11 +740,17 @@ func (p *IndexValuePaginationLimitNode) Lookup(ctx context.Context, name string,
 // CompositeIndexNode represents a composite index directory (e.g., .last_name.first_name/).
 // Lists distinct values for the first column in the composite index.
 //
-// Navigation through composite indexes works level-by-level:
+// Navigation through composite indexes supports two syntaxes:
+//
+// Level-by-level navigation:
 //
 //	.last_name.first_name/           -> distinct last_name values
 //	.last_name.first_name/Smith/     -> distinct first_name values WHERE last_name='Smith'
 //	.last_name.first_name/Smith/John -> rows WHERE last_name='Smith' AND first_name='John'
+//
+// Dot-separated value shortcut (when value count matches column count):
+//
+//	.last_name.first_name/Smith.John/ -> rows WHERE last_name='Smith' AND first_name='John'
 type CompositeIndexNode struct {
 	fs.Inode
 
@@ -771,6 +777,9 @@ type CompositeIndexNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*CompositeIndexNode)(nil)
@@ -799,6 +808,22 @@ func NewCompositeIndexNode(cfg *config.Config, dbClient db.DBClient, cache *Meta
 		columns:     columns,
 		index:       index,
 		partialRows: partialRows,
+	}
+}
+
+// NewCompositeIndexNodeWithPipeline creates a new composite index directory node with pipeline context.
+// The pipeline context is passed through to child nodes for capability chaining.
+func NewCompositeIndexNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *CompositeIndexNode {
+	return &CompositeIndexNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		columns:     columns,
+		index:       index,
+		partialRows: partialRows,
+		pipeline:    pipeline,
 	}
 }
 
@@ -850,24 +875,48 @@ func (n *CompositeIndexNode) Readdir(ctx context.Context) (fs.DirStream, syscall
 }
 
 // Lookup handles access to a value within the composite index.
-// Creates a CompositeIndexLevelNode for the next level of navigation.
+// Supports two syntaxes:
+//   - Single value (e.g., "Smith"): proceeds to next level
+//   - Dot-separated values (e.g., "Smith.John"): if count matches columns, creates final level
+//
+// Creates a CompositeIndexLevelNode for navigation.
 func (n *CompositeIndexNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("CompositeIndexNode.Lookup called",
 		zap.String("table", n.tableName),
 		zap.Strings("columns", n.columns),
 		zap.String("value", name))
 
-	// Create level node with this value as the first filter
+	// Check for dot-separated values shortcut (e.g., "Smith.John" for 2-column index)
+	var values []string
+	if strings.Contains(name, ".") {
+		parts := strings.Split(name, ".")
+		// Only use dot-separated if count matches exactly
+		if len(parts) == len(n.columns) {
+			values = parts
+			logging.Debug("Using dot-separated value shortcut",
+				zap.String("table", n.tableName),
+				zap.Strings("columns", n.columns),
+				zap.Strings("values", values))
+		} else {
+			// Dot doesn't match column count, treat as literal value
+			values = []string{name}
+		}
+	} else {
+		values = []string{name}
+	}
+
+	// Create level node with the parsed values
 	stableAttr := fs.StableAttr{
 		Mode: syscall.S_IFDIR,
 	}
 
-	levelNode := NewCompositeIndexLevelNode(
+	levelNode := NewCompositeIndexLevelNodeWithPipeline(
 		n.cfg, n.db, n.cache, n.schema, n.tableName,
 		n.columns,
-		[]string{name}, // First value in the filter chain
+		values,
 		n.index,
 		n.partialRows,
+		n.pipeline,
 	)
 	child := n.NewPersistentInode(ctx, levelNode, stableAttr)
 
@@ -878,6 +927,9 @@ func (n *CompositeIndexNode) Lookup(ctx context.Context, name string, out *fuse.
 // Tracks which column values have been specified so far and either:
 //   - Shows distinct values for the next column (if more columns remain)
 //   - Shows matching row PKs (if all columns have values)
+//
+// When pipeline context is present and all columns have values, also exposes
+// pipeline capabilities for chaining (.order/, .first/, .export/, etc.).
 type CompositeIndexLevelNode struct {
 	fs.Inode
 
@@ -907,6 +959,9 @@ type CompositeIndexLevelNode struct {
 
 	// partialRows tracks incremental row creation state
 	partialRows *PartialRowTracker
+
+	// pipeline holds the pipeline context for capability chaining (may be nil)
+	pipeline *PipelineContext
 }
 
 var _ fs.InodeEmbedder = (*CompositeIndexLevelNode)(nil)
@@ -937,6 +992,23 @@ func NewCompositeIndexLevelNode(cfg *config.Config, dbClient db.DBClient, cache 
 		values:      values,
 		index:       index,
 		partialRows: partialRows,
+	}
+}
+
+// NewCompositeIndexLevelNodeWithPipeline creates a node for an intermediate composite index level with pipeline context.
+// The pipeline context enables capability chaining when all columns have values.
+func NewCompositeIndexLevelNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *CompositeIndexLevelNode {
+	return &CompositeIndexLevelNode{
+		cfg:         cfg,
+		db:          dbClient,
+		cache:       cache,
+		schema:      schema,
+		tableName:   tableName,
+		columns:     columns,
+		values:      values,
+		index:       index,
+		partialRows: partialRows,
+		pipeline:    pipeline,
 	}
 }
 
@@ -1006,6 +1078,7 @@ func (n *CompositeIndexLevelNode) readdirIntermediateLevel(ctx context.Context, 
 }
 
 // readdirFinalLevel lists PKs of rows matching all column conditions.
+// When pipeline context exists, also lists available capabilities.
 func (n *CompositeIndexLevelNode) readdirFinalLevel(ctx context.Context, limit int) (fs.DirStream, syscall.Errno) {
 	pk, err := n.db.GetPrimaryKey(ctx, n.schema, n.tableName)
 	if err != nil {
@@ -1025,7 +1098,22 @@ func (n *CompositeIndexLevelNode) readdirFinalLevel(ctx context.Context, limit i
 		return nil, syscall.EIO
 	}
 
-	entries := make([]fuse.DirEntry, 0, len(pks))
+	var entries []fuse.DirEntry
+
+	// Add pipeline capabilities if context exists
+	if n.pipeline != nil {
+		// Build pipeline with all the filters applied
+		filteredPipeline := n.getPipelineWithFilters()
+		caps := filteredPipeline.AvailableCapabilities()
+		for _, cap := range caps {
+			entries = append(entries, fuse.DirEntry{
+				Name: cap,
+				Mode: syscall.S_IFDIR,
+			})
+		}
+	}
+
+	// Add matching PKs as files
 	for _, pkVal := range pks {
 		entries = append(entries, fuse.DirEntry{
 			Name: pkVal,
@@ -1035,21 +1123,73 @@ func (n *CompositeIndexLevelNode) readdirFinalLevel(ctx context.Context, limit i
 
 	logging.Debug("Composite index final listing",
 		zap.String("table", n.tableName),
-		zap.Int("pk_count", len(pks)))
+		zap.Int("pk_count", len(pks)),
+		zap.Bool("has_pipeline", n.pipeline != nil))
 
 	return fs.NewListDirStream(entries), 0
 }
 
+// getPipelineWithFilters returns the pipeline context with all composite index filters applied.
+func (n *CompositeIndexLevelNode) getPipelineWithFilters() *PipelineContext {
+	if n.pipeline == nil {
+		return nil
+	}
+	// Apply all filters from this composite index
+	pipeline := n.pipeline
+	for i, col := range n.columns {
+		if i < len(n.values) {
+			pipeline = pipeline.WithFilter(col, n.values[i], true) // true = indexed
+		}
+	}
+	return pipeline
+}
+
 // Lookup handles access to either the next level or a specific row.
+// At the final level (all columns have values), also handles pipeline capabilities.
 func (n *CompositeIndexLevelNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("CompositeIndexLevelNode.Lookup called",
 		zap.String("table", n.tableName),
 		zap.Strings("columns", n.columns),
 		zap.Strings("values", n.values),
-		zap.String("name", name))
+		zap.String("name", name),
+		zap.Bool("has_pipeline", n.pipeline != nil))
 
-	// Check if all columns have values - if so, looking up a row PK
+	// Check if all columns have values - if so, looking up a row PK or pipeline capability
 	if len(n.values) >= len(n.columns) {
+		// Check for pipeline capabilities first
+		if n.pipeline != nil {
+			filteredPipeline := n.getPipelineWithFilters()
+			switch name {
+			case DirExport:
+				if filteredPipeline.CanExport() {
+					return n.lookupExport(ctx, filteredPipeline)
+				}
+			case DirFirst:
+				if filteredPipeline.CanAddLimit(LimitFirst) {
+					return n.lookupPipelineLimit(ctx, PaginationFirst, filteredPipeline)
+				}
+			case DirLast:
+				if filteredPipeline.CanAddLimit(LimitLast) {
+					return n.lookupPipelineLimit(ctx, PaginationLast, filteredPipeline)
+				}
+			case DirSample:
+				if filteredPipeline.CanAddLimit(LimitSample) {
+					return n.lookupSample(ctx, filteredPipeline)
+				}
+			case DirOrder:
+				if filteredPipeline.CanAddOrder() {
+					return n.lookupOrder(ctx, filteredPipeline)
+				}
+			case DirBy:
+				if filteredPipeline.CanAddFilter() {
+					return n.lookupBy(ctx, filteredPipeline)
+				}
+			case DirFilter:
+				if filteredPipeline.CanAddFilter() {
+					return n.lookupFilter(ctx, filteredPipeline)
+				}
+			}
+		}
 		return n.lookupRow(ctx, name)
 	}
 
@@ -1067,12 +1207,60 @@ func (n *CompositeIndexLevelNode) lookupNextLevel(ctx context.Context, name stri
 		Mode: syscall.S_IFDIR,
 	}
 
-	levelNode := NewCompositeIndexLevelNode(
+	levelNode := NewCompositeIndexLevelNodeWithPipeline(
 		n.cfg, n.db, n.cache, n.schema, n.tableName,
-		n.columns, newValues, n.index, n.partialRows,
+		n.columns, newValues, n.index, n.partialRows, n.pipeline,
 	)
 	child := n.NewPersistentInode(ctx, levelNode, stableAttr)
 
+	return child, 0
+}
+
+// lookupExport creates an export node using the pipeline context with filters applied.
+func (n *CompositeIndexLevelNode) lookupExport(ctx context.Context, pipeline *PipelineContext) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	exportNode := NewPipelineExportDirNode(n.cfg, n.db, n.cache, n.schema, n.tableName, pipeline)
+	child := n.NewPersistentInode(ctx, exportNode, stableAttr)
+	return child, 0
+}
+
+// lookupPipelineLimit creates a pagination node using the pipeline context with filters applied.
+func (n *CompositeIndexLevelNode) lookupPipelineLimit(ctx context.Context, paginationType PaginationType, pipeline *PipelineContext) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	limitNode := NewPaginationNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, paginationType, n.partialRows, pipeline)
+	child := n.NewPersistentInode(ctx, limitNode, stableAttr)
+	return child, 0
+}
+
+// lookupSample creates a sample node using the pipeline context with filters applied.
+func (n *CompositeIndexLevelNode) lookupSample(ctx context.Context, pipeline *PipelineContext) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	sampleNode := NewSampleNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.partialRows, pipeline)
+	child := n.NewPersistentInode(ctx, sampleNode, stableAttr)
+	return child, 0
+}
+
+// lookupOrder creates an order node using the pipeline context with filters applied.
+func (n *CompositeIndexLevelNode) lookupOrder(ctx context.Context, pipeline *PipelineContext) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	orderNode := NewOrderDirNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.partialRows, pipeline)
+	child := n.NewPersistentInode(ctx, orderNode, stableAttr)
+	return child, 0
+}
+
+// lookupBy creates a .by/ node using the pipeline context with filters applied.
+func (n *CompositeIndexLevelNode) lookupBy(ctx context.Context, pipeline *PipelineContext) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	byNode := NewByDirNodeWithPipeline(n.cfg, n.db, n.cache, n.schema, n.tableName, n.partialRows, pipeline)
+	child := n.NewPersistentInode(ctx, byNode, stableAttr)
+	return child, 0
+}
+
+// lookupFilter creates a .filter/ node using the pipeline context with filters applied.
+func (n *CompositeIndexLevelNode) lookupFilter(ctx context.Context, pipeline *PipelineContext) (*fs.Inode, syscall.Errno) {
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	filterNode := NewFilterDirNode(n.cfg, n.db, n.cache, n.schema, n.tableName, pipeline, n.partialRows)
+	child := n.NewPersistentInode(ctx, filterNode, stableAttr)
 	return child, 0
 }
 
