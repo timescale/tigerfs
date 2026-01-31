@@ -97,23 +97,7 @@ func (a *AllRowsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	}
 
 	// Convert rows to directory entries
-	entries := make([]fuse.DirEntry, 0, len(rows)+3)
-
-	// Add metadata files
-	entries = append(entries,
-		fuse.DirEntry{
-			Name: FileColumns,
-			Mode: syscall.S_IFREG,
-		},
-		fuse.DirEntry{
-			Name: FileSchema,
-			Mode: syscall.S_IFREG,
-		},
-		fuse.DirEntry{
-			Name: FileCount,
-			Mode: syscall.S_IFREG,
-		},
-	)
+	entries := make([]fuse.DirEntry, 0, len(rows))
 
 	// Add rows
 	for _, rowPK := range rows {
@@ -131,16 +115,11 @@ func (a *AllRowsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	return fs.NewListDirStream(entries), 0
 }
 
-// Lookup looks up a row or metadata file within .all/
+// Lookup looks up a row within .all/
 func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	logging.Debug("AllRowsNode.Lookup called",
 		zap.String("table", a.tableName),
 		zap.String("name", name))
-
-	// Check if this is a metadata file lookup
-	if name == FileColumns || name == FileSchema || name == FileCount {
-		return a.lookupMetadataFile(ctx, name)
-	}
 
 	// Parse filename to extract PK value and format
 	pkValue, format := util.ParseRowFilename(name)
@@ -188,26 +167,3 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	return child, 0
 }
 
-// lookupMetadataFile handles lookups for metadata files within .all/
-func (a *AllRowsNode) lookupMetadataFile(ctx context.Context, name string) (*fs.Inode, syscall.Errno) {
-	var fileType string
-	switch name {
-	case FileColumns:
-		fileType = "columns"
-	case FileSchema:
-		fileType = "schema"
-	case FileCount:
-		fileType = "count"
-	default:
-		return nil, syscall.ENOENT
-	}
-
-	stableAttr := fs.StableAttr{
-		Mode: syscall.S_IFREG,
-	}
-
-	metadataNode := NewMetadataFileNode(a.cfg, a.db, a.schema, a.tableName, fileType)
-	child := a.NewPersistentInode(ctx, metadataNode, stableAttr)
-
-	return child, 0
-}

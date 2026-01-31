@@ -123,28 +123,17 @@ func TestAllRowsNode_Readdir_WithMock(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Should have 3 metadata files + 5 rows = 8 entries
-	if len(entries) != 8 {
-		t.Errorf("Expected 8 entries, got %d", len(entries))
+	// Should have 5 rows (no metadata files - those are in .info/)
+	if len(entries) != 5 {
+		t.Errorf("Expected 5 entries, got %d", len(entries))
 	}
 
-	// Check metadata files are present
-	hasColumns := false
-	hasSchema := false
-	hasCount := false
+	// Check rows are present
+	expected := map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true}
 	for _, name := range entries {
-		switch name {
-		case FileColumns:
-			hasColumns = true
-		case FileSchema:
-			hasSchema = true
-		case FileCount:
-			hasCount = true
+		if !expected[name] {
+			t.Errorf("Unexpected entry: %s", name)
 		}
-	}
-
-	if !hasColumns || !hasSchema || !hasCount {
-		t.Error("Expected metadata files .columns, .schema, .count")
 	}
 }
 
@@ -178,9 +167,9 @@ func TestAllRowsNode_Readdir_WithMock_Empty(t *testing.T) {
 		entries = append(entries, entry.Name)
 	}
 
-	// Should have only 3 metadata files
-	if len(entries) != 3 {
-		t.Errorf("Expected 3 entries (metadata only), got %d", len(entries))
+	// Should have 0 entries (no rows, no metadata files)
+	if len(entries) != 0 {
+		t.Errorf("Expected 0 entries (empty table), got %d", len(entries))
 	}
 }
 
