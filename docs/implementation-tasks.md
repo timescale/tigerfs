@@ -3359,7 +3359,7 @@ grep -rE '"\.(indexes|schemas|views|create|modify|delete|sql|test|commit|abort|f
 
 **Objective:** Move metadata files (`.count`, `.ddl`, `.schema`, `.columns`) under a `.info/` subdirectory.
 
-**Background:** See `docs/decisions/005-capability-directory-taxonomy.md` for full rationale. This separates metadata (nouns describing the table) from capabilities (verbs for actions).
+**Background:** See `docs/adr/005-capability-directory-taxonomy.md` for full rationale. This separates metadata (nouns describing the table) from capabilities (verbs for actions).
 
 **New Structure:**
 ```
@@ -3413,7 +3413,7 @@ cat /mnt/db/users/.info/ddl
 
 **Objective:** Move index-based navigation under a `.by/` subdirectory.
 
-**Background:** See `docs/decisions/005-capability-directory-taxonomy.md`. This prevents column names from colliding with reserved capability names.
+**Background:** See `docs/adr/005-capability-directory-taxonomy.md`. This prevents column names from colliding with reserved capability names.
 
 **New Structure:**
 ```
@@ -3513,7 +3513,7 @@ ls /mnt/db/users/.by/email/
 
 **Objective:** Add row ordering capability for any collection context.
 
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.order/<column>/` capability specifies row ordering. Direction is implicit: `.first` = ASC, `.last` = DESC.
+**Background:** See `docs/adr/006-bulk-export-capability.md`. The `.order/<column>/` capability specifies row ordering. Direction is implicit: `.first` = ASC, `.last` = DESC.
 
 **Supported Paths:**
 ```
@@ -3567,7 +3567,7 @@ ls /mnt/db/events/.order/created_at/.last/10/
 
 **Objective:** Add single-file materialization of table data in multiple formats.
 
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.export/` capability provides bulk data export as csv, tsv, json, or yaml files.
+**Background:** See `docs/adr/006-bulk-export-capability.md`. The `.export/` capability provides bulk data export as csv, tsv, json, or yaml files.
 
 **Structure:**
 ```
@@ -3645,7 +3645,7 @@ cat /mnt/db/users/.order/name/.first/5/.export/yaml
 
 **Objective:** Add bulk data import with explicit write modes.
 
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. The `.import/` capability provides three write modes with atomic transactions.
+**Background:** See `docs/adr/006-bulk-export-capability.md`. The `.import/` capability provides three write modes with atomic transactions.
 
 **Structure:**
 ```
@@ -3755,7 +3755,7 @@ echo 'id,name
 
 **Objective:** Make CSV and TSV writes self-describing by requiring header rows.
 
-**Background:** See `docs/decisions/006-bulk-export-capability.md`. This is a breaking change that makes all formats consistently self-describing.
+**Background:** See `docs/adr/006-bulk-export-capability.md`. This is a breaking change that makes all formats consistently self-describing.
 
 **Change:**
 ```bash
@@ -3823,7 +3823,7 @@ Enable composable capability chaining for complex queries. Users can combine fil
 - `.by/customer_id/123/.order/created_at/.last/10/.export/json`
 - `.first/100/.last/50/` (rows 51-100)
 
-**Architecture:** See `docs/decisions/007-pipeline-query-architecture.md` for full design.
+**Architecture:** See `docs/adr/007-pipeline-query-architecture.md` for full design.
 
 **Key Concepts:**
 - `PipelineContext` accumulates query state as users navigate paths
