@@ -111,11 +111,14 @@ func TestMount_ListRows(t *testing.T) {
 		t.Fatalf("Failed to list users table: %v", err)
 	}
 
-	// Verify rows exist
-	rowIDs := make([]string, len(entries))
-	for i, entry := range entries {
-		rowIDs[i] = entry.Name()
-		t.Logf("Row: %s (isDir=%v)", entry.Name(), entry.IsDir())
+	// Verify rows exist (filter out metadata files starting with .)
+	var rowIDs []string
+	for _, entry := range entries {
+		t.Logf("Entry: %s (isDir=%v)", entry.Name(), entry.IsDir())
+		// Skip metadata entries (files/dirs starting with .)
+		if !strings.HasPrefix(entry.Name(), ".") {
+			rowIDs = append(rowIDs, entry.Name())
+		}
 	}
 
 	// Should have 3 rows (IDs 1, 2, 3)
@@ -167,8 +170,9 @@ func TestMount_ReadRow(t *testing.T) {
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
 
-	// Read row from users table
-	rowFile := mountpoint + "/users/1"
+	// Read row from users table as TSV
+	// Note: Rows without extension are directories (row-as-directory), use .tsv for row-as-file
+	rowFile := mountpoint + "/users/1.tsv"
 	data, err := os.ReadFile(rowFile)
 	if err != nil {
 		t.Fatalf("Failed to read row file: %v", err)

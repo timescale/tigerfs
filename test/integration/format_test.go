@@ -206,8 +206,9 @@ func TestFormats_TSV_Default(t *testing.T) {
 	// Give filesystem time to initialize
 	time.Sleep(500 * time.Millisecond)
 
-	// Test reading row 1 as TSV (default, no extension)
-	rowFile := mountpoint + "/format_test/1"
+	// Test reading row 1 as TSV
+	// Note: Rows without extension are directories (row-as-directory), use .tsv for row-as-file
+	rowFile := mountpoint + "/format_test/1.tsv"
 	data, err := os.ReadFile(rowFile)
 	if err != nil {
 		t.Fatalf("Failed to read row file: %v", err)
@@ -545,7 +546,7 @@ func TestFormats_NULL_TSV(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Test reading row 2 (all NULLs) as TSV
-	rowFile := mountpoint + "/format_test/2"
+	rowFile := mountpoint + "/format_test/2.tsv"
 	data, err := os.ReadFile(rowFile)
 	if err != nil {
 		t.Fatalf("Failed to read row file: %v", err)
@@ -733,7 +734,7 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Test reading row 3 (special characters) as TSV
-	rowFile := mountpoint + "/format_test/3"
+	rowFile := mountpoint + "/format_test/3.tsv"
 	data, err := os.ReadFile(rowFile)
 	if err != nil {
 		t.Fatalf("Failed to read row file: %v", err)
