@@ -39,7 +39,7 @@ Start fresh with a pre-configured table:
 
 ```bash
 # Create a new markdown app called "notes"
-echo "markdown" > /mnt/db/public/.build/notes
+echo "markdown" > /mnt/db/.build/notes
 
 # Start writing
 echo "---
@@ -48,7 +48,7 @@ title: Shopping List
 
 - Milk
 - Eggs
-- Bread" > /mnt/db/public/notes/shopping.md
+- Bread" > /mnt/db/notes/shopping.md
 ```
 
 ### Option 2: Add to Existing Table
@@ -57,13 +57,13 @@ If you already have a table with content:
 
 ```bash
 # Create a markdown view on your posts table
-echo "markdown" > /mnt/db/public/posts/.format/markdown
+echo "markdown" > /mnt/db/posts/.format/markdown
 
 # Your posts are now available as .md files
-ls /mnt/db/public/posts_md/
+ls /mnt/db/posts_md/
 # hello-world.md  my-first-post.md  announcement.md
 
-cat /mnt/db/public/posts_md/hello-world.md
+cat /mnt/db/posts_md/hello-world.md
 ```
 
 ## Naming Conventions
@@ -87,20 +87,20 @@ These examples use a `.build/` app called `notes`. The same operations work with
 
 ```bash
 # List all files
-ls /mnt/db/public/notes/
+ls /mnt/db/notes/
 
 # Read a file
-cat /mnt/db/public/notes/hello-world.md
+cat /mnt/db/notes/hello-world.md
 
 # Search across all files
-grep -r "TODO" /mnt/db/public/notes/
+grep -r "TODO" /mnt/db/notes/
 ```
 
 ### Creating Files
 
 ```bash
 # Create with frontmatter
-cat > /mnt/db/public/notes/new-post.md << 'EOF'
+cat > /mnt/db/notes/new-post.md << 'EOF'
 ---
 author: bob
 tags: [tutorial, getting-started]
@@ -116,23 +116,23 @@ EOF
 
 ```bash
 # Edit with any editor
-vim /mnt/db/public/notes/hello-world.md
+vim /mnt/db/notes/hello-world.md
 
 # Or append content
-echo "\n## Update\n\nMore content here." >> /mnt/db/public/notes/hello-world.md
+echo "\n## Update\n\nMore content here." >> /mnt/db/notes/hello-world.md
 ```
 
 ### Renaming Files
 
 ```bash
 # Rename updates the filename column in the database
-mv /mnt/db/public/notes/old-name.md /mnt/db/public/notes/new-name.md
+mv /mnt/db/notes/old-name.md /mnt/db/notes/new-name.md
 ```
 
 ### Deleting Files
 
 ```bash
-rm /mnt/db/public/notes/unwanted-post.md
+rm /mnt/db/notes/unwanted-post.md
 ```
 
 ## Column Mapping
@@ -152,13 +152,13 @@ TigerFS automatically detects columns by convention:
 If your columns don't match conventions:
 
 ```bash
-echo '{filename:post_slug,body:post_content}' > /mnt/db/public/posts/.format/markdown
+echo '{filename:post_slug,body:post_content}' > /mnt/db/posts/.format/markdown
 ```
 
 ## Checking Configuration
 
 ```bash
-cat /mnt/db/public/posts/.format/markdown
+cat /mnt/db/posts/.format/markdown
 ```
 
 Returns:
@@ -177,10 +177,10 @@ Returns:
 
 ```bash
 # Set up blog
-echo "markdown" > /mnt/db/public/.build/blog
+echo "markdown" > /mnt/db/.build/blog
 
 # Write posts
-cat > /mnt/db/public/blog/welcome.md << 'EOF'
+cat > /mnt/db/blog/welcome.md << 'EOF'
 ---
 title: Welcome to My Blog
 author: alice
@@ -195,17 +195,17 @@ Thanks for visiting...
 EOF
 
 # Find all drafts
-grep -l "draft: true" /mnt/db/public/blog/*.md
+grep -l "draft: true" /mnt/db/blog/*.md
 ```
 
 ### Knowledge Base
 
 ```bash
 # Create knowledge base
-echo "markdown" > /mnt/db/public/.build/kb
+echo "markdown" > /mnt/db/.build/kb
 
 # Organize with categories in frontmatter
-cat > /mnt/db/public/kb/setup-guide.md << 'EOF'
+cat > /mnt/db/kb/setup-guide.md << 'EOF'
 ---
 title: Setup Guide
 category: getting-started
@@ -218,17 +218,17 @@ Follow these steps...
 EOF
 
 # Find all getting-started articles
-grep -l "category: getting-started" /mnt/db/public/kb/*.md
+grep -l "category: getting-started" /mnt/db/kb/*.md
 ```
 
 ### Meeting Notes
 
 ```bash
 # Create meeting notes app
-echo "markdown" > /mnt/db/public/.build/meetings
+echo "markdown" > /mnt/db/.build/meetings
 
 # Record a meeting
-cat > /mnt/db/public/meetings/2024-01-15-standup.md << 'EOF'
+cat > /mnt/db/meetings/2024-01-15-standup.md << 'EOF'
 ---
 date: 2024-01-15
 attendees: [alice, bob, charlie]
@@ -254,13 +254,13 @@ AI agents can read and write content naturally:
 
 ```bash
 # Agent reads all posts
-for f in /mnt/db/public/blog/*.md; do
+for f in /mnt/db/blog/*.md; do
   echo "=== $f ==="
   cat "$f"
 done
 
 # Agent creates content
-cat > /mnt/db/public/blog/ai-generated.md << 'EOF'
+cat > /mnt/db/blog/ai-generated.md << 'EOF'
 ---
 title: AI-Generated Summary
 author: assistant
@@ -277,12 +277,12 @@ The underlying table is still accessible for SQL operations:
 
 ```bash
 # For .format/ (existing table)
-ls /mnt/db/public/posts/          # Native row-as-directory
-ls /mnt/db/public/posts_md/       # Synthesized markdown
+ls /mnt/db/posts/          # Native row-as-directory
+ls /mnt/db/posts_md/       # Synthesized markdown
 
 # For .build/ (new app)
-ls /mnt/db/public/_notes/         # Native (underscore prefix)
-ls /mnt/db/public/notes/          # Synthesized markdown
+ls /mnt/db/_notes/         # Native (underscore prefix)
+ls /mnt/db/notes/          # Synthesized markdown
 ```
 
 ## Tips
