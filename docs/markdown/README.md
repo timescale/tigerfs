@@ -66,26 +66,41 @@ ls /mnt/db/public/posts_md/
 cat /mnt/db/public/posts_md/hello-world.md
 ```
 
+## Naming Conventions
+
+The two creation methods use different naming conventions:
+
+| Method | Synthesized View | Native Table | Example |
+|--------|------------------|--------------|---------|
+| `.build/notes` | `notes/` | `_notes/` | `/notes/hello.md` and `/_notes/1/body` |
+| `posts/.format/markdown` | `posts_md/` | `posts/` | `/posts_md/hello.md` and `/posts/1/body` |
+
+**`.build/` (new app):** View gets the clean name, table gets underscore prefix. This is the primary method.
+
+**`.format/` (existing table):** View gets `_md` suffix to avoid collision with the existing table name.
+
 ## Usage
+
+These examples use a `.build/` app called `notes`. The same operations work with `.format/` views (just use `posts_md/` instead of `notes/`).
 
 ### Reading Files
 
 ```bash
 # List all files
-ls /mnt/db/public/posts_md/
+ls /mnt/db/public/notes/
 
 # Read a file
-cat /mnt/db/public/posts_md/hello-world.md
+cat /mnt/db/public/notes/hello-world.md
 
 # Search across all files
-grep -r "TODO" /mnt/db/public/posts_md/
+grep -r "TODO" /mnt/db/public/notes/
 ```
 
 ### Creating Files
 
 ```bash
 # Create with frontmatter
-cat > /mnt/db/public/posts_md/new-post.md << 'EOF'
+cat > /mnt/db/public/notes/new-post.md << 'EOF'
 ---
 author: bob
 tags: [tutorial, getting-started]
@@ -101,23 +116,23 @@ EOF
 
 ```bash
 # Edit with any editor
-vim /mnt/db/public/posts_md/hello-world.md
+vim /mnt/db/public/notes/hello-world.md
 
 # Or append content
-echo "\n## Update\n\nMore content here." >> /mnt/db/public/posts_md/hello-world.md
+echo "\n## Update\n\nMore content here." >> /mnt/db/public/notes/hello-world.md
 ```
 
 ### Renaming Files
 
 ```bash
 # Rename updates the filename column in the database
-mv /mnt/db/public/posts_md/old-name.md /mnt/db/public/posts_md/new-name.md
+mv /mnt/db/public/notes/old-name.md /mnt/db/public/notes/new-name.md
 ```
 
 ### Deleting Files
 
 ```bash
-rm /mnt/db/public/posts_md/unwanted-post.md
+rm /mnt/db/public/notes/unwanted-post.md
 ```
 
 ## Column Mapping
