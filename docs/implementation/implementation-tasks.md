@@ -4427,8 +4427,8 @@ Enable TigerFS to present database tables as synthesized files (markdown, plain 
 - **Tasks (.md)** - ordered task items with `{number}-{name}-{status}.md` filenames
 
 **Two Creation Methods:**
+- `.build/` - Creates table + view (+ triggers) from scratch (primary)
 - `.format/` - Creates view (+ triggers) on existing table
-- `.build/` - Creates table + view (+ triggers) from scratch
 
 **Reference:** See ADR-008 for full design details.
 
@@ -4645,12 +4645,76 @@ go test ./internal/tigerfs/fuse/synthesized/... -v -run TestPlainText
 
 ---
 
-### Task 6.5: Implement .format/ Handler
+### Task 6.5: Implement .build/ Scaffolding Handler
+
+**Objective:** Create table + view from scratch via filesystem
+
+**Background:**
+`.build/` provides full scaffolding—creates the underlying table with default columns, then creates the synthesized view on top. This is the primary way to create new synthesized apps.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/synthesized/build_node.go`:
+   - Implement `BuildDirNode` for `schema/.build/` directory:
+     - `Readdir()`: Empty (write-only)
+     - `Create()`: Handle new app creation
+
+2. Implement `BuildFileNode`:
+   - `Write()`: Parse format (or JSON5 with custom columns), create table + view
+
+3. Implement default table schemas in `internal/tigerfs/db/ddl.go`:
+   ```go
+   func (c *Client) CreateMarkdownTable(ctx context.Context, schema, tableName string, extraColumns map[string]string) error
+   func (c *Client) CreatePlainTextTable(ctx context.Context, schema, tableName string) error
+   func (c *Client) CreateTasksTable(ctx context.Context, schema, tableName string) error
+   ```
+
+4. Implement naming convention:
+   - View gets clean name (e.g., `posts`)
+   - Table gets underscore prefix (e.g., `_posts`)
+
+5. Create `modified_at` trigger:
+   ```sql
+   CREATE FUNCTION update_modified_at() RETURNS TRIGGER AS $$
+   BEGIN
+       NEW.modified_at := now();
+       RETURN NEW;
+   END;
+   $$ LANGUAGE plpgsql;
+   ```
+
+6. Handle errors:
+   - View already exists → error with hint
+   - Table already exists → error with hint
+
+**Files to Create:**
+- `internal/tigerfs/fuse/synthesized/build_node.go`
+- `internal/tigerfs/fuse/synthesized/build_node_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/ddl.go`
+- `internal/tigerfs/fuse/schema.go` (expose `.build/` directory)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fuse/synthesized/... -v -run TestBuildNode
+```
+
+**Completion Criteria:**
+- `.build/` directory appears under schemas
+- Writing format creates table + view
+- Default columns match ADR-008 specification
+- Naming convention applied correctly
+- `modified_at` trigger created
+- Unit tests pass
+
+---
+
+### Task 6.6: Implement .format/ Handler
 
 **Objective:** Create views via filesystem interface for existing tables
 
 **Background:**
-Users can create synthesized views by writing to `.format/` directory instead of using SQL directly. TigerFS generates the appropriate CREATE VIEW statement.
+Users can create synthesized views by writing to `.format/` directory instead of using SQL directly. TigerFS generates the appropriate CREATE VIEW statement. Use this when you already have a table with content.
 
 **Steps:**
 1. Create `internal/tigerfs/fuse/synthesized/format_node.go`:
@@ -4707,70 +4771,6 @@ go test ./internal/tigerfs/fuse/synthesized/... -v -run TestFormatNode
 - Writing format config creates view
 - Reading format returns current config
 - View comment includes format marker
-- Unit tests pass
-
----
-
-### Task 6.6: Implement .build/ Scaffolding Handler
-
-**Objective:** Create table + view from scratch via filesystem
-
-**Background:**
-`.build/` provides full scaffolding—creates the underlying table with default columns, then creates the synthesized view on top.
-
-**Steps:**
-1. Create `internal/tigerfs/fuse/synthesized/build_node.go`:
-   - Implement `BuildDirNode` for `schema/.build/` directory:
-     - `Readdir()`: Empty (write-only)
-     - `Create()`: Handle new app creation
-
-2. Implement `BuildFileNode`:
-   - `Write()`: Parse format (or JSON5 with custom columns), create table + view
-
-3. Implement default table schemas in `internal/tigerfs/db/ddl.go`:
-   ```go
-   func (c *Client) CreateMarkdownTable(ctx context.Context, schema, tableName string, extraColumns map[string]string) error
-   func (c *Client) CreatePlainTextTable(ctx context.Context, schema, tableName string) error
-   func (c *Client) CreateTasksTable(ctx context.Context, schema, tableName string) error
-   ```
-
-4. Implement naming convention:
-   - View gets clean name (e.g., `posts`)
-   - Table gets underscore prefix (e.g., `_posts`)
-
-5. Create `modified_at` trigger:
-   ```sql
-   CREATE FUNCTION update_modified_at() RETURNS TRIGGER AS $$
-   BEGIN
-       NEW.modified_at := now();
-       RETURN NEW;
-   END;
-   $$ LANGUAGE plpgsql;
-   ```
-
-6. Handle errors:
-   - View already exists → error with hint
-   - Table already exists → error with hint
-
-**Files to Create:**
-- `internal/tigerfs/fuse/synthesized/build_node.go`
-- `internal/tigerfs/fuse/synthesized/build_node_test.go`
-
-**Files to Modify:**
-- `internal/tigerfs/db/ddl.go`
-- `internal/tigerfs/fuse/schema.go` (expose `.build/` directory)
-
-**Verification:**
-```bash
-go test ./internal/tigerfs/fuse/synthesized/... -v -run TestBuildNode
-```
-
-**Completion Criteria:**
-- `.build/` directory appears under schemas
-- Writing format creates table + view
-- Default columns match ADR-008 specification
-- Naming convention applied correctly
-- `modified_at` trigger created
 - Unit tests pass
 
 ---
