@@ -150,17 +150,24 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ## Phase 8: Distribution & Release
 
+### Core Tasks (v0.1 Release Path)
+
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 8.1 | Create Unix Install Script | ~5475 |
-| ⬜ | 8.2 | Create Windows Install Script | ~5515 |
-| ⬜ | 8.3 | Finalize GoReleaser Configuration | ~5555 |
-| ⬜ | 8.4 | Test Release Workflow | ~5600 |
-| ⬜ | 8.5 | Daemon Mode Support | ~5645 |
-| ⬜ | 8.6 | Write Documentation | ~5715 |
-| ⬜ | 8.7 | Performance Testing | ~5760 |
-| ⬜ | 8.8 | Bug Fixes and Polish | ~5800 |
-| ⬜ | 8.9 | Final Testing and v0.1 Release | ~5835 |
+| ⬜ | 8.1 | Finalize GoReleaser Configuration | ~5878 |
+| ⬜ | 8.2 | Test Release Workflow | ~5920 |
+| ⬜ | 8.3 | Create Unix Install Script | ~5965 |
+| ⬜ | 8.4 | Write Documentation | ~6010 |
+| ⬜ | 8.5 | v0.1 Release | ~6060 |
+
+### Deferred Tasks (Post-v0.1)
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 8.6 | Create Windows Install Script | ~6115 |
+| ⬜ | 8.7 | Daemon Mode Support | ~6155 |
+| ⬜ | 8.8 | Performance Testing | ~6225 |
+| ⬜ | 8.9 | Bug Fixes and Polish | ~6265 |
 
 ---
 

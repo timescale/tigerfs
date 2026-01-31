@@ -5871,88 +5871,9 @@ go test ./test/integration/... -v -run TestDDL
 
 ## Phase 8: Distribution & Release
 
-### Task 8.1: Create Unix Install Script
+### Core Tasks (v0.1 Release Path)
 
-**Objective:** Write install.sh for Unix/Linux/macOS
-
-**Steps:**
-1. Create `scripts/install.sh`
-2. Implement install script:
-   - Detect platform (OS + arch): `uname -s`, `uname -m`
-   - Construct download URL for appropriate binary
-   - Download binary: `curl -fsSL <url>`
-   - Download checksum: `curl -fsSL <url>.sha256`
-   - Verify SHA256: `sha256sum -c` or `shasum -a 256 -c`
-   - Install to `~/.local/bin` or `~/bin`
-   - Make executable: `chmod +x`
-   - Check if directory in PATH, suggest export if not
-3. Add retry logic and error handling
-4. Follow tiger-cli install.sh patterns
-
-**Files to Create:**
-- `scripts/install.sh`
-
-**Verification:**
-```bash
-# Test locally (simulate download)
-bash scripts/install.sh
-# Should install tigerfs to ~/.local/bin/
-
-# Verify
-~/.local/bin/tigerfs version
-# Should show version
-```
-
-**Completion Criteria:**
-- Detects platform correctly
-- Downloads appropriate binary
-- Verifies checksum
-- Installs to correct location
-- Provides PATH instructions
-- Error handling robust
-
----
-
-### Task 8.2: Create Windows Install Script
-
-**Objective:** Write install.ps1 for Windows
-
-**Steps:**
-1. Create `scripts/install.ps1`
-2. Implement install script:
-   - Detect architecture: `$env:PROCESSOR_ARCHITECTURE`
-   - Construct download URL for Windows binary
-   - Download binary: `Invoke-WebRequest`
-   - Download checksum
-   - Verify SHA256: `Get-FileHash`
-   - Install to user directory: `$env:LOCALAPPDATA\tigerfs`
-   - Add to PATH (if not present)
-3. Follow tiger-cli install.ps1 patterns
-
-**Files to Create:**
-- `scripts/install.ps1`
-
-**Verification:**
-```powershell
-# Test on Windows (if available)
-irm scripts/install.ps1 | iex
-# Should install tigerfs
-
-tigerfs version
-# Should show version
-```
-
-**Completion Criteria:**
-- Detects architecture
-- Downloads Windows binary
-- Verifies checksum
-- Installs correctly
-- Adds to PATH
-- Error handling robust
-
----
-
-### Task 8.3: Finalize GoReleaser Configuration
+### Task 8.1: Finalize GoReleaser Configuration
 
 **Objective:** Complete .goreleaser.yaml for releases
 
@@ -5995,7 +5916,7 @@ ls dist/
 
 ---
 
-### Task 8.4: Test Release Workflow
+### Task 8.2: Test Release Workflow
 
 **Objective:** Verify GitHub Actions release workflow
 
@@ -6041,7 +5962,190 @@ git push --delete origin v0.0.1-test
 
 ---
 
-### Task 8.5: Daemon Mode Support
+### Task 8.3: Create Unix Install Script
+
+**Objective:** Write install.sh for Linux/macOS
+
+**Steps:**
+1. Create `scripts/install.sh`
+2. Implement install script:
+   - Detect platform (OS + arch): `uname -s`, `uname -m`
+   - Construct download URL for appropriate binary
+   - Download binary: `curl -fsSL <url>`
+   - Download checksum: `curl -fsSL <url>.sha256`
+   - Verify SHA256: `sha256sum -c` or `shasum -a 256 -c`
+   - Install to `~/.local/bin` or `~/bin`
+   - Make executable: `chmod +x`
+   - Check if directory in PATH, suggest export if not
+3. Add retry logic and error handling
+4. Follow tiger-cli install.sh patterns
+
+**Files to Create:**
+- `scripts/install.sh`
+
+**Verification:**
+```bash
+# Test locally (simulate download)
+bash scripts/install.sh
+# Should install tigerfs to ~/.local/bin/
+
+# Verify
+~/.local/bin/tigerfs version
+# Should show version
+```
+
+**Completion Criteria:**
+- Detects platform correctly
+- Downloads appropriate binary
+- Verifies checksum
+- Installs to correct location
+- Provides PATH instructions
+- Error handling robust
+
+---
+
+### Task 8.4: Write Documentation
+
+**Objective:** Expand README and create guides
+
+**Steps:**
+1. Expand `README.md`:
+   - Complete installation section (all methods)
+   - Complete usage section (all commands)
+   - Add examples for common workflows
+   - Add troubleshooting section
+2. Create `docs/getting-started.md`:
+   - Step-by-step tutorial
+   - First mount, explore data, make changes
+   - Examples with output
+3. Create `docs/installation.md`:
+   - Platform-specific instructions
+   - Prerequisites (FUSE installation)
+   - Verification steps
+   - Troubleshooting
+4. Update `CLAUDE.md` with implementation status
+
+**Files to Modify:**
+- `README.md`
+- `CLAUDE.md`
+
+**Files to Create:**
+- `docs/getting-started.md`
+- `docs/installation.md`
+
+**Verification:**
+```bash
+# Verify documentation accuracy by following it
+# Each step in getting-started.md should work
+
+# Check for broken links
+# Check formatting (markdown lint)
+```
+
+**Completion Criteria:**
+- README complete and accurate
+- Getting started guide clear
+- Installation guide complete
+- CLAUDE.md updated
+- No broken links
+
+---
+
+### Task 8.5: v0.1 Release
+
+**Objective:** Release v0.1
+
+**Steps:**
+1. Run full test suite:
+   ```bash
+   go test ./...
+   go test -race ./...
+   go test -coverprofile=coverage.txt ./...
+   ```
+2. Verify coverage >80%
+3. Test on macOS and Linux
+4. Test install script on each platform
+5. Update version in code
+6. Create release checklist in GitHub issue
+7. Tag release: `git tag v0.1.0`
+8. Push tag: `git push origin v0.1.0`
+9. Monitor GitHub Actions
+10. Verify release artifacts
+11. Write release announcement
+12. Update README badges
+
+**Verification:**
+```bash
+# Run all tests
+go test ./...
+# All pass
+
+# Check coverage
+go tool cover -func=coverage.txt | grep total
+# >80%
+
+# Create release
+git tag v0.1.0
+git push origin v0.1.0
+
+# Verify release
+# https://github.com/timescale/tigerfs/releases/tag/v0.1.0
+```
+
+**Completion Criteria:**
+- All tests pass
+- Coverage >80%
+- Tested on macOS and Linux
+- v0.1.0 tag pushed
+- Release published
+- Binaries available
+- Documentation updated
+- Release announced
+
+---
+
+### Deferred Tasks (Post-v0.1)
+
+### Task 8.6: Create Windows Install Script
+
+**Objective:** Write install.ps1 for Windows
+
+**Steps:**
+1. Create `scripts/install.ps1`
+2. Implement install script:
+   - Detect architecture: `$env:PROCESSOR_ARCHITECTURE`
+   - Construct download URL for Windows binary
+   - Download binary: `Invoke-WebRequest`
+   - Download checksum
+   - Verify SHA256: `Get-FileHash`
+   - Install to user directory: `$env:LOCALAPPDATA\tigerfs`
+   - Add to PATH (if not present)
+3. Follow tiger-cli install.ps1 patterns
+
+**Files to Create:**
+- `scripts/install.ps1`
+
+**Verification:**
+```powershell
+# Test on Windows (if available)
+irm scripts/install.ps1 | iex
+# Should install tigerfs
+
+tigerfs version
+# Should show version
+```
+
+**Completion Criteria:**
+- Detects architecture
+- Downloads Windows binary
+- Verifies checksum
+- Installs correctly
+- Adds to PATH
+- Error handling robust
+
+---
+
+### Task 8.7: Daemon Mode Support
 
 **Objective:** Add `--daemon` flag for proper background execution with PID file management
 
@@ -6110,54 +6214,7 @@ tigerfs unmount /mnt/db
 
 ---
 
-### Task 8.6: Write Documentation
-
-**Objective:** Expand README and create guides
-
-**Steps:**
-1. Expand `README.md`:
-   - Complete installation section (all methods)
-   - Complete usage section (all commands)
-   - Add examples for common workflows
-   - Add troubleshooting section
-2. Create `docs/getting-started.md`:
-   - Step-by-step tutorial
-   - First mount, explore data, make changes
-   - Examples with output
-3. Create `docs/installation.md`:
-   - Platform-specific instructions
-   - Prerequisites (FUSE installation)
-   - Verification steps
-   - Troubleshooting
-4. Update `CLAUDE.md` with implementation status
-
-**Files to Modify:**
-- `README.md`
-- `CLAUDE.md`
-
-**Files to Create:**
-- `docs/getting-started.md`
-- `docs/installation.md`
-
-**Verification:**
-```bash
-# Verify documentation accuracy by following it
-# Each step in getting-started.md should work
-
-# Check for broken links
-# Check formatting (markdown lint)
-```
-
-**Completion Criteria:**
-- README complete and accurate
-- Getting started guide clear
-- Installation guide complete
-- CLAUDE.md updated
-- No broken links
-
----
-
-### Task 8.7: Performance Testing
+### Task 8.8: Performance Testing
 
 **Objective:** Benchmark operations, document performance
 
@@ -6196,7 +6253,7 @@ go test -bench=. ./test/benchmark/
 
 ---
 
-### Task 8.8: Bug Fixes and Polish
+### Task 8.9: Bug Fixes and Polish
 
 **Objective:** Fix remaining issues, improve UX
 
@@ -6226,59 +6283,6 @@ grep -r "TODO" internal/
 - Error messages improved
 - Debug logging cleaned up
 - Code review complete
-
----
-
-### Task 8.9: Final Testing and v0.1 Release
-
-**Objective:** Release v0.1
-
-**Steps:**
-1. Run full test suite:
-   ```bash
-   go test ./...
-   go test -race ./...
-   go test -coverprofile=coverage.txt ./...
-   ```
-2. Verify coverage >80%
-3. Test on all platforms (macOS, Linux, Windows if available)
-4. Test install scripts on each platform
-5. Update version in code
-6. Create release checklist in GitHub issue
-7. Tag release: `git tag v0.1.0`
-8. Push tag: `git push origin v0.1.0`
-9. Monitor GitHub Actions
-10. Verify release artifacts
-11. Write release announcement
-12. Update README badges
-
-**Verification:**
-```bash
-# Run all tests
-go test ./...
-# All pass
-
-# Check coverage
-go tool cover -func=coverage.txt | grep total
-# >80%
-
-# Create release
-git tag v0.1.0
-git push origin v0.1.0
-
-# Verify release
-# https://github.com/timescale/tigerfs/releases/tag/v0.1.0
-```
-
-**Completion Criteria:**
-- All tests pass
-- Coverage >80%
-- Tested on all platforms
-- v0.1.0 tag pushed
-- Release published
-- Binaries available
-- Documentation updated
-- Release announced
 
 ---
 
