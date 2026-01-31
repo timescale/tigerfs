@@ -329,15 +329,15 @@ AI agents can find and claim the next task using sequential numbering:
 ls /mnt/db/work/*-o.md
 # 1-research-o.md  2-summarize-o.md  3-draft-o.md
 
-# Get the first (lowest numbered) todo task
-NEXT=$(ls /mnt/db/work/*-o.md | head -1)
+# Get the prefix of the first todo task (e.g., "1-research")
+TASK=$(ls /mnt/db/work/*-o.md | head -1 | sed 's/-o.md$//')
 
-# Claim it: change status and set assignee via native table
-mv "$NEXT" "${NEXT/-o.md/-~.md}"
+# Claim it: change status and set assignee
+mv "$TASK-o.md" "$TASK-~.md"
 echo "agent-1" > /mnt/db/_work/.by/number/1/assignee
 
 # When done, mark complete
-mv "${NEXT/-o.md/-~.md}" "${NEXT/-o.md/-x.md}"
+mv "$TASK-~.md" "$TASK-x.md"
 ```
 
 **Search by content:**
