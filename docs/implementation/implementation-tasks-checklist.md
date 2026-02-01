@@ -158,7 +158,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 8.2 | Test Release Workflow | ~5920 |
 | ✅ | 8.3 | Create Unix Install Script | ~5965 |
 | ✅ | 8.4 | Write Documentation | ~6010 |
-| ⬜ | 8.5 | v0.1 Release | ~6060 |
+| ✅ | 8.5 | v0.1 Release | ~6060 |
 
 ### Deferred Tasks (Post-v0.1)
 
@@ -192,6 +192,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
 | Phase 6: Synthesized Apps | 0 | 10 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
-| Phase 8: Distribution | 4 | 9 | 44% |
+| Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Performance | 0 | 3 | 0% |
-| **Total** | **83** | **105** | **79%** |
+| **Total** | **84** | **105** | **80%** |
