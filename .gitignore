@@ -44,3 +44,6 @@ temp/
 
 # Planning docs (working area, not committed)
 docs/.plans/
+
+# Git worktrees
+.worktrees/
