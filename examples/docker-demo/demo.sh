@@ -56,6 +56,7 @@ start_demo() {
         sleep 1
     done
     info "PostgreSQL is ready"
+    info "Connection string: $CONN_STR"
 
     # Mount TigerFS inside the container
     info "Mounting TigerFS at $MOUNTPOINT (inside container)..."
