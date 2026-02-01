@@ -116,18 +116,29 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ## Phase 6: Synthesized Apps
 
+### 6.1: Markdown & Plain Text
+
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1 | Implement Format Detection | ~4437 |
-| ⬜ | 6.2 | Implement Markdown Synthesis | ~4512 |
-| ⬜ | 6.3 | Implement Markdown Parsing (Write Support) | ~4565 |
-| ⬜ | 6.4 | Implement Plain Text Format | ~4616 |
-| ⬜ | 6.5 | Implement .build/ Scaffolding Handler | ~4648 |
-| ⬜ | 6.6 | Implement .format/ Handler | ~4714 |
-| ⬜ | 6.7 | Implement SynthesizedViewNode | ~4778 |
-| ⬜ | 6.8 | Implement Tasks Filename Synthesis (with dynamic padding) | ~4838 |
-| ⬜ | 6.9 | Implement Tasks Triggers and Renumber Function | ~4926 |
-| ⬜ | 6.10 | Integration Tests for Synthesized Apps | ~5113 |
+| ⬜ | 6.1.1 | Implement Format Detection | ~4455 |
+| ⬜ | 6.1.2 | Implement Markdown Synthesis | ~4530 |
+| ⬜ | 6.1.3 | Implement Markdown Parsing (Write Support) | ~4585 |
+| ⬜ | 6.1.4 | Implement Plain Text Format | ~4635 |
+| ⬜ | 6.1.5 | Implement .build/ Scaffolding Handler (Markdown/PlainText) | ~4670 |
+| ⬜ | 6.1.6 | Implement .format/ Handler (Markdown/PlainText) | ~4740 |
+| ⬜ | 6.1.7 | Implement SynthesizedViewNode (Markdown/PlainText) | ~4810 |
+| ⬜ | 6.1.8 | Integration Tests for Markdown/PlainText | ~4880 |
+
+### 6.2: Tasks
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 6.2.1 | Implement Tasks Filename Synthesis | ~4940 |
+| ⬜ | 6.2.2 | Implement Tasks Triggers and Compact Function | ~5040 |
+| ⬜ | 6.2.3 | Extend .build/ and .format/ for Tasks | ~5170 |
+| ⬜ | 6.2.4 | Extend SynthesizedViewNode for Tasks + .renumber | ~5250 |
+| ⬜ | 6.2.5 | Implement .add File Handler | ~5340 |
+| ⬜ | 6.2.6 | Integration Tests for Tasks | ~5410 |
 
 ---
 
@@ -190,8 +201,10 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
 | Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
-| Phase 6: Synthesized Apps | 0 | 10 | 0% |
+| Phase 6: Synthesized Apps | 0 | 14 | 0% |
+|   6.1: Markdown & Plain Text | 0 | 8 | 0% |
+|   6.2: Tasks | 0 | 6 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Performance | 0 | 3 | 0% |
-| **Total** | **84** | **105** | **80%** |
+| **Total** | **84** | **109** | **77%** |
