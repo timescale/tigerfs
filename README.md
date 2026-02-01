@@ -76,6 +76,34 @@ rm /mnt/db/public/users/456
 umount /mnt/db
 ```
 
+## Try the Demos
+
+Self-contained demos with sample data (1,000 users, 200 products, 8,000 orders):
+
+### Docker Demo (any platform)
+
+Runs both TigerFS and PostgreSQL in Docker containers:
+
+```bash
+cd examples/docker-demo
+./demo.sh start
+./demo.sh shell
+# Now explore: ls, cat users/1.json, etc.
+./demo.sh stop
+```
+
+### macOS Demo (native)
+
+Runs TigerFS natively on macOS with PostgreSQL in Docker:
+
+```bash
+cd examples/mac-demo
+./demo.sh start
+ls -al /tmp/tigerfs-demo
+cat /tmp/tigerfs-demo/users/1.json
+./demo.sh stop
+```
+
 ## Installation
 
 ### One-Line Installer (macOS/Linux/WSL)
