@@ -443,35 +443,36 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 
 ## Project Status
 
-🚧 **Active Development** - TigerFS core functionality is implemented and working:
+🚧 **Active Development** - 75% complete (79/105 tasks)
 
 **Completed:**
-- Virtual filesystem with full CRUD operations (Read, Write, Create, Delete)
-- Row-as-file (TSV, CSV, JSON, YAML) and row-as-directory access patterns
-- Column-level reads and writes with type-based file extensions
-- PostgreSQL database layer with connection pooling (pgx/v5)
-- Data format serialization with NULL handling
-- Constraint validation (NOT NULL, UNIQUE)
-- Incremental row creation via mkdir
-- Metadata directory (`.info/` with schema, columns, count, ddl files)
-- Index-based navigation (`.by/column/value/`) with `.first/N/` and `.last/N/` pagination
-- Pipeline queries with database query pushdown (`.by/`, `.filter/`, `.order/`, chained pagination)
-- Large table handling (`.first/N/`, `.last/N/`, `.sample/N/`, `.info/count`)
-- Bulk export (`.export/csv`, `.export/json`, `.export/tsv`)
-- Schema flattening (default schema at root, `.schemas/` for explicit access)
-- Metadata caching with configurable refresh
-- CLI with mount, unmount, status, list, and config commands
+- Virtual filesystem with full CRUD operations (read, write, create, delete)
+- Multiple data formats: TSV, CSV, JSON, YAML with PATCH semantics on write
+- Row-as-file and row-as-directory access patterns
+- Column-level reads/writes with type-based file extensions (.txt, .json, .bin)
+- All primary key types (serial, UUID, text, composite)
+- Database views (read-only and updatable)
+- Index navigation (`.by/column/value/`) with pagination
+- Pipeline queries with database pushdown (`.by/`, `.filter/`, `.order/`, chained pagination)
+- Large table handling (`.first/N/`, `.last/N/`, `.sample/N/`)
+- Bulk export/import (`.export/`, `.import/`)
+- DDL operations via filesystem (`.create/`, `.modify/`, `.delete/` for tables, indexes, views)
+- Schema management (flattening, `.schemas/` for explicit access)
+- Metadata directory (`.info/` with schema, columns, count, ddl, indexes)
+- CLI commands: mount, unmount, status, list, config
 - Tiger Cloud integration (`--tiger-service-id`)
+- macOS native NFS backend (no dependencies required)
+- Linux FUSE backend
+- PostgreSQL connection pooling (pgx/v5)
 - Permission mapping (PostgreSQL grants → file permissions)
-- Docker testing environment
-- Comprehensive unit and integration test coverage
+- Comprehensive test coverage
 
 **Planned:**
-- Non-serial primary keys (UUID, text, composite)
 - Tables without primary keys (read-only via ctid)
-- Database views (read-only for JOINs, updatable for simple views)
-- TimescaleDB hypertables (time-based and chunk navigation)
-- Distribution (install scripts, GoReleaser packaging, daemon mode)
+- TimescaleDB hypertables (time-based navigation)
+- Synthesized apps (markdown views, task management)
+- Distribution (install scripts, GoReleaser, daemon mode)
+- Windows support
 
 ## Contributing
 
