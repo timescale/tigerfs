@@ -951,6 +951,13 @@ type mockDBClient struct {
 	lastColumnName     string
 	lastColumnValue    string
 	lastDeletePK       string
+
+	// DDL execution tracking
+	execCalled      bool
+	execSuccess     bool
+	execError       error
+	execInTxSuccess bool
+	execInTxError   error
 }
 
 type mockPK struct {
@@ -1311,10 +1318,17 @@ func (m *mockDBClient) DeleteRow(ctx context.Context, schema, table, pkColumn, p
 // Implement db.DDLExecutor
 
 func (m *mockDBClient) Exec(ctx context.Context, sql string, args ...interface{}) error {
+	m.execCalled = true
+	if m.execError != nil {
+		return m.execError
+	}
 	return nil
 }
 
 func (m *mockDBClient) ExecInTransaction(ctx context.Context, sql string, args ...interface{}) error {
+	if m.execInTxError != nil {
+		return m.execInTxError
+	}
 	return nil
 }
 
