@@ -171,13 +171,29 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
-## Phase 9: Performance & Scalability
+## Phase 9: Shared Core Library for FUSE/NFS Feature Parity
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 9.1 | Implement Hybrid Metadata Caching | ~5890 |
-| ⬜ | 9.2 | Evaluate Multi-User Mount Support (allow_other) | ~5955 |
-| ⬜ | 9.3 | Row Timestamps from Database Columns (Optional) | ~5995 |
+| ✅ | 9.1 | Create fs/ Package Foundation | ~6295 |
+| ⬜ | 9.2 | Implement Path Parser | ~6478 |
+| ⬜ | 9.3 | Implement Read Operations | ~6579 |
+| ⬜ | 9.4 | Implement Write Operations | ~6728 |
+| ⬜ | 9.5 | Implement DDL Operations | ~6852 |
+| ⬜ | 9.6 | Implement NFS Handler (Read Operations) | ~6966 |
+| ⬜ | 9.7 | Implement NFS Handler (Write Operations) | ~7100 |
+| ⬜ | 9.8 | FUSE Integration and Migration | ~7210 |
+| ⬜ | 9.9 | Feature Parity Verification and Integration Tests | ~7310 |
+
+---
+
+## Phase 10: Performance & Scalability
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 10.1 | Implement Hybrid Metadata Caching | ~7405 |
+| ⬜ | 10.2 | Evaluate Multi-User Mount Support (allow_other) | ~7470 |
+| ⬜ | 10.3 | Row Timestamps from Database Columns (Optional) | ~7510 |
 
 ---
 
@@ -193,5 +209,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 6: Synthesized Apps | 0 | 10 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
-| Phase 9: Performance | 0 | 3 | 0% |
-| **Total** | **84** | **105** | **80%** |
+| Phase 9: Shared Core Library | 1 | 9 | 11% |
+| Phase 10: Performance | 0 | 3 | 0% |
+| **Total** | **85** | **114** | **75%** |
