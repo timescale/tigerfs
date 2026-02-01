@@ -177,8 +177,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 |--------|------|-------------|------|
 | ✅ | 9.1 | Create fs/ Package Foundation | ~6295 |
 | ✅ | 9.2 | Implement Path Parser | ~6478 |
-| ⬜ | 9.3 | Implement Read Operations | ~6579 |
-| ⬜ | 9.4 | Implement Write Operations | ~6728 |
+| ✅ | 9.3 | Implement Read Operations | ~6579 |
+| ✅ | 9.4 | Implement Write Operations | ~6728 |
 | ⬜ | 9.5 | Implement DDL Operations | ~6852 |
 | ⬜ | 9.6 | Implement NFS Handler (Read Operations) | ~6966 |
 | ⬜ | 9.7 | Implement NFS Handler (Write Operations) | ~7100 |
@@ -211,6 +211,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 6: Synthesized Apps | 0 | 10 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
-| Phase 9: Shared Core Library | 2 | 11 | 18% |
+| Phase 9: Shared Core Library | 4 | 11 | 36% |
 | Phase 10: Performance | 0 | 3 | 0% |
-| **Total** | **86** | **116** | **74%** |
+| **Total** | **88** | **116** | **76%** |

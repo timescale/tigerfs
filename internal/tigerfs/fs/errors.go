@@ -52,7 +52,14 @@ const (
 	// ErrInternal indicates an unexpected internal error.
 	// Maps to EIO in POSIX.
 	ErrInternal
+
+	// ErrNotImplemented indicates a feature is not yet implemented.
+	// Maps to ENOSYS in POSIX.
+	ErrNotImplemented
 )
+
+// Alias for backwards compatibility
+const ErrExists = ErrAlreadyExists
 
 // FSError is a backend-agnostic filesystem error.
 // It provides structured error information that adapters can convert
