@@ -68,6 +68,7 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 	// Add all subcommands (complete tree building)
 	cmd.AddCommand(buildMountCmd(ctx))
 	cmd.AddCommand(buildUnmountCmd())
+	cmd.AddCommand(buildStopCmd())
 	cmd.AddCommand(buildStatusCmd())
 	cmd.AddCommand(buildListCmd())
 	cmd.AddCommand(buildTestConnectionCmd())
