@@ -18,9 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// DirFilter is the name of the filter capability directory.
-const DirFilter = ".filter"
-
 // FileTableTooLarge is shown when a non-indexed column's table exceeds DirFilterLimit.
 // Users can still navigate directly to values, but value listing is not available.
 const FileTableTooLarge = ".table-too-large"
