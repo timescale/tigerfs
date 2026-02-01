@@ -10,11 +10,11 @@ This guide demonstrates common TigerFS workflows using real-world scenarios.
 
 ---
 
-## Example 1: Using the Docker Demo (Recommended for Testing)
+## Example 1: Using the Docker Demo (Any Platform)
 
 **Scenario:** You want to try TigerFS without setting up a local database.
 
-The Docker demo provides a pre-configured environment with TigerFS, PostgreSQL, and sample data.
+The Docker demo runs both TigerFS and PostgreSQL in containers with sample data (1,000 users, 200 products, 8,000 orders).
 
 ### Commands
 
@@ -22,41 +22,90 @@ The Docker demo provides a pre-configured environment with TigerFS, PostgreSQL, 
 # From the TigerFS repository root
 cd examples/docker-demo
 
-# Build and start containers
-docker-compose up -d --build
+# Start the demo (builds containers, starts PostgreSQL, mounts TigerFS)
+./demo.sh start
 
-# Connect to the TigerFS container
-docker-compose exec tigerfs bash
+# Enter the container (starts in /mnt/db)
+./demo.sh shell
 
-# Inside the container: mount the demo database
-# Note: Use 'postgres' as hostname (the Docker service name), not 'localhost'
-tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &
-
-# Verify the mount
-ls /mnt/db
+# Explore!
+ls
+cat users/1.json
+cat products/1.json
+ls orders/.first/10/
 ```
 
 ### Expected Output
 
 ```
-orders/
-products/
-users/
+$ ls
+categories/  orders/  products/  users/
+
+$ cat users/1.json
+{"id":1,"name":"Alice Smith","first_name":"Alice","last_name":"Smith",...}
 ```
 
 ### Explanation
 
-The Docker demo runs two containers: PostgreSQL with sample data (users, products, orders) and TigerFS. Inside the TigerFS container, PostgreSQL is reachable at hostname `postgres` (the Docker Compose service name), not `localhost`.
+The `demo.sh` script handles everything: building containers, waiting for PostgreSQL to be ready, and mounting TigerFS automatically. When you run `./demo.sh shell`, you're placed directly in `/mnt/db` where the database is mounted.
+
+### Other Commands
+
+```bash
+./demo.sh status   # Check if running
+./demo.sh restart  # Stop and start again
+./demo.sh stop     # Unmount and stop containers
+```
+
+---
+
+## Example 1b: Using the macOS Demo (Native)
+
+**Scenario:** You're on macOS and want TigerFS to run natively (not in Docker) for better performance and integration.
+
+The macOS demo runs TigerFS natively using the NFS backend, with only PostgreSQL in Docker.
+
+### Prerequisites
+
+- macOS (Apple Silicon or Intel)
+- Docker Desktop
+- Go 1.21+ (for building TigerFS)
+
+### Commands
+
+```bash
+# From the TigerFS repository root
+cd examples/mac-demo
+
+# Start the demo (starts PostgreSQL, builds TigerFS, mounts at /tmp/tigerfs-demo)
+./demo.sh start
+
+# Explore directly from your Mac terminal
+ls /tmp/tigerfs-demo
+cat /tmp/tigerfs-demo/users/1.json
+cat /tmp/tigerfs-demo/products/1.json
+```
+
+### Expected Output
+
+```
+$ ls /tmp/tigerfs-demo
+categories/  orders/  products/  users/
+
+$ cat /tmp/tigerfs-demo/users/1.json
+{"id":1,"name":"Alice Smith","first_name":"Alice","last_name":"Smith",...}
+```
+
+### Explanation
+
+Unlike the Docker demo, TigerFS runs as a native macOS process. This means:
+- The mount appears at `/tmp/tigerfs-demo` on your Mac (not inside a container)
+- You can use any Mac tools directly (Finder, VS Code, your favorite editor)
 
 ### Cleanup
 
 ```bash
-# Inside container: unmount
-tigerfs unmount /mnt/db
-
-# Exit container and stop services
-exit
-docker-compose down
+./demo.sh stop
 ```
 
 ---
