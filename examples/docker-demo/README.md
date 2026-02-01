@@ -4,10 +4,38 @@ A containerized environment to try TigerFS with PostgreSQL.
 
 ## Quick Start
 
-Choose your connection method:
+```bash
+# Start the demo (builds containers, starts PostgreSQL, mounts TigerFS)
+./demo.sh start
 
-- **Option 1: Local PostgreSQL** (default) - Self-contained demo with sample data
-- **Option 2: Tiger Cloud** - Connect to your Tiger Cloud database
+# Enter the container to explore
+./demo.sh shell
+
+# Inside container:
+ls /mnt/db
+cat /mnt/db/users/1.json
+
+# Or run commands directly from host
+docker compose exec tigerfs ls /mnt/db
+docker compose exec tigerfs cat /mnt/db/users/1.json
+
+# Stop when done
+./demo.sh stop
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `./demo.sh start` | Build containers, start PostgreSQL, mount TigerFS |
+| `./demo.sh stop` | Unmount TigerFS and stop containers |
+| `./demo.sh status` | Show current status |
+| `./demo.sh restart` | Stop and start again |
+| `./demo.sh shell` | Enter the TigerFS container |
+
+## Manual Setup
+
+If you prefer manual control:
 
 ### Option 1: Local PostgreSQL (Recommended for Testing)
 
@@ -19,10 +47,10 @@ cd examples/docker-demo
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Build and start containers
-docker-compose up -d --build
+docker compose up -d --build
 
 # Connect to the TigerFS container
-docker-compose exec tigerfs bash
+docker compose exec tigerfs bash
 
 # Mount the local demo database
 mnt  # Alias for: tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &
@@ -46,10 +74,10 @@ Connect to your Tiger Cloud database using headless authentication.
 cd examples/docker-demo
 
 # Build and start (only the tigerfs container needed)
-docker-compose up -d --build tigerfs
+docker compose up -d --build tigerfs
 
 # Connect with Tiger Cloud credentials
-docker-compose exec tigerfs bash
+docker compose exec tigerfs bash
 
 # Inside container: Install Tiger CLI
 curl -fsSL https://cli.tigerdata.com | sh
@@ -151,14 +179,16 @@ done | jq -s 'sort_by(.age)'
 The demo image includes Claude Code. If you set `ANTHROPIC_API_KEY` before starting, you can use it to explore the mounted filesystem:
 
 ```bash
-docker-compose exec tigerfs bash
+./demo.sh shell
 claude
 ```
 
 ## Cleanup
 
 ```bash
-docker-compose down
+./demo.sh stop
+# Or manually:
+docker compose down
 ```
 
 ## Requirements
