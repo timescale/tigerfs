@@ -176,7 +176,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
 | ✅ | 9.1 | Create fs/ Package Foundation | ~6295 |
-| ⬜ | 9.2 | Implement Path Parser | ~6478 |
+| ✅ | 9.2 | Implement Path Parser | ~6478 |
 | ⬜ | 9.3 | Implement Read Operations | ~6579 |
 | ⬜ | 9.4 | Implement Write Operations | ~6728 |
 | ⬜ | 9.5 | Implement DDL Operations | ~6852 |
@@ -184,6 +184,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ⬜ | 9.7 | Implement NFS Handler (Write Operations) | ~7100 |
 | ⬜ | 9.8 | FUSE Integration and Migration | ~7210 |
 | ⬜ | 9.9 | Feature Parity Verification and Integration Tests | ~7310 |
+| ⬜ | 9.10 | Cleanup and Refactoring | ~7280 |
+| ⬜ | 9.11 | Final Testing and v0.2.0 Release | ~7380 |
 
 ---
 
@@ -209,6 +211,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 6: Synthesized Apps | 0 | 10 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
-| Phase 9: Shared Core Library | 1 | 9 | 11% |
+| Phase 9: Shared Core Library | 2 | 11 | 18% |
 | Phase 10: Performance | 0 | 3 | 0% |
-| **Total** | **85** | **114** | **75%** |
+| **Total** | **86** | **116** | **74%** |
