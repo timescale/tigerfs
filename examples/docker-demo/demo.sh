@@ -133,7 +133,7 @@ shell_demo() {
     fi
 
     info "Entering TigerFS container..."
-    docker compose -f "$SCRIPT_DIR/docker-compose.yml" exec tigerfs bash
+    docker compose -f "$SCRIPT_DIR/docker-compose.yml" exec -w "$MOUNTPOINT" tigerfs bash
 }
 
 case "${1:-start}" in
