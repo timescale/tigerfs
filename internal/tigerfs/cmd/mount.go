@@ -1,7 +1,8 @@
 // Package cmd provides CLI commands for TigerFS.
 //
 // This file implements the mount command which is the primary command for
-// mounting a PostgreSQL database as a FUSE filesystem.
+// mounting a PostgreSQL database as a filesystem. On Linux, FUSE is used;
+// on macOS, NFS is used to avoid requiring third-party kernel extensions.
 package cmd
 
 import (
@@ -13,9 +14,9 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
-	"github.com/timescale/tigerfs/internal/tigerfs/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/mount"
+	"github.com/timescale/tigerfs/internal/tigerfs/tigercloud"
 	"go.uber.org/zap"
 )
 
@@ -87,6 +88,19 @@ Examples:
 				mountpoint = args[0]
 			}
 
+			// If --tiger-service-id is provided, fetch connection string from Tiger Cloud
+			if tigerServiceID != "" {
+				logging.Info("Fetching connection string from Tiger Cloud",
+					zap.String("service_id", tigerServiceID))
+
+				var err error
+				connStr, err = tigercloud.GetConnectionString(ctx, tigerServiceID)
+				if err != nil {
+					return fmt.Errorf("failed to get connection string from Tiger Cloud: %w", err)
+				}
+				logging.Debug("Got connection string from Tiger Cloud")
+			}
+
 			// Resolve mountpoint to absolute path for consistent registry handling
 			absMountpoint, err := filepath.Abs(mountpoint)
 			if err != nil {
@@ -124,8 +138,9 @@ Examples:
 				cfg.DirFilterLimit = dirFilterLimit
 			}
 
-			// Mount the FUSE filesystem
-			fs, err := fuse.Mount(ctx, cfg, connStr, absMountpoint)
+			// Mount the filesystem using platform-specific backend
+			// (NFS on macOS, FUSE on Linux)
+			fs, err := mountFilesystem(ctx, cfg, connStr, absMountpoint)
 			if err != nil {
 				return fmt.Errorf("failed to mount: %w", err)
 			}
