@@ -823,3 +823,448 @@ func TestFormats_SpecialCharacters_JSON(t *testing.T) {
 		t.Error("Expected quote character preserved in JSON")
 	}
 }
+
+func TestFormats_YAML(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test reading row 1 as YAML
+	rowFile := mountpoint + "/format_test/1.yaml"
+	data, err := os.ReadFile(rowFile)
+	if err != nil {
+		t.Fatalf("Failed to read row file: %v", err)
+	}
+
+	content := string(data)
+	t.Logf("YAML content: %s", content)
+
+	// Verify YAML format characteristics
+	if !strings.Contains(content, "id:") {
+		t.Error("Expected 'id:' key in YAML format")
+	}
+	if !strings.Contains(content, "text_col:") {
+		t.Error("Expected 'text_col:' key in YAML format")
+	}
+	if !strings.Contains(content, "normal text") {
+		t.Error("Expected 'normal text' value in YAML format")
+	}
+	if !strings.Contains(content, "int_col:") {
+		t.Error("Expected 'int_col:' key in YAML format")
+	}
+	if !strings.Contains(content, "42") {
+		t.Error("Expected '42' value in YAML format")
+	}
+}
+
+func TestFormats_YAML_NULL(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test reading row 2 (all NULLs) as YAML
+	rowFile := mountpoint + "/format_test/2.yaml"
+	data, err := os.ReadFile(rowFile)
+	if err != nil {
+		t.Fatalf("Failed to read row file: %v", err)
+	}
+
+	content := string(data)
+	t.Logf("YAML NULL content: %s", content)
+
+	// Verify NULL values represented as null in YAML
+	if !strings.Contains(content, "null") {
+		t.Error("Expected 'null' for NULL values in YAML format")
+	}
+}
+
+func TestMetadata_InfoSchema(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data (creates format_test table)
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test .info/schema
+	schemaFile := mountpoint + "/format_test/.info/schema"
+	data, err := os.ReadFile(schemaFile)
+	if err != nil {
+		t.Fatalf("Failed to read .info/schema: %v", err)
+	}
+
+	content := string(data)
+	t.Logf(".info/schema content:\n%s", content)
+
+	// Verify schema contains expected columns
+	if !strings.Contains(content, "id") {
+		t.Error("Expected 'id' column in schema")
+	}
+	if !strings.Contains(content, "text_col") {
+		t.Error("Expected 'text_col' column in schema")
+	}
+	if !strings.Contains(content, "int_col") {
+		t.Error("Expected 'int_col' column in schema")
+	}
+	if !strings.Contains(content, "bool_col") {
+		t.Error("Expected 'bool_col' column in schema")
+	}
+}
+
+func TestMetadata_InfoColumns(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test .info/columns
+	columnsFile := mountpoint + "/format_test/.info/columns"
+	data, err := os.ReadFile(columnsFile)
+	if err != nil {
+		t.Fatalf("Failed to read .info/columns: %v", err)
+	}
+
+	content := string(data)
+	t.Logf(".info/columns content:\n%s", content)
+
+	// Verify columns file contains column names (one per line)
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(lines) < 4 {
+		t.Errorf("Expected at least 4 columns, got %d", len(lines))
+	}
+
+	// Check expected columns are present
+	columnSet := make(map[string]bool)
+	for _, line := range lines {
+		columnSet[strings.TrimSpace(line)] = true
+	}
+
+	expectedColumns := []string{"id", "text_col", "int_col", "bool_col"}
+	for _, col := range expectedColumns {
+		if !columnSet[col] {
+			t.Errorf("Expected column '%s' in .info/columns", col)
+		}
+	}
+}
+
+func TestMetadata_InfoCount(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data (creates 3 rows)
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test .info/count
+	countFile := mountpoint + "/format_test/.info/count"
+	data, err := os.ReadFile(countFile)
+	if err != nil {
+		t.Fatalf("Failed to read .info/count: %v", err)
+	}
+
+	content := strings.TrimSpace(string(data))
+	t.Logf(".info/count content: %s", content)
+
+	// Verify count is 3 (seedFormatTestData creates 3 rows)
+	if content != "3" {
+		t.Errorf("Expected count '3', got '%s'", content)
+	}
+}
+
+func TestMetadata_InfoDDL(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test .info/ddl
+	ddlFile := mountpoint + "/format_test/.info/ddl"
+	data, err := os.ReadFile(ddlFile)
+	if err != nil {
+		t.Fatalf("Failed to read .info/ddl: %v", err)
+	}
+
+	content := string(data)
+	t.Logf(".info/ddl content:\n%s", content)
+
+	// Verify DDL contains CREATE TABLE
+	if !strings.Contains(strings.ToUpper(content), "CREATE TABLE") {
+		t.Error("Expected 'CREATE TABLE' in .info/ddl")
+	}
+	if !strings.Contains(content, "format_test") {
+		t.Error("Expected table name 'format_test' in .info/ddl")
+	}
+}
+
+func TestMetadata_InfoIndexes(t *testing.T) {
+	// Get test database (tries local first, falls back to Docker)
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	// Check FUSE capability once for all format tests
+	checkFUSEMountCapability(t)
+
+	// Seed format test data
+	ctx := context.Background()
+	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
+		t.Fatalf("Failed to seed format test data: %v", err)
+	}
+
+	// Create config
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         10000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		Debug:                   false,
+	}
+
+	// Create mountpoint
+	mountpoint := t.TempDir()
+
+	// Mount filesystem with timeout
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 5*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	// Give filesystem time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	// Test .info/indexes
+	indexesFile := mountpoint + "/format_test/.info/indexes"
+	data, err := os.ReadFile(indexesFile)
+	if err != nil {
+		t.Fatalf("Failed to read .info/indexes: %v", err)
+	}
+
+	content := string(data)
+	t.Logf(".info/indexes content:\n%s", content)
+
+	// format_test table has a primary key, so should have at least the PK index
+	// The content format may vary, but it should not be empty
+	if len(strings.TrimSpace(content)) == 0 {
+		t.Error("Expected non-empty .info/indexes content (at least primary key)")
+	}
+}

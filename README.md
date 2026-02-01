@@ -29,7 +29,7 @@ The filesystem interface is simple and predictable. The database handles durabil
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Unix Tools  │────▶│  Filesystem  │────▶│   TigerFS    │────▶│  PostgreSQL  │
 │  ls, cat,    │     │   Backend    │     │   Daemon     │     │   Database   │
-│  echo, rm    │◀────│ (FUSE/NFS)  │◀────│              │◀────│              │
+│  echo, rm    │◀────│ (FUSE/NFS)   │◀────│              │◀────│              │
 └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 

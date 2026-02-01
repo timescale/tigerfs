@@ -542,3 +542,153 @@ func TestIndexCreateDirNode_Lookup(t *testing.T) {
 }
 
 // Note: contains helper is defined in control_files_test.go
+
+// TestExtractColumnCandidates tests the extractColumnCandidates helper function
+func TestExtractColumnCandidates(t *testing.T) {
+	tests := []struct {
+		name               string
+		indexName          string
+		tableName          string
+		hasTableNameColumn bool
+		expected           []string
+	}{
+		// Prefix patterns: idx_<column>, ix_<column>, index_<column>
+		{
+			name:      "idx_prefix",
+			indexName: "idx_email",
+			tableName: "users",
+			expected:  []string{"email"},
+		},
+		{
+			name:      "ix_prefix",
+			indexName: "ix_name",
+			tableName: "users",
+			expected:  []string{"name"},
+		},
+		{
+			name:      "index_prefix",
+			indexName: "index_status",
+			tableName: "orders",
+			expected:  []string{"status"},
+		},
+
+		// Suffix patterns: <column>_idx, <column>_ix, <column>_index
+		{
+			name:      "idx_suffix",
+			indexName: "email_idx",
+			tableName: "users",
+			expected:  []string{"email"},
+		},
+		{
+			name:      "ix_suffix",
+			indexName: "name_ix",
+			tableName: "users",
+			expected:  []string{"name"},
+		},
+		{
+			name:      "index_suffix",
+			indexName: "status_index",
+			tableName: "orders",
+			expected:  []string{"status"},
+		},
+
+		// Table prefix patterns: <table>_<column>_idx
+		{
+			name:      "table_column_idx",
+			indexName: "users_email_idx",
+			tableName: "users",
+			expected:  []string{"email"},
+		},
+		{
+			name:      "table_column_no_suffix",
+			indexName: "users_email",
+			tableName: "users",
+			expected:  []string{"email"},
+		},
+
+		// Table prefix disabled when column has same name as table
+		{
+			name:               "table_column_idx_with_table_name_column",
+			indexName:          "users_email_idx",
+			tableName:          "users",
+			hasTableNameColumn: true,
+			expected:           []string{}, // No inference when ambiguous
+		},
+
+		// Just the column name
+		{
+			name:      "bare_column_name",
+			indexName: "email",
+			tableName: "users",
+			expected:  []string{"email"},
+		},
+
+		// Edge cases - no match
+		{
+			name:      "underscore_in_column_prefix",
+			indexName: "idx_created_at",
+			tableName: "users",
+			expected:  []string{}, // Has underscore after prefix
+		},
+		{
+			name:      "underscore_in_column_suffix",
+			indexName: "created_at_idx",
+			tableName: "users",
+			expected:  []string{}, // Has underscore before suffix
+		},
+		{
+			name:      "empty_after_prefix",
+			indexName: "idx_",
+			tableName: "users",
+			expected:  []string{},
+		},
+		{
+			name:      "random_underscored_name",
+			indexName: "some_random_name",
+			tableName: "users",
+			expected:  []string{},
+		},
+
+		// Case insensitivity
+		{
+			name:      "uppercase_prefix",
+			indexName: "IDX_EMAIL",
+			tableName: "users",
+			expected:  []string{"email"},
+		},
+		{
+			name:      "mixed_case_table",
+			indexName: "Users_Status_idx",
+			tableName: "Users",
+			expected:  []string{"status"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractColumnCandidates(tt.indexName, tt.tableName, tt.hasTableNameColumn)
+
+			// Compare results
+			if len(result) != len(tt.expected) {
+				t.Errorf("extractColumnCandidates(%q, %q, %v) = %v, want %v",
+					tt.indexName, tt.tableName, tt.hasTableNameColumn, result, tt.expected)
+				return
+			}
+
+			// Check each expected value is present
+			for _, exp := range tt.expected {
+				found := false
+				for _, got := range result {
+					if got == exp {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("extractColumnCandidates(%q, %q, %v) = %v, missing %q",
+						tt.indexName, tt.tableName, tt.hasTableNameColumn, result, exp)
+				}
+			}
+		})
+	}
+}
