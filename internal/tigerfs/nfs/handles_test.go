@@ -131,3 +131,115 @@ func TestHandleManager_HandleToChild_Unknown(t *testing.T) {
 	// Should return nil for unknown parent
 	assert.Nil(t, childHandle)
 }
+
+// TestHandleManager_CreateWriteState tests creating write state.
+func TestHandleManager_CreateWriteState(t *testing.T) {
+	hm := NewHandleManager()
+
+	handle := hm.CreateWriteState("/users/new.json")
+	require.NotNil(t, handle)
+
+	// Should be able to get the write state
+	ws, ok := hm.GetWriteState(handle)
+	assert.True(t, ok)
+	assert.Equal(t, "/users/new.json", ws.Path)
+	assert.NotZero(t, ws.CreatedAt)
+}
+
+// TestHandleManager_GetWriteState_NotFound tests getting non-existent write state.
+func TestHandleManager_GetWriteState_NotFound(t *testing.T) {
+	hm := NewHandleManager()
+
+	// Regular handle doesn't have write state
+	handle := hm.GetOrCreateHandle("/users")
+	ws, ok := hm.GetWriteState(handle)
+	assert.False(t, ok)
+	assert.Nil(t, ws)
+}
+
+// TestHandleManager_WriteToState tests writing data to write state.
+func TestHandleManager_WriteToState(t *testing.T) {
+	hm := NewHandleManager()
+
+	handle := hm.CreateWriteState("/users/new.json")
+	ws, _ := hm.GetWriteState(handle)
+
+	// Write some data
+	n, err := ws.Write([]byte("hello"))
+	require.NoError(t, err)
+	assert.Equal(t, 5, n)
+
+	// Write more data
+	n, err = ws.Write([]byte(" world"))
+	require.NoError(t, err)
+	assert.Equal(t, 6, n)
+
+	// Check buffered data
+	assert.Equal(t, "hello world", ws.Buffer.String())
+}
+
+// TestHandleManager_CloseWriteState tests closing write state and getting data.
+func TestHandleManager_CloseWriteState(t *testing.T) {
+	hm := NewHandleManager()
+
+	handle := hm.CreateWriteState("/users/new.json")
+	ws, _ := hm.GetWriteState(handle)
+
+	// Write data
+	ws.Write([]byte(`{"name":"Alice"}`))
+
+	// Close and get data
+	data, path, err := hm.CloseWriteState(handle)
+	require.NoError(t, err)
+	assert.Equal(t, `{"name":"Alice"}`, string(data))
+	assert.Equal(t, "/users/new.json", path)
+
+	// Write state should be removed
+	_, ok := hm.GetWriteState(handle)
+	assert.False(t, ok)
+}
+
+// TestHandleManager_CloseWriteState_NotFound tests closing non-existent write state.
+func TestHandleManager_CloseWriteState_NotFound(t *testing.T) {
+	hm := NewHandleManager()
+
+	unknownHandle := []byte("unknown")
+	_, _, err := hm.CloseWriteState(unknownHandle)
+	assert.Error(t, err)
+}
+
+// TestWriteState_WriteAt tests writing at specific offset.
+func TestWriteState_WriteAt(t *testing.T) {
+	hm := NewHandleManager()
+
+	handle := hm.CreateWriteState("/users/new.json")
+	ws, _ := hm.GetWriteState(handle)
+
+	// Write at offset 0
+	n, err := ws.WriteAt([]byte("hello"), 0)
+	require.NoError(t, err)
+	assert.Equal(t, 5, n)
+
+	// Write at offset 5
+	n, err = ws.WriteAt([]byte(" world"), 5)
+	require.NoError(t, err)
+	assert.Equal(t, 6, n)
+
+	assert.Equal(t, "hello world", ws.Buffer.String())
+}
+
+// TestWriteState_Truncate tests truncating write state.
+func TestWriteState_Truncate(t *testing.T) {
+	hm := NewHandleManager()
+
+	handle := hm.CreateWriteState("/users/new.json")
+	ws, _ := hm.GetWriteState(handle)
+
+	// Write data
+	ws.Write([]byte("hello world"))
+	assert.Equal(t, 11, ws.Buffer.Len())
+
+	// Truncate to 0
+	ws.Truncate()
+	assert.Equal(t, 0, ws.Buffer.Len())
+}
