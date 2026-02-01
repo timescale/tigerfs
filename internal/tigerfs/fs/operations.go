@@ -17,6 +17,7 @@ type Operations struct {
 	config  *config.Config
 	db      db.DBClient
 	staging *StagingManager // Tracks partial rows for incremental creation
+	ddl     *DDLManager     // Handles DDL staging operations
 }
 
 // NewOperations creates a new Operations instance.
@@ -24,7 +25,14 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 	return &Operations{
 		config: cfg,
 		db:     dbClient,
+		ddl:    NewDDLManager(dbClient),
 	}
+}
+
+// GetDDLManager returns the DDL manager for direct access to DDL operations.
+// This is useful for adapters that need to manage DDL sessions.
+func (o *Operations) GetDDLManager() *DDLManager {
+	return o.ddl
 }
 
 // ReadDir lists directory contents for the given path.
