@@ -7274,6 +7274,155 @@ GOOS=darwin go test ./test/integration/... -v
 
 ---
 
+### Task 9.10: Cleanup and Refactoring
+
+**Objective:** Remove backwards compatibility shims and refactor FUSE to use fs.FSContext directly
+
+**Background:**
+Task 9.1 introduced `PipelineContext` as a type alias to `fs.FSContext` for backwards compatibility. Now that the shared core is complete, we should remove the alias and update all FUSE code to use `fs.FSContext` directly. This ensures a clean codebase without legacy indirection.
+
+**Steps:**
+1. Update all FUSE files to import and use `fs.FSContext` directly:
+   - Replace `*PipelineContext` with `*fs.FSContext`
+   - Replace `NewPipelineContext()` with `fs.NewFSContext()`
+   - Update type references in function signatures
+
+2. Update FUSE files to use constants from `fs` directly:
+   - Replace `fuse.DirBy` with `fs.DirBy` (etc.)
+   - Remove redundant constant re-exports from `fuse/constants.go`
+
+3. Simplify `internal/tigerfs/fuse/pipeline.go`:
+   - Remove `PipelineContext` type alias
+   - Remove `NewPipelineContext` wrapper function
+   - Keep only necessary re-exports (LimitType constants for external callers)
+
+4. Simplify `internal/tigerfs/fuse/constants.go`:
+   - Remove re-exported constants that are only used internally
+   - Keep only constants needed by external packages
+
+5. Run all tests to verify no regressions
+
+6. Update any documentation referencing `PipelineContext`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/pipeline.go` - Remove alias
+- `internal/tigerfs/fuse/constants.go` - Simplify re-exports
+- `internal/tigerfs/fuse/*.go` - Use fs.FSContext directly
+- Any files importing fuse.PipelineContext
+
+**Verification:**
+```bash
+# Ensure no references to PipelineContext remain (except comments)
+grep -r "PipelineContext" internal/tigerfs/fuse/*.go | grep -v "//"
+
+# Build succeeds
+go build ./...
+
+# All tests pass
+go test ./...
+
+# Race detection
+go test -race ./...
+```
+
+**Completion Criteria:**
+- No `PipelineContext` type alias in fuse/pipeline.go
+- All FUSE code uses `fs.FSContext` directly
+- Constants imported from `fs` package where appropriate
+- All tests pass
+- No behavior changes
+
+---
+
+### Task 9.11: Final Testing and v0.2.0 Release
+
+**Objective:** Comprehensive testing of shared core and v0.2.0 release
+
+**Background:**
+Phase 9 adds significant new functionality (NFS write support, DDL via NFS, full feature parity). Before releasing v0.2.0, we need thorough testing on both platforms and updated documentation.
+
+**Steps:**
+1. Comprehensive manual testing on macOS (NFS):
+   ```bash
+   # Mount and test all capabilities
+   tigerfs mount postgres://... /tmp/db
+
+   # Read capabilities
+   ls /tmp/db/users/.info/
+   cat /tmp/db/users/.info/.count
+   ls /tmp/db/users/.by/email/
+   ls /tmp/db/users/.filter/status/
+   ls /tmp/db/users/.first/10/
+   cat /tmp/db/users/.export/all.csv
+
+   # Write capabilities
+   echo '{"name":"test"}' > /tmp/db/users/new.json
+   echo '{"name":"updated"}' > /tmp/db/users/1.json
+   rm /tmp/db/users/999.json
+
+   # DDL capabilities
+   mkdir /tmp/db/.create/test_idx
+   echo 'CREATE INDEX...' > /tmp/db/.create/test_idx/sql
+   cat /tmp/db/.create/test_idx/.test
+   cat /tmp/db/.create/test_idx/.abort
+   ```
+
+2. Comprehensive manual testing on Linux (FUSE):
+   - Same tests as macOS
+   - Verify no regressions from refactoring
+
+3. Update documentation:
+   - Update README.md with NFS write support
+   - Update docs/spec.md with shared core architecture
+   - Add platform parity section
+
+4. Update version to v0.2.0:
+   - Update version in relevant files
+   - Update CHANGELOG.md
+
+5. Create release:
+   ```bash
+   git tag v0.2.0
+   git push origin v0.2.0
+   # GoReleaser builds binaries
+   ```
+
+6. Verify release:
+   - Download and test release binaries
+   - Verify install script works
+
+**Files to Modify:**
+- `README.md` - Update feature list
+- `docs/spec.md` - Add shared core architecture
+- `CHANGELOG.md` - Add v0.2.0 changes
+- Version files as needed
+
+**Verification:**
+```bash
+# All tests pass
+go test ./...
+
+# Integration tests pass
+go test ./test/integration/... -v
+
+# Build release
+goreleaser release --snapshot --clean
+
+# Verify binaries
+./dist/tigerfs_darwin_arm64/tigerfs --version
+./dist/tigerfs_linux_amd64/tigerfs --version
+```
+
+**Completion Criteria:**
+- All manual tests pass on macOS (NFS)
+- All manual tests pass on Linux (FUSE)
+- Documentation updated
+- v0.2.0 tagged and released
+- Release binaries working
+- Install script updated if needed
+
+---
+
 ## Phase 10: Performance & Scalability
 
 ### Task 10.1: Implement Hybrid Metadata Caching
