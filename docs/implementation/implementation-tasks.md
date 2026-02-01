@@ -5880,12 +5880,11 @@ go test ./test/integration/... -v -run TestDDL
 **Steps:**
 1. Open `.goreleaser.yaml`
 2. Verify build configuration:
-   - All platforms: linux, darwin, windows
+   - All platforms: linux, darwin
    - All architectures: amd64, arm64
    - ldflags set correctly (version, build time, commit)
 3. Configure archives:
    - tar.gz for Unix
-   - zip for Windows
    - Include README, spec
 4. Configure checksums
 5. Configure release notes
@@ -6020,7 +6019,10 @@ bash scripts/install.sh
    - Examples with output
 3. Create `docs/installation.md`:
    - Platform-specific instructions
-   - Prerequisites (FUSE installation)
+   - Prerequisites:
+     - macOS: None required (NFS backend)
+     - Linux: FUSE libraries
+     - Windows: WinFsp
    - Verification steps
    - Troubleshooting
 4. Update `CLAUDE.md` with implementation status
@@ -6362,7 +6364,7 @@ TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
 **Background:**
 FUSE's `allow_other` option allows users other than the mounting user to access the filesystem. Currently TigerFS mounts are single-user only. Cross-platform support varies:
 - Linux: Full support (requires `user_allow_other` in `/etc/fuse.conf`)
-- macOS: Limited support (macFUSE, may require SIP adjustments)
+- macOS: Uses NFS backend (different access control model)
 - Windows: Different model (WinFsp uses ACLs, not Unix permissions)
 
 **Questions to Address:**
@@ -6374,7 +6376,7 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 4. Platform-specific implementation requirements?
 
 **Steps:**
-1. Research current macFUSE `allow_other` support on modern macOS
+1. Research NFS export options for multi-user access on macOS
 2. Test `allow_other` behavior with go-fuse library on Linux
 3. Decide on permission model if `allow_other` is enabled
 4. If proceeding: wire up the commented-out flag in `cmd/mount.go`

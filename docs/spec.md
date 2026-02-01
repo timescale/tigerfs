@@ -83,7 +83,7 @@
 ### Target Platforms
 
 **Supported (MVP):**
-- **macOS** - macFUSE required (one-time install)
+- **macOS** - No dependencies (native NFS backend)
 - **Linux** - Native FUSE support
 - **Windows** - WinFsp required (one-time install)
 - **Docker** - With FUSE device access (`--device /dev/fuse --cap-add SYS_ADMIN`)
@@ -116,7 +116,7 @@
 
 **Platform Implementation:**
 - **Linux:** Native FUSE (no root needed if user in `fuse` group)
-- **macOS:** macFUSE (requires admin to install, then regular users can mount)
+- **macOS:** Native NFS backend (no installation required)
 - **Windows:** WinFsp (requires admin to install, then regular users can mount)
 
 **Why FUSE:**
@@ -1136,8 +1136,9 @@ filesystem:
   dir_listing_limit: 10000           # Max rows returned by ls (prevents huge listings)
   trailing_newlines: true            # Add \n to column and .count file reads
   no_filename_extensions: false      # Disable type-based extensions (.txt, .json, etc.)
-  attr_timeout: 1                    # FUSE attribute cache (seconds)
-  entry_timeout: 1                   # FUSE entry cache (seconds)
+  attr_timeout: 1                    # FUSE attribute cache (seconds, FUSE backend only)
+  entry_timeout: 1                   # FUSE entry cache (seconds, FUSE backend only)
+  # Note: macOS NFS backend uses the system's NFS caching instead
 
 # Metadata refresh
 metadata:
@@ -1249,8 +1250,8 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 
 **Caching/Performance:**
 ```bash
---attr-timeout SECS       FUSE attribute cache timeout (default: 1)
---entry-timeout SECS      FUSE entry cache timeout (default: 1)
+--attr-timeout SECS       FUSE attribute cache timeout (FUSE backend only, default: 1)
+--entry-timeout SECS      FUSE entry cache timeout (FUSE backend only, default: 1)
 --metadata-refresh SECS   Table metadata refresh interval (default: 30)
 ```
 
@@ -1421,7 +1422,7 @@ tigerfs version
 tigerfs v0.1.0
 Go: 1.23
 Platform: darwin/arm64
-FUSE: macFUSE 4.7.2
+Backend: NFS
 PostgreSQL: libpq 17.2
 ```
 
@@ -3552,9 +3553,9 @@ go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 **Length:** ~200-300 lines
 
 **Contents:**
-- **Prerequisites** - FUSE requirements per platform
+- **Prerequisites** - Platform-specific requirements
 - **Platform Instructions:**
-  - **macOS** - macFUSE installation, permissions
+  - **macOS** - No dependencies required (NFS backend)
   - **Linux** - FUSE package, user groups
   - **Windows** - WinFsp installation
   - **Docker** - Running with FUSE

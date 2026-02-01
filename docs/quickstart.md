@@ -6,11 +6,12 @@ This guide demonstrates common TigerFS workflows using real-world scenarios.
 
 - TigerFS installed (`go install github.com/timescale/tigerfs/cmd/tigerfs@latest`)
 - PostgreSQL database with data
-- FUSE support (macFUSE on macOS, native on Linux)
+- Linux: FUSE support (usually pre-installed)
+- macOS: No additional dependencies (uses native NFS backend)
 
 ---
 
-## Example 1: Using the Docker Demo (Any Platform)
+## Example 1a: Using the Docker Demo (Any Platform)
 
 **Scenario:** You want to try TigerFS without setting up a local database.
 

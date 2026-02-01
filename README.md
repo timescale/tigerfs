@@ -1,6 +1,6 @@
 # TigerFS
 
-TigerFS is a FUSE-based filesystem that exposes PostgreSQL database contents as mountable directories, mapping tables, rows, and columns onto files and paths. This allows users, agents, and developer tools to inspect and modify data using standard Unix tools (`ls`, `cat`, `grep`, `rm`) instead of writing SQL. Unlike a traditional disk, the backing store is transactional and supports snapshots and sharing across environments, making the same mount useful as both persistent sandbox state and shared state.
+TigerFS is a virtual filesystem that exposes PostgreSQL database contents as mountable directories, mapping tables, rows, and columns onto files and paths. This allows users, agents, and developer tools to inspect and modify data using standard Unix tools (`ls`, `cat`, `grep`, `rm`) instead of writing SQL. Unlike a traditional disk, the backing store is transactional and supports snapshots and sharing across environments, making the same mount useful as both persistent sandbox state and shared state.
 
 ## Overview
 
@@ -21,15 +21,15 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Full CRUD operations (create, read, update, delete)
 - Respects database constraints and permissions
 - Multi-user access, across local dev, containers, and in the cloud
-- Cross-platform support (Linux, macOS, Windows)
+- Cross-platform support (Linux, macOS; Windows pending)
 
 ## Architecture
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Unix Tools  │────▶│    FUSE      │────▶│   TigerFS    │────▶│  PostgreSQL  │
-│  ls, cat,    │     │   Kernel     │     │   Daemon     │     │   Database   │
-│  echo, rm    │◀────│   Module     │◀────│              │◀────│              │
+│  Unix Tools  │────▶│  Filesystem  │────▶│   TigerFS    │────▶│  PostgreSQL  │
+│  ls, cat,    │     │   Backend    │     │   Daemon     │     │   Database   │
+│  echo, rm    │◀────│ (FUSE/NFS)  │◀────│              │◀────│              │
 └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
@@ -51,7 +51,7 @@ TigerFS maps filesystem paths to database queries:
 ```
 
 **Components:**
-- **FUSE Layer** - Filesystem interface (read, write, readdir operations)
+- **Filesystem Layer** - FUSE (Linux) or NFS (macOS) interface for read, write, readdir operations
 - **Database Layer** - PostgreSQL client with connection pooling
 - **Format Layer** - Data serialization (TSV, CSV, JSON, YAML)
 - **Configuration** - Viper-based multi-source configuration
@@ -115,16 +115,14 @@ curl -fsSL https://tigerfs.tigerdata.com | sh
 ### Prerequisites
 
 **macOS:**
-- macFUSE must be installed (one-time setup)
-- Install: `brew install --cask macfuse`
+- No dependencies required (uses native NFS backend)
 
 **Linux:**
 - FUSE support (usually pre-installed)
-- If needed: `sudo apt-get install fuse` or `sudo yum install fuse`
+- If needed: `sudo apt-get install fuse3` or `sudo yum install fuse3`
 
-**Windows:**
-- WinFsp must be installed
-- Download: https://winfsp.dev/
+**Windows:** (pending)
+- Not yet supported
 
 ## Usage
 
@@ -448,7 +446,7 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 🚧 **Active Development** - TigerFS core functionality is implemented and working:
 
 **Completed:**
-- FUSE filesystem with full CRUD operations (Read, Write, Create, Delete)
+- Virtual filesystem with full CRUD operations (Read, Write, Create, Delete)
 - Row-as-file (TSV, CSV, JSON, YAML) and row-as-directory access patterns
 - Column-level reads and writes with type-based file extensions
 - PostgreSQL database layer with connection pooling (pgx/v5)
