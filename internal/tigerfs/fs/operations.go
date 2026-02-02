@@ -559,7 +559,9 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 	}
 }
 
-// statRow returns metadata for a row file.
+// statRow returns metadata for a row path.
+// Without a format extension (e.g., /users/1), returns a directory.
+// With a format extension (e.g., /users/1.json), returns a file.
 func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -589,7 +591,16 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 		}
 	}
 
-	// Calculate size based on format
+	// No format extension means this is a row directory (can cd into it)
+	if parsed.Format == "" {
+		return &Entry{
+			Name:  parsed.PrimaryKey,
+			IsDir: true,
+			Mode:  os.ModeDir | 0755,
+		}, nil
+	}
+
+	// With format extension, it's a file containing the row data
 	size, err := o.calculateRowSize(row, parsed.Format)
 	if err != nil {
 		return nil, &FSError{
@@ -599,16 +610,11 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 		}
 	}
 
-	name := parsed.PrimaryKey
-	if parsed.Format != "" {
-		name = name + "." + parsed.Format
-	}
-
 	return &Entry{
-		Name:  name,
+		Name:  parsed.PrimaryKey + "." + parsed.Format,
 		IsDir: false,
 		Size:  size,
-		Mode:  0600,
+		Mode:  0644,
 	}, nil
 }
 
