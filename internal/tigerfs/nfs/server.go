@@ -8,9 +8,9 @@ import (
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	nfs "github.com/willscott/go-nfs"
-	nfshelper "github.com/willscott/go-nfs/helpers"
 	"go.uber.org/zap"
 )
 
@@ -18,7 +18,8 @@ import (
 type Server struct {
 	cfg        *config.Config
 	db         *db.Client
-	fs         *Filesystem
+	ops        *fs.Operations
+	billyFS    *OpsFilesystem
 	listener   net.Listener
 	port       int
 	mountpoint string
@@ -32,14 +33,18 @@ type Server struct {
 func NewServer(ctx context.Context, cfg *config.Config, dbClient *db.Client) (*Server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	fs := NewFilesystem(ctx, cfg, dbClient)
+	// Create shared fs.Operations
+	ops := fs.NewOperations(cfg, dbClient)
+	// Wrap in billy.Filesystem adapter for go-nfs
+	billyFS := NewOpsFilesystem(ops)
 
 	return &Server{
-		cfg:    cfg,
-		db:     dbClient,
-		fs:     fs,
-		ctx:    ctx,
-		cancel: cancel,
+		cfg:     cfg,
+		db:      dbClient,
+		ops:     ops,
+		billyFS: billyFS,
+		ctx:     ctx,
+		cancel:  cancel,
 	}, nil
 }
 
@@ -58,16 +63,18 @@ func (s *Server) Start() (int, error) {
 		zap.Int("port", s.port),
 		zap.String("address", listener.Addr().String()))
 
-	// Create NFS handler with caching
-	handler := nfshelper.NewNullAuthHandler(s.fs)
-	cacheHandler := nfshelper.NewCachingHandler(handler, 1024)
+	// Create NFS handler with stateless file handles.
+	// StableHandler encodes paths directly into handles, avoiding the stale
+	// handle problem that occurs with LRU-cached UUID handles when listing
+	// large directories.
+	handler := NewStableHandler(s.billyFS)
 
 	// Start serving in background
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		logging.Debug("Starting NFS server goroutine")
-		if err := nfs.Serve(s.listener, cacheHandler); err != nil {
+		if err := nfs.Serve(s.listener, handler); err != nil {
 			// Check if this was a clean shutdown
 			select {
 			case <-s.ctx.Done():
@@ -102,13 +109,6 @@ func (s *Server) Stop() error {
 
 	// Wait for server goroutine to finish
 	s.wg.Wait()
-
-	// Close filesystem
-	if s.fs != nil {
-		if err := s.fs.Close(); err != nil {
-			logging.Warn("Error closing filesystem", zap.Error(err))
-		}
-	}
 
 	logging.Info("NFS server stopped")
 	return nil
