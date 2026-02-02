@@ -86,6 +86,9 @@ type ParsedPath struct {
 
 	// CapabilityArg is the argument within a capability (column name for .by/).
 	CapabilityArg string
+
+	// ExportWithHeaders is set when exporting with headers (.export/.with-headers/).
+	ExportWithHeaders bool
 }
 
 // knownFormats maps format extensions to format names.
@@ -439,12 +442,40 @@ func processExport(result *ParsedPath, remaining []string) (int, *FSError) {
 	result.Context = result.Context.WithTerminal()
 
 	if len(remaining) >= 2 {
-		// .export/<filename>
+		// .export/<format> or .export/.with-headers/<format>
 		filename := remaining[1]
-		result.Format = extractFormat(filename)
+
+		// Handle .with-headers subdirectory
+		if filename == ".with-headers" {
+			result.ExportWithHeaders = true
+			if len(remaining) >= 3 {
+				// .export/.with-headers/<format>
+				filename = remaining[2]
+				result.Format = extractFormatName(filename)
+				return 3, nil
+			}
+			return 2, nil
+		}
+
+		result.Format = extractFormatName(filename)
 		return 2, nil
 	}
 	return 1, nil
+}
+
+// extractFormatName extracts format from a filename.
+// Handles both extension-based (data.csv) and direct format names (csv).
+func extractFormatName(filename string) string {
+	// First try extension-based extraction
+	if fmt := extractFormat(filename); fmt != "" {
+		return fmt
+	}
+	// Then try direct format name (for FUSE-style .export/csv)
+	switch filename {
+	case "csv", "tsv", "json", "yaml":
+		return filename
+	}
+	return ""
 }
 
 // processImport handles .import/ paths.

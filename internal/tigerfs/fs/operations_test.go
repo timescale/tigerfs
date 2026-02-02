@@ -554,9 +554,12 @@ func TestReadDir_ExportDirectory(t *testing.T) {
 	for i, e := range entries {
 		names[i] = e.Name
 	}
-	assert.Contains(t, names, "all.csv")
-	assert.Contains(t, names, "all.json")
-	assert.Contains(t, names, "all.tsv")
+	// Matches FUSE behavior: format names without "all." prefix
+	assert.Contains(t, names, ".with-headers")
+	assert.Contains(t, names, "csv")
+	assert.Contains(t, names, "json")
+	assert.Contains(t, names, "tsv")
+	assert.Contains(t, names, "yaml")
 }
 
 // TestReadDir_ImportDirectory tests listing the .import directory.
