@@ -452,14 +452,24 @@ func (o *Operations) readDirPaginationCapability(ctx context.Context, parsed *Pa
 	return entries, nil
 }
 
-// readDirExport lists format files in .export/.
+// readDirExport lists format files in .export/ or .export/.with-headers/.
+// Matches FUSE behavior: .with-headers/ directory plus format files.
 func (o *Operations) readDirExport(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
-	entries := []Entry{
-		{Name: "all.csv", IsDir: false, Mode: 0444},
-		{Name: "all.tsv", IsDir: false, Mode: 0444},
-		{Name: "all.json", IsDir: false, Mode: 0444},
+	if parsed.ExportWithHeaders {
+		// .with-headers only shows csv and tsv (JSON/YAML have built-in keys)
+		return []Entry{
+			{Name: "csv", IsDir: false, Mode: 0444},
+			{Name: "tsv", IsDir: false, Mode: 0444},
+		}, nil
 	}
-	return entries, nil
+
+	return []Entry{
+		{Name: ".with-headers", IsDir: true, Mode: os.ModeDir | 0555},
+		{Name: "csv", IsDir: false, Mode: 0444},
+		{Name: "json", IsDir: false, Mode: 0444},
+		{Name: "tsv", IsDir: false, Mode: 0444},
+		{Name: "yaml", IsDir: false, Mode: 0444},
+	}, nil
 }
 
 // readDirImport lists import modes in .import/.
@@ -972,9 +982,19 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 	case "json":
 		data, err = format.RowsToJSON(columns, rows)
 	case "csv":
-		data, err = format.RowsToCSV(columns, rows)
+		if parsed.ExportWithHeaders {
+			data, err = format.RowsToCSVWithHeaders(columns, rows)
+		} else {
+			data, err = format.RowsToCSV(columns, rows)
+		}
 	case "tsv", "":
-		data, err = format.RowsToTSV(columns, rows)
+		if parsed.ExportWithHeaders {
+			data, err = format.RowsToTSVWithHeaders(columns, rows)
+		} else {
+			data, err = format.RowsToTSV(columns, rows)
+		}
+	case "yaml":
+		data, err = format.RowsToYAML(columns, rows)
 	default:
 		data, err = format.RowsToTSV(columns, rows)
 	}
