@@ -357,7 +357,6 @@ func (o *Operations) readDirCapability(ctx context.Context, parsed *ParsedPath) 
 }
 
 // readDirByCapability lists indexed columns or values for .by/ navigation.
-// Respects existing pipeline filters when listing distinct values.
 func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -387,45 +386,15 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 		return entries, nil
 	}
 
-	// List distinct values for the column
+	// List distinct values for the column (use DirListingLimit for .by/)
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
 		limit = 10000
 	}
-
-	var values []string
-	var err error
-
-	// If there are existing filters, apply them when getting distinct values
-	if fsCtx.HasFilters() {
-		filterColumns := make([]string, len(fsCtx.Filters))
-		filterValues := make([]string, len(fsCtx.Filters))
-		for i, f := range fsCtx.Filters {
-			filterColumns[i] = f.Column
-			filterValues[i] = f.Value
-		}
-		values, err = o.db.GetDistinctValuesFiltered(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, filterColumns, filterValues, limit)
-	} else {
-		values, err = o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, limit)
-	}
-
-	if err != nil {
-		return nil, &FSError{
-			Code:    ErrIO,
-			Message: "failed to get distinct values",
-			Cause:   err,
-		}
-	}
-
-	entries := make([]Entry, len(values))
-	for i, v := range values {
-		entries[i] = Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
-	}
-	return entries, nil
+	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
 }
 
 // readDirFilterCapability lists columns or values for .filter/ navigation.
-// Respects existing pipeline filters when listing distinct values.
 func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -455,12 +424,17 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 		return entries, nil
 	}
 
-	// List distinct values for the column
+	// List distinct values for the column (use DirFilterLimit for .filter/)
 	limit := o.config.DirFilterLimit
 	if limit <= 0 {
 		limit = 100000
 	}
+	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
+}
 
+// readDistinctColumnValues returns distinct values for a column as directory entries.
+// Applies existing pipeline filters when getting distinct values.
+func (o *Operations) readDistinctColumnValues(ctx context.Context, fsCtx *FSContext, column string, limit int) ([]Entry, *FSError) {
 	var values []string
 	var err error
 
@@ -472,9 +446,9 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 			filterColumns[i] = f.Column
 			filterValues[i] = f.Value
 		}
-		values, err = o.db.GetDistinctValuesFiltered(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, filterColumns, filterValues, limit)
+		values, err = o.db.GetDistinctValuesFiltered(ctx, fsCtx.Schema, fsCtx.TableName, column, filterColumns, filterValues, limit)
 	} else {
-		values, err = o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, limit)
+		values, err = o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, column, limit)
 	}
 
 	if err != nil {
@@ -485,6 +459,7 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 		}
 	}
 
+	now := time.Now()
 	entries := make([]Entry, len(values))
 	for i, v := range values {
 		entries[i] = Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
