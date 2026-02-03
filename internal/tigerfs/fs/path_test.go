@@ -75,8 +75,9 @@ func TestParsePathTable(t *testing.T) {
 	}{
 		{"/users", "public", "users"},
 		{"/users/", "public", "users"},
-		{"/public/users", "public", "users"},
-		{"/myschema/mytable", "myschema", "mytable"},
+		// Explicit schema access via /.schemas/
+		{"/.schemas/public/users", "public", "users"},
+		{"/.schemas/myschema/mytable", "myschema", "mytable"},
 	}
 
 	for _, tt := range tests {
@@ -111,7 +112,10 @@ func TestParsePathRow(t *testing.T) {
 		{"/users/123.csv", "users", "123", "csv"},
 		{"/users/123.tsv", "users", "123", "tsv"},
 		{"/users/abc-def", "users", "abc-def", ""},
-		{"/public/users/456", "users", "456", ""},
+		// Explicit schema access via /.schemas/
+		{"/.schemas/public/users/456", "users", "456", ""},
+		// Text primary keys
+		{"/categories/automotive", "categories", "automotive", ""},
 	}
 
 	for _, tt := range tests {

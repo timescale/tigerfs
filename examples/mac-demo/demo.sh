@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MOUNTPOINT="/tmp/tigerfs-demo"
-CONN_STR="postgres://demo:demo@localhost:5432/demo"
+CONN_STR="postgres://demo:demo@localhost:5432/demo?sslmode=disable"
 
 # Colors for output
 RED='\033[0;31m'
