@@ -357,6 +357,7 @@ func (o *Operations) readDirCapability(ctx context.Context, parsed *ParsedPath) 
 }
 
 // readDirByCapability lists indexed columns or values for .by/ navigation.
+// Respects existing pipeline filters when listing distinct values.
 func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -392,7 +393,22 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 		limit = 10000
 	}
 
-	values, err := o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, limit)
+	var values []string
+	var err error
+
+	// If there are existing filters, apply them when getting distinct values
+	if fsCtx.HasFilters() {
+		filterColumns := make([]string, len(fsCtx.Filters))
+		filterValues := make([]string, len(fsCtx.Filters))
+		for i, f := range fsCtx.Filters {
+			filterColumns[i] = f.Column
+			filterValues[i] = f.Value
+		}
+		values, err = o.db.GetDistinctValuesFiltered(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, filterColumns, filterValues, limit)
+	} else {
+		values, err = o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, limit)
+	}
+
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -409,6 +425,7 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 }
 
 // readDirFilterCapability lists columns or values for .filter/ navigation.
+// Respects existing pipeline filters when listing distinct values.
 func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -444,7 +461,22 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 		limit = 100000
 	}
 
-	values, err := o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, limit)
+	var values []string
+	var err error
+
+	// If there are existing filters, apply them when getting distinct values
+	if fsCtx.HasFilters() {
+		filterColumns := make([]string, len(fsCtx.Filters))
+		filterValues := make([]string, len(fsCtx.Filters))
+		for i, f := range fsCtx.Filters {
+			filterColumns[i] = f.Column
+			filterValues[i] = f.Value
+		}
+		values, err = o.db.GetDistinctValuesFiltered(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, filterColumns, filterValues, limit)
+	} else {
+		values, err = o.db.GetDistinctValues(ctx, fsCtx.Schema, fsCtx.TableName, parsed.CapabilityArg, limit)
+	}
+
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
