@@ -114,13 +114,33 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 
 	entry, fsErr := f.ops.Stat(ctx(), filename)
 	if fsErr != nil {
-		if fsErr.Code == fs.ErrNotExist {
+		logging.Debug("OpsFilesystem.Stat error",
+			zap.String("filename", filename),
+			zap.Int("code", int(fsErr.Code)),
+			zap.String("message", fsErr.Message),
+			zap.Error(fsErr.Cause))
+		// Map FSError codes to appropriate OS errors
+		switch fsErr.Code {
+		case fs.ErrNotExist:
+			return nil, os.ErrNotExist
+		case fs.ErrPermission:
+			return nil, os.ErrPermission
+		case fs.ErrInvalidPath:
+			return nil, os.ErrInvalid
+		default:
+			// For other errors, return not exist to avoid false permission denied
 			return nil, os.ErrNotExist
 		}
-		return nil, fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 	}
 
-	return &opsFileInfo{entry: entry, path: filename}, nil
+	fi := &opsFileInfo{entry: entry, path: filename}
+	logging.Debug("OpsFilesystem.Stat success",
+		zap.String("filename", filename),
+		zap.String("name", entry.Name),
+		zap.Bool("isDir", entry.IsDir),
+		zap.Uint32("entryMode", uint32(entry.Mode)),
+		zap.Uint32("nfsMode", uint32(fi.Mode())))
+	return fi, nil
 }
 
 // Rename is not supported.
@@ -160,17 +180,44 @@ func (f *OpsFilesystem) ReadDir(dirname string) ([]os.FileInfo, error) {
 
 	entries, fsErr := f.ops.ReadDir(ctx(), dirname)
 	if fsErr != nil {
-		if fsErr.Code == fs.ErrNotExist {
+		logging.Debug("OpsFilesystem.ReadDir error",
+			zap.String("dirname", dirname),
+			zap.Int("code", int(fsErr.Code)),
+			zap.String("message", fsErr.Message),
+			zap.Error(fsErr.Cause))
+		// Map FSError codes to appropriate OS errors
+		// Use errors that NFS will interpret correctly
+		switch fsErr.Code {
+		case fs.ErrNotExist:
+			return nil, os.ErrNotExist
+		case fs.ErrPermission:
+			return nil, os.ErrPermission
+		case fs.ErrInvalidPath:
+			return nil, os.ErrInvalid
+		default:
+			// For other errors (IO, internal), return a generic error
+			// that won't be mistaken for permission denied.
+			// Use os.ErrNotExist as it's the safest fallback for directories.
 			return nil, os.ErrNotExist
 		}
-		return nil, fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 	}
 
+	logging.Debug("OpsFilesystem.ReadDir success",
+		zap.String("dirname", dirname),
+		zap.Int("count", len(entries)))
 	result := make([]os.FileInfo, len(entries))
 	for i := range entries {
 		// Construct full path for unique file ID generation
 		entryPath := path.Join(dirname, entries[i].Name)
-		result[i] = &opsFileInfo{entry: &entries[i], path: entryPath}
+		fi := &opsFileInfo{entry: &entries[i], path: entryPath}
+		result[i] = fi
+		// Log detailed attributes for debugging NFS permission issues
+		logging.Debug("OpsFilesystem.ReadDir entry",
+			zap.String("name", fi.Name()),
+			zap.String("path", entryPath),
+			zap.Bool("isDir", fi.IsDir()),
+			zap.Uint32("mode", uint32(fi.Mode())),
+			zap.Int64("size", fi.Size()))
 	}
 	return result, nil
 }
@@ -221,9 +268,21 @@ type opsFileInfo struct {
 	path  string // Full path for generating unique file IDs
 }
 
-func (fi *opsFileInfo) Name() string       { return fi.entry.Name }
-func (fi *opsFileInfo) Size() int64        { return fi.entry.Size }
-func (fi *opsFileInfo) Mode() os.FileMode  { return fi.entry.Mode }
+func (fi *opsFileInfo) Name() string { return fi.entry.Name }
+func (fi *opsFileInfo) Size() int64  { return fi.entry.Size }
+
+// Mode returns the file mode.
+// IMPORTANT: go-nfs has a bug where it sends the full os.FileMode to the wire
+// as the NFS mode field. NFS mode should only contain permission bits (0-07777),
+// not file type bits. go-nfs correctly uses IsDir() to set the NFS type field,
+// but the mode field ends up with os.ModeDir (0x80000000) included.
+// We return the permission bits only to work around this.
+// Note: We still need IsDir() to return true for go-nfs to set the correct NFS type.
+func (fi *opsFileInfo) Mode() os.FileMode {
+	// Return only permission bits (masking off file type)
+	// go-nfs will still correctly identify this as a directory via IsDir()
+	return fi.entry.Mode.Perm()
+}
 func (fi *opsFileInfo) ModTime() time.Time { return fi.entry.ModTime }
 func (fi *opsFileInfo) IsDir() bool        { return fi.entry.IsDir }
 
@@ -237,10 +296,20 @@ func (fi *opsFileInfo) Sys() interface{} {
 	hasher.Write([]byte(fi.path))
 	fileid := hasher.Sum64()
 
+	uid := uint32(os.Getuid())
+	gid := uint32(os.Getgid())
+
+	logging.Debug("opsFileInfo.Sys",
+		zap.String("path", fi.path),
+		zap.Uint64("fileid", fileid),
+		zap.Uint32("uid", uid),
+		zap.Uint32("gid", gid),
+		zap.Bool("isDir", fi.IsDir()))
+
 	return &nfsfile.FileInfo{
 		Fileid: fileid,
-		UID:    uint32(os.Getuid()),
-		GID:    uint32(os.Getgid()),
+		UID:    uid,
+		GID:    gid,
 		Nlink:  1,
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
@@ -123,21 +124,23 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 
 	entries := make([]Entry, 0, len(tables)+len(views)+3)
 
+	now := time.Now()
+
 	// Add special directories first
 	entries = append(entries,
-		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755},
-		Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755},
-		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755},
+		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 	)
 
 	// Add tables
 	for _, t := range tables {
-		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755})
+		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 
 	// Add views
 	for _, v := range views {
-		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0555})
+		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now})
 	}
 
 	return entries, nil
@@ -154,9 +157,10 @@ func (o *Operations) readDirSchemaList(ctx context.Context) ([]Entry, *FSError) 
 		}
 	}
 
+	now := time.Now()
 	entries := make([]Entry, len(schemas))
 	for i, s := range schemas {
-		entries[i] = Entry{Name: s, IsDir: true, Mode: os.ModeDir | 0755}
+		entries[i] = Entry{Name: s, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
 	}
 
 	return entries, nil
@@ -182,14 +186,15 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 		}
 	}
 
+	now := time.Now()
 	entries := make([]Entry, 0, len(tables)+len(views))
 
 	for _, t := range tables {
-		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755})
+		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 
 	for _, v := range views {
-		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0555})
+		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now})
 	}
 
 	return entries, nil
@@ -233,6 +238,8 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		}
 	}
 
+	now := time.Now()
+
 	// Build entries: capability directories first, then rows
 	entries := make([]Entry, 0, len(rows)+15)
 
@@ -242,12 +249,12 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
 	}
 	for _, cap := range capabilities {
-		entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755})
+		entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 
 	// Add rows as directories (row files like 1.json accessible but not listed)
 	for _, rowPK := range rows {
-		entries = append(entries, Entry{Name: rowPK, IsDir: true, Mode: os.ModeDir | 0755})
+		entries = append(entries, Entry{Name: rowPK, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 
 	return entries, nil
@@ -272,9 +279,10 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		}
 	}
 
+	now := time.Now()
 	entries := make([]Entry, len(columns))
 	for i, col := range columns {
-		entries[i] = Entry{Name: col.Name, IsDir: false, Mode: 0644}
+		entries[i] = Entry{Name: col.Name, IsDir: false, Mode: 0600, ModTime: now}
 	}
 
 	return entries, nil
@@ -282,11 +290,12 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 
 // readDirInfo lists the .info metadata directory.
 func (o *Operations) readDirInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
 	entries := []Entry{
-		{Name: ".count", IsDir: false, Mode: 0444},
-		{Name: ".ddl", IsDir: false, Mode: 0444},
-		{Name: ".columns", IsDir: false, Mode: 0444},
-		{Name: ".indexes", IsDir: false, Mode: 0444},
+		{Name: ".count", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: ".ddl", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: ".columns", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: ".indexes", IsDir: false, Mode: 0600, ModTime: now},
 	}
 	return entries, nil
 }
@@ -321,6 +330,8 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 		}
 	}
 
+	now := time.Now()
+
 	if parsed.CapabilityArg == "" {
 		// List indexed columns
 		indexes, err := o.db.GetSingleColumnIndexes(ctx, fsCtx.Schema, fsCtx.TableName)
@@ -334,7 +345,7 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 
 		entries := make([]Entry, len(indexes))
 		for i, idx := range indexes {
-			entries[i] = Entry{Name: idx.Columns[0], IsDir: true, Mode: os.ModeDir | 0755}
+			entries[i] = Entry{Name: idx.Columns[0], IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
 		}
 		return entries, nil
 	}
@@ -356,7 +367,7 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 
 	entries := make([]Entry, len(values))
 	for i, v := range values {
-		entries[i] = Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0755}
+		entries[i] = Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
 	}
 	return entries, nil
 }
@@ -371,6 +382,8 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 		}
 	}
 
+	now := time.Now()
+
 	if parsed.CapabilityArg == "" {
 		// List all columns
 		columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
@@ -384,7 +397,7 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 
 		entries := make([]Entry, len(columns))
 		for i, col := range columns {
-			entries[i] = Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755}
+			entries[i] = Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
 		}
 		return entries, nil
 	}
@@ -406,7 +419,7 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 
 	entries := make([]Entry, len(values))
 	for i, v := range values {
-		entries[i] = Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0755}
+		entries[i] = Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
 	}
 	return entries, nil
 }
@@ -430,12 +443,14 @@ func (o *Operations) readDirOrderCapability(ctx context.Context, parsed *ParsedP
 		}
 	}
 
+	now := time.Now()
+
 	// Show both ascending and descending options for each column
 	entries := make([]Entry, 0, len(columns)*2)
 	for _, col := range columns {
 		entries = append(entries,
-			Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755},
-			Entry{Name: col.Name + ".desc", IsDir: true, Mode: os.ModeDir | 0755},
+			Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+			Entry{Name: col.Name + ".desc", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		)
 	}
 	return entries, nil
@@ -443,11 +458,12 @@ func (o *Operations) readDirOrderCapability(ctx context.Context, parsed *ParsedP
 
 // readDirPaginationCapability lists options for .first/, .last/, .sample/.
 func (o *Operations) readDirPaginationCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
 	// Show common limit values
 	limits := []string{"10", "25", "50", "100", "500", "1000"}
 	entries := make([]Entry, len(limits))
 	for i, l := range limits {
-		entries[i] = Entry{Name: l, IsDir: true, Mode: os.ModeDir | 0755}
+		entries[i] = Entry{Name: l, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
 	}
 	return entries, nil
 }
@@ -455,29 +471,32 @@ func (o *Operations) readDirPaginationCapability(ctx context.Context, parsed *Pa
 // readDirExport lists format files in .export/ or .export/.with-headers/.
 // Matches FUSE behavior: .with-headers/ directory plus format files.
 func (o *Operations) readDirExport(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
+
 	if parsed.ExportWithHeaders {
 		// .with-headers only shows csv and tsv (JSON/YAML have built-in keys)
 		return []Entry{
-			{Name: "csv", IsDir: false, Mode: 0444},
-			{Name: "tsv", IsDir: false, Mode: 0444},
+			{Name: "csv", IsDir: false, Mode: 0600, ModTime: now},
+			{Name: "tsv", IsDir: false, Mode: 0600, ModTime: now},
 		}, nil
 	}
 
 	return []Entry{
-		{Name: ".with-headers", IsDir: true, Mode: os.ModeDir | 0555},
-		{Name: "csv", IsDir: false, Mode: 0444},
-		{Name: "json", IsDir: false, Mode: 0444},
-		{Name: "tsv", IsDir: false, Mode: 0444},
-		{Name: "yaml", IsDir: false, Mode: 0444},
+		{Name: ".with-headers", IsDir: true, Mode: os.ModeDir | 0555, ModTime: now},
+		{Name: "csv", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: "json", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: "tsv", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: "yaml", IsDir: false, Mode: 0600, ModTime: now},
 	}, nil
 }
 
 // readDirImport lists import modes in .import/.
 func (o *Operations) readDirImport(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
 	entries := []Entry{
-		{Name: DirSync, IsDir: true, Mode: os.ModeDir | 0755},
-		{Name: DirOverwrite, IsDir: true, Mode: os.ModeDir | 0755},
-		{Name: DirAppend, IsDir: true, Mode: os.ModeDir | 0755},
+		{Name: DirSync, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		{Name: DirOverwrite, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		{Name: DirAppend, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 	}
 	return entries, nil
 }
@@ -489,12 +508,14 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 		return []Entry{}, nil
 	}
 
+	now := time.Now()
+
 	// List control files for a specific staging operation
 	entries := []Entry{
-		{Name: "sql", IsDir: false, Mode: 0644},
-		{Name: ".test", IsDir: false, Mode: 0444},
-		{Name: ".commit", IsDir: false, Mode: 0200},
-		{Name: ".abort", IsDir: false, Mode: 0200},
+		{Name: "sql", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: ".test", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: ".commit", IsDir: false, Mode: 0200, ModTime: now},
+		{Name: ".abort", IsDir: false, Mode: 0200, ModTime: now},
 	}
 	return entries, nil
 }
@@ -520,18 +541,20 @@ func (o *Operations) StatWithContext(ctx context.Context, fsCtx *FSContext) (*En
 
 // statWithParsed implements stat for a parsed path.
 func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, originalPath string) (*Entry, *FSError) {
+	now := time.Now()
+
 	switch parsed.Type {
 	case PathRoot:
-		return &Entry{Name: "", IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: "", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathSchemaList:
-		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathSchema:
-		return &Entry{Name: parsed.Context.Schema, IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: parsed.Context.Schema, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathTable:
-		return &Entry{Name: parsed.Context.TableName, IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: parsed.Context.TableName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathRow:
 		return o.statRow(ctx, parsed)
@@ -541,25 +564,25 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 
 	case PathInfo:
 		if parsed.InfoFile == "" {
-			return &Entry{Name: ".info", IsDir: true, Mode: os.ModeDir | 0755}, nil
+			return &Entry{Name: ".info", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 		}
 		return o.statInfoFile(ctx, parsed)
 
 	case PathCapability:
-		return &Entry{Name: parsed.CapabilityDir, IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: parsed.CapabilityDir, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathExport:
-		return &Entry{Name: ".export", IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return o.statExport(ctx, parsed)
 
 	case PathImport:
-		return &Entry{Name: ".import", IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: ".import", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathDDL:
 		if parsed.DDLFile != "" {
 			return o.statDDLFile(ctx, parsed)
 		}
 		name := "." + parsed.DDLOp
-		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755}, nil
+		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	default:
 		return nil, &FSError{
@@ -580,6 +603,8 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 			Message: "missing context for row path",
 		}
 	}
+
+	now := time.Now()
 
 	// Get primary key
 	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
@@ -604,9 +629,10 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 	// No format extension means this is a row directory (can cd into it)
 	if parsed.Format == "" {
 		return &Entry{
-			Name:  parsed.PrimaryKey,
-			IsDir: true,
-			Mode:  os.ModeDir | 0755,
+			Name:    parsed.PrimaryKey,
+			IsDir:   true,
+			Mode:    os.ModeDir | 0755,
+			ModTime: now,
 		}, nil
 	}
 
@@ -621,10 +647,11 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 	}
 
 	return &Entry{
-		Name:  parsed.PrimaryKey + "." + parsed.Format,
-		IsDir: false,
-		Size:  size,
-		Mode:  0644,
+		Name:    parsed.PrimaryKey + "." + parsed.Format,
+		IsDir:   false,
+		Size:    size,
+		Mode:    0644,
+		ModTime: now,
 	}, nil
 }
 
@@ -637,6 +664,8 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 			Message: "missing context for column path",
 		}
 	}
+
+	now := time.Now()
 
 	// Get primary key
 	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
@@ -663,20 +692,23 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 	size := int64(len(data))
 
 	return &Entry{
-		Name:  parsed.Column,
-		IsDir: false,
-		Size:  size,
-		Mode:  0600,
+		Name:    parsed.Column,
+		IsDir:   false,
+		Size:    size,
+		Mode:    0600,
+		ModTime: now,
 	}, nil
 }
 
 // statInfoFile returns metadata for an info file.
 func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
 	// Info files are small metadata files, size varies
+	// Use 0600 for NFS compatibility (macOS requires owner read permission)
 	return &Entry{
-		Name:  parsed.InfoFile,
-		IsDir: false,
-		Mode:  0400,
+		Name:    parsed.InfoFile,
+		IsDir:   false,
+		Mode:    0600,
+		ModTime: time.Now(),
 	}, nil
 }
 
@@ -695,10 +727,49 @@ func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entr
 	}
 
 	return &Entry{
-		Name:  parsed.DDLFile,
-		IsDir: false,
-		Mode:  mode,
+		Name:    parsed.DDLFile,
+		IsDir:   false,
+		Mode:    mode,
+		ModTime: time.Now(),
 	}, nil
+}
+
+// statExport returns metadata for an export path (directory or file).
+func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+	now := time.Now()
+
+	// If format is set, this is an export file (e.g., /table/.export/csv)
+	if parsed.Format != "" {
+		// Calculate actual file size by generating the export data
+		content, err := o.readExportFile(ctx, parsed)
+		if err != nil {
+			// If we can't read the file, return with size 0 but don't fail stat
+			// Use 0600 for NFS compatibility (macOS requires owner read permission)
+			return &Entry{
+				Name:    parsed.Format,
+				IsDir:   false,
+				Mode:    0600,
+				ModTime: now,
+			}, nil
+		}
+
+		// Use 0600 for NFS compatibility (macOS requires owner read permission)
+		return &Entry{
+			Name:    parsed.Format,
+			IsDir:   false,
+			Size:    content.Size,
+			Mode:    0600,
+			ModTime: now,
+		}, nil
+	}
+
+	// If ExportWithHeaders is set but no format, it's the .with-headers directory
+	if parsed.ExportWithHeaders {
+		return &Entry{Name: ".with-headers", IsDir: true, Mode: os.ModeDir | 0555, ModTime: now}, nil
+	}
+
+	// Otherwise it's the .export directory itself
+	return &Entry{Name: ".export", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 }
 
 // calculateRowSize calculates the serialized size of a row in the given format.
@@ -819,7 +890,7 @@ func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*File
 	return &FileContent{
 		Data: data,
 		Size: int64(len(data)),
-		Mode: 0644,
+		Mode: 0600,
 	}, nil
 }
 
@@ -859,7 +930,7 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 	return &FileContent{
 		Data: []byte(data),
 		Size: int64(len(data)),
-		Mode: 0644,
+		Mode: 0600,
 	}, nil
 }
 
@@ -947,7 +1018,7 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 	return &FileContent{
 		Data: []byte(data),
 		Size: int64(len(data)),
-		Mode: 0444,
+		Mode: 0600,
 	}, nil
 }
 
@@ -1010,7 +1081,7 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 	return &FileContent{
 		Data: data,
 		Size: int64(len(data)),
-		Mode: 0444,
+		Mode: 0600,
 	}, nil
 }
 

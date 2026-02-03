@@ -78,6 +78,11 @@ func (h *StableHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 		if handleSize < minHandleSize {
 			handleSize = minHandleSize
 		}
+		// Round up to 4-byte boundary for macOS NFS client compatibility.
+		// macOS appears to have issues with handles that aren't 4-byte aligned.
+		if handleSize%4 != 0 {
+			handleSize = ((handleSize / 4) + 1) * 4
+		}
 		handle := make([]byte, handleSize)
 		handle[0] = handleVersionCompressed // reuse version 1 for direct path storage
 		copy(handle[1:], pathBytes)

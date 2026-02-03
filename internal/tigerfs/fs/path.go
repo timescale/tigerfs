@@ -169,19 +169,40 @@ func splitPath(path string) []string {
 }
 
 // parseSchemaPath handles /.schemas/ paths.
+// Supports:
+//   - /.schemas/ → list schemas
+//   - /.schemas/<schema> → list tables in schema
+//   - /.schemas/<schema>/<table> → table path
+//   - /.schemas/<schema>/<table>/<row> → row path
 func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 	if len(segments) == 1 {
 		// /.schemas/
 		return &ParsedPath{Type: PathSchemaList}, nil
 	}
 
-	// /.schemas/<name>
-	return &ParsedPath{
-		Type: PathSchema,
-		Context: &FSContext{
-			Schema: segments[1],
-		},
-	}, nil
+	schema := segments[1]
+
+	if len(segments) == 2 {
+		// /.schemas/<name>/ - list tables in schema
+		return &ParsedPath{
+			Type: PathSchema,
+			Context: &FSContext{
+				Schema: schema,
+			},
+		}, nil
+	}
+
+	// /.schemas/<schema>/<table>/... - parse as table path with explicit schema
+	table := segments[2]
+	ctx := NewFSContext(schema, table, "")
+
+	result := &ParsedPath{
+		Type:    PathTable,
+		Context: ctx,
+	}
+
+	// Process remaining segments (rows, columns, capabilities)
+	return processSegments(result, segments[3:])
 }
 
 // parseDDLPath handles /.create/, /.modify/, /.delete/ paths.
@@ -210,34 +231,14 @@ func parseDDLPath(segments []string) (*ParsedPath, *FSError) {
 }
 
 // parseTablePath handles table paths and capability chains.
+// Root-level paths always use public schema: /table or /table/row.
+// For explicit schema access, use /.schemas/schemaname/table.
 func parseTablePath(segments []string) (*ParsedPath, *FSError) {
-	// Determine schema and table
-	var schema, table string
-	var startIdx int
-
-	// Check if first segment could be a schema
-	// If we have 2+ segments and second is not a capability, treat first as schema
-	if len(segments) >= 2 && !strings.HasPrefix(segments[1], ".") {
-		// Could be /schema/table/... or /table/<pk>/...
-		// We need to distinguish. For now, assume single segment is table with public schema.
-		// If second segment looks like a capability or row, first is table.
-		// Otherwise, first is schema, second is table.
-
-		// Heuristic: if second segment is all digits or has format extension, first is table
-		if looksLikeRowPK(segments[1]) {
-			schema = "public"
-			table = segments[0]
-			startIdx = 1
-		} else {
-			schema = segments[0]
-			table = segments[1]
-			startIdx = 2
-		}
-	} else {
-		schema = "public"
-		table = segments[0]
-		startIdx = 1
-	}
+	// Always use public schema for root-level table paths.
+	// This avoids ambiguity between /schema/table and /table/row for text PKs.
+	schema := "public"
+	table := segments[0]
+	startIdx := 1
 
 	// Create initial context
 	ctx := NewFSContext(schema, table, "")
@@ -249,28 +250,6 @@ func parseTablePath(segments []string) (*ParsedPath, *FSError) {
 	}
 
 	return processSegments(result, segments[startIdx:])
-}
-
-// looksLikeRowPK returns true if segment looks like a primary key value
-// rather than a table name.
-func looksLikeRowPK(s string) bool {
-	// If it's all digits, it's a PK
-	if _, err := strconv.Atoi(s); err == nil {
-		return true
-	}
-	// If it has a format extension, it's a PK
-	for ext := range knownFormats {
-		if strings.HasSuffix(s, ext) {
-			return true
-		}
-	}
-	// If it contains characters unlikely in table names, it's a PK
-	// Dots are allowed in PKs but rare in table names (except for schema.table notation
-	// which we don't support in this position)
-	if strings.ContainsAny(s, "-@.") {
-		return true
-	}
-	return false
 }
 
 // processSegments processes path segments after table identification.
