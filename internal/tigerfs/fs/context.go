@@ -255,6 +255,13 @@ func (ctx *FSContext) HasFilters() bool {
 	return len(ctx.Filters) > 0
 }
 
+// HasPipelineOperations returns true if any pipeline operations have been applied.
+// This includes filters (.by/, .filter/), ordering (.order/), or limits (.first/, .last/, .sample/).
+// Used to determine whether to use pipeline-aware queries instead of simple table scans.
+func (ctx *FSContext) HasPipelineOperations() bool {
+	return ctx.HasFilters() || ctx.HasOrdered || ctx.LimitType != LimitNone
+}
+
 // HasLimit returns true if any limit has been applied.
 func (ctx *FSContext) HasLimit() bool {
 	return ctx.LimitType != LimitNone
