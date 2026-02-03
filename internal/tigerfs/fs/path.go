@@ -507,10 +507,16 @@ func processRowOrColumn(result *ParsedPath, remaining []string) (*ParsedPath, *F
 	result.PrimaryKey = pk
 	result.Format = format
 
-	// If there's another segment, it's a column
+	// If there's another segment, check if it's a format file or column
 	if len(remaining) >= 2 {
-		result.Type = PathColumn
-		result.Column = remaining[1]
+		segment := remaining[1]
+		// Check if it's a row format file (.json, .csv, .tsv, .yaml)
+		if fmt, ok := knownFormats[segment]; ok {
+			result.Format = fmt
+		} else {
+			result.Type = PathColumn
+			result.Column = segment
+		}
 	}
 
 	return result, nil

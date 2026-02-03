@@ -318,9 +318,18 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 	}
 
 	now := time.Now()
-	entries := make([]Entry, len(columns))
-	for i, col := range columns {
-		entries[i] = Entry{Name: col.Name, IsDir: false, Mode: 0600, ModTime: now}
+
+	// Include row export format files (.json, .tsv, .csv, .yaml)
+	entries := []Entry{
+		{Name: ".json", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: ".tsv", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: ".csv", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: ".yaml", IsDir: false, Mode: 0444, ModTime: now},
+	}
+
+	// Add column files
+	for _, col := range columns {
+		entries = append(entries, Entry{Name: col.Name, IsDir: false, Mode: 0600, ModTime: now})
 	}
 
 	return entries, nil
@@ -992,8 +1001,16 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 		}
 	}
 
-	// Format value with trailing newline
-	data := fmt.Sprintf("%v\n", val)
+	// Format value using proper type conversion (same as FUSE)
+	str, err := format.ConvertValueToText(val)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: fmt.Sprintf("failed to format column value: %v", err),
+			Cause:   err,
+		}
+	}
+	data := str + "\n"
 
 	return &FileContent{
 		Data: []byte(data),
