@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"strconv"
 	"time"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	"github.com/timescale/tigerfs/internal/tigerfs/logging"
+	"go.uber.org/zap"
 )
 
 // Operations provides filesystem operations backed by PostgreSQL.
@@ -597,7 +600,23 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return &Entry{Name: parsed.Context.Schema, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathTable:
-		return &Entry{Name: parsed.Context.TableName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+		name := parsed.Context.TableName
+		// When we have the original path and there are pipeline operations,
+		// use the path's basename as the entry name. This is critical for NFS
+		// which expects stat responses to have names matching the path being stat'd.
+		// E.g., stat("/table/.by/col/value") should return Name="value", not "table".
+		if originalPath != "" && parsed.Context.HasPipelineOperations() {
+			baseName := path.Base(originalPath)
+			logging.Debug("statWithParsed PathTable with pipeline",
+				zap.String("originalPath", originalPath),
+				zap.String("tableName", parsed.Context.TableName),
+				zap.String("baseName", baseName),
+				zap.Int("filterCount", len(parsed.Context.Filters)))
+			if baseName != "" && baseName != "." && baseName != "/" {
+				name = baseName
+			}
+		}
+		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathRow:
 		return o.statRow(ctx, parsed)

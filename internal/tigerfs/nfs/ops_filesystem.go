@@ -301,10 +301,12 @@ func (fi *opsFileInfo) Sys() interface{} {
 
 	logging.Debug("opsFileInfo.Sys",
 		zap.String("path", fi.path),
+		zap.String("name", fi.entry.Name),
 		zap.Uint64("fileid", fileid),
 		zap.Uint32("uid", uid),
 		zap.Uint32("gid", gid),
-		zap.Bool("isDir", fi.IsDir()))
+		zap.Bool("isDir", fi.IsDir()),
+		zap.Uint32("mode", uint32(fi.Mode())))
 
 	return &nfsfile.FileInfo{
 		Fileid: fileid,
