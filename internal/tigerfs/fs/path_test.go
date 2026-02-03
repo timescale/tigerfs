@@ -116,6 +116,11 @@ func TestParsePathRow(t *testing.T) {
 		{"/.schemas/public/users/456", "users", "456", ""},
 		// Text primary keys
 		{"/categories/automotive", "categories", "automotive", ""},
+		// Row format files as separate path segments (NFS-style cd into row dir then cat .json)
+		{"/users/123/.json", "users", "123", "json"},
+		{"/users/123/.csv", "users", "123", "csv"},
+		{"/users/123/.tsv", "users", "123", "tsv"},
+		{"/users/123/.yaml", "users", "123", "yaml"},
 	}
 
 	for _, tt := range tests {
