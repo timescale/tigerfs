@@ -39,6 +39,10 @@ func TestToHandle_4ByteAlignment(t *testing.T) {
 		"/categories/slug",            // 16 chars
 		"/categories/automotive",      // 22 chars
 		"/" + strings.Repeat("a", 62), // max direct path (63 bytes total with /)
+		// Long paths that trigger hash fallback (version 2)
+		"/" + strings.Repeat("a", 100),                                                     // 101 chars - uses hash
+		"/orders/.by/product_id/100/.filter/id/019c2560-909a-7c65-b660-88037c7d86fb",       // 74 chars - uses hash
+		"/very/long/path/that/exceeds/the/maximum/direct/encoding/limit/of/sixtyfour/bytes", // >64 chars - uses hash
 	}
 
 	for _, path := range testPaths {
@@ -103,10 +107,10 @@ func TestToHandle_LongPath_UsesHashFallback(t *testing.T) {
 	handle := h.ToHandle(fs, parts)
 
 	assert.Equal(t, byte(handleVersionHash), handle[0], "long path should use hash version")
-	// Hash handles: 1 version byte + 32 hash bytes = 33 bytes
-	// Note: hash handles are not currently padded to 4-byte boundary, but this is rare
-	// and only happens for paths > 63 bytes which are uncommon in filesystem usage
-	assert.Equal(t, 33, len(handle), "hash handle should be 33 bytes (1 version + 32 hash)")
+	// Hash handles: 1 version byte + 32 hash bytes + 3 padding = 36 bytes (4-byte aligned)
+	// macOS NFS client requires handles to be 4-byte aligned
+	assert.Equal(t, 36, len(handle), "hash handle should be 36 bytes (1 version + 32 hash + 3 padding)")
+	assert.Equal(t, 0, len(handle)%4, "hash handle should be 4-byte aligned")
 }
 
 // TestFromHandle_InvalidHandle_ReturnsStale verifies invalid handles return NFSStatusStale.

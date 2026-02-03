@@ -98,9 +98,12 @@ func (h *StableHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 	h.fallback[hash] = joinedPath
 	h.mu.Unlock()
 
-	handle := make([]byte, 33)
+	// Use 36 bytes (1 version + 32 hash + 3 padding) for 4-byte alignment.
+	// macOS NFS client requires handles to be 4-byte aligned.
+	handle := make([]byte, 36)
 	handle[0] = handleVersionHash
 	copy(handle[1:], hash[:])
+	// Remaining 3 bytes are zero padding
 	return handle
 }
 

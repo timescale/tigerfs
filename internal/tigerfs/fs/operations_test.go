@@ -1684,3 +1684,82 @@ func TestHasPipelineOperations(t *testing.T) {
 	ctx = ctx.WithLimit(10, LimitFirst)
 	assert.True(t, ctx.HasPipelineOperations(), "context with limit should have pipeline operations")
 }
+
+// TestStat_FilterValue_ReturnsFilterValueAsName verifies that stat on filter value paths
+// returns the filter value as the entry name, not the table name.
+// This is critical for NFS which expects the stat response name to match the path basename.
+func TestStat_FilterValue_ReturnsFilterValueAsName(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	tests := []struct {
+		path         string
+		expectedName string
+		description  string
+	}{
+		{
+			path:         "/users/.by/status/active",
+			expectedName: "active",
+			description:  "filter value via .by",
+		},
+		{
+			path:         "/users/.filter/status/active",
+			expectedName: "active",
+			description:  "filter value via .filter",
+		},
+		{
+			path:         "/users/.first/10",
+			expectedName: "10",
+			description:  "limit value via .first",
+		},
+		{
+			path:         "/users/.last/25",
+			expectedName: "25",
+			description:  "limit value via .last",
+		},
+		{
+			path:         "/users/.order/created_at",
+			expectedName: "created_at",
+			description:  "order column",
+		},
+		{
+			path:         "/users/.by/product_id/100/.filter/id/abc-123",
+			expectedName: "abc-123",
+			description:  "nested filter value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			entry, err := ops.Stat(context.Background(), tt.path)
+			require.Nil(t, err, "stat should succeed for path: %s", tt.path)
+			require.NotNil(t, entry, "entry should not be nil for path: %s", tt.path)
+			assert.Equal(t, tt.expectedName, entry.Name, "entry name should be the path basename for: %s", tt.description)
+			assert.True(t, entry.IsDir, "filtered table should be a directory")
+		})
+	}
+}
+
+// TestStat_TableWithoutPipeline_ReturnsTableName verifies that regular table stat still works.
+func TestStat_TableWithoutPipeline_ReturnsTableName(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	entry, err := ops.Stat(context.Background(), "/users")
+	require.Nil(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "users", entry.Name, "table stat should return table name")
+	assert.True(t, entry.IsDir, "table should be a directory")
+}
