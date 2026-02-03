@@ -8,12 +8,12 @@ package fs
 const DirInfo = ".info"
 
 // Metadata files (under .info/ directory)
+// Note: These files do NOT have dot prefixes, matching FUSE behavior.
 const (
-	FileCount   = ".count"   // Row count
-	FileDDL     = ".ddl"     // CREATE TABLE statement
-	FileSchema  = ".schema"  // Table schema (columns, types)
-	FileColumns = ".columns" // Column listing
-	FileIndexes = ".indexes" // Index listing
+	FileCount   = "count"   // Row count
+	FileDDL     = "ddl"     // CREATE TABLE statement
+	FileSchema  = "schema"  // Table schema (columns, types)
+	FileColumns = "columns" // Column listing
 )
 
 // Navigation capabilities

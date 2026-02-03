@@ -289,13 +289,14 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 }
 
 // readDirInfo lists the .info metadata directory.
+// Files match FUSE behavior: count, ddl, schema, columns (no dot prefix).
 func (o *Operations) readDirInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	now := time.Now()
 	entries := []Entry{
-		{Name: ".count", IsDir: false, Mode: 0600, ModTime: now},
-		{Name: ".ddl", IsDir: false, Mode: 0600, ModTime: now},
-		{Name: ".columns", IsDir: false, Mode: 0600, ModTime: now},
-		{Name: ".indexes", IsDir: false, Mode: 0600, ModTime: now},
+		{Name: "count", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: "ddl", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: "schema", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: "columns", IsDir: false, Mode: 0444, ModTime: now},
 	}
 	return entries, nil
 }
@@ -948,7 +949,7 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 	var err error
 
 	switch parsed.InfoFile {
-	case ".count":
+	case FileCount: // "count"
 		count, dbErr := o.db.GetRowCount(ctx, fsCtx.Schema, fsCtx.TableName)
 		if dbErr != nil {
 			return nil, &FSError{
@@ -959,7 +960,7 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 		}
 		data = strconv.FormatInt(count, 10) + "\n"
 
-	case ".ddl":
+	case FileDDL: // "ddl" - full DDL with indexes, constraints, triggers
 		ddl, dbErr := o.db.GetFullDDL(ctx, fsCtx.Schema, fsCtx.TableName)
 		if dbErr != nil {
 			return nil, &FSError{
@@ -970,7 +971,7 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 		}
 		data = ddl
 
-	case ".columns":
+	case FileColumns: // "columns" - one column name per line (no types)
 		columns, dbErr := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 		if dbErr != nil {
 			return nil, &FSError{
@@ -980,25 +981,19 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 			}
 		}
 		for _, col := range columns {
-			data += fmt.Sprintf("%s\t%s\n", col.Name, col.DataType)
+			data += col.Name + "\n"
 		}
 
-	case ".indexes":
-		indexes, dbErr := o.db.GetIndexes(ctx, fsCtx.Schema, fsCtx.TableName)
+	case FileSchema: // "schema" - basic CREATE TABLE DDL
+		ddl, dbErr := o.db.GetTableDDL(ctx, fsCtx.Schema, fsCtx.TableName)
 		if dbErr != nil {
 			return nil, &FSError{
 				Code:    ErrIO,
-				Message: "failed to get indexes",
+				Message: "failed to get schema",
 				Cause:   dbErr,
 			}
 		}
-		for _, idx := range indexes {
-			unique := ""
-			if idx.IsUnique {
-				unique = "UNIQUE "
-			}
-			data += fmt.Sprintf("%s%s (%s)\n", unique, idx.Name, joinStrings(idx.Columns))
-		}
+		data = ddl
 
 	default:
 		return nil, &FSError{
