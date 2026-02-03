@@ -202,6 +202,7 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 
 // readDirTable lists contents of a table directory.
 // Shows rows (by primary key) plus capability directories.
+// Respects pipeline context (filters, order, limits) when present.
 func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -223,18 +224,42 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 
 	pkColumn := pk.Columns[0]
 
-	// List rows (limited by dir_listing_limit)
+	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
 		limit = 10000
 	}
 
-	rows, err := o.db.ListRows(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, limit)
-	if err != nil {
-		return nil, &FSError{
-			Code:    ErrIO,
-			Message: "failed to list rows",
-			Cause:   err,
+	var rows []string
+
+	// Check if we have any pipeline operations (filters, order, limits)
+	if fsCtx.HasPipelineOperations() {
+		// Use pipeline query to respect filters, order, and limits
+		params := fsCtx.ToQueryParams()
+		params.PKColumn = pkColumn
+
+		// Apply default limit if none specified in pipeline
+		if params.Limit == 0 {
+			params.Limit = limit
+		}
+
+		rows, err = o.db.QueryRowsPipeline(ctx, params)
+		if err != nil {
+			return nil, &FSError{
+				Code:    ErrIO,
+				Message: "failed to query rows with pipeline",
+				Cause:   err,
+			}
+		}
+	} else {
+		// Simple table scan for raw table access
+		rows, err = o.db.ListRows(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, limit)
+		if err != nil {
+			return nil, &FSError{
+				Code:    ErrIO,
+				Message: "failed to list rows",
+				Cause:   err,
+			}
 		}
 	}
 
@@ -243,13 +268,23 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	// Build entries: capability directories first, then rows
 	entries := make([]Entry, 0, len(rows)+15)
 
-	// Add capability directories
-	capabilities := []string{
-		DirAll, DirBy, DirDelete, DirExport, DirFilter, DirFirst,
-		DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
-	}
-	for _, cap := range capabilities {
-		entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	// Add capability directories based on what's available in current context
+	if fsCtx.HasPipelineOperations() {
+		// Use available capabilities based on pipeline state
+		for _, cap := range fsCtx.AvailableCapabilities() {
+			entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+		}
+		// Always include .info for metadata access
+		entries = append(entries, Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	} else {
+		// Show all capabilities for raw table access
+		capabilities := []string{
+			DirAll, DirBy, DirDelete, DirExport, DirFilter, DirFirst,
+			DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
+		}
+		for _, cap := range capabilities {
+			entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+		}
 	}
 
 	// Add rows as directories (row files like 1.json accessible but not listed)
@@ -1024,6 +1059,7 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 }
 
 // readExportFile reads an export file (bulk data).
+// Respects pipeline context (filters, order, limits) when present.
 func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -1033,13 +1069,31 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 		}
 	}
 
-	// Get all rows
+	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
 		limit = 10000
 	}
 
-	columns, rows, err := o.db.GetAllRows(ctx, fsCtx.Schema, fsCtx.TableName, limit)
+	var columns []string
+	var rows [][]interface{}
+	var err error
+
+	// Check if we have any pipeline operations (filters, order, limits)
+	if fsCtx.HasPipelineOperations() {
+		// Use pipeline query to respect filters, order, and limits
+		params := fsCtx.ToQueryParams()
+
+		// Apply default limit if none specified in pipeline
+		if params.Limit == 0 {
+			params.Limit = limit
+		}
+
+		columns, rows, err = o.db.QueryRowsWithDataPipeline(ctx, params)
+	} else {
+		// Simple table scan for raw table access
+		columns, rows, err = o.db.GetAllRows(ctx, fsCtx.Schema, fsCtx.TableName, limit)
+	}
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,

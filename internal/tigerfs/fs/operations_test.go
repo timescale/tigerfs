@@ -942,6 +942,10 @@ type mockDBClient struct {
 	// View updatability
 	viewUpdatable map[string]bool
 
+	// Pipeline query results (for QueryRowsPipeline and QueryRowsWithDataPipeline)
+	pipelineResultRows []string
+	pipelineRows       [][]interface{}
+
 	// Write tracking
 	insertCalled       bool
 	updateCalled       bool
@@ -1336,11 +1340,31 @@ func (m *mockDBClient) ExecInTransaction(ctx context.Context, sql string, args .
 // Implement db.PipelineReader
 
 func (m *mockDBClient) QueryRowsPipeline(ctx context.Context, params db.QueryParams) ([]string, error) {
+	// If pipeline results are set, return them
+	if m.pipelineResultRows != nil {
+		return m.pipelineResultRows, nil
+	}
 	return []string{}, nil
 }
 
 func (m *mockDBClient) QueryRowsWithDataPipeline(ctx context.Context, params db.QueryParams) ([]string, [][]interface{}, error) {
+	// If we have column data, return it filtered by params
+	key := params.Schema + "." + params.Table
+	if cols, ok := m.columns[key]; ok {
+		columns := make([]string, len(cols))
+		for i, c := range cols {
+			columns[i] = c.name
+		}
+		// Return empty rows for now - tests can override via pipelineRows
+		return columns, m.pipelineRows, nil
+	}
 	return nil, nil, nil
+}
+
+// pipelineRows allows tests to specify rows returned by QueryRowsPipeline
+func (m *mockDBClient) SetPipelineResults(rows []string, dataRows [][]interface{}) {
+	m.pipelineResultRows = rows
+	m.pipelineRows = dataRows
 }
 
 // ============================================================================
@@ -1500,4 +1524,163 @@ func TestReadDir_InfoDirectory_FilesHaveReadOnlyMode(t *testing.T) {
 		assert.Equal(t, os.FileMode(0444), entry.Mode,
 			"info file %s should have read-only mode 0444 in directory listing", entry.Name)
 	}
+}
+
+// ============================================================================
+// Tests for pipeline operations (filters, order, limits)
+// ============================================================================
+
+// TestReadDir_PipelineFilter_UsesQueryRowsPipeline verifies that .by/.filter paths use pipeline queries.
+func TestReadDir_PipelineFilter_UsesQueryRowsPipeline(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		indexes: map[string][]mockIndex{
+			"public.users": {
+				{name: "users_status_idx", columns: []string{"status"}, unique: false},
+			},
+		},
+		// Set pipeline results - these should be returned when using pipeline query
+		pipelineResultRows: []string{"1", "3", "5"},
+		// Regular rows should NOT be used when pipeline is active
+		rows: map[string][]string{
+			"public.users": {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Access path with filter: /users/.by/status/active
+	entries, err := ops.ReadDir(context.Background(), "/users/.by/status/active")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	// Count row entries (not capability directories)
+	rowEntries := []string{}
+	for _, e := range entries {
+		if !e.IsDir || (e.Name != ".by" && e.Name != ".filter" && e.Name != ".order" &&
+			e.Name != ".first" && e.Name != ".last" && e.Name != ".sample" &&
+			e.Name != ".export" && e.Name != ".info") {
+			rowEntries = append(rowEntries, e.Name)
+		}
+	}
+
+	// Should have exactly 3 rows from pipeline query, not 10 from regular query
+	assert.Len(t, rowEntries, 3, "should return filtered rows from pipeline query")
+	assert.Contains(t, rowEntries, "1")
+	assert.Contains(t, rowEntries, "3")
+	assert.Contains(t, rowEntries, "5")
+}
+
+// TestReadDir_PipelineLimit_UsesQueryRowsPipeline verifies that .first/.last/.sample paths use pipeline queries.
+func TestReadDir_PipelineLimit_UsesQueryRowsPipeline(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		// Set pipeline results - these should be returned when using pipeline query
+		pipelineResultRows: []string{"1", "2", "3"},
+		// Regular rows should NOT be used when pipeline is active
+		rows: map[string][]string{
+			"public.users": {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Access path with limit: /users/.first/3
+	entries, err := ops.ReadDir(context.Background(), "/users/.first/3")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	// Count row entries (not capability directories)
+	rowEntries := []string{}
+	for _, e := range entries {
+		// Row entries are not capability directories
+		if e.Name[0] != '.' {
+			rowEntries = append(rowEntries, e.Name)
+		}
+	}
+
+	// Should have exactly 3 rows from pipeline query
+	assert.Len(t, rowEntries, 3, "should return limited rows from pipeline query")
+}
+
+// TestReadDir_NoPipeline_UsesListRows verifies that plain table access uses ListRows.
+func TestReadDir_NoPipeline_UsesListRows(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		// Regular rows should be used when there's no pipeline
+		rows: map[string][]string{
+			"public.users": {"1", "2", "3", "4", "5"},
+		},
+		// Pipeline results should NOT be used for plain table access
+		pipelineResultRows: []string{"filtered"},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Access plain table path: /users
+	entries, err := ops.ReadDir(context.Background(), "/users")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	// Count row entries (not capability directories)
+	rowEntries := []string{}
+	for _, e := range entries {
+		if e.Name[0] != '.' {
+			rowEntries = append(rowEntries, e.Name)
+		}
+	}
+
+	// Should have 5 rows from regular ListRows, not "filtered" from pipeline
+	assert.Len(t, rowEntries, 5, "should return all rows from ListRows")
+	assert.Contains(t, rowEntries, "1")
+	assert.Contains(t, rowEntries, "5")
+	assert.NotContains(t, rowEntries, "filtered")
+}
+
+// TestHasPipelineOperations verifies the HasPipelineOperations helper.
+func TestHasPipelineOperations(t *testing.T) {
+	// No operations
+	ctx := NewFSContext("public", "users", "id")
+	assert.False(t, ctx.HasPipelineOperations(), "empty context should have no pipeline operations")
+
+	// With filter
+	ctx = ctx.WithFilter("status", "active", true)
+	assert.True(t, ctx.HasPipelineOperations(), "context with filter should have pipeline operations")
+
+	// With order only
+	ctx = NewFSContext("public", "users", "id")
+	ctx = ctx.WithOrder("name", false)
+	assert.True(t, ctx.HasPipelineOperations(), "context with order should have pipeline operations")
+
+	// With limit only
+	ctx = NewFSContext("public", "users", "id")
+	ctx = ctx.WithLimit(10, LimitFirst)
+	assert.True(t, ctx.HasPipelineOperations(), "context with limit should have pipeline operations")
 }
