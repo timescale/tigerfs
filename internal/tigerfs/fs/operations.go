@@ -702,13 +702,19 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 }
 
 // statInfoFile returns metadata for an info file.
+// Fetches the actual content to report accurate file size.
 func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
-	// Info files are small metadata files, size varies
-	// Use 0600 for NFS compatibility (macOS requires owner read permission)
+	// Fetch actual content to get accurate size (required for NFS)
+	content, fsErr := o.readInfoFile(ctx, parsed)
+	if fsErr != nil {
+		return nil, fsErr
+	}
+
 	return &Entry{
 		Name:    parsed.InfoFile,
 		IsDir:   false,
-		Mode:    0600,
+		Mode:    0444, // Read-only, matching FUSE behavior
+		Size:    int64(len(content.Data)),
 		ModTime: time.Now(),
 	}, nil
 }
