@@ -15,10 +15,10 @@ Run TigerFS natively on macOS with PostgreSQL in Docker.
 ./demo.sh start
 
 # Explore the mounted filesystem
-ls /tmp/tigerfs-demo
-ls /tmp/tigerfs-demo/users
-cat /tmp/tigerfs-demo/users/1.json
-cat /tmp/tigerfs-demo/products/1.json
+cd /tmp/tigerfs-demo ; ls -al
+cat users/1.json
+cat products/1.json
+cat categories/.export/tsv
 
 # Stop when done
 ./demo.sh stop
