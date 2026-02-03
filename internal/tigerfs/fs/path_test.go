@@ -166,9 +166,10 @@ func TestParsePathInfo(t *testing.T) {
 	}{
 		{"/users/.info", "users", ""},
 		{"/users/.info/", "users", ""},
-		{"/users/.info/.count", "users", ".count"},
-		{"/users/.info/.ddl", "users", ".ddl"},
-		{"/users/.info/.columns", "users", ".columns"},
+		{"/users/.info/count", "users", "count"},
+		{"/users/.info/ddl", "users", "ddl"},
+		{"/users/.info/columns", "users", "columns"},
+		{"/users/.info/schema", "users", "schema"},
 	}
 
 	for _, tt := range tests {

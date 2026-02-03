@@ -248,10 +248,10 @@ func TestReadDir_InfoDirectory(t *testing.T) {
 		names[i] = e.Name
 	}
 
-	assert.Contains(t, names, ".count")
-	assert.Contains(t, names, ".ddl")
-	assert.Contains(t, names, ".columns")
-	assert.Contains(t, names, ".indexes")
+	assert.Contains(t, names, "count")
+	assert.Contains(t, names, "ddl")
+	assert.Contains(t, names, "columns")
+	assert.Contains(t, names, "schema")
 }
 
 // TestReadFile_InfoCount tests reading the .count metadata file.
@@ -267,7 +267,7 @@ func TestReadFile_InfoCount(t *testing.T) {
 	}
 
 	ops := NewOperations(cfg, mockDB)
-	content, err := ops.ReadFile(context.Background(), "/users/.info/.count")
+	content, err := ops.ReadFile(context.Background(), "/users/.info/count")
 
 	require.Nil(t, err)
 	require.NotNil(t, content)
@@ -308,12 +308,12 @@ func TestStat_InfoFile(t *testing.T) {
 	}
 
 	ops := NewOperations(cfg, mockDB)
-	entry, err := ops.Stat(context.Background(), "/users/.info/.count")
+	entry, err := ops.Stat(context.Background(), "/users/.info/count")
 
 	require.Nil(t, err)
 	require.NotNil(t, entry)
 	assert.False(t, entry.IsDir)
-	assert.Equal(t, ".count", entry.Name)
+	assert.Equal(t, "count", entry.Name)
 }
 
 // TestStat_DDLFile tests Stat on a DDL control file.
@@ -355,14 +355,14 @@ func TestReadFile_InfoDDL(t *testing.T) {
 	}
 
 	ops := NewOperations(cfg, mockDB)
-	content, err := ops.ReadFile(context.Background(), "/users/.info/.ddl")
+	content, err := ops.ReadFile(context.Background(), "/users/.info/ddl")
 
 	require.Nil(t, err)
 	require.NotNil(t, content)
 	assert.Contains(t, string(content.Data), "CREATE TABLE")
 }
 
-// TestReadFile_InfoColumns tests reading the .columns metadata file.
+// TestReadFile_InfoColumns tests reading the columns metadata file.
 func TestReadFile_InfoColumns(t *testing.T) {
 	cfg := &config.Config{}
 	mockDB := &mockDBClient{
@@ -378,36 +378,33 @@ func TestReadFile_InfoColumns(t *testing.T) {
 	}
 
 	ops := NewOperations(cfg, mockDB)
-	content, err := ops.ReadFile(context.Background(), "/users/.info/.columns")
+	content, err := ops.ReadFile(context.Background(), "/users/.info/columns")
 
 	require.Nil(t, err)
 	require.NotNil(t, content)
-	assert.Contains(t, string(content.Data), "id\tinteger")
-	assert.Contains(t, string(content.Data), "name\ttext")
+	// columns file just lists column names, one per line (no types)
+	assert.Contains(t, string(content.Data), "id\n")
+	assert.Contains(t, string(content.Data), "name\n")
 }
 
-// TestReadFile_InfoIndexes tests reading the .indexes metadata file.
-func TestReadFile_InfoIndexes(t *testing.T) {
+// TestReadFile_InfoSchema tests reading the schema metadata file.
+func TestReadFile_InfoSchema(t *testing.T) {
 	cfg := &config.Config{}
 	mockDB := &mockDBClient{
 		tables: map[string][]string{
 			"public": {"users"},
 		},
-		indexes: map[string][]mockIndex{
-			"public.users": {
-				{name: "users_pkey", columns: []string{"id"}, unique: true},
-				{name: "users_name_idx", columns: []string{"name"}, unique: false},
-			},
+		tableDDL: map[string]string{
+			"public.users": "CREATE TABLE users (id integer, name text)",
 		},
 	}
 
 	ops := NewOperations(cfg, mockDB)
-	content, err := ops.ReadFile(context.Background(), "/users/.info/.indexes")
+	content, err := ops.ReadFile(context.Background(), "/users/.info/schema")
 
 	require.Nil(t, err)
 	require.NotNil(t, content)
-	assert.Contains(t, string(content.Data), "UNIQUE users_pkey")
-	assert.Contains(t, string(content.Data), "users_name_idx")
+	assert.Contains(t, string(content.Data), "CREATE TABLE")
 }
 
 // TestReadDir_ByCapability tests listing indexed columns in .by/.
