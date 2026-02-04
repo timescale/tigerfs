@@ -320,6 +320,15 @@ func processInfo(result *ParsedPath, remaining []string) (int, *FSError) {
 
 // processBy handles .by/ paths.
 func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
+	// Check if filtering is allowed (filters are disallowed after .order/)
+	if !result.Context.CanAddFilter() {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "cannot add .by/ after .order/",
+			Hint:    "filters must come before .order/ in the path",
+		}
+	}
+
 	if len(remaining) == 1 {
 		// Just .by/ - list indexed columns
 		result.Type = PathCapability
@@ -345,6 +354,15 @@ func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 
 // processFilter handles .filter/ paths.
 func processFilter(result *ParsedPath, remaining []string) (int, *FSError) {
+	// Check if filtering is allowed (filters are disallowed after .order/)
+	if !result.Context.CanAddFilter() {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "cannot add .filter/ after .order/",
+			Hint:    "filters must come before .order/ in the path",
+		}
+	}
+
 	if len(remaining) == 1 {
 		result.Type = PathCapability
 		result.CapabilityDir = DirFilter
@@ -369,9 +387,26 @@ func processFilter(result *ParsedPath, remaining []string) (int, *FSError) {
 // processOrder handles .order/ paths.
 func processOrder(result *ParsedPath, remaining []string) (int, *FSError) {
 	if len(remaining) == 1 {
+		// Only show .order/ capability if it can be used
+		if !result.Context.CanAddOrder() {
+			return 0, &FSError{
+				Code:    ErrInvalidPath,
+				Message: "cannot add .order/ after previous .order/",
+				Hint:    "only one .order/ is allowed per path",
+			}
+		}
 		result.Type = PathCapability
 		result.CapabilityDir = DirOrder
 		return 1, nil
+	}
+
+	// Check if ordering is allowed before applying
+	if !result.Context.CanAddOrder() {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "cannot add .order/ after previous .order/",
+			Hint:    "only one .order/ is allowed per path",
+		}
 	}
 
 	// .order/<column> or .order/<column>.desc
@@ -388,6 +423,26 @@ func processOrder(result *ParsedPath, remaining []string) (int, *FSError) {
 
 // processLimit handles .first/, .last/, .sample/ paths.
 func processLimit(result *ParsedPath, remaining []string, limitType LimitType) (int, *FSError) {
+	// Check if this limit type is allowed
+	if !result.Context.CanAddLimit(limitType) {
+		var hint string
+		switch {
+		case result.Context.LimitType == LimitSample:
+			hint = "no limits allowed after .sample/ - just sample fewer rows"
+		case result.Context.LimitType == LimitFirst && limitType == LimitFirst:
+			hint = ".first/.first is redundant - use a single .first/ with smaller value"
+		case result.Context.LimitType == LimitLast && limitType == LimitLast:
+			hint = ".last/.last is redundant - use a single .last/ with smaller value"
+		default:
+			hint = "this limit combination is not allowed"
+		}
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("cannot add %s after %s", remaining[0], limitTypeToDir(result.Context.LimitType)),
+			Hint:    hint,
+		}
+	}
+
 	if len(remaining) < 2 {
 		result.Type = PathCapability
 		result.CapabilityDir = remaining[0]
@@ -413,6 +468,20 @@ func processLimit(result *ParsedPath, remaining []string, limitType LimitType) (
 	result.Context = result.Context.WithLimit(n, limitType)
 	result.Type = PathTable
 	return 2, nil
+}
+
+// limitTypeToDir converts a LimitType back to its directory name.
+func limitTypeToDir(lt LimitType) string {
+	switch lt {
+	case LimitFirst:
+		return ".first"
+	case LimitLast:
+		return ".last"
+	case LimitSample:
+		return ".sample"
+	default:
+		return "unknown"
+	}
 }
 
 // processExport handles .export/ paths.

@@ -513,6 +513,77 @@ func TestParsePathInvalid(t *testing.T) {
 	}
 }
 
+// TestParsePathDisallowedCombinations verifies that invalid capability combinations are rejected.
+func TestParsePathDisallowedCombinations(t *testing.T) {
+	tests := []struct {
+		path string
+		desc string
+	}{
+		// Filter after order is disallowed
+		{"/users/.order/created_at/.filter/status/active", "filter after order"},
+		{"/users/.order/created_at/.by/email/foo@bar.com", "by after order"},
+
+		// Double order is disallowed
+		{"/users/.order/created_at/.order/name", "order after order"},
+
+		// Double sample is disallowed
+		{"/users/.sample/10/.sample/5", "sample after sample"},
+
+		// Anything after sample is disallowed
+		{"/users/.sample/10/.first/5", "first after sample"},
+		{"/users/.sample/10/.last/5", "last after sample"},
+
+		// Double first is disallowed (redundant)
+		{"/users/.first/10/.first/5", "first after first"},
+
+		// Double last is disallowed (redundant)
+		{"/users/.last/10/.last/5", "last after last"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			_, err := ParsePath(tt.path)
+			if err == nil {
+				t.Errorf("ParsePath(%q) should return error for %s", tt.path, tt.desc)
+			}
+		})
+	}
+}
+
+// TestParsePathAllowedCombinations verifies that valid capability combinations work.
+func TestParsePathAllowedCombinations(t *testing.T) {
+	tests := []struct {
+		path string
+		desc string
+	}{
+		// Filter before order is allowed
+		{"/users/.filter/status/active/.order/created_at", "filter then order"},
+		{"/users/.by/email/foo@bar.com/.order/created_at", "by then order"},
+
+		// Multiple filters are allowed
+		{"/users/.filter/status/active/.filter/role/admin", "filter then filter"},
+		{"/users/.by/status/active/.by/role/admin", "by then by"},
+		{"/users/.by/status/active/.filter/role/admin", "by then filter"},
+
+		// First then last (nested pagination) is allowed
+		{"/users/.first/100/.last/10", "first then last"},
+		{"/users/.last/100/.first/10", "last then first"},
+
+		// Order then limit is allowed
+		{"/users/.order/created_at/.first/10", "order then first"},
+		{"/users/.order/created_at/.last/10", "order then last"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			_, err := ParsePath(tt.path)
+			if err != nil {
+				t.Errorf("ParsePath(%q) should succeed for %s, got error: %v", tt.path, tt.desc, err)
+			}
+		})
+	}
+}
+
 // TestParsePathEdgeCases verifies edge cases.
 func TestParsePathEdgeCases(t *testing.T) {
 	tests := []struct {
