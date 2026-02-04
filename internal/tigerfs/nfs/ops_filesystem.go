@@ -138,8 +138,8 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 		zap.String("filename", filename),
 		zap.String("name", entry.Name),
 		zap.Bool("isDir", entry.IsDir),
-		zap.Uint32("entryMode", uint32(entry.Mode)),
-		zap.Uint32("nfsMode", uint32(fi.Mode())))
+		zap.Int64("size", entry.Size),
+		zap.Uint32("mode", uint32(fi.Mode())))
 	return fi, nil
 }
 
@@ -262,6 +262,33 @@ func (f *OpsFilesystem) Root() string {
 	return "/"
 }
 
+// billy.Change interface implementation - required for go-nfs to allow writes.
+// These are no-ops since database-backed filesystems don't support Unix permissions.
+
+// Chmod is a no-op for database-backed filesystems.
+func (f *OpsFilesystem) Chmod(name string, mode os.FileMode) error {
+	logging.Debug("OpsFilesystem.Chmod (no-op)", zap.String("name", name), zap.Uint32("mode", uint32(mode)))
+	return nil
+}
+
+// Lchown is a no-op for database-backed filesystems.
+func (f *OpsFilesystem) Lchown(name string, uid, gid int) error {
+	logging.Debug("OpsFilesystem.Lchown (no-op)", zap.String("name", name), zap.Int("uid", uid), zap.Int("gid", gid))
+	return nil
+}
+
+// Chown is a no-op for database-backed filesystems.
+func (f *OpsFilesystem) Chown(name string, uid, gid int) error {
+	logging.Debug("OpsFilesystem.Chown (no-op)", zap.String("name", name), zap.Int("uid", uid), zap.Int("gid", gid))
+	return nil
+}
+
+// Chtimes is a no-op for database-backed filesystems.
+func (f *OpsFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) error {
+	logging.Debug("OpsFilesystem.Chtimes (no-op)", zap.String("name", name), zap.Time("atime", atime), zap.Time("mtime", mtime))
+	return nil
+}
+
 // opsFileInfo implements os.FileInfo using fs.Entry.
 type opsFileInfo struct {
 	entry *fs.Entry
@@ -382,6 +409,24 @@ func (c *opsChrootFilesystem) Root() string {
 	return c.root
 }
 
+// billy.Change interface implementation for chroot filesystem.
+
+func (c *opsChrootFilesystem) Chmod(name string, mode os.FileMode) error {
+	return c.fs.Chmod(path.Join(c.root, name), mode)
+}
+
+func (c *opsChrootFilesystem) Lchown(name string, uid, gid int) error {
+	return c.fs.Lchown(path.Join(c.root, name), uid, gid)
+}
+
+func (c *opsChrootFilesystem) Chown(name string, uid, gid int) error {
+	return c.fs.Chown(path.Join(c.root, name), uid, gid)
+}
+
+func (c *opsChrootFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) error {
+	return c.fs.Chtimes(path.Join(c.root, name), atime, mtime)
+}
+
 // ctx returns a background context for operations.
 // In a real implementation, this should be passed through from the NFS request.
 func ctx() context.Context {
@@ -456,10 +501,45 @@ func (f *memFile) Write(p []byte) (int, error) {
 }
 
 func (f *memFile) Close() error {
+	logging.Debug("memFile.Close", zap.String("path", f.path), zap.Bool("dirty", f.dirty), zap.Int("size", len(f.data)))
 	if f.dirty && f.ops != nil && f.path != "" {
+		// WORKAROUND: Skip writing empty content to the database.
+		//
+		// Background: The macOS NFS client uses a truncate-before-write pattern:
+		//   1. SETATTR with size=0 (truncates file to empty)
+		//   2. WRITE operations with actual content
+		//   3. COMMIT to finalize
+		//
+		// The go-nfs library handles SETATTR by opening the file, calling Truncate(0),
+		// and then Close(). Our memFile.Close() writes data back to the database.
+		// This means truncating a file immediately writes empty content to the DB,
+		// BEFORE the actual content arrives in step 2.
+		//
+		// Problem: Writing empty content to a database column can fail:
+		//   - NOT NULL constraints: empty string converts to NULL, violating constraint
+		//   - Data integrity: user intended to write content, not clear it
+		//
+		// This workaround skips the database write when content is empty. The actual
+		// content will be written when the NFS WRITE operations arrive with data.
+		//
+		// TODO: A proper architectural fix would be to:
+		//   1. Track file handles across NFS operations (not just within a single RPC)
+		//   2. Buffer writes and only commit to DB on NFS COMMIT, or when the file
+		//      handle reference count drops to zero
+		//   3. This would require significant changes to how go-nfs handles file state
+		//      and how we integrate with it
+		//
+		// Limitation: This workaround means users cannot intentionally clear a column
+		// to empty by truncating. They should use Delete (rm) to set columns to NULL.
+		if len(f.data) == 0 {
+			logging.Debug("memFile.Close: skipping write of empty content (truncate-before-write pattern)",
+				zap.String("path", f.path))
+			return nil
+		}
 		logging.Debug("memFile.Close writing back", zap.String("path", f.path), zap.Int("size", len(f.data)))
 		fsErr := f.ops.WriteFile(ctx(), f.path, f.data)
 		if fsErr != nil {
+			logging.Error("memFile.Close WriteFile failed", zap.String("path", f.path), zap.Error(fsErr.Cause))
 			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 		}
 	}
@@ -475,6 +555,7 @@ func (f *memFile) Unlock() error {
 }
 
 func (f *memFile) Truncate(size int64) error {
+	logging.Debug("memFile.Truncate", zap.String("path", f.path), zap.Int64("newSize", size), zap.Int("currentSize", len(f.data)))
 	if !f.writable {
 		return fmt.Errorf("file not opened for writing")
 	}
