@@ -350,7 +350,10 @@ func TestParsePathExport(t *testing.T) {
 		{"/users/.export/", ""},
 		{"/users/.export/all.csv", "csv"},
 		{"/users/.export/all.json", "json"},
+		{"/users/.export/json", "json"},
 		{"/users/.filter/active/true/.export/filtered.csv", "csv"},
+		{"/users/.first/5/.export/json", "json"},
+		{"/users/.first/5/.export/csv", "csv"},
 	}
 
 	for _, tt := range tests {
@@ -366,6 +369,55 @@ func TestParsePathExport(t *testing.T) {
 				t.Errorf("Format = %q, want %q", result.Format, tt.format)
 			}
 		})
+	}
+}
+
+// TestParsePathPipelineExport verifies that pipeline operations are preserved in export paths.
+func TestParsePathPipelineExport(t *testing.T) {
+	path := "/users/.first/5/.export/json"
+	result, err := ParsePath(path)
+	if err != nil {
+		t.Fatalf("ParsePath(%q) error: %v", path, err)
+	}
+
+	// Verify path type
+	if result.Type != PathExport {
+		t.Errorf("Type = %v, want PathExport", result.Type)
+	}
+
+	// Verify format
+	if result.Format != "json" {
+		t.Errorf("Format = %q, want %q", result.Format, "json")
+	}
+
+	// Verify context exists
+	if result.Context == nil {
+		t.Fatal("Context is nil, want non-nil")
+	}
+
+	// Verify table name
+	if result.Context.TableName != "users" {
+		t.Errorf("TableName = %q, want %q", result.Context.TableName, "users")
+	}
+
+	// Verify limit is preserved
+	if result.Context.Limit != 5 {
+		t.Errorf("Limit = %d, want 5", result.Context.Limit)
+	}
+
+	// Verify limit type is First
+	if result.Context.LimitType != LimitFirst {
+		t.Errorf("LimitType = %v, want LimitFirst", result.Context.LimitType)
+	}
+
+	// Verify HasPipelineOperations returns true
+	if !result.Context.HasPipelineOperations() {
+		t.Error("HasPipelineOperations() = false, want true")
+	}
+
+	// Verify terminal state
+	if !result.Context.IsTerminal {
+		t.Error("IsTerminal = false, want true")
 	}
 }
 

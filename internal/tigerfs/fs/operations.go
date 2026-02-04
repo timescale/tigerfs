@@ -1131,8 +1131,19 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 
 	// Check if we have any pipeline operations (filters, order, limits)
 	if fsCtx.HasPipelineOperations() {
+		// Get primary key for pipeline query ordering
+		pk, pkErr := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+		if pkErr != nil {
+			return nil, &FSError{
+				Code:    ErrIO,
+				Message: "failed to get primary key for export",
+				Cause:   pkErr,
+			}
+		}
+
 		// Use pipeline query to respect filters, order, and limits
 		params := fsCtx.ToQueryParams()
+		params.PKColumn = pk.Columns[0]
 
 		// Apply default limit if none specified in pipeline
 		if params.Limit == 0 {
