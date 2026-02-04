@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
@@ -1762,4 +1763,47 @@ func TestStat_TableWithoutPipeline_ReturnsTableName(t *testing.T) {
 	require.NotNil(t, entry)
 	assert.Equal(t, "users", entry.Name, "table stat should return table name")
 	assert.True(t, entry.IsDir, "table should be a directory")
+}
+
+// TestReadFile_PipelineExport_ReturnsJSONData verifies that .first/N/.export/json returns data.
+// This tests the specific path that was failing in NFS integration tests.
+func TestReadFile_PipelineExport_ReturnsJSONData(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
+		// Set pipeline rows for QueryRowsWithDataPipeline
+		pipelineRows: [][]interface{}{
+			{1, "Alice"},
+			{2, "Bob"},
+			{3, "Charlie"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Test the path: /users/.first/3/.export/json
+	content, err := ops.ReadFile(context.Background(), "/users/.first/3/.export/json")
+
+	require.Nil(t, err, "ReadFile should not error")
+	require.NotNil(t, content, "content should not be nil")
+	assert.Greater(t, len(content.Data), 0, "export data should not be empty")
+
+	// Verify it's valid JSON
+	var jsonData []map[string]interface{}
+	jsonErr := json.Unmarshal(content.Data, &jsonData)
+	require.NoError(t, jsonErr, "data should be valid JSON")
+	assert.Len(t, jsonData, 3, "should have 3 rows")
 }
