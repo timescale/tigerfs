@@ -393,6 +393,126 @@ func SetupTestDB(t *testing.T) (string, func()) {
 	return result.ConnStr, result.Cleanup
 }
 
+// GetTestDBEmpty returns a test database connection without seeding any data.
+// Use this when tests will seed their own data (e.g., command tests with demo data).
+func GetTestDBEmpty(t *testing.T) *TestDBResult {
+	t.Helper()
+
+	// Try local PostgreSQL first
+	probeLocalPostgreSQL()
+	if localPGAvailable {
+		return setupLocalTestDBEmpty(t, localPGConnStr)
+	}
+
+	t.Logf("Local PostgreSQL not available (%s), trying Docker...", localPGProbeReason)
+
+	// Fall back to Docker
+	if !isDockerAvailable() {
+		t.Skip("Neither local PostgreSQL nor Docker available, skipping test")
+		return nil
+	}
+
+	return setupDockerTestDBEmpty(t)
+}
+
+// setupLocalTestDBEmpty sets up a test schema without seeding data
+func setupLocalTestDBEmpty(t *testing.T, connStr string) *TestDBResult {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		t.Fatalf("Failed to connect to local PostgreSQL: %v", err)
+	}
+
+	// Create a unique schema for this test to avoid conflicts
+	schemaName := fmt.Sprintf("tigerfs_test_%d", time.Now().UnixNano())
+
+	_, err = pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", schemaName))
+	if err != nil {
+		pool.Close()
+		t.Fatalf("Failed to create test schema: %v", err)
+	}
+
+	// Set search path to our test schema
+	schemaConnStr := connStr + fmt.Sprintf("&search_path=%s", schemaName)
+
+	pool.Close()
+
+	t.Logf("Using local PostgreSQL with schema %s (empty)", schemaName)
+
+	cleanup := func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
+		cleanupPool, err := pgxpool.New(cleanupCtx, connStr)
+		if err != nil {
+			t.Logf("Failed to connect for cleanup: %v", err)
+			return
+		}
+		defer cleanupPool.Close()
+
+		_, err = cleanupPool.Exec(cleanupCtx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schemaName))
+		if err != nil {
+			t.Logf("Failed to drop test schema: %v", err)
+		}
+	}
+
+	return &TestDBResult{
+		ConnStr: schemaConnStr,
+		Source:  SourceLocal,
+		Cleanup: cleanup,
+	}
+}
+
+// setupDockerTestDBEmpty starts a PostgreSQL container without seeding data
+func setupDockerTestDBEmpty(t *testing.T) *TestDBResult {
+	t.Helper()
+
+	ctx := context.Background()
+
+	// Start PostgreSQL container
+	pgContainer, err := postgres.Run(ctx,
+		"postgres:17-alpine",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("testuser"),
+		postgres.WithPassword("testpass"),
+		postgres.BasicWaitStrategies(),
+		postgres.WithSQLDriver("pgx"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to start PostgreSQL container: %v", err)
+	}
+
+	// Get connection string
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		_ = pgContainer.Terminate(ctx)
+		t.Fatalf("Failed to get connection string: %v", err)
+	}
+
+	// Wait for PostgreSQL to be ready
+	time.Sleep(2 * time.Second)
+
+	// No seeding - empty database
+
+	t.Log("Using Docker PostgreSQL container (empty)")
+
+	cleanup := func() {
+		if err := pgContainer.Terminate(ctx); err != nil {
+			t.Logf("Failed to terminate PostgreSQL container: %v", err)
+		}
+	}
+
+	return &TestDBResult{
+		ConnStr: connStr,
+		Source:  SourceDocker,
+		Cleanup: cleanup,
+	}
+}
+
 // isFUSEAvailable checks if FUSE is available on the system.
 // On macOS, FUSE (macFUSE) is no longer supported; use NFS instead.
 // On Linux, checks for /dev/fuse.
