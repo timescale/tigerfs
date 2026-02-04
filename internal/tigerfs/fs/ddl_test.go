@@ -412,3 +412,57 @@ func TestDDLStagingEntry(t *testing.T) {
 	assert.Equal(t, DDLCreate, entry.Operation)
 	assert.True(t, entry.Validated)
 }
+
+// TestDDLManager_FindSessionByName tests finding sessions by name.
+func TestDDLManager_FindSessionByName(t *testing.T) {
+	dm := NewDDLManager(nil)
+
+	// Create multiple sessions
+	id1, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.CreateSession(DDLCreate, "table", "public", "users", "")
+	dm.CreateSession(DDLModify, "table", "public", "orders", "") // Same name, different op
+
+	// Find by name and operation
+	found := dm.FindSessionByName(DDLCreate, "orders")
+	assert.Equal(t, id1, found)
+
+	// Find non-existent
+	notFound := dm.FindSessionByName(DDLCreate, "products")
+	assert.Empty(t, notFound)
+}
+
+// TestDDLManager_FindSessionByName_WrongOp tests that wrong operation type doesn't match.
+func TestDDLManager_FindSessionByName_WrongOp(t *testing.T) {
+	dm := NewDDLManager(nil)
+
+	// Create a DDLCreate session
+	dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+
+	// Try to find with wrong operation type
+	found := dm.FindSessionByName(DDLDelete, "orders")
+	assert.Empty(t, found)
+}
+
+// TestParseDDLOpType tests parsing DDL operation strings.
+func TestParseDDLOpType(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected DDLOpType
+		valid    bool
+	}{
+		{"create", DDLCreate, true},
+		{"modify", DDLModify, true},
+		{"delete", DDLDelete, true},
+		{"invalid", DDLCreate, false},
+		{"CREATE", DDLCreate, false}, // case-sensitive
+		{"", DDLCreate, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			op, valid := ParseDDLOpType(tt.input)
+			assert.Equal(t, tt.expected, op)
+			assert.Equal(t, tt.valid, valid)
+		})
+	}
+}

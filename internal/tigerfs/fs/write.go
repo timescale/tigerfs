@@ -244,11 +244,87 @@ func (o *Operations) writeImportFile(ctx context.Context, parsed *ParsedPath, da
 }
 
 // writeDDLFile handles DDL staging file writes.
+//
+// Supported files:
+//   - sql: Write DDL content
+//   - .test: Trigger validation (data ignored)
+//   - .commit: Execute DDL (data ignored)
+//   - .abort: Cancel staging session (data ignored)
 func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
-	// DDL writes will be implemented in Task 9.5
-	return &FSError{
-		Code:    ErrNotImplemented,
-		Message: "DDL writes not yet implemented",
+	// Convert operation string to DDLOpType
+	op, valid := ParseDDLOpType(parsed.DDLOp)
+	if !valid {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp),
+		}
+	}
+
+	// Find session by name
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID == "" {
+		return &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("no DDL session found for %s", parsed.DDLName),
+			Hint:    fmt.Sprintf("create session first with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
+		}
+	}
+
+	// Handle the specific file
+	switch parsed.DDLFile {
+	case FileSQL:
+		// Write DDL content
+		err := o.ddl.WriteSQL(sessionID, string(data))
+		if err != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: "failed to write DDL content",
+				Cause:   err,
+			}
+		}
+		return nil
+
+	case FileTest:
+		// Trigger validation
+		_, err := o.ddl.Test(ctx, sessionID)
+		if err != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: "failed to test DDL",
+				Cause:   err,
+			}
+		}
+		return nil
+
+	case FileCommit:
+		// Execute DDL
+		err := o.ddl.Commit(ctx, sessionID)
+		if err != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: "DDL commit failed",
+				Cause:   err,
+			}
+		}
+		return nil
+
+	case FileAbort:
+		// Cancel staging session
+		err := o.ddl.Abort(sessionID)
+		if err != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: "failed to abort DDL session",
+				Cause:   err,
+			}
+		}
+		return nil
+
+	default:
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("unknown DDL file: %s", parsed.DDLFile),
+		}
 	}
 }
 
@@ -486,11 +562,7 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 		return nil
 
 	case PathDDL:
-		// DDL mkdir will be implemented in Task 9.5
-		return &FSError{
-			Code:    ErrNotImplemented,
-			Message: "DDL mkdir not yet implemented",
-		}
+		return o.mkdirDDL(ctx, parsed)
 
 	default:
 		return &FSError{
@@ -556,4 +628,52 @@ func (o *Operations) parseWriteData(data []byte, formatType string) ([]string, [
 		// Default to JSON
 		return format.ParseJSON(string(data))
 	}
+}
+
+// mkdirDDL creates a DDL staging session.
+//
+// This is triggered by mkdir /.create/name, /.modify/name, or /.delete/name.
+// Creates a new DDL staging session for the named object.
+func (o *Operations) mkdirDDL(ctx context.Context, parsed *ParsedPath) *FSError {
+	// Validate DDLName is not empty
+	if parsed.DDLName == "" {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "DDL object name is required",
+			Hint:    "use mkdir /.create/<name> to create a staging session",
+		}
+	}
+
+	// Convert operation string to DDLOpType
+	op, valid := ParseDDLOpType(parsed.DDLOp)
+	if !valid {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp),
+		}
+	}
+
+	// Check if session already exists
+	existingID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if existingID != "" {
+		return &FSError{
+			Code:    ErrExists,
+			Message: fmt.Sprintf("DDL session already exists for %s", parsed.DDLName),
+			Hint:    "use the existing session or abort it first with touch /.create/<name>/.abort",
+		}
+	}
+
+	// Create new session
+	// Default object type is "table"; for indexes, the FUSE layer parses additional
+	// context from the path (e.g., /table/.indexes/.create/idx_name)
+	_, err := o.ddl.CreateSession(op, "table", "public", parsed.DDLName, "")
+	if err != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to create DDL session",
+			Cause:   err,
+		}
+	}
+
+	return nil
 }

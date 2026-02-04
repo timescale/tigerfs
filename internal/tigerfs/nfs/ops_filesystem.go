@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-billy/v5"
@@ -43,13 +44,25 @@ func normalizePath(p string) string {
 func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Create", zap.String("filename", filename))
+
+	// DDL trigger files (.test, .commit, .abort) are marked with isTrigger=true.
+	// The actual trigger fires on Close via memFile.Close() calling WriteFile.
+	baseName := path.Base(filename)
+	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
+
+	// DDL sql files need special handling: empty writes must be persisted to clear
+	// the session content. This is needed for the truncate-before-write pattern.
+	isDDLSQL := baseName == "sql" && isDDLPath(filename)
+
 	return &memFile{
-		name:     path.Base(filename),
-		data:     []byte{},
-		writable: true,
-		dirty:    false,
-		path:     filename,
-		ops:      f.ops,
+		name:      baseName,
+		data:      []byte{},
+		writable:  true,
+		dirty:     false,
+		path:      filename,
+		ops:       f.ops,
+		isTrigger: isTrigger,
+		isDDLSQL:  isDDLSQL,
 	}, nil
 }
 
@@ -65,15 +78,49 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 
 	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
 
+	// DDL trigger files (.test, .commit, .abort) are handled specially:
+	// - They always appear to exist (via stat) for NFS protocol compliance
+	// - The actual trigger fires on Close via memFile.Close() calling WriteFile
+	// - We mark them with isTrigger=true so Close knows to bypass the empty-write check
+	baseName := path.Base(filename)
+	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
+
+	// DDL sql files need special handling for NFS truncate-before-write pattern.
+	isDDLSQL := baseName == "sql" && isDDLPath(filename)
+
 	// For write with truncate or create, start with empty data
 	if flag&os.O_TRUNC != 0 || flag&os.O_CREATE != 0 {
 		return &memFile{
-			name:     path.Base(filename),
-			data:     []byte{},
-			writable: isWrite,
-			dirty:    false,
-			path:     filename,
-			ops:      f.ops,
+			name:      baseName,
+			data:      []byte{},
+			writable:  isWrite,
+			dirty:     false,
+			path:      filename,
+			ops:       f.ops,
+			isTrigger: isTrigger,
+			isDDLSQL:  isDDLSQL,
+		}, nil
+	}
+
+	// For DDL sql files opened for writing (without O_TRUNC), start with empty data.
+	// This handles the NFS truncate-before-write pattern:
+	//   1. SETATTR(size=0) → opens with O_TRUNC, truncates, closes (marks dirty but skip write)
+	//   2. WRITE → opens with O_WRONLY (no O_TRUNC), writes content, closes
+	// Without this, step 2 would read the template from DDLManager (since GetSQL
+	// returns template when SQL is empty), causing partial overwrites.
+	// By starting with empty data for write operations, we ensure clean writes.
+	if isDDLSQL && isWrite {
+		logging.Debug("OpsFilesystem.OpenFile: DDL sql file opened for write, starting empty",
+			zap.String("filename", filename), zap.Int("flag", flag))
+		return &memFile{
+			name:      baseName,
+			data:      []byte{},
+			writable:  isWrite,
+			dirty:     false,
+			path:      filename,
+			ops:       f.ops,
+			isTrigger: isTrigger,
+			isDDLSQL:  isDDLSQL,
 		}, nil
 	}
 
@@ -84,12 +131,14 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 			// If creating, return empty writable file
 			if flag&os.O_CREATE != 0 {
 				return &memFile{
-					name:     path.Base(filename),
-					data:     []byte{},
-					writable: isWrite,
-					dirty:    false,
-					path:     filename,
-					ops:      f.ops,
+					name:      baseName,
+					data:      []byte{},
+					writable:  isWrite,
+					dirty:     false,
+					path:      filename,
+					ops:       f.ops,
+					isTrigger: isTrigger,
+					isDDLSQL:  isDDLSQL,
 				}, nil
 			}
 			return nil, os.ErrNotExist
@@ -98,12 +147,14 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 	}
 
 	return &memFile{
-		name:     path.Base(filename),
-		data:     content.Data,
-		writable: isWrite,
-		dirty:    false,
-		path:     filename,
-		ops:      f.ops,
+		name:      baseName,
+		data:      content.Data,
+		writable:  isWrite,
+		dirty:     false,
+		path:      filename,
+		ops:       f.ops,
+		isTrigger: isTrigger,
+		isDDLSQL:  isDDLSQL,
 	}, nil
 }
 
@@ -285,7 +336,15 @@ func (f *OpsFilesystem) Chown(name string, uid, gid int) error {
 
 // Chtimes is a no-op for database-backed filesystems.
 func (f *OpsFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) error {
-	logging.Debug("OpsFilesystem.Chtimes (no-op)", zap.String("name", name), zap.Time("atime", atime), zap.Time("mtime", mtime))
+	name = normalizePath(name)
+	logging.Debug("OpsFilesystem.Chtimes", zap.String("name", name), zap.Time("atime", atime), zap.Time("mtime", mtime))
+
+	// DDL trigger files (.test, .commit, .abort) are triggered on OpenFile, not Chtimes.
+	// go-nfs may call Chtimes after file close to update timestamps, but by then the
+	// session might already be removed (for .abort/.commit). We just return success.
+	// Note: We used to trigger here for `touch` which uses Chtimes, but now OpenFile
+	// triggers on ANY open of trigger files, so Chtimes triggering is redundant.
+
 	return nil
 }
 
@@ -433,15 +492,22 @@ func ctx() context.Context {
 	return context.Background()
 }
 
+// isDDLPath checks if a path is within a DDL staging directory (.create, .modify, .delete).
+func isDDLPath(p string) bool {
+	return strings.Contains(p, "/.create/") || strings.Contains(p, "/.modify/") || strings.Contains(p, "/.delete/")
+}
+
 // memFile is an in-memory file for reading and writing row data.
 type memFile struct {
-	name     string
-	data     []byte
-	offset   int64
-	writable bool
-	dirty    bool
-	path     string         // full path for write-back
-	ops      *fs.Operations // for write-back on Close
+	name      string
+	data      []byte
+	offset    int64
+	writable  bool
+	dirty     bool
+	path      string         // full path for write-back
+	ops       *fs.Operations // for write-back on Close
+	isTrigger bool           // true for DDL trigger files (.test, .commit, .abort)
+	isDDLSQL  bool           // true for DDL sql files (need empty writes to clear session)
 }
 
 func (f *memFile) Name() string {
@@ -501,9 +567,23 @@ func (f *memFile) Write(p []byte) (int, error) {
 }
 
 func (f *memFile) Close() error {
-	logging.Debug("memFile.Close", zap.String("path", f.path), zap.Bool("dirty", f.dirty), zap.Int("size", len(f.data)))
+	logging.Debug("memFile.Close", zap.String("path", f.path), zap.Bool("dirty", f.dirty), zap.Int("size", len(f.data)), zap.Bool("isTrigger", f.isTrigger), zap.Bool("isDDLSQL", f.isDDLSQL))
+
+	// For DDL trigger files, ALWAYS write to trigger the operation.
+	// The trigger happens regardless of whether the file was dirtied or has content.
+	if f.isTrigger && f.ops != nil && f.path != "" {
+		logging.Debug("memFile.Close: DDL trigger file, triggering operation", zap.String("path", f.path))
+		fsErr := f.ops.WriteFile(ctx(), f.path, []byte{})
+		if fsErr != nil {
+			logging.Error("memFile.Close: DDL trigger failed", zap.String("path", f.path), zap.Error(fsErr.Cause))
+			// Don't return error - let NFS operations complete normally.
+			// The DDL operation failure is logged but shouldn't cause NFS protocol errors.
+		}
+		return nil
+	}
+
 	if f.dirty && f.ops != nil && f.path != "" {
-		// WORKAROUND: Skip writing empty content to the database.
+		// WORKAROUND: Skip writing empty content to database columns.
 		//
 		// Background: The macOS NFS client uses a truncate-before-write pattern:
 		//   1. SETATTR with size=0 (truncates file to empty)
@@ -522,16 +602,13 @@ func (f *memFile) Close() error {
 		// This workaround skips the database write when content is empty. The actual
 		// content will be written when the NFS WRITE operations arrive with data.
 		//
-		// TODO: A proper architectural fix would be to:
-		//   1. Track file handles across NFS operations (not just within a single RPC)
-		//   2. Buffer writes and only commit to DB on NFS COMMIT, or when the file
-		//      handle reference count drops to zero
-		//   3. This would require significant changes to how go-nfs handles file state
-		//      and how we integrate with it
+		// EXCEPTION: DDL sql files MUST write empty content to clear the session.
+		// Without this, the truncate-before-write pattern leaves stale template
+		// content in the DDL session, causing partial overwrites.
 		//
 		// Limitation: This workaround means users cannot intentionally clear a column
 		// to empty by truncating. They should use Delete (rm) to set columns to NULL.
-		if len(f.data) == 0 {
+		if len(f.data) == 0 && !f.isDDLSQL {
 			logging.Debug("memFile.Close: skipping write of empty content (truncate-before-write pattern)",
 				zap.String("path", f.path))
 			return nil
