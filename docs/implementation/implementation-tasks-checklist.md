@@ -184,7 +184,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 9.7 | Implement NFS Handler (Write Operations) | ~7100 |
 | ✅ | 9.8 | FUSE Integration and Migration | ~7210 |
 | ✅ | 9.9 | Feature Parity Verification and Integration Tests | ~7310 |
-| ⬜ | 9.10 | Cleanup and Refactoring | ~7280 |
+| ⬜ | 9.10 | Cleanup, Refactoring, and Docker-on-macOS Integration Tests | ~7280 |
 | ⬜ | 9.11 | Final Testing and v0.2.0 Release | ~7380 |
 
 ---

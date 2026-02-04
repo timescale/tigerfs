@@ -7304,6 +7304,13 @@ Task 9.1 introduced `PipelineContext` as a type alias to `fs.FSContext` for back
 
 6. Update any documentation referencing `PipelineContext`
 
+7. Implement Docker-on-macOS integration test support:
+   - Currently, integration tests use NFS on macOS and FUSE on Linux
+   - Add `TEST_MOUNT_METHOD=docker` option on macOS to run tests using Linux FUSE in Docker
+   - Requires refactoring FUSE layer to use an OS abstraction interface
+   - DockerFS wrapper executes file operations via `docker exec` commands
+   - Build TigerFS for Linux, run in privileged container with FUSE device
+
 **Files to Modify:**
 - `internal/tigerfs/fuse/pipeline.go` - Remove alias
 - `internal/tigerfs/fuse/constants.go` - Simplify re-exports
@@ -7331,6 +7338,7 @@ go test -race ./...
 - Constants imported from `fs` package where appropriate
 - All tests pass
 - No behavior changes
+- `TEST_MOUNT_METHOD=docker` runs integration tests on macOS using Linux FUSE in Docker
 
 ---
 
