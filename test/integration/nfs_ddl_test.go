@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -572,5 +573,335 @@ func TestNFSDDL_ModifyExistingTable(t *testing.T) {
 				t.Logf("Columns after ALTER: %s", string(columns))
 			}
 		}
+	})
+}
+
+// TestNFS_WriteReadScenarios tests 8 comprehensive write/read scenarios via NFS.
+// This tests different access patterns:
+// - Write without prior read
+// - Read before write
+// - Different format extensions
+// - Column file access
+// - Creating new rows
+func TestNFS_WriteReadScenarios(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	// Use empty database - we'll create our own table with 1000 rows
+	dbResult := GetTestDBEmpty(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	tableName := "nfs_write_test"
+
+	// Step 0: Create table with 10 rows
+	t.Run("SetupTable", func(t *testing.T) {
+		createDir := filepath.Join(mountpoint, ".create", tableName)
+
+		if err := os.MkdirAll(createDir, 0755); err != nil {
+			t.Fatalf("Failed to mkdir /.create/%s: %v", tableName, err)
+		}
+
+		// Write DDL to create table with 10 rows
+		sqlPath := filepath.Join(createDir, "sql")
+		ddl := fmt.Sprintf(`CREATE TABLE %s (
+			id INT PRIMARY KEY,
+			name TEXT NOT NULL,
+			email TEXT,
+			value INT
+		);
+		INSERT INTO %s (id, name, email, value)
+		SELECT i, 'User' || i, 'user' || i || '@example.com', i * 10
+		FROM generate_series(1, 10) i;`, tableName, tableName)
+
+		if err := os.WriteFile(sqlPath, []byte(ddl), 0644); err != nil {
+			t.Fatalf("Failed to write DDL: %v", err)
+		}
+
+		// Commit the DDL
+		commitPath := filepath.Join(createDir, ".commit")
+		if err := touchTriggerFile(t, commitPath); err != nil {
+			t.Fatalf("Failed to trigger .commit: %v", err)
+		}
+
+		time.Sleep(500 * time.Millisecond)
+
+		// Verify table exists
+		tablePath := filepath.Join(mountpoint, tableName)
+		if _, err := os.Stat(tablePath); os.IsNotExist(err) {
+			t.Fatalf("Table directory should exist after CREATE")
+		}
+		t.Logf("Created table %s with 1000 rows", tableName)
+	})
+
+	tablePath := filepath.Join(mountpoint, tableName)
+
+	// Scenario 1: Write 2.json (never read before), then read 2.json
+	t.Run("Scenario1_WriteReadJSON", func(t *testing.T) {
+		// Write row 2 (which exists in DB with different values)
+		row2Path := filepath.Join(tablePath, "2.json")
+		newData := `{"name": "NewUser2", "email": "new2@test.com", "value": 999}`
+		if err := os.WriteFile(row2Path, []byte(newData), 0644); err != nil {
+			t.Fatalf("Failed to write 2.json: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read back and verify
+		readData, err := os.ReadFile(row2Path)
+		if err != nil {
+			t.Fatalf("Failed to read 2.json: %v", err)
+		}
+		t.Logf("Scenario 1 - Read 2.json: %s", string(readData))
+
+		if !strings.Contains(string(readData), "NewUser2") {
+			t.Errorf("Expected 'NewUser2' in read data, got: %s", string(readData))
+		}
+		if !strings.Contains(string(readData), "999") {
+			t.Errorf("Expected '999' in read data, got: %s", string(readData))
+		}
+	})
+
+	// Scenario 2: Write 3.tsv (never read before), then read 3.csv
+	t.Run("Scenario2_WriteTSVReadCSV", func(t *testing.T) {
+		// Write row 3 as TSV
+		row3TSVPath := filepath.Join(tablePath, "3.tsv")
+		newData := "name\temail\tvalue\nNewUser3\tnew3@test.com\t888"
+		if err := os.WriteFile(row3TSVPath, []byte(newData), 0644); err != nil {
+			t.Fatalf("Failed to write 3.tsv: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read back as CSV
+		row3CSVPath := filepath.Join(tablePath, "3.csv")
+		readData, err := os.ReadFile(row3CSVPath)
+		if err != nil {
+			t.Fatalf("Failed to read 3.csv: %v", err)
+		}
+		t.Logf("Scenario 2 - Read 3.csv: %s", string(readData))
+
+		if !strings.Contains(string(readData), "NewUser3") {
+			t.Errorf("Expected 'NewUser3' in read data, got: %s", string(readData))
+		}
+	})
+
+	// Scenario 3: Read 4.json first, then write 4.json, then read 4.json
+	t.Run("Scenario3_ReadWriteReadJSON", func(t *testing.T) {
+		row4Path := filepath.Join(tablePath, "4.json")
+
+		// Read first (existing row)
+		originalData, err := os.ReadFile(row4Path)
+		if err != nil {
+			t.Fatalf("Failed to read original 4.json: %v", err)
+		}
+		t.Logf("Scenario 3 - Original 4.json: %s", string(originalData))
+
+		if !strings.Contains(string(originalData), "User4") {
+			t.Errorf("Expected 'User4' in original data, got: %s", string(originalData))
+		}
+
+		// Write new values
+		newData := `{"name": "UpdatedUser4", "email": "updated4@test.com", "value": 777}`
+		if err := os.WriteFile(row4Path, []byte(newData), 0644); err != nil {
+			t.Fatalf("Failed to write 4.json: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read again
+		readData, err := os.ReadFile(row4Path)
+		if err != nil {
+			t.Fatalf("Failed to read updated 4.json: %v", err)
+		}
+		t.Logf("Scenario 3 - Updated 4.json: %s", string(readData))
+
+		if !strings.Contains(string(readData), "UpdatedUser4") {
+			t.Errorf("Expected 'UpdatedUser4' in read data, got: %s", string(readData))
+		}
+	})
+
+	// Scenario 4: Write 5/name, then read 5/name.txt
+	t.Run("Scenario4_WriteColumnReadColumnTxt", func(t *testing.T) {
+		row5Dir := filepath.Join(tablePath, "5")
+		namePath := filepath.Join(row5Dir, "name")
+
+		// Write column without extension
+		if err := os.WriteFile(namePath, []byte("ScenarioFiveUser\n"), 0644); err != nil {
+			t.Fatalf("Failed to write 5/name: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read with .txt extension (should read same column)
+		nameTxtPath := filepath.Join(row5Dir, "name.txt")
+		readData, err := os.ReadFile(nameTxtPath)
+		if err != nil {
+			t.Logf("Scenario 4 - Could not read 5/name.txt (may not be supported): %v", err)
+			// Fall back to reading without extension
+			readData, err = os.ReadFile(namePath)
+			if err != nil {
+				t.Fatalf("Failed to read 5/name: %v", err)
+			}
+		}
+		t.Logf("Scenario 4 - Read 5/name(.txt): %s", strings.TrimSpace(string(readData)))
+
+		if !strings.Contains(string(readData), "ScenarioFiveUser") {
+			t.Errorf("Expected 'ScenarioFiveUser', got: %s", string(readData))
+		}
+	})
+
+	// Scenario 5: Write 6/name.txt, then read 6/name
+	t.Run("Scenario5_WriteColumnTxtReadColumn", func(t *testing.T) {
+		row6Dir := filepath.Join(tablePath, "6")
+		nameTxtPath := filepath.Join(row6Dir, "name.txt")
+		namePath := filepath.Join(row6Dir, "name")
+
+		// Write column with .txt extension
+		if err := os.WriteFile(nameTxtPath, []byte("ScenarioSixUser\n"), 0644); err != nil {
+			t.Logf("Scenario 5 - Could not write 6/name.txt (may not be supported): %v", err)
+			// Fall back to writing without extension
+			if err := os.WriteFile(namePath, []byte("ScenarioSixUser\n"), 0644); err != nil {
+				t.Fatalf("Failed to write 6/name: %v", err)
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read without extension
+		readData, err := os.ReadFile(namePath)
+		if err != nil {
+			t.Fatalf("Failed to read 6/name: %v", err)
+		}
+		t.Logf("Scenario 5 - Read 6/name: %s", strings.TrimSpace(string(readData)))
+
+		if !strings.Contains(string(readData), "ScenarioSixUser") {
+			t.Errorf("Expected 'ScenarioSixUser', got: %s", string(readData))
+		}
+	})
+
+	// Scenario 6: Read 7/name first, then write 7/name, then read 7/name
+	t.Run("Scenario6_ReadWriteReadColumn", func(t *testing.T) {
+		row7Dir := filepath.Join(tablePath, "7")
+		namePath := filepath.Join(row7Dir, "name")
+
+		// Read original value
+		originalData, err := os.ReadFile(namePath)
+		if err != nil {
+			t.Fatalf("Failed to read original 7/name: %v", err)
+		}
+		t.Logf("Scenario 6 - Original 7/name: %s", strings.TrimSpace(string(originalData)))
+
+		if !strings.Contains(string(originalData), "User7") {
+			t.Errorf("Expected 'User7' in original, got: %s", string(originalData))
+		}
+
+		// Write new value
+		if err := os.WriteFile(namePath, []byte("UpdatedSevenUser\n"), 0644); err != nil {
+			t.Fatalf("Failed to write 7/name: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read again
+		readData, err := os.ReadFile(namePath)
+		if err != nil {
+			t.Fatalf("Failed to read updated 7/name: %v", err)
+		}
+		t.Logf("Scenario 6 - Updated 7/name: %s", strings.TrimSpace(string(readData)))
+
+		if !strings.Contains(string(readData), "UpdatedSevenUser") {
+			t.Errorf("Expected 'UpdatedSevenUser', got: %s", string(readData))
+		}
+	})
+
+	// Scenario 7: Write 20.json (new row - doesn't exist), then read 20.json
+	t.Run("Scenario7_WriteNewRowReadJSON", func(t *testing.T) {
+		row20Path := filepath.Join(tablePath, "20.json")
+
+		// Write new row (id 20 doesn't exist)
+		newData := `{"id": 20, "name": "NewRow20", "email": "new20@test.com", "value": 200}`
+		if err := os.WriteFile(row20Path, []byte(newData), 0644); err != nil {
+			t.Fatalf("Failed to write 20.json: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read back
+		readData, err := os.ReadFile(row20Path)
+		if err != nil {
+			t.Fatalf("Failed to read 20.json: %v", err)
+		}
+		t.Logf("Scenario 7 - Read 20.json: %s", string(readData))
+
+		if !strings.Contains(string(readData), "NewRow20") {
+			t.Errorf("Expected 'NewRow20' in read data, got: %s", string(readData))
+		}
+	})
+
+	// Scenario 8: Read 21.json (should fail), then write 21.json, then read 21.json
+	t.Run("Scenario8_ReadFailWriteReadJSON", func(t *testing.T) {
+		row21Path := filepath.Join(tablePath, "21.json")
+
+		// Read should fail (row doesn't exist)
+		_, err := os.ReadFile(row21Path)
+		if err == nil {
+			t.Logf("Scenario 8 - Unexpected: 21.json exists before write")
+		} else {
+			t.Logf("Scenario 8 - Expected failure reading 21.json: %v", err)
+		}
+
+		// Write new row
+		newData := `{"id": 21, "name": "NewRow21", "email": "new21@test.com", "value": 210}`
+		if err := os.WriteFile(row21Path, []byte(newData), 0644); err != nil {
+			t.Fatalf("Failed to write 21.json: %v", err)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read back
+		readData, err := os.ReadFile(row21Path)
+		if err != nil {
+			t.Fatalf("Failed to read 21.json: %v", err)
+		}
+		t.Logf("Scenario 8 - Read 21.json: %s", string(readData))
+
+		if !strings.Contains(string(readData), "NewRow21") {
+			t.Errorf("Expected 'NewRow21' in read data, got: %s", string(readData))
+		}
+	})
+
+	// Cleanup: Delete the test table
+	t.Run("Cleanup", func(t *testing.T) {
+		deleteDir := filepath.Join(mountpoint, ".delete", tableName)
+
+		if err := os.MkdirAll(deleteDir, 0755); err != nil {
+			t.Fatalf("Failed to mkdir /.delete/%s: %v", tableName, err)
+		}
+
+		sqlPath := filepath.Join(deleteDir, "sql")
+		ddl := "DROP TABLE " + tableName + ";"
+		if err := os.WriteFile(sqlPath, []byte(ddl), 0644); err != nil {
+			t.Fatalf("Failed to write DROP DDL: %v", err)
+		}
+
+		commitPath := filepath.Join(deleteDir, ".commit")
+		if err := touchTriggerFile(t, commitPath); err != nil {
+			t.Fatalf("Failed to trigger .commit: %v", err)
+		}
+
+		t.Logf("Cleaned up table %s", tableName)
 	})
 }

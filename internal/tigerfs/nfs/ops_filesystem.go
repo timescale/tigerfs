@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-git/go-billy/v5"
@@ -21,11 +22,29 @@ import (
 // This provides feature parity between FUSE and NFS by using the shared core.
 type OpsFilesystem struct {
 	ops *fs.Operations
+
+	// inFlightMu protects inFlightFiles and truncatedFiles for concurrent access.
+	inFlightMu sync.RWMutex
+	// inFlightFiles tracks files being created but not yet written to the database.
+	// This is needed because NFS calls Stat after Create but before Close, and the
+	// row doesn't exist in the database yet. We return synthetic stat info for these.
+	inFlightFiles map[string]*memFile
+
+	// truncatedFiles tracks files that have been truncated via O_TRUNC but not yet
+	// written. This handles the NFS truncate-before-write pattern for existing rows:
+	//   1. SETATTR(size=0) → OpenFile with O_TRUNC → marks as truncated
+	//   2. WRITE → OpenFile for write → checks truncated, returns empty memFile
+	// Without this, step 2 would read existing row data from DB, causing corruption.
+	truncatedFiles map[string]bool
 }
 
 // NewOpsFilesystem creates a new OpsFilesystem that wraps fs.Operations.
 func NewOpsFilesystem(ops *fs.Operations) *OpsFilesystem {
-	return &OpsFilesystem{ops: ops}
+	return &OpsFilesystem{
+		ops:            ops,
+		inFlightFiles:  make(map[string]*memFile),
+		truncatedFiles: make(map[string]bool),
+	}
 }
 
 // normalizePath ensures the path starts with "/" as required by fs.Operations.
@@ -54,7 +73,10 @@ func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	// the session content. This is needed for the truncate-before-write pattern.
 	isDDLSQL := baseName == "sql" && isDDLPath(filename)
 
-	return &memFile{
+	// Row files (JSON, CSV, etc.) need replacement semantics on write.
+	rowFile := isRowFile(baseName)
+
+	mf := &memFile{
 		name:      baseName,
 		data:      []byte{},
 		writable:  true,
@@ -63,7 +85,20 @@ func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 		ops:       f.ops,
 		isTrigger: isTrigger,
 		isDDLSQL:  isDDLSQL,
-	}, nil
+		isRowFile: rowFile,
+		fs:        f,
+	}
+
+	// Track this file as in-flight so Stat returns success before Close writes to DB.
+	// This is needed because NFS calls SETATTR (which calls Stat) after CREATE but
+	// before the data is written to the database.
+	f.inFlightMu.Lock()
+	f.inFlightFiles[filename] = mf
+	numAfter := len(f.inFlightFiles)
+	f.inFlightMu.Unlock()
+	logging.Debug("OpsFilesystem.Create: registered in-flight file", zap.String("path", filename), zap.Int("numInFlight", numAfter))
+
+	return mf, nil
 }
 
 // Open opens a file for reading.
@@ -78,6 +113,39 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 
 	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
 
+	// Check for in-flight files first.
+	// NFS write workflow: CREATE → SETATTR → WRITE (OpenFile with O_RDWR, no O_CREATE)
+	// The file is registered as in-flight on CREATE but doesn't exist in DB yet.
+	// If we try to read from DB, it fails. So for in-flight files opened for writing,
+	// return a writable memFile that will write to DB on Close.
+	if isWrite {
+		f.inFlightMu.RLock()
+		inFlightMf, inFlight := f.inFlightFiles[filename]
+		f.inFlightMu.RUnlock()
+
+		if inFlight {
+			logging.Debug("OpsFilesystem.OpenFile: returning in-flight file for write",
+				zap.String("filename", filename), zap.Int("flag", flag))
+
+			// Return a new memFile that shares the same path but allows writing.
+			// The original in-flight memFile was created by CREATE and immediately closed.
+			// This new memFile will receive the actual data and write to DB on Close.
+			baseName := path.Base(filename)
+			return &memFile{
+				name:      baseName,
+				data:      inFlightMf.data, // Start with any existing data
+				writable:  true,
+				dirty:     false,
+				path:      filename,
+				ops:       f.ops,
+				isTrigger: inFlightMf.isTrigger,
+				isDDLSQL:  inFlightMf.isDDLSQL,
+				isRowFile: inFlightMf.isRowFile,
+				fs:        f,
+			}, nil
+		}
+	}
+
 	// DDL trigger files (.test, .commit, .abort) are handled specially:
 	// - They always appear to exist (via stat) for NFS protocol compliance
 	// - The actual trigger fires on Close via memFile.Close() calling WriteFile
@@ -88,9 +156,12 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 	// DDL sql files need special handling for NFS truncate-before-write pattern.
 	isDDLSQL := baseName == "sql" && isDDLPath(filename)
 
+	// Row files (JSON, CSV, etc.) need replacement semantics on write.
+	rowFile := isRowFile(baseName)
+
 	// For write with truncate or create, start with empty data
 	if flag&os.O_TRUNC != 0 || flag&os.O_CREATE != 0 {
-		return &memFile{
+		mf := &memFile{
 			name:      baseName,
 			data:      []byte{},
 			writable:  isWrite,
@@ -99,7 +170,53 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 			ops:       f.ops,
 			isTrigger: isTrigger,
 			isDDLSQL:  isDDLSQL,
-		}, nil
+			isRowFile: rowFile,
+			fs:        f,
+		}
+		f.inFlightMu.Lock()
+		// Track as in-flight for O_CREATE (new file being created).
+		// This allows Stat to succeed before Close writes to DB.
+		if flag&os.O_CREATE != 0 {
+			f.inFlightFiles[filename] = mf
+			logging.Debug("OpsFilesystem.OpenFile: registered in-flight file (O_CREATE)",
+				zap.String("path", filename), zap.Int("flag", flag))
+		}
+		// Track as truncated for O_TRUNC (existing file being overwritten).
+		// This allows subsequent WRITE operations to start with empty data
+		// instead of reading stale data from the database.
+		if flag&os.O_TRUNC != 0 {
+			f.truncatedFiles[filename] = true
+			logging.Debug("OpsFilesystem.OpenFile: marked file as truncated (O_TRUNC)",
+				zap.String("path", filename), zap.Int("flag", flag))
+		}
+		f.inFlightMu.Unlock()
+		return mf, nil
+	}
+
+	// Check if file was recently truncated (truncate-before-write pattern).
+	// For existing files: SETATTR(size=0) → O_TRUNC → marks truncated → WRITE → here
+	// We need to return empty data instead of reading stale data from DB.
+	if isWrite {
+		f.inFlightMu.RLock()
+		truncated := f.truncatedFiles[filename]
+		f.inFlightMu.RUnlock()
+
+		if truncated {
+			logging.Debug("OpsFilesystem.OpenFile: returning empty memFile for truncated file",
+				zap.String("filename", filename), zap.Int("flag", flag))
+			return &memFile{
+				name:      baseName,
+				data:      []byte{},
+				writable:  true,
+				dirty:     false,
+				path:      filename,
+				ops:       f.ops,
+				isTrigger: isTrigger,
+				isDDLSQL:  isDDLSQL,
+				isRowFile: rowFile,
+				fs:        f,
+			}, nil
+		}
 	}
 
 	// For DDL sql files opened for writing (without O_TRUNC), start with empty data.
@@ -121,6 +238,8 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 			ops:       f.ops,
 			isTrigger: isTrigger,
 			isDDLSQL:  isDDLSQL,
+			isRowFile: rowFile,
+			fs:        f,
 		}, nil
 	}
 
@@ -128,9 +247,9 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 	content, fsErr := f.ops.ReadFile(ctx(), filename)
 	if fsErr != nil {
 		if fsErr.Code == fs.ErrNotExist {
-			// If creating, return empty writable file
+			// If creating, return empty writable file and track as in-flight
 			if flag&os.O_CREATE != 0 {
-				return &memFile{
+				mf := &memFile{
 					name:      baseName,
 					data:      []byte{},
 					writable:  isWrite,
@@ -139,7 +258,15 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 					ops:       f.ops,
 					isTrigger: isTrigger,
 					isDDLSQL:  isDDLSQL,
-				}, nil
+					isRowFile: rowFile,
+					fs:        f,
+				}
+				f.inFlightMu.Lock()
+				f.inFlightFiles[filename] = mf
+				f.inFlightMu.Unlock()
+				logging.Debug("OpsFilesystem.OpenFile: registered in-flight file (O_CREATE, not exist)",
+					zap.String("path", filename), zap.Int("flag", flag))
+				return mf, nil
 			}
 			return nil, os.ErrNotExist
 		}
@@ -155,6 +282,8 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 		ops:       f.ops,
 		isTrigger: isTrigger,
 		isDDLSQL:  isDDLSQL,
+		isRowFile: rowFile,
+		fs:        f,
 	}, nil
 }
 
@@ -162,6 +291,26 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Stat", zap.String("filename", filename))
+
+	// Check for in-flight files first (files being created but not yet written to DB).
+	// NFS calls Stat after Create but before Close, and the row doesn't exist in the
+	// database yet. Return synthetic info for these files.
+	f.inFlightMu.RLock()
+	mf, inFlight := f.inFlightFiles[filename]
+	f.inFlightMu.RUnlock()
+
+	if inFlight {
+		logging.Debug("OpsFilesystem.Stat: returning in-flight file info",
+			zap.String("filename", filename),
+			zap.Int("size", len(mf.data)))
+		return &inFlightFileInfo{
+			name:    mf.name,
+			size:    int64(len(mf.data)),
+			mode:    0644,
+			modTime: time.Now(),
+			path:    filename,
+		}, nil
+	}
 
 	entry, fsErr := f.ops.Stat(ctx(), filename)
 	if fsErr != nil {
@@ -402,6 +551,36 @@ func (fi *opsFileInfo) Sys() interface{} {
 	}
 }
 
+// inFlightFileInfo implements os.FileInfo for files being created but not yet in DB.
+// This is used to return synthetic stat info for in-flight creates.
+type inFlightFileInfo struct {
+	name    string
+	size    int64
+	mode    os.FileMode
+	modTime time.Time
+	path    string
+}
+
+func (fi *inFlightFileInfo) Name() string       { return fi.name }
+func (fi *inFlightFileInfo) Size() int64        { return fi.size }
+func (fi *inFlightFileInfo) Mode() os.FileMode  { return fi.mode }
+func (fi *inFlightFileInfo) ModTime() time.Time { return fi.modTime }
+func (fi *inFlightFileInfo) IsDir() bool        { return false }
+
+// Sys returns NFS file info with the current user's UID/GID.
+func (fi *inFlightFileInfo) Sys() interface{} {
+	hasher := fnv.New64()
+	hasher.Write([]byte(fi.path))
+	fileid := hasher.Sum64()
+
+	return &nfsfile.FileInfo{
+		Fileid: fileid,
+		UID:    uint32(os.Getuid()),
+		GID:    uint32(os.Getgid()),
+		Nlink:  1,
+	}
+}
+
 // opsChrootFilesystem wraps an OpsFilesystem with a root prefix.
 type opsChrootFilesystem struct {
 	fs   *OpsFilesystem
@@ -497,6 +676,15 @@ func isDDLPath(p string) bool {
 	return strings.Contains(p, "/.create/") || strings.Contains(p, "/.modify/") || strings.Contains(p, "/.delete/")
 }
 
+// isRowFile checks if a filename is a row format file (JSON, CSV, TSV, YAML).
+// Row files represent entire database rows and writes should replace the full content.
+func isRowFile(filename string) bool {
+	return strings.HasSuffix(filename, ".json") ||
+		strings.HasSuffix(filename, ".csv") ||
+		strings.HasSuffix(filename, ".tsv") ||
+		strings.HasSuffix(filename, ".yaml")
+}
+
 // memFile is an in-memory file for reading and writing row data.
 type memFile struct {
 	name      string
@@ -508,6 +696,8 @@ type memFile struct {
 	ops       *fs.Operations // for write-back on Close
 	isTrigger bool           // true for DDL trigger files (.test, .commit, .abort)
 	isDDLSQL  bool           // true for DDL sql files (need empty writes to clear session)
+	isRowFile bool           // true for row files (JSON, CSV, etc.) - writes replace entire content
+	fs        *OpsFilesystem // for removing from inFlightFiles on Close
 }
 
 func (f *memFile) Name() string {
@@ -551,6 +741,18 @@ func (f *memFile) Write(p []byte) (int, error) {
 		return 0, fmt.Errorf("file not opened for writing")
 	}
 
+	// For row files (JSON, CSV, etc.), writes replace the entire content.
+	// This handles the case where NFS reads existing data, then writes new data
+	// at offset 0. Without replacement semantics, the buffer would retain any
+	// old data beyond the new content length, causing JSON parsing errors.
+	if f.isRowFile && f.offset == 0 {
+		f.data = make([]byte, len(p))
+		copy(f.data, p)
+		f.offset = int64(len(p))
+		f.dirty = true
+		return len(p), nil
+	}
+
 	// Expand buffer if needed
 	newLen := f.offset + int64(len(p))
 	if newLen > int64(len(f.data)) {
@@ -568,6 +770,23 @@ func (f *memFile) Write(p []byte) (int, error) {
 
 func (f *memFile) Close() error {
 	logging.Debug("memFile.Close", zap.String("path", f.path), zap.Bool("dirty", f.dirty), zap.Int("size", len(f.data)), zap.Bool("isTrigger", f.isTrigger), zap.Bool("isDDLSQL", f.isDDLSQL))
+
+	// Remove from in-flight tracking only when content was actually written.
+	// go-nfs calls Create then immediately Close (with dirty=false, size=0) to get
+	// an NFS file handle. We need to keep tracking these "created but not written"
+	// files so Stat returns success. Only remove when:
+	// - File has content and was dirty (actual write completed), OR
+	// - File is a trigger file (these don't need tracking)
+	shouldRemoveFromInFlight := f.dirty && len(f.data) > 0
+	defer func() {
+		if f.fs != nil && f.path != "" && shouldRemoveFromInFlight {
+			f.fs.inFlightMu.Lock()
+			delete(f.fs.inFlightFiles, f.path)
+			delete(f.fs.truncatedFiles, f.path) // Also clear truncated flag
+			f.fs.inFlightMu.Unlock()
+			logging.Debug("memFile.Close: removed from in-flight/truncated tracking", zap.String("path", f.path))
+		}
+	}()
 
 	// For DDL trigger files, ALWAYS write to trigger the operation.
 	// The trigger happens regardless of whether the file was dirtied or has content.
