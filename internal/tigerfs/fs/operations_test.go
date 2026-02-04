@@ -120,6 +120,9 @@ func TestStat_Table(t *testing.T) {
 		tables: map[string][]string{
 			"public": {"users"},
 		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
 	}
 
 	ops := NewOperations(cfg, mockDB)
@@ -129,6 +132,25 @@ func TestStat_Table(t *testing.T) {
 	require.NotNil(t, entry)
 	assert.True(t, entry.IsDir)
 	assert.Equal(t, "users", entry.Name)
+}
+
+// TestStat_Table_NotFound tests Stat on a non-existent table.
+func TestStat_Table_NotFound(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	_, err := ops.Stat(context.Background(), "/nonexistent")
+
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
 }
 
 // TestStat_RowFile tests Stat on a row file.
@@ -325,23 +347,44 @@ func TestStat_DDLFile(t *testing.T) {
 
 	ops := NewOperations(cfg, mockDB)
 
-	// Test sql file
-	entry, err := ops.Stat(context.Background(), "/.create/myindex/sql")
-	require.Nil(t, err)
+	// Create a DDL session first
+	_, err := ops.GetDDLManager().CreateSession(DDLCreate, "index", "public", "myindex", "")
+	require.NoError(t, err)
+
+	// Test sql file - should exist and be readable
+	entry, fsErr := ops.Stat(context.Background(), "/.create/myindex/sql")
+	require.Nil(t, fsErr)
 	require.NotNil(t, entry)
 	assert.Equal(t, "sql", entry.Name)
 
-	// Test .test file
-	entry, err = ops.Stat(context.Background(), "/.create/myindex/.test")
-	require.Nil(t, err)
+	// Test trigger files - they exist so they appear in ls output
+	entry, fsErr = ops.Stat(context.Background(), "/.create/myindex/.test")
+	require.Nil(t, fsErr)
 	require.NotNil(t, entry)
 	assert.Equal(t, ".test", entry.Name)
 
-	// Test .commit file
-	entry, err = ops.Stat(context.Background(), "/.create/myindex/.commit")
-	require.Nil(t, err)
+	entry, fsErr = ops.Stat(context.Background(), "/.create/myindex/.commit")
+	require.Nil(t, fsErr)
 	require.NotNil(t, entry)
 	assert.Equal(t, ".commit", entry.Name)
+
+	entry, fsErr = ops.Stat(context.Background(), "/.create/myindex/.abort")
+	require.Nil(t, fsErr)
+	require.NotNil(t, entry)
+	assert.Equal(t, ".abort", entry.Name)
+}
+
+// TestStat_DDLFile_NoSession tests Stat on a DDL file when no session exists.
+func TestStat_DDLFile_NoSession(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Without creating a session, stat should return ErrNotExist
+	_, err := ops.Stat(context.Background(), "/.create/nonexistent/sql")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
 }
 
 // TestReadFile_InfoDDL tests reading the .ddl metadata file.
@@ -763,18 +806,36 @@ func TestStat_DDL(t *testing.T) {
 
 	ops := NewOperations(cfg, mockDB)
 
-	// Test .create directory
+	// Test .create directory (always exists)
 	entry, err := ops.Stat(context.Background(), "/.create")
 	require.Nil(t, err)
 	require.NotNil(t, entry)
 	assert.True(t, entry.IsDir)
 	assert.Equal(t, ".create", entry.Name)
 
-	// Test named staging directory
+	// Create a DDL session first
+	_, createErr := ops.GetDDLManager().CreateSession(DDLCreate, "index", "public", "myindex", "")
+	require.NoError(t, createErr)
+
+	// Test named staging directory (requires session)
 	entry, err = ops.Stat(context.Background(), "/.create/myindex")
 	require.Nil(t, err)
 	require.NotNil(t, entry)
 	assert.True(t, entry.IsDir)
+	assert.Equal(t, "myindex", entry.Name)
+}
+
+// TestStat_DDL_NoSession tests Stat on a DDL staging directory when no session exists.
+func TestStat_DDL_NoSession(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Without creating a session, stat on staging dir should return ErrNotExist
+	_, err := ops.Stat(context.Background(), "/.create/nonexistent")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
 }
 
 // TestReadDir_RowDirectory tests listing columns in a row directory.
@@ -825,11 +886,23 @@ func TestReadDir_DDL(t *testing.T) {
 
 	ops := NewOperations(cfg, mockDB)
 
-	// Test listing .create directory (empty)
+	// Test listing .create directory (empty initially)
 	entries, err := ops.ReadDir(context.Background(), "/.create")
 	require.Nil(t, err)
 	require.NotNil(t, entries)
 	assert.Len(t, entries, 0)
+
+	// Create a DDL session
+	_, createErr := ops.GetDDLManager().CreateSession(DDLCreate, "index", "public", "myindex", "")
+	require.NoError(t, createErr)
+
+	// Test listing .create directory (now has one session)
+	entries, err = ops.ReadDir(context.Background(), "/.create")
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+	assert.Len(t, entries, 1)
+	assert.Equal(t, "myindex", entries[0].Name)
+	assert.True(t, entries[0].IsDir)
 
 	// Test listing specific staging directory
 	entries, err = ops.ReadDir(context.Background(), "/.create/myindex")
@@ -846,12 +919,28 @@ func TestReadDir_DDL(t *testing.T) {
 	assert.Contains(t, names, ".abort")
 }
 
+// TestReadDir_DDL_NoSession tests listing a DDL staging directory when no session exists.
+func TestReadDir_DDL_NoSession(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Without creating a session, readdir on staging dir should return ErrNotExist
+	_, err := ops.ReadDir(context.Background(), "/.create/nonexistent")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
+}
+
 // TestStatWithContext tests Stat using a pre-parsed FSContext.
 func TestStatWithContext(t *testing.T) {
 	cfg := &config.Config{}
 	mockDB := &mockDBClient{
 		tables: map[string][]string{
 			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
 		},
 	}
 
@@ -1695,6 +1784,9 @@ func TestStat_FilterValue_ReturnsFilterValueAsName(t *testing.T) {
 		tables: map[string][]string{
 			"public": {"users"},
 		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
 	}
 
 	ops := NewOperations(cfg, mockDB)
@@ -1753,6 +1845,9 @@ func TestStat_TableWithoutPipeline_ReturnsTableName(t *testing.T) {
 	mockDB := &mockDBClient{
 		tables: map[string][]string{
 			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
 		},
 	}
 

@@ -334,6 +334,69 @@ func (m *DDLManager) ListSessions(op DDLOpType) []string {
 	return ids
 }
 
+// ListSessionEntries returns all staging session entries matching an operation type.
+//
+// This is used by ReadDir to list staging directories with their metadata.
+//
+// Parameters:
+//   - op: the operation type to filter by
+//
+// Returns a slice of matching session entries (copies, not pointers).
+func (m *DDLManager) ListSessionEntries(op DDLOpType) []DDLStagingEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var entries []DDLStagingEntry
+	for _, session := range m.sessions {
+		if session.Operation == op {
+			entries = append(entries, *session)
+		}
+	}
+	return entries
+}
+
+// FindSessionByName finds a session by operation type and object name.
+//
+// This is used by the Operations layer, which receives object names from
+// path parsing rather than session UUIDs.
+//
+// Parameters:
+//   - op: the DDL operation type to match
+//   - objectName: the name of the object being created/modified/deleted
+//
+// Returns the session ID if found, or empty string if not found.
+func (m *DDLManager) FindSessionByName(op DDLOpType, objectName string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for id, session := range m.sessions {
+		if session.Operation == op && session.ObjectName == objectName {
+			return id
+		}
+	}
+	return ""
+}
+
+// ParseDDLOpType converts a string operation name to DDLOpType.
+//
+// Parameters:
+//   - opStr: operation string ("create", "modify", or "delete")
+//
+// Returns the corresponding DDLOpType and true if valid, or DDLCreate
+// and false if the string is not recognized.
+func ParseDDLOpType(opStr string) (DDLOpType, bool) {
+	switch opStr {
+	case "create":
+		return DDLCreate, true
+	case "modify":
+		return DDLModify, true
+	case "delete":
+		return DDLDelete, true
+	default:
+		return DDLCreate, false
+	}
+}
+
 // generateTemplate generates a DDL template based on the session context.
 func (m *DDLManager) generateTemplate(session *DDLStagingEntry) string {
 	switch session.Operation {

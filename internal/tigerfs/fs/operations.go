@@ -558,19 +558,48 @@ func (o *Operations) readDirImport(ctx context.Context, parsed *ParsedPath) ([]E
 
 // readDirDDL lists DDL staging directory contents.
 func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
-	if parsed.DDLName == "" {
-		// List staging directories (currently empty until operations are staged)
-		return []Entry{}, nil
-	}
-
 	now := time.Now()
 
+	if parsed.DDLName == "" {
+		// List staging directories by querying DDLManager for sessions of this operation type
+		op, valid := ParseDDLOpType(parsed.DDLOp)
+		if !valid {
+			return nil, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
+		}
+		sessions := o.ddl.ListSessionEntries(op)
+		entries := make([]Entry, len(sessions))
+		for i, session := range sessions {
+			entries[i] = Entry{
+				Name:    session.ObjectName,
+				IsDir:   true,
+				Mode:    os.ModeDir | 0755,
+				ModTime: session.CreatedAt,
+			}
+		}
+		return entries, nil
+	}
+
+	// For a specific staging directory, check if session exists first
+	op, valid := ParseDDLOpType(parsed.DDLOp)
+	if !valid {
+		return nil, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
+	}
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID == "" {
+		return nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
+			Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
+		}
+	}
+
 	// List control files for a specific staging operation
+	// Note: Mode and Size must match what statDDLFile returns for NFS consistency
 	entries := []Entry{
 		{Name: "sql", IsDir: false, Mode: 0600, ModTime: now},
-		{Name: ".test", IsDir: false, Mode: 0600, ModTime: now},
-		{Name: ".commit", IsDir: false, Mode: 0200, ModTime: now},
-		{Name: ".abort", IsDir: false, Mode: 0200, ModTime: now},
+		{Name: ".test", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
+		{Name: ".commit", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
+		{Name: ".abort", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
 	}
 	return entries, nil
 }
@@ -609,18 +638,36 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return &Entry{Name: parsed.Context.Schema, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathTable:
-		name := parsed.Context.TableName
+		fsCtx := parsed.Context
+		if fsCtx == nil {
+			return nil, &FSError{
+				Code:    ErrInvalidPath,
+				Message: "missing context for table path",
+			}
+		}
+		// Verify table exists by checking if we can get its primary key.
+		// This is necessary because table paths are parsed without database validation,
+		// and NFS clients need accurate stat responses to avoid caching nonexistent entries.
+		_, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+		if err != nil {
+			return nil, &FSError{
+				Code:    ErrNotExist,
+				Message: fmt.Sprintf("table not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
+				Cause:   err,
+			}
+		}
+		name := fsCtx.TableName
 		// When we have the original path and there are pipeline operations,
 		// use the path's basename as the entry name. This is critical for NFS
 		// which expects stat responses to have names matching the path being stat'd.
 		// E.g., stat("/table/.by/col/value") should return Name="value", not "table".
-		if originalPath != "" && parsed.Context.HasPipelineOperations() {
+		if originalPath != "" && fsCtx.HasPipelineOperations() {
 			baseName := path.Base(originalPath)
 			logging.Debug("statWithParsed PathTable with pipeline",
 				zap.String("originalPath", originalPath),
-				zap.String("tableName", parsed.Context.TableName),
+				zap.String("tableName", fsCtx.TableName),
 				zap.String("baseName", baseName),
-				zap.Int("filterCount", len(parsed.Context.Filters)))
+				zap.Int("filterCount", len(fsCtx.Filters)))
 			if baseName != "" && baseName != "." && baseName != "/" {
 				name = baseName
 			}
@@ -652,6 +699,23 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		if parsed.DDLFile != "" {
 			return o.statDDLFile(ctx, parsed)
 		}
+		// If DDLName is set, this is a staging directory - check if session exists
+		if parsed.DDLName != "" {
+			op, valid := ParseDDLOpType(parsed.DDLOp)
+			if !valid {
+				return nil, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
+			}
+			sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+			if sessionID == "" {
+				return nil, &FSError{
+					Code:    ErrNotExist,
+					Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
+					Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
+				}
+			}
+			return &Entry{Name: parsed.DDLName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+		}
+		// Otherwise it's just /.create (the operation directory itself)
 		name := "." + parsed.DDLOp
 		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
@@ -798,22 +862,70 @@ func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Ent
 
 // statDDLFile returns metadata for a DDL control file.
 func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+	// Validate operation type
+	op, valid := ParseDDLOpType(parsed.DDLOp)
+	if !valid {
+		return nil, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
+	}
+
+	// Trigger files (.test, .commit, .abort) must always appear to exist for NFS compliance.
+	// After a trigger fires (especially .commit or .abort), the session is removed. If NFS
+	// then tries to stat the file (which it does after close), the session won't be found.
+	// By returning a valid entry regardless of session state, we ensure NFS protocol
+	// operations complete successfully. The actual operation will fail with a helpful
+	// error if there's no session.
+	//
+	// We use mode 0644 (instead of 0200 write-only) because some NFS clients have issues
+	// with write-only files. Size is 0 to match the actual empty content returned by read.
+	if parsed.DDLFile == FileTest || parsed.DDLFile == FileCommit || parsed.DDLFile == FileAbort {
+		return &Entry{
+			Name:    parsed.DDLFile,
+			IsDir:   false,
+			Mode:    0644, // Read-write for NFS compatibility
+			Size:    0,    // Matches actual empty content
+			ModTime: time.Now(),
+		}, nil
+	}
+
+	// For other files (sql, test.log), we need the session to exist
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID == "" {
+		return nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
+			Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
+		}
+	}
+
 	var mode os.FileMode
+	var size int64
 	switch parsed.DDLFile {
-	case "sql":
+	case FileSQL:
 		mode = 0600
-	case ".test":
-		mode = 0400
-	case ".commit", ".abort":
-		mode = 0200
+		// Get actual size of SQL content (or template)
+		content := o.ddl.GetSQL(sessionID)
+		size = int64(len(content))
+	case FileTestLog:
+		mode = 0444
+		// Get actual size of test log
+		log := o.ddl.GetTestLog(sessionID)
+		if log == "" {
+			return nil, &FSError{
+				Code:    ErrNotExist,
+				Message: "no test results yet",
+				Hint:    fmt.Sprintf("run validation with: touch /.%s/%s/.test", parsed.DDLOp, parsed.DDLName),
+			}
+		}
+		size = int64(len(log))
 	default:
-		mode = 0400
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown DDL file: %s", parsed.DDLFile)}
 	}
 
 	return &Entry{
 		Name:    parsed.DDLFile,
 		IsDir:   false,
 		Mode:    mode,
+		Size:    size,
 		ModTime: time.Now(),
 	}, nil
 }
@@ -910,6 +1022,8 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return o.readInfoFile(ctx, parsed)
 	case PathExport:
 		return o.readExportFile(ctx, parsed)
+	case PathDDL:
+		return o.readDDLFile(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
@@ -1211,4 +1325,73 @@ func joinStrings(strs []string) string {
 		result += s
 	}
 	return result
+}
+
+// readDDLFile reads a DDL staging file.
+//
+// Supported files:
+//   - sql: Returns DDL content or template if empty
+//   - test.log: Returns validation results
+func (o *Operations) readDDLFile(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
+	// Convert operation string to DDLOpType
+	op, valid := ParseDDLOpType(parsed.DDLOp)
+	if !valid {
+		return nil, &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp),
+		}
+	}
+
+	// Find session by name
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID == "" {
+		return nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("no DDL session found for %s", parsed.DDLName),
+			Hint:    fmt.Sprintf("create session first with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
+		}
+	}
+
+	// Handle the specific file
+	switch parsed.DDLFile {
+	case FileSQL:
+		// Return DDL content or template
+		content := o.ddl.GetSQL(sessionID)
+		return &FileContent{
+			Data: []byte(content),
+			Size: int64(len(content)),
+			Mode: 0600,
+		}, nil
+
+	case FileTestLog:
+		// Return test log
+		log := o.ddl.GetTestLog(sessionID)
+		if log == "" {
+			return nil, &FSError{
+				Code:    ErrNotExist,
+				Message: "no test results yet",
+				Hint:    fmt.Sprintf("run validation with: touch /.%s/%s/.test", parsed.DDLOp, parsed.DDLName),
+			}
+		}
+		return &FileContent{
+			Data: []byte(log),
+			Size: int64(len(log)),
+			Mode: 0444,
+		}, nil
+
+	case FileTest, FileCommit, FileAbort:
+		// Trigger files return empty content when read (they're write-only triggers).
+		// The size is reported as 4096 in stat for NFS compatibility, but actual content is empty.
+		return &FileContent{
+			Data: []byte{},
+			Size: 0,
+			Mode: 0644,
+		}, nil
+
+	default:
+		return nil, &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("cannot read DDL file: %s", parsed.DDLFile),
+		}
+	}
 }
