@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,15 @@ type TestDBSource int
 const (
 	SourceLocal  TestDBSource = iota // Local PostgreSQL
 	SourceDocker                     // Docker container via testcontainers
+)
+
+// MountMethod indicates the filesystem mount method to use for tests
+type MountMethod string
+
+const (
+	MountMethodFUSE   MountMethod = "fuse"   // Linux FUSE (native)
+	MountMethodNFS    MountMethod = "nfs"    // macOS NFS (native)
+	MountMethodDocker MountMethod = "docker" // Docker container with Linux FUSE
 )
 
 // TestDBResult contains the connection info and cleanup function
@@ -383,20 +393,80 @@ func SetupTestDB(t *testing.T) (string, func()) {
 	return result.ConnStr, result.Cleanup
 }
 
-// isFUSEAvailable checks if FUSE is available on the system
+// isFUSEAvailable checks if FUSE is available on the system.
+// On macOS, FUSE (macFUSE) is no longer supported; use NFS instead.
+// On Linux, checks for /dev/fuse.
 func isFUSEAvailable() bool {
-	// On macOS, check for osxfuse/macfuse
-	if _, err := os.Stat("/Library/Filesystems/osxfuse.fs"); err == nil {
-		return true
-	}
-	if _, err := os.Stat("/Library/Filesystems/macfuse.fs"); err == nil {
-		return true
-	}
-
 	// On Linux, check for /dev/fuse
 	if _, err := os.Stat("/dev/fuse"); err == nil {
 		return true
 	}
 
+	// macFUSE is no longer available/maintained on macOS
+	// Tests should use NFS on macOS instead
 	return false
+}
+
+// isNFSAvailable checks if NFS mounting is available on the system.
+// On macOS, NFS is built into the OS and always available.
+// On Linux, NFS is not used for integration tests (use FUSE instead).
+func isNFSAvailable() bool {
+	// Check if we're on macOS by looking for mount_nfs
+	if _, err := os.Stat("/sbin/mount_nfs"); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// isMountAvailable checks if any filesystem mount method is available.
+// Returns true if FUSE (Linux) or NFS (macOS) is available.
+func isMountAvailable() (available bool, method string) {
+	if isFUSEAvailable() {
+		return true, "fuse"
+	}
+	if isNFSAvailable() {
+		return true, "nfs"
+	}
+	return false, ""
+}
+
+// getMountMethod determines the mount method to use based on platform and environment.
+//
+// On Linux: Always uses FUSE (native).
+// On macOS: Uses TEST_MOUNT_METHOD environment variable:
+//   - "nfs" (default): Use native macOS NFS
+//   - "docker": Run tests in a Docker container with Linux FUSE
+//
+// Returns the mount method and a reason string if skipping.
+func getMountMethod(t *testing.T) (MountMethod, string) {
+	t.Helper()
+
+	if runtime.GOOS == "linux" {
+		if !isFUSEAvailable() {
+			return "", "FUSE not available on Linux (/dev/fuse not found)"
+		}
+		return MountMethodFUSE, ""
+	}
+
+	if runtime.GOOS == "darwin" {
+		method := os.Getenv("TEST_MOUNT_METHOD")
+		switch method {
+		case "", "nfs":
+			// Default to NFS on macOS
+			if !isNFSAvailable() {
+				return "", "NFS not available on macOS (/sbin/mount_nfs not found)"
+			}
+			return MountMethodNFS, ""
+		case "docker":
+			if !isDockerAvailable() {
+				return "", "Docker not available for TEST_MOUNT_METHOD=docker"
+			}
+			return MountMethodDocker, ""
+		default:
+			return "", fmt.Sprintf("invalid TEST_MOUNT_METHOD=%q (use 'nfs' or 'docker')", method)
+		}
+	}
+
+	return "", fmt.Sprintf("unsupported platform: %s", runtime.GOOS)
 }

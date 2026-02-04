@@ -319,3 +319,351 @@ func TestFSOperations_NotExist(t *testing.T) {
 	_, fsErr := ops.ReadFile(ctx, tablePath+"/99999.json")
 	require.NotNil(t, fsErr, "Should fail for non-existent row")
 }
+
+// TestFSOperations_WriteFile_SimpleColumn tests writing to a simple column path.
+// This tests: echo "value" > /table/pk/column
+func TestFSOperations_WriteFile_SimpleColumn(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Write to column
+	columnPath := tablePath + "/1/name"
+	fsErr := ops.WriteFile(ctx, columnPath, []byte("Updated Name\n"))
+	require.Nil(t, fsErr, "WriteFile should succeed for column")
+
+	// Read back and verify
+	content, fsErr := ops.ReadFile(ctx, columnPath)
+	require.Nil(t, fsErr, "ReadFile should succeed after update")
+	assert.Equal(t, "Updated Name\n", string(content.Data), "Should contain updated value")
+
+	// Also verify via row read
+	rowContent, fsErr := ops.ReadFile(ctx, tablePath+"/1.json")
+	require.Nil(t, fsErr, "ReadFile should succeed for row")
+	assert.Contains(t, string(rowContent.Data), "Updated Name", "Row should contain updated name")
+}
+
+// TestFSOperations_WriteFile_ColumnSizeConsistency tests that Stat and ReadFile
+// return consistent sizes for column files. This is critical for NFS.
+func TestFSOperations_WriteFile_ColumnSizeConsistency(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+	columnPath := tablePath + "/1/name"
+
+	// Get stat info
+	entry, fsErr := ops.Stat(ctx, columnPath)
+	require.Nil(t, fsErr, "Stat should succeed")
+
+	// Get actual content
+	content, fsErr := ops.ReadFile(ctx, columnPath)
+	require.Nil(t, fsErr, "ReadFile should succeed")
+
+	// Size should match
+	assert.Equal(t, entry.Size, int64(len(content.Data)),
+		"Stat size (%d) should match ReadFile size (%d)", entry.Size, len(content.Data))
+}
+
+// TestFSOperations_WriteFile_PipelineColumn tests writing to a column via pipeline path.
+// This tests: cd /table/.by/col/val/pk; echo "value" > column
+func TestFSOperations_WriteFile_PipelineColumn(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - pipeline paths need schema-qualified tables
+	if result.Source == SourceDocker {
+		t.Skip("Skipping pipeline test in Docker mode - requires schema-qualified path")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// First, let's verify there's an active=true filter option
+	// Read a row to find the active column value
+	content, fsErr := ops.ReadFile(ctx, tablePath+"/1.json")
+	require.Nil(t, fsErr, "ReadFile should succeed")
+	t.Logf("Row 1 data: %s", string(content.Data))
+
+	// Write to column via pipeline path (filter by active=true, then update name)
+	// Use .filter/active/true instead of .by to test filter paths
+	pipelinePath := tablePath + "/.filter/active/true/1/name"
+	fsErr = ops.WriteFile(ctx, pipelinePath, []byte("Pipeline Updated\n"))
+	require.Nil(t, fsErr, "WriteFile via pipeline should succeed")
+
+	// Verify the update via direct path
+	directContent, fsErr := ops.ReadFile(ctx, tablePath+"/1/name")
+	require.Nil(t, fsErr, "ReadFile should succeed after pipeline update")
+	assert.Equal(t, "Pipeline Updated\n", string(directContent.Data), "Should contain updated value")
+}
+
+// TestFSOperations_Import_Sync tests the .import/.sync write operation.
+func TestFSOperations_Import_Sync(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - import paths need specific setup
+	if result.Source == SourceDocker {
+		t.Skip("Skipping import test in Docker mode")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Prepare import data (CSV format)
+	importData := `id,name,email,age,active
+1,Sync Alice,sync.alice@example.com,25,true
+2,Sync Bob,sync.bob@example.com,30,false
+`
+
+	// Write to sync import path
+	importPath := tablePath + "/.import/.sync/data.csv"
+	fsErr := ops.WriteFile(ctx, importPath, []byte(importData))
+	require.Nil(t, fsErr, "Import sync should succeed")
+
+	// Verify the data was imported
+	row1, fsErr := ops.ReadFile(ctx, tablePath+"/1.json")
+	require.Nil(t, fsErr, "ReadFile should succeed after import")
+	assert.Contains(t, string(row1.Data), "Sync Alice", "Row 1 should have synced name")
+}
+
+// TestFSOperations_Import_Append tests the .import/.append write operation.
+func TestFSOperations_Import_Append(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - import paths need specific setup
+	if result.Source == SourceDocker {
+		t.Skip("Skipping import test in Docker mode")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Get initial count
+	countContent, fsErr := ops.ReadFile(ctx, tablePath+"/.info/count")
+	require.Nil(t, fsErr, "ReadFile count should succeed")
+	initialCount := strings.TrimSpace(string(countContent.Data))
+	t.Logf("Initial count: %s", initialCount)
+
+	// Prepare append data (new rows)
+	appendData := `id,name,email,age,active
+100,Appended User,appended@example.com,40,true
+`
+
+	// Write to append import path
+	importPath := tablePath + "/.import/.append/data.csv"
+	fsErr = ops.WriteFile(ctx, importPath, []byte(appendData))
+	require.Nil(t, fsErr, "Import append should succeed")
+
+	// Verify the new row exists
+	newRow, fsErr := ops.ReadFile(ctx, tablePath+"/100.json")
+	require.Nil(t, fsErr, "ReadFile should succeed for appended row")
+	assert.Contains(t, string(newRow.Data), "Appended User", "Should contain appended user")
+}
+
+// TestFSOperations_WriteFile_NullColumn tests writing empty/NULL to a column.
+func TestFSOperations_WriteFile_NullColumn(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Write empty to age column (should set to NULL)
+	columnPath := tablePath + "/1/age"
+	fsErr := ops.WriteFile(ctx, columnPath, []byte("\n"))
+	require.Nil(t, fsErr, "WriteFile should succeed for empty value")
+
+	// Verify stat and read are consistent after NULL
+	entry, fsErr := ops.Stat(ctx, columnPath)
+	require.Nil(t, fsErr, "Stat should succeed for NULL column")
+
+	content, fsErr := ops.ReadFile(ctx, columnPath)
+	require.Nil(t, fsErr, "ReadFile should succeed for NULL column")
+
+	// Size should match (even for NULL)
+	assert.Equal(t, entry.Size, int64(len(content.Data)),
+		"Stat size (%d) should match ReadFile size (%d) for NULL column", entry.Size, len(content.Data))
+}
+
+// TestFSOperations_Import_Overwrite tests the .import/.overwrite write operation.
+// Overwrite should truncate existing data before importing.
+func TestFSOperations_Import_Overwrite(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - import paths need specific setup
+	if result.Source == SourceDocker {
+		t.Skip("Skipping import test in Docker mode")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Get initial count
+	countContent, fsErr := ops.ReadFile(ctx, tablePath+"/.info/count")
+	require.Nil(t, fsErr, "ReadFile count should succeed")
+	t.Logf("Initial count: %s", strings.TrimSpace(string(countContent.Data)))
+
+	// Prepare overwrite data (only 2 rows - should replace all existing)
+	overwriteData := `id,name,email,age,active
+1,Overwrite Alice,overwrite.alice@example.com,25,true
+2,Overwrite Bob,overwrite.bob@example.com,30,false
+`
+
+	// Write to overwrite import path
+	importPath := tablePath + "/.import/.overwrite/data.csv"
+	fsErr = ops.WriteFile(ctx, importPath, []byte(overwriteData))
+	require.Nil(t, fsErr, "Import overwrite should succeed")
+
+	// Verify the data was replaced - should have exactly 2 rows now
+	countContent, fsErr = ops.ReadFile(ctx, tablePath+"/.info/count")
+	require.Nil(t, fsErr, "ReadFile count should succeed after overwrite")
+	finalCount := strings.TrimSpace(string(countContent.Data))
+	assert.Equal(t, "2", finalCount, "Overwrite should leave exactly 2 rows")
+
+	// Verify the content
+	row1, fsErr := ops.ReadFile(ctx, tablePath+"/1.json")
+	require.Nil(t, fsErr, "ReadFile should succeed after overwrite")
+	assert.Contains(t, string(row1.Data), "Overwrite Alice", "Row 1 should have overwritten name")
+}
+
+// TestFSOperations_Export_CSV tests the bulk export functionality.
+// This tests reading from .export paths.
+func TestFSOperations_Export_CSV(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - export paths need specific setup
+	if result.Source == SourceDocker {
+		t.Skip("Skipping export test in Docker mode")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Read export as CSV
+	exportPath := tablePath + "/.export/csv"
+	content, fsErr := ops.ReadFile(ctx, exportPath)
+	require.Nil(t, fsErr, "ReadFile export should succeed")
+
+	data := string(content.Data)
+	assert.NotEmpty(t, data, "Export should have data")
+
+	// CSV without headers should have data rows
+	lines := strings.Split(strings.TrimSpace(data), "\n")
+	assert.GreaterOrEqual(t, len(lines), 1, "Export should have at least 1 row")
+	t.Logf("Exported %d rows", len(lines))
+}
+
+// TestFSOperations_Export_WithHeaders tests bulk export with headers.
+func TestFSOperations_Export_WithHeaders(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - export paths need specific setup
+	if result.Source == SourceDocker {
+		t.Skip("Skipping export test in Docker mode")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Read export as CSV with headers
+	exportPath := tablePath + "/.export/.with-headers/csv"
+	content, fsErr := ops.ReadFile(ctx, exportPath)
+	require.Nil(t, fsErr, "ReadFile export with headers should succeed")
+
+	data := string(content.Data)
+	assert.NotEmpty(t, data, "Export should have data")
+
+	// CSV with headers should have header row
+	lines := strings.Split(strings.TrimSpace(data), "\n")
+	assert.GreaterOrEqual(t, len(lines), 2, "Export with headers should have header + data rows")
+
+	// Header should contain column names
+	header := lines[0]
+	assert.Contains(t, header, "id", "Header should contain id column")
+	assert.Contains(t, header, "name", "Header should contain name column")
+	t.Logf("Export header: %s", header)
+}
+
+// TestFSOperations_Export_JSON tests bulk export as JSON.
+func TestFSOperations_Export_JSON(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	// Skip in Docker mode - export paths need specific setup
+	if result.Source == SourceDocker {
+		t.Skip("Skipping export test in Docker mode")
+	}
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Read export as JSON
+	exportPath := tablePath + "/.export/json"
+	content, fsErr := ops.ReadFile(ctx, exportPath)
+	require.Nil(t, fsErr, "ReadFile export JSON should succeed")
+
+	data := string(content.Data)
+	assert.NotEmpty(t, data, "Export should have data")
+
+	// JSON export should be a valid JSON array
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(data), "["), "JSON export should start with [")
+	assert.True(t, strings.HasSuffix(strings.TrimSpace(data), "]"), "JSON export should end with ]")
+}

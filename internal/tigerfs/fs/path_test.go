@@ -523,3 +523,37 @@ func TestParsePathEdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestParsePathPipelineColumn verifies column paths through pipelines
+func TestParsePathPipelineColumn(t *testing.T) {
+	tests := []struct {
+		path   string
+		table  string
+		pk     string
+		column string
+	}{
+		{"/orders/.by/product_id/100/019c257f-2fb2-7f27-8365-d510ed5b1f23/quantity", "orders", "019c257f-2fb2-7f27-8365-d510ed5b1f23", "quantity"},
+		{"/categories/automotive/name", "categories", "automotive", "name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != PathColumn {
+				t.Errorf("Type = %v, want PathColumn", result.Type)
+			}
+			if result.Context.TableName != tt.table {
+				t.Errorf("TableName = %q, want %q", result.Context.TableName, tt.table)
+			}
+			if result.PrimaryKey != tt.pk {
+				t.Errorf("PrimaryKey = %q, want %q", result.PrimaryKey, tt.pk)
+			}
+			if result.Column != tt.column {
+				t.Errorf("Column = %q, want %q", result.Column, tt.column)
+			}
+		})
+	}
+}

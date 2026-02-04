@@ -758,9 +758,16 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		}
 	}
 
-	// Calculate size
-	data := fmt.Sprintf("%v\n", val)
-	size := int64(len(data))
+	// Calculate size using same formatting as readColumnFile
+	str, err := format.ConvertValueToText(val)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: fmt.Sprintf("failed to format column value: %v", err),
+			Cause:   err,
+		}
+	}
+	size := int64(len(str) + 1) // +1 for trailing newline
 
 	return &Entry{
 		Name:    parsed.Column,

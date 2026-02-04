@@ -40,8 +40,8 @@ func TestToHandle_4ByteAlignment(t *testing.T) {
 		"/categories/automotive",      // 22 chars
 		"/" + strings.Repeat("a", 62), // max direct path (63 bytes total with /)
 		// Long paths that trigger hash fallback (version 2)
-		"/" + strings.Repeat("a", 100),                                                     // 101 chars - uses hash
-		"/orders/.by/product_id/100/.filter/id/019c2560-909a-7c65-b660-88037c7d86fb",       // 74 chars - uses hash
+		"/" + strings.Repeat("a", 100), // 101 chars - uses hash
+		"/orders/.by/product_id/100/.filter/id/019c2560-909a-7c65-b660-88037c7d86fb",        // 74 chars - uses hash
 		"/very/long/path/that/exceeds/the/maximum/direct/encoding/limit/of/sixtyfour/bytes", // >64 chars - uses hash
 	}
 
