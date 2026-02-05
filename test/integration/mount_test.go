@@ -339,22 +339,22 @@ func TestMount_FileSizes(t *testing.T) {
 	}
 	t.Logf("Row file size: %d bytes", rowStat.Size())
 
-	// Test 3: Verify metadata file (.count) size matches content
-	countPath := mountpoint + "/users/.count"
+	// Test 3: Verify metadata file (.info/count) size matches content
+	countPath := mountpoint + "/users/.info/count"
 	countContent, err := os.ReadFile(countPath)
 	if err != nil {
-		t.Fatalf("Failed to read .count file: %v", err)
+		t.Fatalf("Failed to read .info/count file: %v", err)
 	}
 
 	countStat, err := os.Stat(countPath)
 	if err != nil {
-		t.Fatalf("Failed to stat .count file: %v", err)
+		t.Fatalf("Failed to stat .info/count file: %v", err)
 	}
 
 	if countStat.Size() != int64(len(countContent)) {
-		t.Errorf(".count file size mismatch: stat=%d, content=%d", countStat.Size(), len(countContent))
+		t.Errorf(".info/count file size mismatch: stat=%d, content=%d", countStat.Size(), len(countContent))
 	}
-	t.Logf(".count file size: %d bytes (content=%q)", countStat.Size(), strings.TrimSpace(string(countContent)))
+	t.Logf(".info/count file size: %d bytes (content=%q)", countStat.Size(), strings.TrimSpace(string(countContent)))
 
 	// Test 4: Verify all file sizes are non-zero for non-empty data
 	if columnStat.Size() == 0 && len(columnContent) > 0 {

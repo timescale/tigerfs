@@ -426,11 +426,15 @@ func TestParsePathImport(t *testing.T) {
 	tests := []struct {
 		path       string
 		importMode string
+		format     string
 	}{
-		{"/users/.import", ""},
-		{"/users/.import/.sync", "sync"},
-		{"/users/.import/.overwrite", "overwrite"},
-		{"/users/.import/.append", "append"},
+		{"/users/.import", "", ""},
+		{"/users/.import/.sync", "sync", ""},
+		{"/users/.import/.overwrite", "overwrite", ""},
+		{"/users/.import/.append", "append", ""},
+		{"/users/.import/.overwrite/csv", "overwrite", "csv"},
+		{"/users/.import/.sync/json", "sync", "json"},
+		{"/users/.import/.append/data.csv", "append", "csv"},
 	}
 
 	for _, tt := range tests {
@@ -444,6 +448,9 @@ func TestParsePathImport(t *testing.T) {
 			}
 			if result.ImportMode != tt.importMode {
 				t.Errorf("ImportMode = %q, want %q", result.ImportMode, tt.importMode)
+			}
+			if result.Format != tt.format {
+				t.Errorf("Format = %q, want %q", result.Format, tt.format)
 			}
 		})
 	}
