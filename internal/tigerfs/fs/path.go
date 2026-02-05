@@ -44,6 +44,9 @@ const (
 
 	// PathDDL is a DDL staging directory (/.create/, /.modify/, /.delete/).
 	PathDDL
+
+	// PathViewList is the /.views/ directory (only lists .create for view creation).
+	PathViewList
 )
 
 // ParsedPath holds the result of parsing a filesystem path.
@@ -82,6 +85,12 @@ type ParsedPath struct {
 
 	// DDLFile is the DDL file being accessed (sql, .test, .commit, .abort, test.log).
 	DDLFile string
+
+	// DDLObjectType is the type of object for DDL operations (table, index, schema, view).
+	DDLObjectType string
+
+	// DDLParentTable is the parent table for index DDL operations.
+	DDLParentTable string
 
 	// CapabilityDir is set when Type is PathCapability, indicating which
 	// capability directory we're in (.by, .filter, .order, etc.).
@@ -151,8 +160,11 @@ func ParsePath(path string) (*ParsedPath, *FSError) {
 	switch first {
 	case ".schemas":
 		return parseSchemaPath(segments)
-	case ".create", ".modify", ".delete":
+	case ".create":
+		// Only .create is at root level; .modify and .delete are inside tables
 		return parseDDLPath(segments)
+	case ".views":
+		return parseViewPath(segments)
 	}
 
 	// Otherwise, it's a table path (possibly with schema prefix)
@@ -173,8 +185,10 @@ func splitPath(path string) []string {
 
 // parseSchemaPath handles /.schemas/ paths.
 // Supports:
-//   - /.schemas/ → list schemas
+//   - /.schemas/ → list schemas (plus .create)
+//   - /.schemas/.create/{name}/ → create schema DDL
 //   - /.schemas/<schema> → list tables in schema
+//   - /.schemas/<schema>/.delete/ → delete schema DDL
 //   - /.schemas/<schema>/<table> → table path
 //   - /.schemas/<schema>/<table>/<row> → row path
 func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
@@ -185,6 +199,22 @@ func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 
 	schema := segments[1]
 
+	// Handle /.schemas/.create/{name}/
+	if schema == ".create" {
+		result := &ParsedPath{
+			Type:          PathDDL,
+			DDLOp:         "create",
+			DDLObjectType: "schema",
+		}
+		if len(segments) >= 3 {
+			result.DDLName = segments[2]
+			if len(segments) >= 4 {
+				result.DDLFile = segments[3]
+			}
+		}
+		return result, nil
+	}
+
 	if len(segments) == 2 {
 		// /.schemas/<name>/ - list tables in schema
 		return &ParsedPath{
@@ -193,6 +223,20 @@ func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 				Schema: schema,
 			},
 		}, nil
+	}
+
+	// Handle /.schemas/{schema}/.delete/
+	if segments[2] == ".delete" {
+		result := &ParsedPath{
+			Type:          PathDDL,
+			DDLOp:         "delete",
+			DDLName:       schema,
+			DDLObjectType: "schema",
+		}
+		if len(segments) >= 4 {
+			result.DDLFile = segments[3]
+		}
+		return result, nil
 	}
 
 	// /.schemas/<schema>/<table>/... - parse as table path with explicit schema
@@ -208,22 +252,25 @@ func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 	return processSegments(result, segments[3:])
 }
 
-// parseDDLPath handles /.create/, /.modify/, /.delete/ paths.
+// parseDDLPath handles /.create/ paths at root level.
+// Note: .modify and .delete are now handled at table level via processTableDDL.
 func parseDDLPath(segments []string) (*ParsedPath, *FSError) {
 	op := strings.TrimPrefix(segments[0], ".")
 
 	if len(segments) == 1 {
-		// Just /.create/ etc - list staging directories
+		// Just /.create/ - list staging directories
 		return &ParsedPath{
-			Type:  PathDDL,
-			DDLOp: op,
+			Type:          PathDDL,
+			DDLOp:         op,
+			DDLObjectType: "table",
 		}, nil
 	}
 
 	result := &ParsedPath{
-		Type:    PathDDL,
-		DDLOp:   op,
-		DDLName: segments[1],
+		Type:          PathDDL,
+		DDLOp:         op,
+		DDLName:       segments[1],
+		DDLObjectType: "table",
 	}
 
 	if len(segments) >= 3 {
@@ -231,6 +278,45 @@ func parseDDLPath(segments []string) (*ParsedPath, *FSError) {
 	}
 
 	return result, nil
+}
+
+// parseViewPath handles /.views/ paths.
+// Supports:
+//   - /.views/ → list .create only (views themselves appear at root)
+//   - /.views/.create/{name}/ → create view DDL
+//
+// Note: View delete uses /{view}/.delete/ (same as tables) since views appear
+// at root level. View modify is NOT supported per spec.
+func parseViewPath(segments []string) (*ParsedPath, *FSError) {
+	if len(segments) == 1 {
+		// /.views/ - list .create only
+		return &ParsedPath{Type: PathViewList}, nil
+	}
+
+	next := segments[1]
+
+	// Handle /.views/.create/{name}/
+	if next == ".create" {
+		result := &ParsedPath{
+			Type:          PathDDL,
+			DDLOp:         "create",
+			DDLObjectType: "view",
+		}
+		if len(segments) >= 3 {
+			result.DDLName = segments[2]
+			if len(segments) >= 4 {
+				result.DDLFile = segments[3]
+			}
+		}
+		return result, nil
+	}
+
+	// /.views/{name} is INVALID - views are accessed from root directory
+	return nil, &FSError{
+		Code:    ErrInvalidPath,
+		Message: "views are accessed from root directory, not from .views/",
+		Hint:    fmt.Sprintf("use /%s instead of /.views/%s", next, next),
+	}
 }
 
 // parseTablePath handles table paths and capability chains.
@@ -303,6 +389,12 @@ func processCapability(result *ParsedPath, cap string, remaining []string) (int,
 	case DirAll:
 		// .all/ just continues to table listing
 		return 1, nil
+	case DirModify:
+		return processTableDDL(result, remaining, "modify")
+	case DirDelete:
+		return processTableDDL(result, remaining, "delete")
+	case DirIndexes:
+		return processIndexes(result, remaining)
 	default:
 		return 0, &FSError{
 			Code:    ErrInvalidPath,
@@ -566,6 +658,101 @@ func processImport(result *ParsedPath, remaining []string) (int, *FSError) {
 			result.Format = extractFormatName(next)
 			return 3, nil
 		}
+		return 2, nil
+	}
+	return 1, nil
+}
+
+// processIndexes handles index paths (/{table}/.indexes/...).
+// Supports:
+//   - /{table}/.indexes/ - list indexes
+//   - /{table}/.indexes/.create/{name}/ - create index DDL
+//   - /{table}/.indexes/{name}/ - index info
+//   - /{table}/.indexes/{name}/.delete/ - delete index DDL
+//
+// Returns the number of segments consumed.
+func processIndexes(result *ParsedPath, remaining []string) (int, *FSError) {
+	fsCtx := result.Context
+	if fsCtx == nil {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: ".indexes/ requires a table context",
+		}
+	}
+
+	if len(remaining) == 1 {
+		// /{table}/.indexes/ - list indexes
+		result.Type = PathCapability
+		result.CapabilityDir = DirIndexes
+		return 1, nil
+	}
+
+	next := remaining[1]
+
+	// Handle /{table}/.indexes/.create/{name}/
+	if next == ".create" {
+		result.Type = PathDDL
+		result.DDLOp = "create"
+		result.DDLObjectType = "index"
+		result.DDLParentTable = fsCtx.TableName
+		if len(remaining) >= 3 {
+			result.DDLName = remaining[2]
+			if len(remaining) >= 4 {
+				result.DDLFile = remaining[3]
+				return 4, nil
+			}
+			return 3, nil
+		}
+		return 2, nil
+	}
+
+	// /{table}/.indexes/{name}/ or /{table}/.indexes/{name}/.delete/
+	indexName := next
+
+	if len(remaining) >= 3 && remaining[2] == ".delete" {
+		// /{table}/.indexes/{name}/.delete/
+		result.Type = PathDDL
+		result.DDLOp = "delete"
+		result.DDLName = indexName
+		result.DDLObjectType = "index"
+		result.DDLParentTable = fsCtx.TableName
+		if len(remaining) >= 4 {
+			result.DDLFile = remaining[3]
+			return 4, nil
+		}
+		return 3, nil
+	}
+
+	// /{table}/.indexes/{name}/ - index info (or .schema file)
+	result.Type = PathCapability
+	result.CapabilityDir = DirIndexes
+	result.CapabilityArg = indexName
+	return 2, nil
+}
+
+// processTableDDL handles table-level DDL paths (/{table}/.modify/ and /{table}/.delete/).
+// Returns the number of segments consumed.
+//
+// TODO: Views share the same root-level path structure as tables, so /{view}/.modify/
+// and /{view}/.delete/ are parsed identically. Currently we allow .modify on views at
+// parse time; the operation will fail at execution time if the database rejects it
+// (e.g., PostgreSQL doesn't support ALTER VIEW for most modifications). An alternative
+// would be to query the database here to distinguish views from tables, but that adds
+// overhead to every path operation. Following FUSE's approach of failing at execution.
+func processTableDDL(result *ParsedPath, remaining []string, op string) (int, *FSError) {
+	fsCtx := result.Context
+	if fsCtx == nil {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf(".%s/ requires a table context", op),
+		}
+	}
+	result.Type = PathDDL
+	result.DDLOp = op
+	result.DDLName = fsCtx.TableName
+	result.DDLObjectType = "table"
+	if len(remaining) >= 2 {
+		result.DDLFile = remaining[1]
 		return 2, nil
 	}
 	return 1, nil

@@ -298,11 +298,13 @@ func TestNFSDDL_EndToEndTableWorkflow(t *testing.T) {
 
 	// Step 8: Delete the table via DDL
 	t.Run("DeleteTable", func(t *testing.T) {
-		deleteDir := filepath.Join(mountpoint, ".delete", tableName)
+		// Per spec: delete is at /{table}/.delete/, not /.delete/{table}/
+		tablePath := filepath.Join(mountpoint, tableName)
+		deleteDir := filepath.Join(tablePath, ".delete")
 
 		// Create staging directory for delete
 		if err := os.MkdirAll(deleteDir, 0755); err != nil {
-			t.Fatalf("Failed to mkdir /.delete/%s: %v", tableName, err)
+			t.Fatalf("Failed to mkdir /%s/.delete: %v", tableName, err)
 		}
 
 		// Write DROP TABLE statement
@@ -320,8 +322,7 @@ func TestNFSDDL_EndToEndTableWorkflow(t *testing.T) {
 
 		time.Sleep(500 * time.Millisecond)
 
-		// Verify table is gone
-		tablePath := filepath.Join(mountpoint, tableName)
+		// Verify table is gone (reusing tablePath from above)
 		if _, err := os.Stat(tablePath); !os.IsNotExist(err) {
 			t.Errorf("Table should not exist after DROP")
 		} else {
@@ -518,10 +519,11 @@ func TestNFSDDL_ModifyExistingTable(t *testing.T) {
 	}
 
 	t.Run("AddColumn", func(t *testing.T) {
-		modifyDir := filepath.Join(mountpoint, ".modify", "users")
+		// Per spec: modify is at /{table}/.modify/, not /.modify/{table}/
+		modifyDir := filepath.Join(mountpoint, "users", ".modify")
 
 		if err := os.MkdirAll(modifyDir, 0755); err != nil {
-			t.Fatalf("Failed to mkdir /.modify/users: %v", err)
+			t.Fatalf("Failed to mkdir /users/.modify: %v", err)
 		}
 
 		// Read template
@@ -885,10 +887,12 @@ func TestNFS_WriteReadScenarios(t *testing.T) {
 
 	// Cleanup: Delete the test table
 	t.Run("Cleanup", func(t *testing.T) {
-		deleteDir := filepath.Join(mountpoint, ".delete", tableName)
+		// Per spec: delete is at /{table}/.delete/, not /.delete/{table}/
+		tablePath := filepath.Join(mountpoint, tableName)
+		deleteDir := filepath.Join(tablePath, ".delete")
 
 		if err := os.MkdirAll(deleteDir, 0755); err != nil {
-			t.Fatalf("Failed to mkdir /.delete/%s: %v", tableName, err)
+			t.Fatalf("Failed to mkdir /%s/.delete: %v", tableName, err)
 		}
 
 		sqlPath := filepath.Join(deleteDir, "sql")

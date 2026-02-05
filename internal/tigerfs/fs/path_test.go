@@ -472,6 +472,7 @@ func TestParsePathDDL(t *testing.T) {
 		ddlName string
 		ddlFile string
 	}{
+		// Root-level .create (for tables)
 		{"/.create/myindex", "create", "myindex", ""},
 		{"/.create/myindex/", "create", "myindex", ""},
 		{"/.create/myindex/sql", "create", "myindex", "sql"},
@@ -479,8 +480,14 @@ func TestParsePathDDL(t *testing.T) {
 		{"/.create/myindex/.commit", "create", "myindex", ".commit"},
 		{"/.create/myindex/.abort", "create", "myindex", ".abort"},
 		{"/.create/myindex/test.log", "create", "myindex", "test.log"},
-		{"/.modify/users", "modify", "users", ""},
-		{"/.delete/old_index", "delete", "old_index", ""},
+		// Table-level .modify and .delete (per spec)
+		{"/users/.modify", "modify", "users", ""},
+		{"/users/.modify/sql", "modify", "users", "sql"},
+		{"/users/.modify/.test", "modify", "users", ".test"},
+		{"/users/.modify/.commit", "modify", "users", ".commit"},
+		{"/users/.delete", "delete", "users", ""},
+		{"/users/.delete/sql", "delete", "users", "sql"},
+		{"/users/.delete/.commit", "delete", "users", ".commit"},
 	}
 
 	for _, tt := range tests {
@@ -500,6 +507,224 @@ func TestParsePathDDL(t *testing.T) {
 			}
 			if result.DDLFile != tt.ddlFile {
 				t.Errorf("DDLFile = %q, want %q", result.DDLFile, tt.ddlFile)
+			}
+		})
+	}
+}
+
+// TestParsePathSchemaDDL verifies schema DDL path parsing.
+func TestParsePathSchemaDDL(t *testing.T) {
+	tests := []struct {
+		path          string
+		ddlOp         string
+		ddlName       string
+		ddlFile       string
+		ddlObjectType string
+	}{
+		// Schema create
+		{"/.schemas/.create", "create", "", "", "schema"},
+		{"/.schemas/.create/myschema", "create", "myschema", "", "schema"},
+		{"/.schemas/.create/myschema/sql", "create", "myschema", "sql", "schema"},
+		{"/.schemas/.create/myschema/.test", "create", "myschema", ".test", "schema"},
+		{"/.schemas/.create/myschema/.commit", "create", "myschema", ".commit", "schema"},
+		// Schema delete
+		{"/.schemas/oldschema/.delete", "delete", "oldschema", "", "schema"},
+		{"/.schemas/oldschema/.delete/sql", "delete", "oldschema", "sql", "schema"},
+		{"/.schemas/oldschema/.delete/.commit", "delete", "oldschema", ".commit", "schema"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != PathDDL {
+				t.Errorf("Type = %v, want PathDDL", result.Type)
+			}
+			if result.DDLOp != tt.ddlOp {
+				t.Errorf("DDLOp = %q, want %q", result.DDLOp, tt.ddlOp)
+			}
+			if result.DDLName != tt.ddlName {
+				t.Errorf("DDLName = %q, want %q", result.DDLName, tt.ddlName)
+			}
+			if result.DDLFile != tt.ddlFile {
+				t.Errorf("DDLFile = %q, want %q", result.DDLFile, tt.ddlFile)
+			}
+			if result.DDLObjectType != tt.ddlObjectType {
+				t.Errorf("DDLObjectType = %q, want %q", result.DDLObjectType, tt.ddlObjectType)
+			}
+		})
+	}
+}
+
+// TestParsePathViewDDL verifies view DDL path parsing.
+func TestParsePathViewDDL(t *testing.T) {
+	// View create paths
+	createTests := []struct {
+		path          string
+		ddlOp         string
+		ddlName       string
+		ddlFile       string
+		ddlObjectType string
+	}{
+		{"/.views/.create", "create", "", "", "view"},
+		{"/.views/.create/myview", "create", "myview", "", "view"},
+		{"/.views/.create/myview/sql", "create", "myview", "sql", "view"},
+		{"/.views/.create/myview/.test", "create", "myview", ".test", "view"},
+		{"/.views/.create/myview/.commit", "create", "myview", ".commit", "view"},
+	}
+
+	for _, tt := range createTests {
+		t.Run(tt.path, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != PathDDL {
+				t.Errorf("Type = %v, want PathDDL", result.Type)
+			}
+			if result.DDLOp != tt.ddlOp {
+				t.Errorf("DDLOp = %q, want %q", result.DDLOp, tt.ddlOp)
+			}
+			if result.DDLName != tt.ddlName {
+				t.Errorf("DDLName = %q, want %q", result.DDLName, tt.ddlName)
+			}
+			if result.DDLFile != tt.ddlFile {
+				t.Errorf("DDLFile = %q, want %q", result.DDLFile, tt.ddlFile)
+			}
+			if result.DDLObjectType != tt.ddlObjectType {
+				t.Errorf("DDLObjectType = %q, want %q", result.DDLObjectType, tt.ddlObjectType)
+			}
+		})
+	}
+
+	// /.views/ directory should return PathViewList
+	t.Run("/.views", func(t *testing.T) {
+		result, err := ParsePath("/.views")
+		if err != nil {
+			t.Fatalf("ParsePath(/.views) error: %v", err)
+		}
+		if result.Type != PathViewList {
+			t.Errorf("Type = %v, want PathViewList", result.Type)
+		}
+	})
+
+	// /.views/{name} should return error (views accessed from root)
+	t.Run("/.views/myview_invalid", func(t *testing.T) {
+		_, err := ParsePath("/.views/myview")
+		if err == nil {
+			t.Error("ParsePath(/.views/myview) should return error - views accessed from root")
+		}
+	})
+}
+
+// TestParsePathIndexDDL verifies index DDL path parsing.
+func TestParsePathIndexDDL(t *testing.T) {
+	tests := []struct {
+		path           string
+		ddlOp          string
+		ddlName        string
+		ddlFile        string
+		ddlObjectType  string
+		ddlParentTable string
+	}{
+		// Index create
+		{"/users/.indexes/.create", "create", "", "", "index", "users"},
+		{"/users/.indexes/.create/idx_email", "create", "idx_email", "", "index", "users"},
+		{"/users/.indexes/.create/idx_email/sql", "create", "idx_email", "sql", "index", "users"},
+		{"/users/.indexes/.create/idx_email/.test", "create", "idx_email", ".test", "index", "users"},
+		{"/users/.indexes/.create/idx_email/.commit", "create", "idx_email", ".commit", "index", "users"},
+		// Index delete
+		{"/users/.indexes/idx_old/.delete", "delete", "idx_old", "", "index", "users"},
+		{"/users/.indexes/idx_old/.delete/sql", "delete", "idx_old", "sql", "index", "users"},
+		{"/users/.indexes/idx_old/.delete/.commit", "delete", "idx_old", ".commit", "index", "users"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != PathDDL {
+				t.Errorf("Type = %v, want PathDDL", result.Type)
+			}
+			if result.DDLOp != tt.ddlOp {
+				t.Errorf("DDLOp = %q, want %q", result.DDLOp, tt.ddlOp)
+			}
+			if result.DDLName != tt.ddlName {
+				t.Errorf("DDLName = %q, want %q", result.DDLName, tt.ddlName)
+			}
+			if result.DDLFile != tt.ddlFile {
+				t.Errorf("DDLFile = %q, want %q", result.DDLFile, tt.ddlFile)
+			}
+			if result.DDLObjectType != tt.ddlObjectType {
+				t.Errorf("DDLObjectType = %q, want %q", result.DDLObjectType, tt.ddlObjectType)
+			}
+			if result.DDLParentTable != tt.ddlParentTable {
+				t.Errorf("DDLParentTable = %q, want %q", result.DDLParentTable, tt.ddlParentTable)
+			}
+		})
+	}
+
+	// /{table}/.indexes/ should list indexes (PathCapability)
+	t.Run("/users/.indexes", func(t *testing.T) {
+		result, err := ParsePath("/users/.indexes")
+		if err != nil {
+			t.Fatalf("ParsePath(/users/.indexes) error: %v", err)
+		}
+		if result.Type != PathCapability {
+			t.Errorf("Type = %v, want PathCapability", result.Type)
+		}
+		if result.CapabilityDir != ".indexes" {
+			t.Errorf("CapabilityDir = %q, want .indexes", result.CapabilityDir)
+		}
+	})
+
+	// /{table}/.indexes/{name} should be index info (PathCapability with arg)
+	t.Run("/users/.indexes/idx_email", func(t *testing.T) {
+		result, err := ParsePath("/users/.indexes/idx_email")
+		if err != nil {
+			t.Fatalf("ParsePath(/users/.indexes/idx_email) error: %v", err)
+		}
+		if result.Type != PathCapability {
+			t.Errorf("Type = %v, want PathCapability", result.Type)
+		}
+		if result.CapabilityDir != ".indexes" {
+			t.Errorf("CapabilityDir = %q, want .indexes", result.CapabilityDir)
+		}
+		if result.CapabilityArg != "idx_email" {
+			t.Errorf("CapabilityArg = %q, want idx_email", result.CapabilityArg)
+		}
+	})
+}
+
+// TestParsePathRootLevelDDLInvalid verifies that .modify and .delete at root level are invalid.
+func TestParsePathRootLevelDDLInvalid(t *testing.T) {
+	// These paths were valid before but should now be parsed as table paths
+	// (which will fail validation when the "table" doesn't exist)
+	tests := []struct {
+		path string
+		desc string
+	}{
+		{"/.modify", "root .modify directory"},
+		{"/.modify/users", "root .modify with name"},
+		{"/.delete", "root .delete directory"},
+		{"/.delete/tablename", "root .delete with name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			// These should parse as table paths (the "table" name is .modify or .delete)
+			// They won't return an error at parse time, but won't be PathDDL
+			if err != nil {
+				// If it errors, that's also acceptable
+				return
+			}
+			if result.Type == PathDDL {
+				t.Errorf("ParsePath(%q) should NOT return PathDDL for root-level %s", tt.path, tt.desc)
 			}
 		})
 	}

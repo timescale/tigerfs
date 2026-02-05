@@ -69,6 +69,8 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirSchemaList(ctx)
 	case PathSchema:
 		return o.readDirSchema(ctx, parsed.Context.Schema)
+	case PathViewList:
+		return o.readDirViews(ctx)
 	case PathTable:
 		return o.readDirTable(ctx, parsed)
 	case PathInfo:
@@ -130,10 +132,12 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 	now := time.Now()
 
 	// Add special directories first
+	// Note: .delete is NOT at root level - it's inside tables (/{table}/.delete/)
+	// .views only contains .create (views themselves appear at root like tables)
 	entries = append(entries,
 		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
-		Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 	)
 
 	// Add tables
@@ -150,6 +154,7 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 }
 
 // readDirSchemaList lists all schemas (/.schemas/).
+// Includes .create for schema creation DDL.
 func (o *Operations) readDirSchemaList(ctx context.Context) ([]Entry, *FSError) {
 	schemas, err := o.db.GetSchemas(ctx)
 	if err != nil {
@@ -161,15 +166,30 @@ func (o *Operations) readDirSchemaList(ctx context.Context) ([]Entry, *FSError) 
 	}
 
 	now := time.Now()
-	entries := make([]Entry, len(schemas))
-	for i, s := range schemas {
-		entries[i] = Entry{Name: s, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
+	entries := make([]Entry, 0, len(schemas)+1)
+
+	// Add .create first for schema creation DDL
+	entries = append(entries, Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+
+	for _, s := range schemas {
+		entries = append(entries, Entry{Name: s, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 
 	return entries, nil
 }
 
+// readDirViews lists the /.views/ directory.
+// Only shows .create since views themselves appear at root level alongside tables.
+func (o *Operations) readDirViews(ctx context.Context) ([]Entry, *FSError) {
+	now := time.Now()
+	entries := []Entry{
+		{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+	}
+	return entries, nil
+}
+
 // readDirSchema lists tables in a specific schema.
+// Includes .delete for schema deletion DDL.
 func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry, *FSError) {
 	tables, err := o.db.GetTables(ctx, schema)
 	if err != nil {
@@ -190,7 +210,10 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 	}
 
 	now := time.Now()
-	entries := make([]Entry, 0, len(tables)+len(views))
+	entries := make([]Entry, 0, len(tables)+len(views)+1)
+
+	// Add .delete for schema deletion DDL
+	entries = append(entries, Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 
 	for _, t := range tables {
 		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
@@ -361,6 +384,8 @@ func (o *Operations) readDirCapability(ctx context.Context, parsed *ParsedPath) 
 	case DirFirst, DirLast, DirSample:
 		// These show numeric directories for limit values
 		return o.readDirPaginationCapability(ctx, parsed)
+	case DirIndexes:
+		return o.readDirIndexesCapability(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
@@ -524,6 +549,42 @@ func (o *Operations) readDirPaginationCapability(ctx context.Context, parsed *Pa
 	return entries, nil
 }
 
+// readDirIndexesCapability lists indexes for /{table}/.indexes/.
+// Includes .create for index creation DDL.
+func (o *Operations) readDirIndexesCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	fsCtx := parsed.Context
+	if fsCtx == nil {
+		return nil, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "missing context for .indexes path",
+		}
+	}
+
+	now := time.Now()
+
+	// Get all indexes for this table
+	indexes, err := o.db.GetIndexes(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to get indexes",
+			Cause:   err,
+		}
+	}
+
+	entries := make([]Entry, 0, len(indexes)+1)
+
+	// Add .create first for index creation DDL
+	entries = append(entries, Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+
+	// Add existing indexes
+	for _, idx := range indexes {
+		entries = append(entries, Entry{Name: idx.Name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	}
+
+	return entries, nil
+}
+
 // readDirExport lists format files in .export/ or .export/.with-headers/.
 // Matches FUSE behavior: .with-headers/ directory plus format files.
 func (o *Operations) readDirExport(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
@@ -660,6 +721,9 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 
 	case PathSchema:
 		return &Entry{Name: parsed.Context.Schema, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
+	case PathViewList:
+		return &Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathTable:
 		fsCtx := parsed.Context
