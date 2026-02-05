@@ -336,7 +336,7 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 }
 
 // readDirInfo lists the .info metadata directory.
-// Files match FUSE behavior: count, ddl, schema, columns (no dot prefix).
+// Files match FUSE behavior: count, ddl, schema, columns, indexes (no dot prefix).
 func (o *Operations) readDirInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	now := time.Now()
 	entries := []Entry{
@@ -344,6 +344,7 @@ func (o *Operations) readDirInfo(ctx context.Context, parsed *ParsedPath) ([]Ent
 		{Name: "ddl", IsDir: false, Mode: 0444, ModTime: now},
 		{Name: "schema", IsDir: false, Mode: 0444, ModTime: now},
 		{Name: "columns", IsDir: false, Mode: 0444, ModTime: now},
+		{Name: "indexes", IsDir: false, Mode: 0444, ModTime: now},
 	}
 	return entries, nil
 }
@@ -693,7 +694,7 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return o.statExport(ctx, parsed)
 
 	case PathImport:
-		return &Entry{Name: ".import", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+		return o.statImport(ctx, parsed)
 
 	case PathDDL:
 		if parsed.DDLFile != "" {
@@ -968,6 +969,30 @@ func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath) (*Entry
 	return &Entry{Name: ".export", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 }
 
+// statImport returns metadata for an import path (directory or file).
+func (o *Operations) statImport(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+	now := time.Now()
+
+	// .import directory itself
+	if parsed.ImportMode == "" {
+		return &Entry{Name: ".import", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// .import/.overwrite (or .sync, .append) directory - no format yet
+	if parsed.Format == "" {
+		return &Entry{Name: "." + parsed.ImportMode, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// .import/.overwrite/csv (or other format) - this is a writable file
+	return &Entry{
+		Name:    parsed.Format,
+		IsDir:   false,
+		Mode:    0600, // writable
+		Size:    0,    // size unknown until written
+		ModTime: now,
+	}, nil
+}
+
 // calculateRowSize calculates the serialized size of a row in the given format.
 func (o *Operations) calculateRowSize(row *db.Row, fmt string) (int64, error) {
 	var data []byte
@@ -1022,6 +1047,9 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return o.readInfoFile(ctx, parsed)
 	case PathExport:
 		return o.readExportFile(ctx, parsed)
+	case PathImport:
+		// Import files are write-only, return empty content
+		return &FileContent{Data: []byte{}}, nil
 	case PathDDL:
 		return o.readDDLFile(ctx, parsed)
 	default:
@@ -1199,6 +1227,19 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 			}
 		}
 		data = ddl
+
+	case FileIndexes: // "indexes" - one index name per line
+		indexes, dbErr := o.db.GetIndexes(ctx, fsCtx.Schema, fsCtx.TableName)
+		if dbErr != nil {
+			return nil, &FSError{
+				Code:    ErrIO,
+				Message: "failed to get indexes",
+				Cause:   dbErr,
+			}
+		}
+		for _, idx := range indexes {
+			data += idx.Name + "\n"
+		}
 
 	default:
 		return nil, &FSError{

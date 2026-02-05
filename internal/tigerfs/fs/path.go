@@ -542,10 +542,10 @@ func processImport(result *ParsedPath, remaining []string) (int, *FSError) {
 		default:
 			result.ImportMode = strings.TrimPrefix(mode, ".")
 		}
-		// Check for filename (e.g., data.csv)
+		// Check for filename (e.g., data.csv or just csv)
 		if len(remaining) >= 3 {
 			filename := remaining[2]
-			result.Format = extractFormat(filename)
+			result.Format = extractFormatName(filename)
 			return 3, nil
 		}
 		return 2, nil

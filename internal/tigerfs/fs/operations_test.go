@@ -1507,7 +1507,7 @@ func TestStat_InfoFile_HasReadOnlyMode(t *testing.T) {
 
 	ops := NewOperations(cfg, mockDB)
 
-	infoFiles := []string{"count", "ddl", "schema", "columns"}
+	infoFiles := []string{"count", "ddl", "schema", "columns", "indexes"}
 	for _, file := range infoFiles {
 		t.Run(file, func(t *testing.T) {
 			entry, err := ops.Stat(context.Background(), "/users/.info/"+file)
@@ -1533,7 +1533,7 @@ func TestReadDir_InfoDirectory_CorrectFilenames(t *testing.T) {
 	entries, err := ops.ReadDir(context.Background(), "/users/.info")
 
 	require.Nil(t, err)
-	require.Len(t, entries, 4, "should have exactly 4 info files")
+	require.Len(t, entries, 5, "should have exactly 5 info files")
 
 	names := make([]string, len(entries))
 	for i, e := range entries {
@@ -1545,6 +1545,7 @@ func TestReadDir_InfoDirectory_CorrectFilenames(t *testing.T) {
 	assert.Contains(t, names, "ddl")
 	assert.Contains(t, names, "schema")
 	assert.Contains(t, names, "columns")
+	assert.Contains(t, names, "indexes")
 
 	// Verify NO dot-prefixed names
 	assert.NotContains(t, names, ".count", "should not have .count")

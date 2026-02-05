@@ -1126,8 +1126,8 @@ func TestMetadata_InfoColumns(t *testing.T) {
 }
 
 func TestMetadata_InfoCount(t *testing.T) {
-	// Get test database (tries local first, falls back to Docker)
-	dbResult := GetTestDB(t)
+	// Get empty test database to ensure clean state
+	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
 		return
 	}
@@ -1136,7 +1136,7 @@ func TestMetadata_InfoCount(t *testing.T) {
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Seed format test data (creates 3 rows)
+	// Seed format test data (creates 5 rows)
 	ctx := context.Background()
 	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
@@ -1177,9 +1177,9 @@ func TestMetadata_InfoCount(t *testing.T) {
 	content := strings.TrimSpace(string(data))
 	t.Logf(".info/count content: %s", content)
 
-	// Verify count is 3 (seedFormatTestData creates 3 rows)
-	if content != "3" {
-		t.Errorf("Expected count '3', got '%s'", content)
+	// Verify count is 5 (seedFormatTestData creates 5 rows)
+	if content != "5" {
+		t.Errorf("Expected count '5', got '%s'", content)
 	}
 }
 

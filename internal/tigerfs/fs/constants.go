@@ -14,6 +14,7 @@ const (
 	FileDDL     = "ddl"     // CREATE TABLE statement
 	FileSchema  = "schema"  // Table schema (columns, types)
 	FileColumns = "columns" // Column listing
+	FileIndexes = "indexes" // Index listing
 )
 
 // Navigation capabilities
