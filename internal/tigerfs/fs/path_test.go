@@ -427,14 +427,19 @@ func TestParsePathImport(t *testing.T) {
 		path       string
 		importMode string
 		format     string
+		noHeaders  bool
 	}{
-		{"/users/.import", "", ""},
-		{"/users/.import/.sync", "sync", ""},
-		{"/users/.import/.overwrite", "overwrite", ""},
-		{"/users/.import/.append", "append", ""},
-		{"/users/.import/.overwrite/csv", "overwrite", "csv"},
-		{"/users/.import/.sync/json", "sync", "json"},
-		{"/users/.import/.append/data.csv", "append", "csv"},
+		{"/users/.import", "", "", false},
+		{"/users/.import/.sync", "sync", "", false},
+		{"/users/.import/.overwrite", "overwrite", "", false},
+		{"/users/.import/.append", "append", "", false},
+		{"/users/.import/.overwrite/csv", "overwrite", "csv", false},
+		{"/users/.import/.sync/json", "sync", "json", false},
+		{"/users/.import/.append/data.csv", "append", "csv", false},
+		// .no-headers option
+		{"/users/.import/.overwrite/.no-headers", "overwrite", "", true},
+		{"/users/.import/.overwrite/.no-headers/csv", "overwrite", "csv", true},
+		{"/users/.import/.sync/.no-headers/tsv", "sync", "tsv", true},
 	}
 
 	for _, tt := range tests {
@@ -451,6 +456,9 @@ func TestParsePathImport(t *testing.T) {
 			}
 			if result.Format != tt.format {
 				t.Errorf("Format = %q, want %q", result.Format, tt.format)
+			}
+			if result.ImportNoHeaders != tt.noHeaders {
+				t.Errorf("ImportNoHeaders = %v, want %v", result.ImportNoHeaders, tt.noHeaders)
 			}
 		})
 	}

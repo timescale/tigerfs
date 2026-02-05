@@ -71,6 +71,9 @@ type ParsedPath struct {
 	// ImportMode is the import mode when Type is PathImport (sync, overwrite, append).
 	ImportMode string
 
+	// ImportNoHeaders is set when importing without headers (.import/{mode}/.no-headers/).
+	ImportNoHeaders bool
+
 	// DDLOp is the DDL operation when Type is PathDDL (create, modify, delete).
 	DDLOp string
 
@@ -527,6 +530,7 @@ func extractFormatName(filename string) string {
 }
 
 // processImport handles .import/ paths.
+// Supports: .import, .import/{mode}, .import/{mode}/{format}, .import/{mode}/.no-headers/{format}
 func processImport(result *ParsedPath, remaining []string) (int, *FSError) {
 	result.Type = PathImport
 
@@ -542,10 +546,24 @@ func processImport(result *ParsedPath, remaining []string) (int, *FSError) {
 		default:
 			result.ImportMode = strings.TrimPrefix(mode, ".")
 		}
-		// Check for filename (e.g., data.csv or just csv)
+
+		// Check for .no-headers option or format
 		if len(remaining) >= 3 {
-			filename := remaining[2]
-			result.Format = extractFormatName(filename)
+			next := remaining[2]
+
+			// Handle .no-headers option
+			if next == DirNoHeaders {
+				result.ImportNoHeaders = true
+				// Check for format after .no-headers
+				if len(remaining) >= 4 {
+					result.Format = extractFormatName(remaining[3])
+					return 4, nil
+				}
+				return 3, nil
+			}
+
+			// Direct format (e.g., csv or data.csv)
+			result.Format = extractFormatName(next)
 			return 3, nil
 		}
 		return 2, nil

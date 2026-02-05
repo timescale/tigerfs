@@ -207,8 +207,8 @@ func (o *Operations) writeImportFile(ctx context.Context, parsed *ParsedPath, da
 		return fsErr
 	}
 
-	// Parse data as CSV (default format for imports)
-	columns, rows, err := format.ParseCSVBulk(data)
+	// Parse data based on format and no-headers option
+	columns, rows, err := o.parseImportData(ctx, parsed, data)
 	if err != nil {
 		return &FSError{
 			Code:    ErrInvalidPath,
@@ -241,6 +241,56 @@ func (o *Operations) writeImportFile(ctx context.Context, parsed *ParsedPath, da
 	}
 
 	return nil
+}
+
+// parseImportData parses import data based on format and no-headers option.
+func (o *Operations) parseImportData(ctx context.Context, parsed *ParsedPath, data []byte) ([]string, [][]interface{}, error) {
+	fsCtx := parsed.Context
+	importFormat := parsed.Format
+	if importFormat == "" {
+		importFormat = "csv" // default
+	}
+
+	// Handle no-headers mode for CSV/TSV
+	if parsed.ImportNoHeaders {
+		// Fetch column names from schema
+		cols, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to get columns from schema: %w", err)
+		}
+		if len(cols) == 0 {
+			return nil, nil, fmt.Errorf("no columns found for table %s.%s", fsCtx.Schema, fsCtx.TableName)
+		}
+
+		// Extract column names in schema order
+		columns := make([]string, len(cols))
+		for i, col := range cols {
+			columns[i] = col.Name
+		}
+
+		switch importFormat {
+		case "csv":
+			return format.ParseCSVBulkNoHeaders(data, columns)
+		case "tsv":
+			return format.ParseTSVBulkNoHeaders(data, columns)
+		default:
+			return nil, nil, fmt.Errorf("no-headers mode not supported for %s format", importFormat)
+		}
+	}
+
+	// Standard parsing with headers
+	switch importFormat {
+	case "csv":
+		return format.ParseCSVBulk(data)
+	case "tsv":
+		return format.ParseTSVBulk(data)
+	case "json":
+		return format.ParseJSONBulk(data)
+	case "yaml":
+		return format.ParseYAMLBulk(data)
+	default:
+		return nil, nil, fmt.Errorf("unknown import format: %s", importFormat)
+	}
 }
 
 // writeDDLFile handles DDL staging file writes.
