@@ -549,10 +549,33 @@ func (o *Operations) readDirExport(ctx context.Context, parsed *ParsedPath) ([]E
 // readDirImport lists import modes in .import/.
 func (o *Operations) readDirImport(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	now := time.Now()
+
+	// .import/ directory - list modes
+	if parsed.ImportMode == "" {
+		entries := []Entry{
+			{Name: DirSync, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+			{Name: DirOverwrite, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+			{Name: DirAppend, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		}
+		return entries, nil
+	}
+
+	// .import/{mode}/.no-headers/ directory - list formats (csv, tsv only)
+	if parsed.ImportNoHeaders {
+		entries := []Entry{
+			{Name: FmtCSV, IsDir: false, Mode: 0600, ModTime: now},
+			{Name: FmtTSV, IsDir: false, Mode: 0600, ModTime: now},
+		}
+		return entries, nil
+	}
+
+	// .import/{mode}/ directory - list .no-headers and formats
 	entries := []Entry{
-		{Name: DirSync, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
-		{Name: DirOverwrite, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
-		{Name: DirAppend, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		{Name: DirNoHeaders, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		{Name: FmtCSV, IsDir: false, Mode: 0600, ModTime: now},
+		{Name: FmtJSON, IsDir: false, Mode: 0600, ModTime: now},
+		{Name: FmtTSV, IsDir: false, Mode: 0600, ModTime: now},
+		{Name: FmtYAML, IsDir: false, Mode: 0600, ModTime: now},
 	}
 	return entries, nil
 }
@@ -978,12 +1001,17 @@ func (o *Operations) statImport(ctx context.Context, parsed *ParsedPath) (*Entry
 		return &Entry{Name: ".import", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 	}
 
-	// .import/.overwrite (or .sync, .append) directory - no format yet
-	if parsed.Format == "" {
+	// .import/.overwrite (or .sync, .append) directory - no format yet, no .no-headers
+	if parsed.Format == "" && !parsed.ImportNoHeaders {
 		return &Entry{Name: "." + parsed.ImportMode, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 	}
 
-	// .import/.overwrite/csv (or other format) - this is a writable file
+	// .import/.overwrite/.no-headers directory - no format yet
+	if parsed.Format == "" && parsed.ImportNoHeaders {
+		return &Entry{Name: DirNoHeaders, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// .import/.overwrite/csv or .import/.overwrite/.no-headers/csv - writable file
 	return &Entry{
 		Name:    parsed.Format,
 		IsDir:   false,
