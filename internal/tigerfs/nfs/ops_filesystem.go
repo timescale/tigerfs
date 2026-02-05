@@ -24,6 +24,7 @@ type OpsFilesystem struct {
 	ops *fs.Operations
 
 	// inFlightMu protects inFlightFiles and truncatedFiles for concurrent access.
+	// DEPRECATED: These will be replaced by fileCache in Task 9.11.
 	inFlightMu sync.RWMutex
 	// inFlightFiles tracks files being created but not yet written to the database.
 	// This is needed because NFS calls Stat after Create but before Close, and the
@@ -36,6 +37,60 @@ type OpsFilesystem struct {
 	//   2. WRITE → OpenFile for write → checks truncated, returns empty memFile
 	// Without this, step 2 would read existing row data from DB, causing corruption.
 	truncatedFiles map[string]bool
+
+	// fileCache is a unified cache for persistent memFiles (ADR-010).
+	// Files persist in memory until all handles close, then commit once to DB.
+	// This replaces inFlightFiles and truncatedFiles with reference counting.
+	cacheMu   sync.RWMutex
+	fileCache map[string]*cachedFile
+}
+
+// cachedFile persists across NFS RPCs until refCount drops to zero.
+// This enables O(n) instead of O(n²) database traffic for large file writes.
+//
+// # Problem Solved
+//
+// Without caching, each NFS WRITE RPC triggers: Open → Read from DB → Overlay → Write to DB → Close.
+// For a 1MB file with 32KB wsize, this means 32 round-trips, each transferring the full file.
+// With caching, we buffer writes in memory and commit once when the last handle closes.
+//
+// # Lifecycle
+//
+//  1. First OpenFile: creates cachedFile with refCount=1, loads data from DB (or empty if O_TRUNC)
+//  2. Subsequent OpenFile: increments refCount, returns memFile wrapping same cachedFile
+//  3. Write: modifies cached data buffer, sets dirty=true
+//  4. Sync: commits to DB immediately (handles editor saves)
+//  5. Close: decrements refCount; if zero and dirty, commits to DB and removes from cache
+//  6. Reaper: force-commits and removes entries idle for >5 minutes (handles client crashes)
+//
+// # Thread Safety
+//
+// The mu mutex protects all mutable fields. The parent OpsFilesystem.cacheMu protects
+// the fileCache map itself. Lock ordering: always acquire cacheMu before mu.
+//
+// See ADR-010 for full architecture details.
+type cachedFile struct {
+	mu sync.RWMutex // Protects all fields below
+
+	// Identity and content
+	path string // Full normalized path (e.g., "/users/1/name.txt") - also the cache key
+	data []byte // Current file content buffer
+
+	// State tracking
+	dirty        bool      // True if data has been modified since last commit
+	refCount     int       // Number of open memFile handles pointing to this cache entry
+	lastActivity time.Time // Last read/write/open time - used by reaper for idle detection
+	truncated    bool      // True if O_TRUNC was set - next open should not read from DB
+	deleted      bool      // True if file was rm'd while open - subsequent writes return EIO
+	isSequential bool      // True if all writes have been append-only (offset == len before write)
+
+	// Database connection for commit operations
+	ops *fs.Operations
+
+	// File type flags (determine write behavior)
+	isTrigger bool // DDL trigger files (.test, .commit, .abort) - always fire on close
+	isDDLSQL  bool // DDL sql files - empty writes must be persisted to clear session
+	isRowFile bool // Row files (JSON, CSV, TSV, YAML) - writes at offset 0 replace entire buffer
 }
 
 // NewOpsFilesystem creates a new OpsFilesystem that wraps fs.Operations.
@@ -44,7 +99,130 @@ func NewOpsFilesystem(ops *fs.Operations) *OpsFilesystem {
 		ops:            ops,
 		inFlightFiles:  make(map[string]*memFile),
 		truncatedFiles: make(map[string]bool),
+		fileCache:      make(map[string]*cachedFile),
 	}
+}
+
+// =============================================================================
+// File Cache Helpers (ADR-010)
+//
+// These methods manage the persistent file cache that enables efficient large
+// file writes. The cache is keyed by normalized path and stores cachedFile
+// entries that persist across NFS RPC boundaries.
+//
+// Lock ordering: Always acquire cacheMu before any cachedFile.mu to prevent deadlocks.
+// =============================================================================
+
+// getOrCreateCachedFile returns an existing cached file or creates a new one.
+//
+// If the file is already in the cache, this increments its refCount and updates
+// lastActivity. If not, it creates a new entry with refCount=1.
+//
+// Parameters:
+//   - filePath: Normalized path (must start with "/")
+//   - flags: os.O_* flags from OpenFile - O_TRUNC sets cached.truncated=true
+//
+// Returns:
+//   - The cached file entry with refCount already incremented
+//
+// Thread safety:
+//   - Caller must hold no locks
+//   - This method acquires cacheMu and briefly the cachedFile.mu
+func (f *OpsFilesystem) getOrCreateCachedFile(filePath string, flags int) *cachedFile {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+
+	if cached, exists := f.fileCache[filePath]; exists {
+		cached.mu.Lock()
+		cached.refCount++
+		cached.lastActivity = time.Now()
+		cached.mu.Unlock()
+		logging.Debug("getOrCreateCachedFile: cache hit",
+			zap.String("path", filePath),
+			zap.Int("refCount", cached.refCount))
+		return cached
+	}
+
+	// Determine file type from path
+	baseName := path.Base(filePath)
+	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
+	isDDLSQL := baseName == "sql" && isDDLPath(filePath)
+	rowFile := isRowFile(baseName)
+
+	// Create new cached file
+	cached := &cachedFile{
+		path:         filePath,
+		data:         []byte{},
+		dirty:        false,
+		refCount:     1,
+		lastActivity: time.Now(),
+		truncated:    flags&os.O_TRUNC != 0,
+		deleted:      false,
+		isSequential: true, // Assume sequential until proven otherwise
+		ops:          f.ops,
+		isTrigger:    isTrigger,
+		isDDLSQL:     isDDLSQL,
+		isRowFile:    rowFile,
+	}
+
+	f.fileCache[filePath] = cached
+	logging.Debug("getOrCreateCachedFile: cache miss, created new entry",
+		zap.String("path", filePath),
+		zap.Bool("truncated", cached.truncated))
+	return cached
+}
+
+// removeFromCache removes a file from the cache if its refCount is zero.
+//
+// This is called after Close() commits data to the database. It only removes
+// the entry if no other handles are still open (refCount == 0). If handles
+// remain open, the entry stays in cache for their continued use.
+//
+// Parameters:
+//   - filePath: Normalized path to remove
+//
+// Thread safety:
+//   - Caller must hold no locks
+//   - This method acquires cacheMu and briefly the cachedFile.mu
+func (f *OpsFilesystem) removeFromCache(filePath string) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+
+	cached, exists := f.fileCache[filePath]
+	if !exists {
+		return
+	}
+
+	cached.mu.RLock()
+	refCount := cached.refCount
+	cached.mu.RUnlock()
+
+	if refCount == 0 {
+		delete(f.fileCache, filePath)
+		logging.Debug("removeFromCache: removed entry",
+			zap.String("path", filePath))
+	}
+}
+
+// getCachedFile returns an existing cached file or nil if not found.
+//
+// This is a read-only lookup that does NOT increment refCount. Use this for
+// checking cache state (e.g., in Stat) without affecting the lifecycle.
+// For opening files, use getOrCreateCachedFile instead.
+//
+// Parameters:
+//   - filePath: Normalized path to look up
+//
+// Returns:
+//   - The cached file entry, or nil if not in cache
+//
+// Thread safety:
+//   - Caller must hold no locks
+//   - This method acquires cacheMu for reading only
+func (f *OpsFilesystem) getCachedFile(filePath string) *cachedFile {
+	f.cacheMu.RLock()
+	defer f.cacheMu.RUnlock()
+	return f.fileCache[filePath]
 }
 
 // normalizePath ensures the path starts with "/" as required by fs.Operations.
