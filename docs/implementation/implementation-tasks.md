@@ -7274,7 +7274,229 @@ GOOS=darwin go test ./test/integration/... -v
 
 ---
 
-### Task 9.10: Cleanup and Refactoring
+### Task 9.10: Add cachedFile Structure and File Cache
+
+**Objective:** Introduce the core caching data structures for persistent memFile (ADR-010)
+
+**Background:**
+The current NFS implementation creates a fresh `memFile` for each NFS operation, causing O(n²) database traffic for large file writes. ADR-010 introduces a persistent file cache with reference counting to commit once instead of per-chunk.
+
+**Steps:**
+1. Add `cachedFile` struct to `ops_filesystem.go`:
+   ```go
+   type cachedFile struct {
+       mu           sync.RWMutex
+       path         string
+       data         []byte
+       dirty        bool
+       refCount     int
+       lastActivity time.Time
+       truncated    bool
+       deleted      bool
+       isSequential bool
+       ops          *fs.Operations
+       isTrigger    bool
+       isDDLSQL     bool
+       isRowFile    bool
+   }
+   ```
+
+2. Modify `OpsFilesystem` struct:
+   - Replace `inFlightFiles` and `truncatedFiles` with unified `fileCache map[string]*cachedFile`
+   - Add `cacheMu sync.RWMutex`
+
+3. Update `NewOpsFilesystem()` to initialize `fileCache`
+
+4. Add helper methods:
+   - `getOrCreateCachedFile(path string, flags int) *cachedFile`
+   - `removeFromCache(path string)`
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+
+**Verification:**
+```bash
+go build ./...
+go test ./internal/tigerfs/nfs/... -run TestMemFile
+```
+
+**Completion Criteria:**
+- `cachedFile` struct defined
+- `OpsFilesystem` uses `fileCache` map
+- Helper methods implemented
+- Existing tests still pass (data structures in place but not yet used)
+
+---
+
+### Task 9.11: Modify OpenFile for Cache Lookup
+
+**Objective:** Check cache before reading from database
+
+**Background:**
+With the cache in place, `OpenFile` should check the cache first. If a file is already cached, increment the reference count and return a memFile wrapping the cached entry. This prevents redundant database reads.
+
+**Steps:**
+1. Modify `OpenFile` to:
+   - Check `fileCache` first for existing entry
+   - If found: increment `refCount`, return memFile wrapping cached entry
+   - If not found: create new `cachedFile`, load from DB (unless O_TRUNC/O_CREATE)
+   - Handle O_TRUNC: set `cached.truncated=true`, clear data
+
+2. Modify `Create` to use new cache structure
+
+3. Update `memFile` struct:
+   - Add `cached *cachedFile` field
+   - Remove direct `data []byte` field (use `cached.data` instead)
+
+4. Ensure `lastActivity` updated on each operation
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/nfs/... -v
+# Verify cache hit/miss in logs with debug enabled
+```
+
+**Completion Criteria:**
+- `OpenFile` checks cache before DB read
+- `memFile` uses shared `cachedFile`
+- Existing write tests pass
+- Cache hit avoids database round-trip
+
+---
+
+### Task 9.12: Implement Reference Counting and Sync
+
+**Objective:** Commit on Sync() and when last handle closes
+
+**Background:**
+Editor saves trigger `fsync()` which calls `Sync()`. We should commit to DB immediately on Sync. On Close, we only commit when the reference count drops to zero (last handle closes).
+
+**Steps:**
+1. Add `memFile.Sync()` method:
+   - If dirty and has data, commit to DB immediately
+   - Clear dirty flag after successful commit
+   - This handles editor saves (fsync)
+
+2. Modify `memFile.Close()`:
+   - Decrement `refCount`
+   - Only commit to DB when `refCount == 0 && dirty`
+   - Remove from cache after successful commit
+
+3. Modify `memFile.Write()`:
+   - Lock `cached.mu` during writes
+   - Write to `cached.data`
+   - Track `isSequential` (offset == len(data) before write)
+
+4. Update `Stat` to return size from `cached.data` if file is in cache
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/nfs/... -v
+go test ./test/integration/... -run TestNFS_LargeWrite
+```
+
+**Completion Criteria:**
+- `Sync()` commits immediately (editor save works)
+- `Close()` uses reference counting
+- Large file writes commit once (not per-chunk)
+- `Stat` returns cached size
+
+---
+
+### Task 9.13: Large File Streaming and Memory Limits
+
+**Objective:** Handle large files without OOM
+
+**Background:**
+PostgreSQL stores column values atomically (~1GB max with TOAST). For sequential writes, we can stream: commit at 10MB threshold, clear buffer, continue. For random writes, we buffer up to 100MB then reject.
+
+**Steps:**
+1. Add configuration constants:
+   - `streamingThreshold = 10 * 1024 * 1024` (10MB)
+   - `maxRandomWriteSize = 100 * 1024 * 1024` (100MB)
+
+2. Implement streaming mode in `memFile.Write()`:
+   - If `isSequential && len(cached.data) > streamingThreshold`:
+     - Commit current buffer to DB
+     - Clear buffer, continue accepting writes
+   - Track that file has been streamed
+
+3. Implement size limit for random writes:
+   - If `!isSequential && len(cached.data) > maxRandomWriteSize`:
+     - Return `syscall.EFBIG`
+
+4. Update unit tests for streaming behavior
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+- `internal/tigerfs/nfs/memfile_test.go`
+
+**Verification:**
+```bash
+# Should complete without OOM, commits in ~10MB chunks
+dd if=/dev/zero of=/mnt/db/table/1/data.txt bs=1M count=100
+```
+
+**Completion Criteria:**
+- Sequential writes >10MB stream (commit and clear)
+- Random writes >100MB return EFBIG
+- Large file writes work without memory exhaustion
+
+---
+
+### Task 9.14: Cache Reaper and Graceful Shutdown
+
+**Objective:** Prevent memory leaks, flush on shutdown
+
+**Background:**
+NFS clients can crash without closing files. A background reaper commits stale entries after 5 minutes of inactivity. On graceful shutdown, all dirty entries are flushed.
+
+**Steps:**
+1. Add background reaper goroutine:
+   - `startCacheReaper()` - ticker every 30s
+   - `reapStaleCacheEntries()` - force-commit entries idle > 5 min
+   - `stopCacheReaper()` - stop ticker via context/channel
+
+2. Implement `OpsFilesystem.Close()`:
+   - Stop reaper goroutine
+   - Iterate all cache entries, commit dirty ones
+   - Clear cache
+
+3. Handle Remove/Rename:
+   - `Remove()`: mark `cached.deleted=true`, delete from cache
+   - `Rename()`: update cache key from old to new path
+   - `memFile.Write()`: check `deleted` flag, return EIO
+
+4. Update `server.go`:
+   - Call `billyFS.startCacheReaper()` on start
+   - Call `billyFS.Close()` on stop
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+- `internal/tigerfs/nfs/server.go`
+- `internal/tigerfs/nfs/memfile_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/nfs/... -run TestReaper
+go test ./test/integration/... -run TestNFS
+```
+
+**Completion Criteria:**
+- Reaper commits stale entries after 5 min idle
+- Graceful shutdown flushes all dirty entries
+- Delete while open returns EIO on subsequent writes
+- No memory leaks from unclosed handles
+
+---
+
+### Task 9.15: Cleanup and Refactoring
 
 **Objective:** Remove backwards compatibility shims and refactor FUSE to use fs.FSContext directly
 
@@ -7342,7 +7564,7 @@ go test -race ./...
 
 ---
 
-### Task 9.11: Final Testing and v0.2.0 Release
+### Task 9.16: Final Testing and v0.2.0 Release
 
 **Objective:** Comprehensive testing of shared core and v0.2.0 release
 
