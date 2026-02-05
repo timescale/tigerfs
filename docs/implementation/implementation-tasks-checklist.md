@@ -184,8 +184,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 9.7 | Implement NFS Handler (Write Operations) | ~7100 |
 | ✅ | 9.8 | FUSE Integration and Migration | ~7210 |
 | ✅ | 9.9 | Feature Parity Verification and Integration Tests | ~7310 |
-| ⬜ | 9.10 | Add cachedFile Structure and File Cache | ~7277 |
-| ⬜ | 9.11 | Modify OpenFile for Cache Lookup | ~7340 |
+| ✅ | 9.10 | Add cachedFile Structure and File Cache | ~7277 |
+| ✅ | 9.11 | Modify OpenFile for Cache Lookup | ~7340 |
 | ⬜ | 9.12 | Implement Reference Counting and Sync | ~7400 |
 | ⬜ | 9.13 | Large File Streaming and Memory Limits | ~7470 |
 | ⬜ | 9.14 | Cache Reaper and Graceful Shutdown | ~7540 |
@@ -216,6 +216,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 6: Synthesized Apps | 0 | 10 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
-| Phase 9: Shared Core Library | 9 | 11 | 82% |
+| Phase 9: Shared Core Library | 11 | 16 | 69% |
 | Phase 10: Performance | 0 | 3 | 0% |
-| **Total** | **93** | **116** | **80%** |
+| **Total** | **95** | **121** | **79%** |
