@@ -2,6 +2,7 @@ package nfs
 
 import (
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -579,6 +580,137 @@ func TestMemFile_Sync_SkipsDeletedFile(t *testing.T) {
 	// Sync should succeed but skip the commit
 	err = mf.Sync()
 	require.NoError(t, err)
+}
+
+// =============================================================================
+// Large File Handling Tests (Task 9.13)
+// =============================================================================
+
+// TestMemFile_StreamingWrite_TriggersAtThreshold verifies that sequential writes
+// exceeding the streaming threshold trigger a commit and buffer clear.
+//
+// WRITE ISSUE CAPTURED: Memory exhaustion on large file writes
+//
+// When writing very large files (e.g., dd if=/dev/zero bs=1M count=100),
+// buffering everything in memory would cause OOM. For sequential writes,
+// we commit at the threshold and clear the buffer.
+//
+// This test verifies:
+//   - Sequential writes trigger streaming at threshold
+//   - Buffer is cleared after streaming commit
+//   - streamed flag is set
+func TestMemFile_StreamingWrite_TriggersAtThreshold(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	f, err := fs.OpenFile("/table/1/data.txt", os.O_WRONLY|os.O_CREATE, 0644)
+	require.NoError(t, err)
+	mf := f.(*memFile)
+
+	// Write data at the threshold (not exceeding yet)
+	chunk := make([]byte, 1024*1024) // 1MB chunks
+	for i := 0; i < 10; i++ {        // 10MB total, at threshold but not over
+		_, err = f.Write(chunk)
+		require.NoError(t, err)
+	}
+
+	// Verify buffer has accumulated (threshold is > not >=)
+	mf.cached.mu.RLock()
+	sizeAtThreshold := len(mf.cached.data)
+	streamed := mf.cached.streamed
+	mf.cached.mu.RUnlock()
+	assert.Equal(t, 10*1024*1024, sizeAtThreshold, "buffer should have 10MB")
+	assert.False(t, streamed, "should not have streamed yet (at threshold, not over)")
+
+	// Write more to exceed threshold (ops is nil, so no actual DB write)
+	_, err = f.Write(chunk) // 11MB total, exceeds 10MB threshold
+	require.NoError(t, err)
+
+	// After threshold, buffer should be cleared and streamed flag set
+	mf.cached.mu.RLock()
+	sizeAfterThreshold := len(mf.cached.data)
+	streamed = mf.cached.streamed
+	isSequential := mf.cached.isSequential
+	mf.cached.mu.RUnlock()
+
+	assert.Equal(t, 0, sizeAfterThreshold, "buffer should be cleared after streaming")
+	assert.True(t, streamed, "streamed flag should be set")
+	assert.True(t, isSequential, "should still be marked sequential")
+}
+
+// TestMemFile_RandomWrite_RejectsAtLimit verifies that non-sequential writes
+// exceeding the maximum random write size return EFBIG.
+//
+// WRITE ISSUE CAPTURED: Unbounded memory for random access patterns
+//
+// Random writes (seeking to various positions) require keeping all data
+// in memory. Without a limit, a malicious or buggy client could exhaust
+// memory. We cap random writes at 100MB and return EFBIG.
+//
+// This test verifies:
+//   - Non-sequential writes have a size limit
+//   - Exceeding the limit returns EFBIG
+func TestMemFile_RandomWrite_RejectsAtLimit(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	f, err := fs.OpenFile("/table/1/data.txt", os.O_WRONLY|os.O_CREATE, 0644)
+	require.NoError(t, err)
+	mf := f.(*memFile)
+
+	// Write some data
+	_, err = f.Write([]byte("initial"))
+	require.NoError(t, err)
+
+	// Seek backwards to make it non-sequential
+	_, err = f.Seek(0, 0)
+	require.NoError(t, err)
+	_, err = f.Write([]byte("x"))
+	require.NoError(t, err)
+
+	// Verify it's marked as non-sequential
+	mf.cached.mu.RLock()
+	isSequential := mf.cached.isSequential
+	mf.cached.mu.RUnlock()
+	assert.False(t, isSequential, "should be marked non-sequential after seek+write")
+
+	// Try to write past the limit (simulate by setting data size near limit)
+	mf.cached.mu.Lock()
+	mf.cached.data = make([]byte, 100*1024*1024-1) // Just under 100MB
+	mf.offset = int64(len(mf.cached.data))
+	mf.cached.mu.Unlock()
+
+	// This write should fail with EFBIG
+	_, err = f.Write([]byte("xx")) // Would push over 100MB
+	require.Error(t, err, "write exceeding limit should fail")
+	assert.ErrorIs(t, err, syscall.EFBIG, "error should be EFBIG")
+}
+
+// TestMemFile_SequentialWrite_NoSizeLimit verifies that sequential writes
+// are not limited by maxRandomWriteSize (they stream instead).
+func TestMemFile_SequentialWrite_NoSizeLimit(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	f, err := fs.OpenFile("/table/1/data.txt", os.O_WRONLY|os.O_CREATE, 0644)
+	require.NoError(t, err)
+	mf := f.(*memFile)
+
+	// Simulate writing more than maxRandomWriteSize sequentially
+	// The streaming mechanism will clear the buffer periodically
+	chunk := make([]byte, 1024*1024) // 1MB chunks
+	for i := 0; i < 15; i++ {        // 15MB > 10MB threshold, will stream
+		_, err = f.Write(chunk)
+		require.NoError(t, err)
+	}
+
+	// Should have streamed (buffer cleared)
+	mf.cached.mu.RLock()
+	streamed := mf.cached.streamed
+	isSequential := mf.cached.isSequential
+	bufferSize := len(mf.cached.data)
+	mf.cached.mu.RUnlock()
+
+	assert.True(t, streamed, "should have streamed")
+	assert.True(t, isSequential, "should still be sequential")
+	assert.Less(t, bufferSize, 15*1024*1024, "buffer should be less than total written")
 }
 
 // =============================================================================

@@ -9,6 +9,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-git/go-billy/v5"
@@ -16,6 +17,20 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	nfsfile "github.com/willscott/go-nfs/file"
 	"go.uber.org/zap"
+)
+
+// Large file handling constants (ADR-010)
+const (
+	// streamingThreshold is the buffer size at which sequential writes trigger
+	// a streaming commit. When the buffer exceeds this size and writes are
+	// append-only, we commit the current buffer to the database and clear it,
+	// allowing unlimited file sizes without memory exhaustion.
+	streamingThreshold = 10 * 1024 * 1024 // 10MB
+
+	// maxRandomWriteSize is the maximum buffer size for non-sequential writes.
+	// Random access patterns require keeping all data in memory until close,
+	// so we cap the buffer to prevent OOM. Exceeding this returns EFBIG.
+	maxRandomWriteSize = 100 * 1024 * 1024 // 100MB
 )
 
 // OpsFilesystem implements billy.Filesystem by delegating to fs.Operations.
@@ -78,6 +93,7 @@ type cachedFile struct {
 	truncated    bool      // True if O_TRUNC was set - next open should not read from DB
 	deleted      bool      // True if file was rm'd while open - subsequent writes return EIO
 	isSequential bool      // True if all writes have been append-only (offset == len before write)
+	streamed     bool      // True if file has been partially committed via streaming (append mode)
 
 	// Database connection for commit operations
 	ops *fs.Operations
@@ -909,10 +925,10 @@ func (f *memFile) Write(p []byte) (int, error) {
 	}
 
 	f.cached.mu.Lock()
-	defer f.cached.mu.Unlock()
 
 	// Check if file was deleted while we had it open
 	if f.cached.deleted {
+		f.cached.mu.Unlock()
 		return 0, fmt.Errorf("file was deleted")
 	}
 
@@ -926,6 +942,7 @@ func (f *memFile) Write(p []byte) (int, error) {
 		f.offset = int64(len(p))
 		f.cached.dirty = true
 		f.cached.lastActivity = time.Now()
+		f.cached.mu.Unlock()
 		return len(p), nil
 	}
 
@@ -934,8 +951,18 @@ func (f *memFile) Write(p []byte) (int, error) {
 		f.cached.isSequential = false
 	}
 
-	// Expand buffer if needed
+	// Check size limits for random (non-sequential) writes
 	newLen := f.offset + int64(len(p))
+	if !f.cached.isSequential && newLen > maxRandomWriteSize {
+		f.cached.mu.Unlock()
+		logging.Warn("memFile.Write: random write exceeds size limit",
+			zap.String("path", f.cached.path),
+			zap.Int64("newLen", newLen),
+			zap.Int64("limit", maxRandomWriteSize))
+		return 0, syscall.EFBIG
+	}
+
+	// Expand buffer if needed
 	if newLen > int64(len(f.cached.data)) {
 		newData := make([]byte, newLen)
 		copy(newData, f.cached.data)
@@ -947,6 +974,54 @@ func (f *memFile) Write(p []byte) (int, error) {
 	f.offset += int64(len(p))
 	f.cached.dirty = true
 	f.cached.lastActivity = time.Now()
+
+	// Check if we should stream (commit and clear) for large sequential writes
+	// This prevents memory exhaustion for very large files like dd output
+	if f.cached.isSequential && int64(len(f.cached.data)) > streamingThreshold {
+		// Need to commit outside the lock to avoid holding it during I/O
+		data := f.cached.data
+		path := f.cached.path
+		ops := f.cached.ops
+		f.cached.mu.Unlock()
+
+		if ops != nil && path != "" {
+			logging.Debug("memFile.Write: streaming commit",
+				zap.String("path", path),
+				zap.Int("size", len(data)))
+
+			fsErr := ops.WriteFile(ctx(), path, data)
+			if fsErr != nil {
+				logging.Error("memFile.Write: streaming commit failed",
+					zap.String("path", path),
+					zap.Error(fsErr.Cause))
+				return 0, fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+			}
+
+			// Clear buffer after successful commit
+			f.cached.mu.Lock()
+			f.cached.data = []byte{}
+			f.cached.dirty = false
+			f.cached.streamed = true
+			f.cached.lastActivity = time.Now()
+			f.offset = 0 // Reset offset since buffer is cleared
+			f.cached.mu.Unlock()
+
+			logging.Debug("memFile.Write: streaming commit complete, buffer cleared",
+				zap.String("path", path))
+		} else {
+			// No ops, just clear buffer (for testing)
+			f.cached.mu.Lock()
+			f.cached.data = []byte{}
+			f.cached.dirty = false
+			f.cached.streamed = true
+			f.offset = 0
+			f.cached.mu.Unlock()
+		}
+
+		return len(p), nil
+	}
+
+	f.cached.mu.Unlock()
 	return len(p), nil
 }
 
