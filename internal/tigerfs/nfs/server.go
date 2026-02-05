@@ -63,6 +63,9 @@ func (s *Server) Start() (int, error) {
 		zap.Int("port", s.port),
 		zap.String("address", listener.Addr().String()))
 
+	// Start the cache reaper for handling crashed clients
+	s.billyFS.StartCacheReaper()
+
 	// Create NFS handler with stateless file handles.
 	// StableHandler encodes paths directly into handles, avoiding the stale
 	// handle problem that occurs with LRU-cached UUID handles when listing
@@ -109,6 +112,13 @@ func (s *Server) Stop() error {
 
 	// Wait for server goroutine to finish
 	s.wg.Wait()
+
+	// Flush cached files and stop the reaper
+	if s.billyFS != nil {
+		if err := s.billyFS.Close(); err != nil {
+			logging.Warn("Error flushing cached files on shutdown", zap.Error(err))
+		}
+	}
 
 	logging.Info("NFS server stopped")
 	return nil

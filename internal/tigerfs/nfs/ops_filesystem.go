@@ -31,6 +31,14 @@ const (
 	// Random access patterns require keeping all data in memory until close,
 	// so we cap the buffer to prevent OOM. Exceeding this returns EFBIG.
 	maxRandomWriteSize = 100 * 1024 * 1024 // 100MB
+
+	// cacheReaperInterval is how often the reaper checks for stale entries.
+	cacheReaperInterval = 30 * time.Second
+
+	// cacheIdleTimeout is how long a cache entry can be idle before being
+	// force-committed and evicted. This handles clients that crash without
+	// closing files.
+	cacheIdleTimeout = 5 * time.Minute
 )
 
 // OpsFilesystem implements billy.Filesystem by delegating to fs.Operations.
@@ -53,6 +61,10 @@ type OpsFilesystem struct {
 	// fileCache maps normalized paths to cached file entries.
 	// Entries persist until: (1) last handle closes and commits, or (2) reaper evicts.
 	fileCache map[string]*cachedFile
+
+	// reaperStop signals the cache reaper goroutine to stop.
+	// Closed by Close() to trigger graceful shutdown.
+	reaperStop chan struct{}
 }
 
 // cachedFile persists across NFS RPCs until refCount drops to zero.
@@ -235,6 +247,196 @@ func (f *OpsFilesystem) getCachedFile(filePath string) *cachedFile {
 	f.cacheMu.RLock()
 	defer f.cacheMu.RUnlock()
 	return f.fileCache[filePath]
+}
+
+// =============================================================================
+// Cache Reaper and Shutdown (ADR-010)
+//
+// The reaper handles clients that crash without closing files. It periodically
+// checks for idle cache entries and force-commits them to prevent memory leaks.
+// On graceful shutdown, Close() flushes all dirty entries before returning.
+// =============================================================================
+
+// StartCacheReaper starts the background cache reaper goroutine.
+//
+// The reaper runs every 30 seconds and force-commits cache entries that have
+// been idle for more than 5 minutes. This handles NFS clients that crash or
+// disconnect without properly closing files.
+//
+// Call Close() to stop the reaper and flush all remaining dirty entries.
+func (f *OpsFilesystem) StartCacheReaper() {
+	f.reaperStop = make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(cacheReaperInterval)
+		defer ticker.Stop()
+
+		logging.Debug("Cache reaper started",
+			zap.Duration("interval", cacheReaperInterval),
+			zap.Duration("idleTimeout", cacheIdleTimeout))
+
+		for {
+			select {
+			case <-ticker.C:
+				f.reapStaleCacheEntries()
+			case <-f.reaperStop:
+				logging.Debug("Cache reaper stopped")
+				return
+			}
+		}
+	}()
+}
+
+// reapStaleCacheEntries finds and commits cache entries that have been idle
+// longer than cacheIdleTimeout.
+//
+// For each stale entry:
+//  1. If dirty, commit data to database
+//  2. Remove from cache regardless of refCount
+//
+// This prevents memory leaks from crashed clients that never close their files.
+func (f *OpsFilesystem) reapStaleCacheEntries() {
+	now := time.Now()
+	var staleEntries []*cachedFile
+	var stalePaths []string
+
+	// Find stale entries (hold cacheMu briefly)
+	f.cacheMu.RLock()
+	for path, cached := range f.fileCache {
+		cached.mu.RLock()
+		idle := now.Sub(cached.lastActivity)
+		isStale := idle > cacheIdleTimeout
+		cached.mu.RUnlock()
+
+		if isStale {
+			staleEntries = append(staleEntries, cached)
+			stalePaths = append(stalePaths, path)
+		}
+	}
+	f.cacheMu.RUnlock()
+
+	if len(staleEntries) == 0 {
+		return
+	}
+
+	logging.Debug("Reaper found stale entries",
+		zap.Int("count", len(staleEntries)))
+
+	// Commit and remove stale entries
+	for i, cached := range staleEntries {
+		path := stalePaths[i]
+
+		cached.mu.Lock()
+		dirty := cached.dirty
+		data := cached.data
+		ops := cached.ops
+		isDDLSQL := cached.isDDLSQL
+		cached.mu.Unlock()
+
+		// Commit if dirty (same logic as Close)
+		if dirty && ops != nil && len(data) > 0 {
+			logging.Debug("Reaper committing stale entry",
+				zap.String("path", path),
+				zap.Int("size", len(data)))
+
+			fsErr := ops.WriteFile(ctx(), path, data)
+			if fsErr != nil {
+				logging.Error("Reaper commit failed",
+					zap.String("path", path),
+					zap.Error(fsErr.Cause))
+			}
+		} else if dirty && ops != nil && len(data) == 0 && isDDLSQL {
+			// DDL sql files need empty write committed
+			logging.Debug("Reaper committing empty DDL sql file",
+				zap.String("path", path))
+			ops.WriteFile(ctx(), path, data)
+		}
+
+		// Remove from cache
+		f.cacheMu.Lock()
+		delete(f.fileCache, path)
+		f.cacheMu.Unlock()
+
+		logging.Debug("Reaper evicted stale entry",
+			zap.String("path", path))
+	}
+}
+
+// Close stops the cache reaper and flushes all dirty cache entries.
+//
+// This should be called on graceful shutdown to ensure no data is lost.
+// After Close returns, no more writes will be accepted and the cache is empty.
+//
+// Close is safe to call multiple times; subsequent calls are no-ops.
+func (f *OpsFilesystem) Close() error {
+	// Stop reaper if running
+	if f.reaperStop != nil {
+		close(f.reaperStop)
+		f.reaperStop = nil
+	}
+
+	// Flush all dirty entries
+	f.cacheMu.Lock()
+	entries := make([]*cachedFile, 0, len(f.fileCache))
+	paths := make([]string, 0, len(f.fileCache))
+	for path, cached := range f.fileCache {
+		entries = append(entries, cached)
+		paths = append(paths, path)
+	}
+	f.cacheMu.Unlock()
+
+	if len(entries) == 0 {
+		logging.Debug("OpsFilesystem.Close: no cached entries to flush")
+		return nil
+	}
+
+	logging.Debug("OpsFilesystem.Close: flushing cached entries",
+		zap.Int("count", len(entries)))
+
+	var lastErr error
+	for i, cached := range entries {
+		path := paths[i]
+
+		cached.mu.Lock()
+		dirty := cached.dirty
+		data := cached.data
+		ops := cached.ops
+		isDDLSQL := cached.isDDLSQL
+		isTrigger := cached.isTrigger
+		cached.mu.Unlock()
+
+		// Skip non-dirty entries (unless trigger)
+		if !dirty && !isTrigger {
+			continue
+		}
+
+		// Skip empty non-DDL entries
+		if len(data) == 0 && !isDDLSQL && !isTrigger {
+			continue
+		}
+
+		if ops != nil {
+			logging.Debug("OpsFilesystem.Close: flushing entry",
+				zap.String("path", path),
+				zap.Int("size", len(data)))
+
+			fsErr := ops.WriteFile(ctx(), path, data)
+			if fsErr != nil {
+				logging.Error("OpsFilesystem.Close: flush failed",
+					zap.String("path", path),
+					zap.Error(fsErr.Cause))
+				lastErr = fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+			}
+		}
+	}
+
+	// Clear cache
+	f.cacheMu.Lock()
+	f.fileCache = make(map[string]*cachedFile)
+	f.cacheMu.Unlock()
+
+	logging.Debug("OpsFilesystem.Close: cache cleared")
+	return lastErr
 }
 
 // normalizePath ensures the path starts with "/" as required by fs.Operations.
