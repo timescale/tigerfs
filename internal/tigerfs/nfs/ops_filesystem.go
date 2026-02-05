@@ -1096,6 +1096,86 @@ func (f *memFile) Unlock() error {
 	return nil
 }
 
+// Sync commits the current buffer to the database immediately.
+//
+// This is called when an editor saves (fsync) while the file is still open.
+// Unlike Close(), Sync does not decrement the reference count or remove
+// the file from cache - it just ensures current changes are persisted.
+//
+// # Behavior
+//
+//   - If dirty and has data: commit to DB, clear dirty flag
+//   - If not dirty or empty: no-op
+//   - File remains in cache for continued editing
+//
+// # Thread Safety
+//
+// Acquires cached.mu to read/update state. The actual DB write happens
+// outside the lock to avoid holding it during I/O.
+func (f *memFile) Sync() error {
+	f.cached.mu.Lock()
+	filePath := f.cached.path
+	dirty := f.cached.dirty
+	data := f.cached.data
+	ops := f.cached.ops
+	isDDLSQL := f.cached.isDDLSQL
+	deleted := f.cached.deleted
+	f.cached.mu.Unlock()
+
+	logging.Debug("memFile.Sync",
+		zap.String("path", filePath),
+		zap.Bool("dirty", dirty),
+		zap.Int("size", len(data)))
+
+	// If file was deleted, nothing to sync
+	if deleted {
+		logging.Debug("memFile.Sync: file was deleted, skipping",
+			zap.String("path", filePath))
+		return nil
+	}
+
+	// If not dirty, nothing to sync
+	if !dirty {
+		logging.Debug("memFile.Sync: not dirty, skipping",
+			zap.String("path", filePath))
+		return nil
+	}
+
+	// Skip empty content unless it's a DDL sql file
+	// (same logic as Close for truncate-before-write pattern)
+	if len(data) == 0 && !isDDLSQL {
+		logging.Debug("memFile.Sync: empty content, skipping",
+			zap.String("path", filePath))
+		return nil
+	}
+
+	// Commit to database
+	if ops != nil && filePath != "" {
+		logging.Debug("memFile.Sync: committing to database",
+			zap.String("path", filePath),
+			zap.Int("size", len(data)))
+
+		fsErr := ops.WriteFile(ctx(), filePath, data)
+		if fsErr != nil {
+			logging.Error("memFile.Sync WriteFile failed",
+				zap.String("path", filePath),
+				zap.Error(fsErr.Cause))
+			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+		}
+
+		// Clear dirty flag after successful commit
+		f.cached.mu.Lock()
+		f.cached.dirty = false
+		f.cached.lastActivity = time.Now()
+		f.cached.mu.Unlock()
+
+		logging.Debug("memFile.Sync: commit successful",
+			zap.String("path", filePath))
+	}
+
+	return nil
+}
+
 func (f *memFile) Truncate(size int64) error {
 	if !f.writable {
 		return fmt.Errorf("file not opened for writing")
