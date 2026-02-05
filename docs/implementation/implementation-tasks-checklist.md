@@ -184,8 +184,13 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 9.7 | Implement NFS Handler (Write Operations) | ~7100 |
 | ✅ | 9.8 | FUSE Integration and Migration | ~7210 |
 | ✅ | 9.9 | Feature Parity Verification and Integration Tests | ~7310 |
-| ⬜ | 9.10 | Cleanup, Refactoring, and Docker-on-macOS Integration Tests | ~7280 |
-| ⬜ | 9.11 | Final Testing and v0.2.0 Release | ~7380 |
+| ⬜ | 9.10 | Add cachedFile Structure and File Cache | ~7277 |
+| ⬜ | 9.11 | Modify OpenFile for Cache Lookup | ~7340 |
+| ⬜ | 9.12 | Implement Reference Counting and Sync | ~7400 |
+| ⬜ | 9.13 | Large File Streaming and Memory Limits | ~7470 |
+| ⬜ | 9.14 | Cache Reaper and Graceful Shutdown | ~7540 |
+| ⬜ | 9.15 | Cleanup, Refactoring, and Docker-on-macOS Integration Tests | ~7610 |
+| ⬜ | 9.16 | Final Testing and v0.2.0 Release | ~7710 |
 
 ---
 
