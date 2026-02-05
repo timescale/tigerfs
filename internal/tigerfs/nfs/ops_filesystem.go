@@ -20,28 +20,23 @@ import (
 
 // OpsFilesystem implements billy.Filesystem by delegating to fs.Operations.
 // This provides feature parity between FUSE and NFS by using the shared core.
+//
+// # File Caching (ADR-010)
+//
+// The filesystem uses a persistent file cache to enable efficient large file writes.
+// Files are cached in memory until all handles close, then committed once to the
+// database. This reduces O(n²) database traffic to O(n) for multi-chunk NFS writes.
+//
+// See cachedFile for cache entry lifecycle details.
 type OpsFilesystem struct {
 	ops *fs.Operations
 
-	// inFlightMu protects inFlightFiles and truncatedFiles for concurrent access.
-	// DEPRECATED: These will be replaced by fileCache in Task 9.11.
-	inFlightMu sync.RWMutex
-	// inFlightFiles tracks files being created but not yet written to the database.
-	// This is needed because NFS calls Stat after Create but before Close, and the
-	// row doesn't exist in the database yet. We return synthetic stat info for these.
-	inFlightFiles map[string]*memFile
+	// cacheMu protects fileCache for concurrent access.
+	// Lock ordering: always acquire cacheMu before any cachedFile.mu.
+	cacheMu sync.RWMutex
 
-	// truncatedFiles tracks files that have been truncated via O_TRUNC but not yet
-	// written. This handles the NFS truncate-before-write pattern for existing rows:
-	//   1. SETATTR(size=0) → OpenFile with O_TRUNC → marks as truncated
-	//   2. WRITE → OpenFile for write → checks truncated, returns empty memFile
-	// Without this, step 2 would read existing row data from DB, causing corruption.
-	truncatedFiles map[string]bool
-
-	// fileCache is a unified cache for persistent memFiles (ADR-010).
-	// Files persist in memory until all handles close, then commit once to DB.
-	// This replaces inFlightFiles and truncatedFiles with reference counting.
-	cacheMu   sync.RWMutex
+	// fileCache maps normalized paths to cached file entries.
+	// Entries persist until: (1) last handle closes and commits, or (2) reaper evicts.
 	fileCache map[string]*cachedFile
 }
 
@@ -94,12 +89,13 @@ type cachedFile struct {
 }
 
 // NewOpsFilesystem creates a new OpsFilesystem that wraps fs.Operations.
+//
+// The returned filesystem has an initialized file cache. Callers should call
+// Close() on shutdown to flush any dirty cached files.
 func NewOpsFilesystem(ops *fs.Operations) *OpsFilesystem {
 	return &OpsFilesystem{
-		ops:            ops,
-		inFlightFiles:  make(map[string]*memFile),
-		truncatedFiles: make(map[string]bool),
-		fileCache:      make(map[string]*cachedFile),
+		ops:       ops,
+		fileCache: make(map[string]*cachedFile),
 	}
 }
 
@@ -238,43 +234,35 @@ func normalizePath(p string) string {
 }
 
 // Create creates a new file for writing.
+//
+// This creates or retrieves a cached file entry (ADR-010) and returns a memFile
+// handle for writing. The file is cached in memory until all handles close,
+// then committed once to the database.
 func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Create", zap.String("filename", filename))
 
-	// DDL trigger files (.test, .commit, .abort) are marked with isTrigger=true.
-	// The actual trigger fires on Close via memFile.Close() calling WriteFile.
-	baseName := path.Base(filename)
-	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
+	// Get or create cached file entry with O_CREATE|O_TRUNC semantics
+	cached := f.getOrCreateCachedFile(filename, os.O_CREATE|os.O_TRUNC)
 
-	// DDL sql files need special handling: empty writes must be persisted to clear
-	// the session content. This is needed for the truncate-before-write pattern.
-	isDDLSQL := baseName == "sql" && isDDLPath(filename)
-
-	// Row files (JSON, CSV, etc.) need replacement semantics on write.
-	rowFile := isRowFile(baseName)
+	// If this is a fresh create (truncated flag set), clear any existing data
+	cached.mu.Lock()
+	if cached.truncated {
+		cached.data = []byte{}
+	}
+	cached.mu.Unlock()
 
 	mf := &memFile{
-		name:      baseName,
-		data:      []byte{},
-		writable:  true,
-		dirty:     false,
-		path:      filename,
-		ops:       f.ops,
-		isTrigger: isTrigger,
-		isDDLSQL:  isDDLSQL,
-		isRowFile: rowFile,
-		fs:        f,
+		name:     path.Base(filename),
+		offset:   0,
+		writable: true,
+		fs:       f,
+		cached:   cached,
 	}
 
-	// Track this file as in-flight so Stat returns success before Close writes to DB.
-	// This is needed because NFS calls SETATTR (which calls Stat) after CREATE but
-	// before the data is written to the database.
-	f.inFlightMu.Lock()
-	f.inFlightFiles[filename] = mf
-	numAfter := len(f.inFlightFiles)
-	f.inFlightMu.Unlock()
-	logging.Debug("OpsFilesystem.Create: registered in-flight file", zap.String("path", filename), zap.Int("numInFlight", numAfter))
+	logging.Debug("OpsFilesystem.Create: created memFile with cache",
+		zap.String("path", filename),
+		zap.Int("refCount", cached.refCount))
 
 	return mf, nil
 }
@@ -285,205 +273,171 @@ func (f *OpsFilesystem) Open(filename string) (billy.File, error) {
 }
 
 // OpenFile opens a file with the specified flags and mode.
+//
+// This uses the persistent file cache (ADR-010) to enable efficient large file
+// writes. Multiple opens of the same file share a cachedFile entry via reference
+// counting. Data is committed to the database only when the last handle closes.
+//
+// # Flag Handling
+//
+//   - O_TRUNC: Clears cached data, sets truncated=true to prevent DB read
+//   - O_CREATE: Creates new cached entry if file doesn't exist
+//   - O_WRONLY/O_RDWR: Enables writing to the cached buffer
+//
+// # Special Cases
+//
+//   - DDL trigger files (.test, .commit, .abort): Always trigger on close
+//   - DDL sql files: Empty writes must persist to clear session state
+//   - Row files (JSON, CSV, etc.): Writes at offset 0 replace entire buffer
 func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.OpenFile", zap.String("filename", filename), zap.Int("flag", flag))
 
 	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
 
-	// Check for in-flight files first.
-	// NFS write workflow: CREATE → SETATTR → WRITE (OpenFile with O_RDWR, no O_CREATE)
-	// The file is registered as in-flight on CREATE but doesn't exist in DB yet.
-	// If we try to read from DB, it fails. So for in-flight files opened for writing,
-	// return a writable memFile that will write to DB on Close.
-	if isWrite {
-		f.inFlightMu.RLock()
-		inFlightMf, inFlight := f.inFlightFiles[filename]
-		f.inFlightMu.RUnlock()
+	// Check if file is already in cache (includes in-flight and truncated files)
+	cached := f.getCachedFile(filename)
+	if cached != nil {
+		// File is already cached - get another reference
+		cached.mu.Lock()
+		cached.refCount++
+		cached.lastActivity = time.Now()
 
-		if inFlight {
-			logging.Debug("OpsFilesystem.OpenFile: returning in-flight file for write",
-				zap.String("filename", filename), zap.Int("flag", flag))
-
-			// Return a new memFile that shares the same path but allows writing.
-			// The original in-flight memFile was created by CREATE and immediately closed.
-			// This new memFile will receive the actual data and write to DB on Close.
-			baseName := path.Base(filename)
-			return &memFile{
-				name:      baseName,
-				data:      inFlightMf.data, // Start with any existing data
-				writable:  true,
-				dirty:     false,
-				path:      filename,
-				ops:       f.ops,
-				isTrigger: inFlightMf.isTrigger,
-				isDDLSQL:  inFlightMf.isDDLSQL,
-				isRowFile: inFlightMf.isRowFile,
-				fs:        f,
-			}, nil
-		}
-	}
-
-	// DDL trigger files (.test, .commit, .abort) are handled specially:
-	// - They always appear to exist (via stat) for NFS protocol compliance
-	// - The actual trigger fires on Close via memFile.Close() calling WriteFile
-	// - We mark them with isTrigger=true so Close knows to bypass the empty-write check
-	baseName := path.Base(filename)
-	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
-
-	// DDL sql files need special handling for NFS truncate-before-write pattern.
-	isDDLSQL := baseName == "sql" && isDDLPath(filename)
-
-	// Row files (JSON, CSV, etc.) need replacement semantics on write.
-	rowFile := isRowFile(baseName)
-
-	// For write with truncate or create, start with empty data
-	if flag&os.O_TRUNC != 0 || flag&os.O_CREATE != 0 {
-		mf := &memFile{
-			name:      baseName,
-			data:      []byte{},
-			writable:  isWrite,
-			dirty:     false,
-			path:      filename,
-			ops:       f.ops,
-			isTrigger: isTrigger,
-			isDDLSQL:  isDDLSQL,
-			isRowFile: rowFile,
-			fs:        f,
-		}
-		f.inFlightMu.Lock()
-		// Track as in-flight for O_CREATE (new file being created).
-		// This allows Stat to succeed before Close writes to DB.
-		if flag&os.O_CREATE != 0 {
-			f.inFlightFiles[filename] = mf
-			logging.Debug("OpsFilesystem.OpenFile: registered in-flight file (O_CREATE)",
-				zap.String("path", filename), zap.Int("flag", flag))
-		}
-		// Track as truncated for O_TRUNC (existing file being overwritten).
-		// This allows subsequent WRITE operations to start with empty data
-		// instead of reading stale data from the database.
+		// Handle O_TRUNC on already-cached file
 		if flag&os.O_TRUNC != 0 {
-			f.truncatedFiles[filename] = true
-			logging.Debug("OpsFilesystem.OpenFile: marked file as truncated (O_TRUNC)",
-				zap.String("path", filename), zap.Int("flag", flag))
+			cached.data = []byte{}
+			cached.truncated = true
+			logging.Debug("OpsFilesystem.OpenFile: truncated cached file",
+				zap.String("filename", filename))
 		}
-		f.inFlightMu.Unlock()
-		return mf, nil
-	}
 
-	// Check if file was recently truncated (truncate-before-write pattern).
-	// For existing files: SETATTR(size=0) → O_TRUNC → marks truncated → WRITE → here
-	// We need to return empty data instead of reading stale data from DB.
-	if isWrite {
-		f.inFlightMu.RLock()
-		truncated := f.truncatedFiles[filename]
-		f.inFlightMu.RUnlock()
+		refCount := cached.refCount
+		cached.mu.Unlock()
 
-		if truncated {
-			logging.Debug("OpsFilesystem.OpenFile: returning empty memFile for truncated file",
-				zap.String("filename", filename), zap.Int("flag", flag))
-			return &memFile{
-				name:      baseName,
-				data:      []byte{},
-				writable:  true,
-				dirty:     false,
-				path:      filename,
-				ops:       f.ops,
-				isTrigger: isTrigger,
-				isDDLSQL:  isDDLSQL,
-				isRowFile: rowFile,
-				fs:        f,
-			}, nil
-		}
-	}
+		logging.Debug("OpsFilesystem.OpenFile: cache hit",
+			zap.String("filename", filename),
+			zap.Int("refCount", refCount),
+			zap.Int("flag", flag))
 
-	// For DDL sql files opened for writing (without O_TRUNC), start with empty data.
-	// This handles the NFS truncate-before-write pattern:
-	//   1. SETATTR(size=0) → opens with O_TRUNC, truncates, closes (marks dirty but skip write)
-	//   2. WRITE → opens with O_WRONLY (no O_TRUNC), writes content, closes
-	// Without this, step 2 would read the template from DDLManager (since GetSQL
-	// returns template when SQL is empty), causing partial overwrites.
-	// By starting with empty data for write operations, we ensure clean writes.
-	if isDDLSQL && isWrite {
-		logging.Debug("OpsFilesystem.OpenFile: DDL sql file opened for write, starting empty",
-			zap.String("filename", filename), zap.Int("flag", flag))
 		return &memFile{
-			name:      baseName,
-			data:      []byte{},
-			writable:  isWrite,
-			dirty:     false,
-			path:      filename,
-			ops:       f.ops,
-			isTrigger: isTrigger,
-			isDDLSQL:  isDDLSQL,
-			isRowFile: rowFile,
-			fs:        f,
+			name:     path.Base(filename),
+			offset:   0,
+			writable: isWrite,
+			fs:       f,
+			cached:   cached,
 		}, nil
 	}
 
-	// Try to read existing content
+	// File not in cache - determine if we need to load from DB or create fresh
+
+	// For O_TRUNC or O_CREATE, start with empty data (don't read from DB)
+	if flag&os.O_TRUNC != 0 || flag&os.O_CREATE != 0 {
+		cached = f.getOrCreateCachedFile(filename, flag)
+
+		logging.Debug("OpsFilesystem.OpenFile: created new cached entry (O_TRUNC or O_CREATE)",
+			zap.String("filename", filename),
+			zap.Int("flag", flag))
+
+		return &memFile{
+			name:     path.Base(filename),
+			offset:   0,
+			writable: isWrite,
+			fs:       f,
+			cached:   cached,
+		}, nil
+	}
+
+	// For DDL sql files opened for writing, start with empty data.
+	// This handles the NFS truncate-before-write pattern where we don't want
+	// to read the template from DDLManager.
+	baseName := path.Base(filename)
+	isDDLSQL := baseName == "sql" && isDDLPath(filename)
+	if isDDLSQL && isWrite {
+		cached = f.getOrCreateCachedFile(filename, flag)
+
+		logging.Debug("OpsFilesystem.OpenFile: DDL sql file opened for write, starting empty",
+			zap.String("filename", filename))
+
+		return &memFile{
+			name:     path.Base(filename),
+			offset:   0,
+			writable: isWrite,
+			fs:       f,
+			cached:   cached,
+		}, nil
+	}
+
+	// Try to read existing content from database
 	content, fsErr := f.ops.ReadFile(ctx(), filename)
 	if fsErr != nil {
 		if fsErr.Code == fs.ErrNotExist {
-			// If creating, return empty writable file and track as in-flight
+			// If O_CREATE was set, create empty file
 			if flag&os.O_CREATE != 0 {
-				mf := &memFile{
-					name:      baseName,
-					data:      []byte{},
-					writable:  isWrite,
-					dirty:     false,
-					path:      filename,
-					ops:       f.ops,
-					isTrigger: isTrigger,
-					isDDLSQL:  isDDLSQL,
-					isRowFile: rowFile,
-					fs:        f,
-				}
-				f.inFlightMu.Lock()
-				f.inFlightFiles[filename] = mf
-				f.inFlightMu.Unlock()
-				logging.Debug("OpsFilesystem.OpenFile: registered in-flight file (O_CREATE, not exist)",
-					zap.String("path", filename), zap.Int("flag", flag))
-				return mf, nil
+				cached = f.getOrCreateCachedFile(filename, flag)
+
+				logging.Debug("OpsFilesystem.OpenFile: created new cached entry (file not exist, O_CREATE)",
+					zap.String("filename", filename))
+
+				return &memFile{
+					name:     path.Base(filename),
+					offset:   0,
+					writable: isWrite,
+					fs:       f,
+					cached:   cached,
+				}, nil
 			}
 			return nil, os.ErrNotExist
 		}
 		return nil, fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 	}
 
+	// File exists in DB - create cached entry with the content
+	cached = f.getOrCreateCachedFile(filename, flag)
+	cached.mu.Lock()
+	// Only load data if this is the first open (data is still empty)
+	// If another handle already loaded data, use that
+	if len(cached.data) == 0 && !cached.truncated {
+		cached.data = content.Data
+	}
+	cached.mu.Unlock()
+
+	logging.Debug("OpsFilesystem.OpenFile: loaded from DB into cache",
+		zap.String("filename", filename),
+		zap.Int("size", len(content.Data)))
+
 	return &memFile{
-		name:      baseName,
-		data:      content.Data,
-		writable:  isWrite,
-		dirty:     false,
-		path:      filename,
-		ops:       f.ops,
-		isTrigger: isTrigger,
-		isDDLSQL:  isDDLSQL,
-		isRowFile: rowFile,
-		fs:        f,
+		name:     path.Base(filename),
+		offset:   0,
+		writable: isWrite,
+		fs:       f,
+		cached:   cached,
 	}, nil
 }
 
 // Stat returns file info for the given path.
+//
+// For cached files (ADR-010), returns the current buffer size rather than
+// querying the database. This ensures NFS sees correct sizes for files
+// being written but not yet committed.
 func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Stat", zap.String("filename", filename))
 
-	// Check for in-flight files first (files being created but not yet written to DB).
-	// NFS calls Stat after Create but before Close, and the row doesn't exist in the
-	// database yet. Return synthetic info for these files.
-	f.inFlightMu.RLock()
-	mf, inFlight := f.inFlightFiles[filename]
-	f.inFlightMu.RUnlock()
+	// Check for cached files first (files being created/modified but not yet in DB).
+	// NFS calls Stat after Create but before Close, and the data may not exist
+	// in the database yet. Return info from cache for these files.
+	cached := f.getCachedFile(filename)
+	if cached != nil {
+		cached.mu.RLock()
+		size := int64(len(cached.data))
+		cached.mu.RUnlock()
 
-	if inFlight {
-		logging.Debug("OpsFilesystem.Stat: returning in-flight file info",
+		logging.Debug("OpsFilesystem.Stat: returning cached file info",
 			zap.String("filename", filename),
-			zap.Int("size", len(mf.data)))
+			zap.Int64("size", size))
 		return &inFlightFileInfo{
-			name:    mf.name,
-			size:    int64(len(mf.data)),
+			name:    path.Base(filename),
+			size:    size,
 			mode:    0644,
 			modTime: time.Now(),
 			path:    filename,
@@ -527,9 +481,23 @@ func (f *OpsFilesystem) Rename(oldpath, newpath string) error {
 }
 
 // Remove removes a file.
+//
+// If the file is currently cached (ADR-010), it is marked as deleted.
+// Open handles will receive EIO on subsequent writes. The cached entry
+// is removed when the last handle closes.
 func (f *OpsFilesystem) Remove(filename string) error {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Remove", zap.String("filename", filename))
+
+	// Mark cached file as deleted if it exists
+	cached := f.getCachedFile(filename)
+	if cached != nil {
+		cached.mu.Lock()
+		cached.deleted = true
+		cached.mu.Unlock()
+		logging.Debug("OpsFilesystem.Remove: marked cached file as deleted",
+			zap.String("filename", filename))
+	}
 
 	fsErr := f.ops.Delete(ctx(), filename)
 	if fsErr != nil {
@@ -863,19 +831,28 @@ func isRowFile(filename string) bool {
 		strings.HasSuffix(filename, ".yaml")
 }
 
-// memFile is an in-memory file for reading and writing row data.
+// memFile is an in-memory file handle for reading and writing row data.
+//
+// Each memFile wraps a shared cachedFile entry. Multiple memFile handles can
+// point to the same cachedFile (reference counted). The memFile maintains its
+// own offset for sequential read/write operations, while the actual data lives
+// in the shared cachedFile.
+//
+// # Lifecycle
+//
+//   - Created by OpenFile or Create
+//   - Reads/Writes operate on cached.data via the per-handle offset
+//   - Close decrements cached.refCount; commits to DB when refCount reaches 0
 type memFile struct {
-	name      string
-	data      []byte
-	offset    int64
-	writable  bool
-	dirty     bool
-	path      string         // full path for write-back
-	ops       *fs.Operations // for write-back on Close
-	isTrigger bool           // true for DDL trigger files (.test, .commit, .abort)
-	isDDLSQL  bool           // true for DDL sql files (need empty writes to clear session)
-	isRowFile bool           // true for row files (JSON, CSV, etc.) - writes replace entire content
-	fs        *OpsFilesystem // for removing from inFlightFiles on Close
+	name     string         // basename for Name() method
+	offset   int64          // per-handle read/write position
+	writable bool           // true if opened for writing
+	fs       *OpsFilesystem // parent filesystem for cache management
+
+	// Shared cached file entry (ADR-010)
+	// All data operations go through cached.data instead of a local buffer.
+	// Multiple memFile handles can share the same cachedFile.
+	cached *cachedFile
 }
 
 func (f *memFile) Name() string {
@@ -883,19 +860,27 @@ func (f *memFile) Name() string {
 }
 
 func (f *memFile) Read(p []byte) (int, error) {
-	if f.offset >= int64(len(f.data)) {
+	f.cached.mu.RLock()
+	defer f.cached.mu.RUnlock()
+
+	if f.offset >= int64(len(f.cached.data)) {
 		return 0, io.EOF
 	}
-	n := copy(p, f.data[f.offset:])
+	n := copy(p, f.cached.data[f.offset:])
 	f.offset += int64(n)
+	f.cached.lastActivity = time.Now()
 	return n, nil
 }
 
 func (f *memFile) ReadAt(p []byte, off int64) (int, error) {
-	if off >= int64(len(f.data)) {
+	f.cached.mu.RLock()
+	defer f.cached.mu.RUnlock()
+
+	if off >= int64(len(f.cached.data)) {
 		return 0, io.EOF
 	}
-	n := copy(p, f.data[off:])
+	n := copy(p, f.cached.data[off:])
+	f.cached.lastActivity = time.Now()
 	if n < len(p) {
 		return n, io.EOF
 	}
@@ -903,13 +888,17 @@ func (f *memFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *memFile) Seek(offset int64, whence int) (int64, error) {
+	f.cached.mu.RLock()
+	dataLen := int64(len(f.cached.data))
+	f.cached.mu.RUnlock()
+
 	switch whence {
 	case io.SeekStart:
 		f.offset = offset
 	case io.SeekCurrent:
 		f.offset += offset
 	case io.SeekEnd:
-		f.offset = int64(len(f.data)) + offset
+		f.offset = dataLen + offset
 	}
 	return f.offset, nil
 }
@@ -919,67 +908,114 @@ func (f *memFile) Write(p []byte) (int, error) {
 		return 0, fmt.Errorf("file not opened for writing")
 	}
 
+	f.cached.mu.Lock()
+	defer f.cached.mu.Unlock()
+
+	// Check if file was deleted while we had it open
+	if f.cached.deleted {
+		return 0, fmt.Errorf("file was deleted")
+	}
+
 	// For row files (JSON, CSV, etc.), writes replace the entire content.
 	// This handles the case where NFS reads existing data, then writes new data
 	// at offset 0. Without replacement semantics, the buffer would retain any
 	// old data beyond the new content length, causing JSON parsing errors.
-	if f.isRowFile && f.offset == 0 {
-		f.data = make([]byte, len(p))
-		copy(f.data, p)
+	if f.cached.isRowFile && f.offset == 0 {
+		f.cached.data = make([]byte, len(p))
+		copy(f.cached.data, p)
 		f.offset = int64(len(p))
-		f.dirty = true
+		f.cached.dirty = true
+		f.cached.lastActivity = time.Now()
 		return len(p), nil
+	}
+
+	// Track whether writes are sequential (for large file streaming optimization)
+	if f.offset != int64(len(f.cached.data)) {
+		f.cached.isSequential = false
 	}
 
 	// Expand buffer if needed
 	newLen := f.offset + int64(len(p))
-	if newLen > int64(len(f.data)) {
+	if newLen > int64(len(f.cached.data)) {
 		newData := make([]byte, newLen)
-		copy(newData, f.data)
-		f.data = newData
+		copy(newData, f.cached.data)
+		f.cached.data = newData
 	}
 
 	// Write data at current offset
-	copy(f.data[f.offset:], p)
+	copy(f.cached.data[f.offset:], p)
 	f.offset += int64(len(p))
-	f.dirty = true
+	f.cached.dirty = true
+	f.cached.lastActivity = time.Now()
 	return len(p), nil
 }
 
 func (f *memFile) Close() error {
-	logging.Debug("memFile.Close", zap.String("path", f.path), zap.Bool("dirty", f.dirty), zap.Int("size", len(f.data)), zap.Bool("isTrigger", f.isTrigger), zap.Bool("isDDLSQL", f.isDDLSQL))
+	f.cached.mu.Lock()
+	filePath := f.cached.path
+	dirty := f.cached.dirty
+	dataLen := len(f.cached.data)
+	isTrigger := f.cached.isTrigger
+	isDDLSQL := f.cached.isDDLSQL
+	ops := f.cached.ops
 
-	// Remove from in-flight tracking only when content was actually written.
-	// go-nfs calls Create then immediately Close (with dirty=false, size=0) to get
-	// an NFS file handle. We need to keep tracking these "created but not written"
-	// files so Stat returns success. Only remove when:
-	// - File has content and was dirty (actual write completed), OR
-	// - File is a trigger file (these don't need tracking)
-	shouldRemoveFromInFlight := f.dirty && len(f.data) > 0
-	defer func() {
-		if f.fs != nil && f.path != "" && shouldRemoveFromInFlight {
-			f.fs.inFlightMu.Lock()
-			delete(f.fs.inFlightFiles, f.path)
-			delete(f.fs.truncatedFiles, f.path) // Also clear truncated flag
-			f.fs.inFlightMu.Unlock()
-			logging.Debug("memFile.Close: removed from in-flight/truncated tracking", zap.String("path", f.path))
-		}
-	}()
+	logging.Debug("memFile.Close",
+		zap.String("path", filePath),
+		zap.Bool("dirty", dirty),
+		zap.Int("size", dataLen),
+		zap.Bool("isTrigger", isTrigger),
+		zap.Bool("isDDLSQL", isDDLSQL),
+		zap.Int("refCount", f.cached.refCount))
 
-	// For DDL trigger files, ALWAYS write to trigger the operation.
-	// The trigger happens regardless of whether the file was dirtied or has content.
-	if f.isTrigger && f.ops != nil && f.path != "" {
-		logging.Debug("memFile.Close: DDL trigger file, triggering operation", zap.String("path", f.path))
-		fsErr := f.ops.WriteFile(ctx(), f.path, []byte{})
-		if fsErr != nil {
-			logging.Error("memFile.Close: DDL trigger failed", zap.String("path", f.path), zap.Error(fsErr.Cause))
-			// Don't return error - let NFS operations complete normally.
-			// The DDL operation failure is logged but shouldn't cause NFS protocol errors.
-		}
+	// Decrement reference count
+	f.cached.refCount--
+	refCount := f.cached.refCount
+	f.cached.lastActivity = time.Now()
+	f.cached.mu.Unlock()
+
+	// If there are still other handles open, don't commit yet
+	if refCount > 0 {
+		logging.Debug("memFile.Close: other handles still open, deferring commit",
+			zap.String("path", filePath),
+			zap.Int("refCount", refCount))
 		return nil
 	}
 
-	if f.dirty && f.ops != nil && f.path != "" {
+	// Last handle closed - commit if dirty
+	// Re-acquire lock to read final state and clear dirty flag
+	f.cached.mu.Lock()
+	dirty = f.cached.dirty
+	data := f.cached.data
+	deleted := f.cached.deleted
+	truncated := f.cached.truncated
+	f.cached.mu.Unlock()
+
+	// If file was deleted while open, discard changes
+	if deleted {
+		logging.Debug("memFile.Close: file was deleted, discarding changes",
+			zap.String("path", filePath))
+		f.fs.removeFromCache(filePath)
+		return nil
+	}
+
+	// For DDL trigger files, ALWAYS write to trigger the operation.
+	// The trigger happens regardless of whether the file was dirtied or has content.
+	if isTrigger && ops != nil && filePath != "" {
+		logging.Debug("memFile.Close: DDL trigger file, triggering operation",
+			zap.String("path", filePath))
+		fsErr := ops.WriteFile(ctx(), filePath, []byte{})
+		if fsErr != nil {
+			logging.Error("memFile.Close: DDL trigger failed",
+				zap.String("path", filePath),
+				zap.Error(fsErr.Cause))
+			// Don't return error - let NFS operations complete normally.
+			// The DDL operation failure is logged but shouldn't cause NFS protocol errors.
+		}
+		f.fs.removeFromCache(filePath)
+		return nil
+	}
+
+	if dirty && ops != nil && filePath != "" {
 		// WORKAROUND: Skip writing empty content to database columns.
 		//
 		// Background: The macOS NFS client uses a truncate-before-write pattern:
@@ -1005,18 +1041,50 @@ func (f *memFile) Close() error {
 		//
 		// Limitation: This workaround means users cannot intentionally clear a column
 		// to empty by truncating. They should use Delete (rm) to set columns to NULL.
-		if len(f.data) == 0 && !f.isDDLSQL {
-			logging.Debug("memFile.Close: skipping write of empty content (truncate-before-write pattern)",
-				zap.String("path", f.path))
+		if len(data) == 0 && !isDDLSQL {
+			// For empty data with dirty flag, this is likely the truncate phase of
+			// truncate-before-write pattern. Keep the cache entry so the subsequent
+			// WRITE operation can find it with truncated=true.
+			// The reaper will clean it up if no write comes within 5 minutes.
+			logging.Debug("memFile.Close: skipping write of empty content, keeping cache for subsequent write",
+				zap.String("path", filePath))
+			// Don't remove from cache - wait for subsequent write or reaper
 			return nil
 		}
-		logging.Debug("memFile.Close writing back", zap.String("path", f.path), zap.Int("size", len(f.data)))
-		fsErr := f.ops.WriteFile(ctx(), f.path, f.data)
+
+		logging.Debug("memFile.Close writing back",
+			zap.String("path", filePath),
+			zap.Int("size", len(data)))
+		fsErr := ops.WriteFile(ctx(), filePath, data)
 		if fsErr != nil {
-			logging.Error("memFile.Close WriteFile failed", zap.String("path", f.path), zap.Error(fsErr.Cause))
+			logging.Error("memFile.Close WriteFile failed",
+				zap.String("path", filePath),
+				zap.Error(fsErr.Cause))
+			f.fs.removeFromCache(filePath)
 			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 		}
+
+		// Mark as not dirty after successful write
+		f.cached.mu.Lock()
+		f.cached.dirty = false
+		f.cached.truncated = false // Clear truncated since we've now committed
+		f.cached.mu.Unlock()
+
+		// Remove from cache after successful commit
+		f.fs.removeFromCache(filePath)
+		return nil
 	}
+
+	// File wasn't dirty - check if we should keep it in cache
+	// Keep truncated entries for the truncate-before-write pattern
+	if truncated {
+		logging.Debug("memFile.Close: keeping truncated entry in cache for subsequent write",
+			zap.String("path", filePath))
+		return nil
+	}
+
+	// Nothing was written and file wasn't truncated - remove from cache
+	f.fs.removeFromCache(filePath)
 	return nil
 }
 
@@ -1029,17 +1097,26 @@ func (f *memFile) Unlock() error {
 }
 
 func (f *memFile) Truncate(size int64) error {
-	logging.Debug("memFile.Truncate", zap.String("path", f.path), zap.Int64("newSize", size), zap.Int("currentSize", len(f.data)))
 	if !f.writable {
 		return fmt.Errorf("file not opened for writing")
 	}
-	if size < int64(len(f.data)) {
-		f.data = f.data[:size]
-	} else if size > int64(len(f.data)) {
+
+	f.cached.mu.Lock()
+	defer f.cached.mu.Unlock()
+
+	logging.Debug("memFile.Truncate",
+		zap.String("path", f.cached.path),
+		zap.Int64("newSize", size),
+		zap.Int("currentSize", len(f.cached.data)))
+
+	if size < int64(len(f.cached.data)) {
+		f.cached.data = f.cached.data[:size]
+	} else if size > int64(len(f.cached.data)) {
 		newData := make([]byte, size)
-		copy(newData, f.data)
-		f.data = newData
+		copy(newData, f.cached.data)
+		f.cached.data = newData
 	}
-	f.dirty = true
+	f.cached.dirty = true
+	f.cached.lastActivity = time.Now()
 	return nil
 }
