@@ -36,7 +36,7 @@ func NewServer(ctx context.Context, cfg *config.Config, dbClient *db.Client) (*S
 	// Create shared fs.Operations
 	ops := fs.NewOperations(cfg, dbClient)
 	// Wrap in billy.Filesystem adapter for go-nfs
-	billyFS := NewOpsFilesystem(ops)
+	billyFS := NewOpsFilesystem(ops, cfg)
 
 	return &Server{
 		cfg:     cfg,

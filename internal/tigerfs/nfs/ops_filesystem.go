@@ -13,32 +13,11 @@ import (
 	"time"
 
 	"github.com/go-git/go-billy/v5"
+	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	nfsfile "github.com/willscott/go-nfs/file"
 	"go.uber.org/zap"
-)
-
-// Large file handling constants (ADR-010)
-const (
-	// streamingThreshold is the buffer size at which sequential writes trigger
-	// a streaming commit. When the buffer exceeds this size and writes are
-	// append-only, we commit the current buffer to the database and clear it,
-	// allowing unlimited file sizes without memory exhaustion.
-	streamingThreshold = 10 * 1024 * 1024 // 10MB
-
-	// maxRandomWriteSize is the maximum buffer size for non-sequential writes.
-	// Random access patterns require keeping all data in memory until close,
-	// so we cap the buffer to prevent OOM. Exceeding this returns EFBIG.
-	maxRandomWriteSize = 100 * 1024 * 1024 // 100MB
-
-	// cacheReaperInterval is how often the reaper checks for stale entries.
-	cacheReaperInterval = 30 * time.Second
-
-	// cacheIdleTimeout is how long a cache entry can be idle before being
-	// force-committed and evicted. This handles clients that crash without
-	// closing files.
-	cacheIdleTimeout = 5 * time.Minute
 )
 
 // OpsFilesystem implements billy.Filesystem by delegating to fs.Operations.
@@ -53,6 +32,7 @@ const (
 // See cachedFile for cache entry lifecycle details.
 type OpsFilesystem struct {
 	ops *fs.Operations
+	cfg *config.Config
 
 	// cacheMu protects fileCache for concurrent access.
 	// Lock ordering: always acquire cacheMu before any cachedFile.mu.
@@ -120,11 +100,55 @@ type cachedFile struct {
 //
 // The returned filesystem has an initialized file cache. Callers should call
 // Close() on shutdown to flush any dirty cached files.
-func NewOpsFilesystem(ops *fs.Operations) *OpsFilesystem {
+//
+// The cfg parameter provides NFS cache tuning settings (NFSStreamingThreshold,
+// NFSMaxRandomWriteSize, NFSCacheReaperInterval, NFSCacheIdleTimeout).
+func NewOpsFilesystem(ops *fs.Operations, cfg *config.Config) *OpsFilesystem {
 	return &OpsFilesystem{
 		ops:       ops,
+		cfg:       cfg,
 		fileCache: make(map[string]*cachedFile),
 	}
+}
+
+// Default values for NFS cache settings (used when config is nil or zero)
+const (
+	defaultStreamingThreshold  = 10 * 1024 * 1024  // 10MB
+	defaultMaxRandomWriteSize  = 100 * 1024 * 1024 // 100MB
+	defaultCacheReaperInterval = 30 * time.Second
+	defaultCacheIdleTimeout    = 5 * time.Minute
+)
+
+// streamingThreshold returns the configured streaming threshold or the default.
+func (f *OpsFilesystem) streamingThreshold() int64 {
+	if f.cfg != nil && f.cfg.NFSStreamingThreshold > 0 {
+		return f.cfg.NFSStreamingThreshold
+	}
+	return defaultStreamingThreshold
+}
+
+// maxRandomWriteSize returns the configured max random write size or the default.
+func (f *OpsFilesystem) maxRandomWriteSize() int64 {
+	if f.cfg != nil && f.cfg.NFSMaxRandomWriteSize > 0 {
+		return f.cfg.NFSMaxRandomWriteSize
+	}
+	return defaultMaxRandomWriteSize
+}
+
+// cacheReaperInterval returns the configured reaper interval or the default.
+func (f *OpsFilesystem) cacheReaperInterval() time.Duration {
+	if f.cfg != nil && f.cfg.NFSCacheReaperInterval > 0 {
+		return f.cfg.NFSCacheReaperInterval
+	}
+	return defaultCacheReaperInterval
+}
+
+// cacheIdleTimeout returns the configured idle timeout or the default.
+func (f *OpsFilesystem) cacheIdleTimeout() time.Duration {
+	if f.cfg != nil && f.cfg.NFSCacheIdleTimeout > 0 {
+		return f.cfg.NFSCacheIdleTimeout
+	}
+	return defaultCacheIdleTimeout
 }
 
 // =============================================================================
@@ -268,12 +292,12 @@ func (f *OpsFilesystem) StartCacheReaper() {
 	f.reaperStop = make(chan struct{})
 
 	go func() {
-		ticker := time.NewTicker(cacheReaperInterval)
+		ticker := time.NewTicker(f.cacheReaperInterval())
 		defer ticker.Stop()
 
 		logging.Debug("Cache reaper started",
-			zap.Duration("interval", cacheReaperInterval),
-			zap.Duration("idleTimeout", cacheIdleTimeout))
+			zap.Duration("interval", f.cacheReaperInterval()),
+			zap.Duration("idleTimeout", f.cacheIdleTimeout()))
 
 		for {
 			select {
@@ -288,7 +312,7 @@ func (f *OpsFilesystem) StartCacheReaper() {
 }
 
 // reapStaleCacheEntries finds and commits cache entries that have been idle
-// longer than cacheIdleTimeout.
+// longer than NFSCacheIdleTimeout.
 //
 // For each stale entry:
 //  1. If dirty, commit data to database
@@ -302,10 +326,11 @@ func (f *OpsFilesystem) reapStaleCacheEntries() {
 
 	// Find stale entries (hold cacheMu briefly)
 	f.cacheMu.RLock()
+	cacheSize := len(f.fileCache)
 	for path, cached := range f.fileCache {
 		cached.mu.RLock()
 		idle := now.Sub(cached.lastActivity)
-		isStale := idle > cacheIdleTimeout
+		isStale := idle > f.cacheIdleTimeout()
 		cached.mu.RUnlock()
 
 		if isStale {
@@ -314,6 +339,10 @@ func (f *OpsFilesystem) reapStaleCacheEntries() {
 		}
 	}
 	f.cacheMu.RUnlock()
+
+	logging.Debug("Cache reaper tick",
+		zap.Int("cacheSize", cacheSize),
+		zap.Int("staleCount", len(staleEntries)))
 
 	if len(staleEntries) == 0 {
 		return
@@ -609,26 +638,42 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 		return nil, fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 	}
 
-	// File exists in DB - create cached entry with the content
-	cached = f.getOrCreateCachedFile(filename, flag)
-	cached.mu.Lock()
-	// Only load data if this is the first open (data is still empty)
-	// If another handle already loaded data, use that
-	if len(cached.data) == 0 && !cached.truncated {
-		cached.data = content.Data
-	}
-	cached.mu.Unlock()
+	// File exists in DB
+	if isWrite {
+		// Write mode: use cache for sharing and commit-on-close
+		cached = f.getOrCreateCachedFile(filename, flag)
+		cached.mu.Lock()
+		// Only load data if this is the first open (data is still empty)
+		// If another handle already loaded data, use that
+		if len(cached.data) == 0 && !cached.truncated {
+			cached.data = content.Data
+		}
+		cached.mu.Unlock()
 
-	logging.Debug("OpsFilesystem.OpenFile: loaded from DB into cache",
+		logging.Debug("OpsFilesystem.OpenFile: loaded from DB into cache (write mode)",
+			zap.String("filename", filename),
+			zap.Int("size", len(content.Data)))
+
+		return &memFile{
+			name:     path.Base(filename),
+			offset:   0,
+			writable: true,
+			fs:       f,
+			cached:   cached,
+		}, nil
+	}
+
+	// Read-only mode: use private data buffer, no cache
+	logging.Debug("OpsFilesystem.OpenFile: read-only, using private buffer",
 		zap.String("filename", filename),
 		zap.Int("size", len(content.Data)))
 
 	return &memFile{
 		name:     path.Base(filename),
 		offset:   0,
-		writable: isWrite,
+		writable: false,
 		fs:       f,
-		cached:   cached,
+		data:     content.Data,
 	}, nil
 }
 
@@ -1051,26 +1096,32 @@ func isRowFile(filename string) bool {
 
 // memFile is an in-memory file handle for reading and writing row data.
 //
-// Each memFile wraps a shared cachedFile entry. Multiple memFile handles can
-// point to the same cachedFile (reference counted). The memFile maintains its
-// own offset for sequential read/write operations, while the actual data lives
-// in the shared cachedFile.
+// For write operations, memFile wraps a shared cachedFile entry. Multiple
+// memFile handles can point to the same cachedFile (reference counted).
+//
+// For read-only operations, memFile holds a private data buffer that is NOT
+// added to the global fileCache. This prevents cache bloat when reading many
+// files (e.g., `cat /mnt/db/table/*/col.txt`).
 //
 // # Lifecycle
 //
-//   - Created by OpenFile or Create
-//   - Reads/Writes operate on cached.data via the per-handle offset
-//   - Close decrements cached.refCount; commits to DB when refCount reaches 0
+//   - Write mode: cached != nil, data operations go through cached.data
+//   - Read-only mode: cached == nil, data operations use private data buffer
+//   - Close in write mode: decrements cached.refCount, commits when refCount=0
+//   - Close in read-only mode: no-op (just discards private buffer)
 type memFile struct {
 	name     string         // basename for Name() method
 	offset   int64          // per-handle read/write position
 	writable bool           // true if opened for writing
 	fs       *OpsFilesystem // parent filesystem for cache management
 
-	// Shared cached file entry (ADR-010)
-	// All data operations go through cached.data instead of a local buffer.
-	// Multiple memFile handles can share the same cachedFile.
+	// Shared cached file entry (ADR-010) - used for write operations only.
+	// When cached is nil, this is a read-only handle with private data.
 	cached *cachedFile
+
+	// Private data buffer for read-only opens (when cached is nil).
+	// This avoids adding read-only files to the global fileCache.
+	data []byte
 }
 
 func (f *memFile) Name() string {
@@ -1078,6 +1129,17 @@ func (f *memFile) Name() string {
 }
 
 func (f *memFile) Read(p []byte) (int, error) {
+	// Read-only mode: use private data buffer
+	if f.cached == nil {
+		if f.offset >= int64(len(f.data)) {
+			return 0, io.EOF
+		}
+		n := copy(p, f.data[f.offset:])
+		f.offset += int64(n)
+		return n, nil
+	}
+
+	// Write mode: use shared cached data
 	f.cached.mu.RLock()
 	defer f.cached.mu.RUnlock()
 
@@ -1091,6 +1153,19 @@ func (f *memFile) Read(p []byte) (int, error) {
 }
 
 func (f *memFile) ReadAt(p []byte, off int64) (int, error) {
+	// Read-only mode: use private data buffer
+	if f.cached == nil {
+		if off >= int64(len(f.data)) {
+			return 0, io.EOF
+		}
+		n := copy(p, f.data[off:])
+		if n < len(p) {
+			return n, io.EOF
+		}
+		return n, nil
+	}
+
+	// Write mode: use shared cached data
 	f.cached.mu.RLock()
 	defer f.cached.mu.RUnlock()
 
@@ -1106,9 +1181,16 @@ func (f *memFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *memFile) Seek(offset int64, whence int) (int64, error) {
-	f.cached.mu.RLock()
-	dataLen := int64(len(f.cached.data))
-	f.cached.mu.RUnlock()
+	var dataLen int64
+	if f.cached == nil {
+		// Read-only mode: use private data buffer
+		dataLen = int64(len(f.data))
+	} else {
+		// Write mode: use shared cached data
+		f.cached.mu.RLock()
+		dataLen = int64(len(f.cached.data))
+		f.cached.mu.RUnlock()
+	}
 
 	switch whence {
 	case io.SeekStart:
@@ -1122,7 +1204,7 @@ func (f *memFile) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (f *memFile) Write(p []byte) (int, error) {
-	if !f.writable {
+	if !f.writable || f.cached == nil {
 		return 0, fmt.Errorf("file not opened for writing")
 	}
 
@@ -1155,12 +1237,12 @@ func (f *memFile) Write(p []byte) (int, error) {
 
 	// Check size limits for random (non-sequential) writes
 	newLen := f.offset + int64(len(p))
-	if !f.cached.isSequential && newLen > maxRandomWriteSize {
+	if !f.cached.isSequential && newLen > f.fs.maxRandomWriteSize() {
 		f.cached.mu.Unlock()
 		logging.Warn("memFile.Write: random write exceeds size limit",
 			zap.String("path", f.cached.path),
 			zap.Int64("newLen", newLen),
-			zap.Int64("limit", maxRandomWriteSize))
+			zap.Int64("limit", f.fs.maxRandomWriteSize()))
 		return 0, syscall.EFBIG
 	}
 
@@ -1179,7 +1261,7 @@ func (f *memFile) Write(p []byte) (int, error) {
 
 	// Check if we should stream (commit and clear) for large sequential writes
 	// This prevents memory exhaustion for very large files like dd output
-	if f.cached.isSequential && int64(len(f.cached.data)) > streamingThreshold {
+	if f.cached.isSequential && int64(len(f.cached.data)) > f.fs.streamingThreshold() {
 		// Need to commit outside the lock to avoid holding it during I/O
 		data := f.cached.data
 		path := f.cached.path
@@ -1228,6 +1310,13 @@ func (f *memFile) Write(p []byte) (int, error) {
 }
 
 func (f *memFile) Close() error {
+	// Read-only mode: no cache to manage, just discard private buffer
+	if f.cached == nil {
+		f.data = nil
+		return nil
+	}
+
+	// Write mode: manage cache reference counting and commits
 	f.cached.mu.Lock()
 	filePath := f.cached.path
 	dirty := f.cached.dirty
@@ -1390,6 +1479,11 @@ func (f *memFile) Unlock() error {
 // Acquires cached.mu to read/update state. The actual DB write happens
 // outside the lock to avoid holding it during I/O.
 func (f *memFile) Sync() error {
+	// Read-only mode: nothing to sync
+	if f.cached == nil {
+		return nil
+	}
+
 	f.cached.mu.Lock()
 	filePath := f.cached.path
 	dirty := f.cached.dirty
@@ -1454,7 +1548,7 @@ func (f *memFile) Sync() error {
 }
 
 func (f *memFile) Truncate(size int64) error {
-	if !f.writable {
+	if !f.writable || f.cached == nil {
 		return fmt.Errorf("file not opened for writing")
 	}
 
