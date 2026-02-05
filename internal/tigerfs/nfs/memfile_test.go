@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/timescale/tigerfs/internal/tigerfs/config"
 )
 
 // =============================================================================
@@ -25,6 +26,12 @@ import (
 // Note: ops is nil, so database operations will fail. Use for testing cache logic only.
 func newTestOpsFilesystem() *OpsFilesystem {
 	return &OpsFilesystem{
+		cfg: &config.Config{
+			NFSStreamingThreshold:  10 * 1024 * 1024,  // 10MB
+			NFSMaxRandomWriteSize:  100 * 1024 * 1024, // 100MB
+			NFSCacheReaperInterval: 30 * time.Second,
+			NFSCacheIdleTimeout:    5 * time.Minute,
+		},
 		fileCache: make(map[string]*cachedFile),
 	}
 }
