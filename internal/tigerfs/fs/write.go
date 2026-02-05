@@ -83,7 +83,19 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 	pkColumn := pk.Columns[0]
 
 	// Parse data based on format
-	columns, values, parseErr := o.parseWriteData(data, parsed.Format)
+	var columns []string
+	var values []interface{}
+	var parseErr error
+
+	if parsed.Format == "" {
+		// Bare path: PUT semantics - values in schema column order (no headers)
+		// This matches FUSE behavior for paths like /table/123 without format extension
+		columns, values, parseErr = o.parseWriteDataNoHeaders(ctx, fsCtx.Schema, fsCtx.TableName, data)
+	} else {
+		// Format specified: PATCH semantics - data includes column names
+		columns, values, parseErr = o.parseWriteData(data, parsed.Format)
+	}
+
 	if parseErr != nil {
 		return &FSError{
 			Code:    ErrInvalidPath,
@@ -663,7 +675,7 @@ func (o *Operations) checkWritePermission(ctx context.Context, schema, table str
 	return nil
 }
 
-// parseWriteData parses write data based on format.
+// parseWriteData parses write data based on format (PATCH semantics - data includes column names).
 func (o *Operations) parseWriteData(data []byte, formatType string) ([]string, []interface{}, error) {
 	switch formatType {
 	case "json":
@@ -675,9 +687,39 @@ func (o *Operations) parseWriteData(data []byte, formatType string) ([]string, [
 	case "yaml":
 		return format.ParseYAML(string(data))
 	default:
-		// Default to JSON
+		// Default to JSON for unknown formats
 		return format.ParseJSON(string(data))
 	}
+}
+
+// parseWriteDataNoHeaders parses write data without headers (PUT semantics).
+// Values are expected in schema column order, parsed as TSV.
+// This matches FUSE behavior for bare paths like /table/123 without format extension.
+func (o *Operations) parseWriteDataNoHeaders(ctx context.Context, schema, table string, data []byte) ([]string, []interface{}, error) {
+	// Trim trailing newline
+	if len(data) > 0 && data[len(data)-1] == '\n' {
+		data = data[:len(data)-1]
+	}
+
+	// Get columns from schema
+	tableColumns, err := o.db.GetColumns(ctx, schema, table)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get table columns: %w", err)
+	}
+
+	// Extract column names in schema order
+	columns := make([]string, len(tableColumns))
+	for i, col := range tableColumns {
+		columns[i] = col.Name
+	}
+
+	// Parse as TSV without headers
+	_, values, err := format.ParseTSV(string(data))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return columns, values, nil
 }
 
 // mkdirDDL creates a DDL staging session.
