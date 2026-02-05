@@ -1,9 +1,11 @@
 package nfs
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -579,6 +581,106 @@ func TestMemFile_Sync_SkipsDeletedFile(t *testing.T) {
 
 	// Sync should succeed but skip the commit
 	err = mf.Sync()
+	require.NoError(t, err)
+}
+
+// =============================================================================
+// Cache Reaper and Shutdown Tests (Task 9.14)
+// =============================================================================
+
+// TestOpsFilesystem_ReapStaleCacheEntries verifies that the reaper evicts
+// entries that have been idle longer than the timeout.
+func TestOpsFilesystem_ReapStaleCacheEntries(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	// Create a file and write to it
+	f, err := fs.OpenFile("/table/1/col.txt", os.O_RDWR|os.O_CREATE, 0644)
+	require.NoError(t, err)
+	_, err = f.Write([]byte("test data"))
+	require.NoError(t, err)
+
+	// Verify it's in cache
+	cached := fs.getCachedFile("/table/1/col.txt")
+	require.NotNil(t, cached, "file should be in cache")
+
+	// Manually set lastActivity to be stale (more than 5 min ago)
+	cached.mu.Lock()
+	cached.lastActivity = time.Now().Add(-6 * time.Minute)
+	cached.mu.Unlock()
+
+	// Run reaper
+	fs.reapStaleCacheEntries()
+
+	// File should be evicted
+	cached = fs.getCachedFile("/table/1/col.txt")
+	assert.Nil(t, cached, "stale file should be evicted from cache")
+}
+
+// TestOpsFilesystem_ReapKeepsFreshEntries verifies that the reaper does NOT
+// evict entries that have recent activity.
+func TestOpsFilesystem_ReapKeepsFreshEntries(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	// Create a file and write to it
+	f, err := fs.OpenFile("/table/1/col.txt", os.O_RDWR|os.O_CREATE, 0644)
+	require.NoError(t, err)
+	_, err = f.Write([]byte("test data"))
+	require.NoError(t, err)
+
+	// Verify it's in cache with recent activity
+	cached := fs.getCachedFile("/table/1/col.txt")
+	require.NotNil(t, cached, "file should be in cache")
+
+	// Run reaper
+	fs.reapStaleCacheEntries()
+
+	// File should still be there (activity was recent)
+	cached = fs.getCachedFile("/table/1/col.txt")
+	assert.NotNil(t, cached, "fresh file should remain in cache")
+}
+
+// TestOpsFilesystem_Close_FlushesDirtyEntries verifies that Close() commits
+// all dirty cache entries before returning.
+func TestOpsFilesystem_Close_FlushesDirtyEntries(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	// Create multiple files
+	for i := 0; i < 3; i++ {
+		f, err := fs.OpenFile(fmt.Sprintf("/table/%d/col.txt", i), os.O_RDWR|os.O_CREATE, 0644)
+		require.NoError(t, err)
+		_, err = f.Write([]byte("test data"))
+		require.NoError(t, err)
+		// Don't close - leave in cache
+	}
+
+	// Verify files are in cache
+	assert.NotNil(t, fs.getCachedFile("/table/0/col.txt"))
+	assert.NotNil(t, fs.getCachedFile("/table/1/col.txt"))
+	assert.NotNil(t, fs.getCachedFile("/table/2/col.txt"))
+
+	// Close filesystem (ops is nil, so no actual DB writes)
+	err := fs.Close()
+	require.NoError(t, err)
+
+	// Cache should be empty
+	assert.Nil(t, fs.getCachedFile("/table/0/col.txt"))
+	assert.Nil(t, fs.getCachedFile("/table/1/col.txt"))
+	assert.Nil(t, fs.getCachedFile("/table/2/col.txt"))
+}
+
+// TestOpsFilesystem_Close_Idempotent verifies that Close() can be called
+// multiple times without error.
+func TestOpsFilesystem_Close_Idempotent(t *testing.T) {
+	fs := newTestOpsFilesystem()
+
+	// Close multiple times
+	err := fs.Close()
+	require.NoError(t, err)
+
+	err = fs.Close()
+	require.NoError(t, err)
+
+	err = fs.Close()
 	require.NoError(t, err)
 }
 
