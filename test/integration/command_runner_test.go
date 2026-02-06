@@ -98,9 +98,7 @@ func TestCommandCases_Write(t *testing.T) {
 }
 
 // TestCommandCases_DDL runs DDL command tests.
-// Currently skipped until NFS DDL writes are fixed.
 func TestCommandCases_DDL(t *testing.T) {
-	t.Skip("DDL tests skipped - NFS DDL writes need fixing first")
 
 	// Setup database with demo data
 	dbResult := GetTestDBEmpty(t)
