@@ -625,3 +625,105 @@ func TestFSOperations_Export_JSON(t *testing.T) {
 	assert.True(t, strings.HasPrefix(strings.TrimSpace(data), "["), "JSON export should start with [")
 	assert.True(t, strings.HasSuffix(strings.TrimSpace(data), "]"), "JSON export should end with ]")
 }
+
+// TestFSOperations_ColumnExtensions tests that column files can be accessed
+// with type-appropriate extensions (e.g., name.txt for TEXT columns).
+func TestFSOperations_ColumnExtensions(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	t.Run("ReadDir shows columns with extensions", func(t *testing.T) {
+		// List columns in a row directory
+		rowPath := tablePath + "/1"
+		entries, fsErr := ops.ReadDir(ctx, rowPath)
+		require.Nil(t, fsErr, "ReadDir should succeed for row")
+
+		// Log all entries for debugging
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name)
+		}
+		t.Logf("Row directory contains: %v", names)
+
+		// Check that TEXT columns have .txt extension
+		var foundNameTxt bool
+		for _, e := range entries {
+			if e.Name == "name.txt" {
+				foundNameTxt = true
+				break
+			}
+		}
+		assert.True(t, foundNameTxt, "TEXT column 'name' should be listed as 'name.txt'")
+	})
+
+	t.Run("Read column with extension works", func(t *testing.T) {
+		// Read using extension path
+		columnPath := tablePath + "/1/name.txt"
+		content, fsErr := ops.ReadFile(ctx, columnPath)
+		require.Nil(t, fsErr, "ReadFile should succeed for column with extension")
+		assert.NotEmpty(t, content.Data, "Column should have content")
+		t.Logf("Column value: %s", strings.TrimSpace(string(content.Data)))
+	})
+
+	t.Run("Read column without extension works (backward compat)", func(t *testing.T) {
+		// Read using bare column name (no extension)
+		columnPath := tablePath + "/1/name"
+		content, fsErr := ops.ReadFile(ctx, columnPath)
+		require.Nil(t, fsErr, "ReadFile should succeed for column without extension")
+		assert.NotEmpty(t, content.Data, "Column should have content")
+	})
+
+	t.Run("Read column with wrong extension fails", func(t *testing.T) {
+		// Try to read TEXT column with .json extension - should fail
+		columnPath := tablePath + "/1/name.json"
+		_, fsErr := ops.ReadFile(ctx, columnPath)
+		require.NotNil(t, fsErr, "ReadFile should fail for wrong extension")
+		assert.Equal(t, fs.ErrNotExist, fsErr.Code, "Should be not exist error")
+	})
+
+	t.Run("Stat column with extension works", func(t *testing.T) {
+		// Stat using extension path
+		columnPath := tablePath + "/1/name.txt"
+		entry, fsErr := ops.Stat(ctx, columnPath)
+		require.Nil(t, fsErr, "Stat should succeed for column with extension")
+		assert.Equal(t, "name.txt", entry.Name, "Entry name should include extension")
+		assert.False(t, entry.IsDir, "Column should not be a directory")
+	})
+
+	t.Run("Write column with extension works", func(t *testing.T) {
+		// Write using extension path
+		columnPath := tablePath + "/1/name.txt"
+		fsErr := ops.WriteFile(ctx, columnPath, []byte("Extension Write\n"))
+		require.Nil(t, fsErr, "WriteFile should succeed for column with extension")
+
+		// Verify the update
+		content, fsErr := ops.ReadFile(ctx, columnPath)
+		require.Nil(t, fsErr, "ReadFile should succeed after write")
+		assert.Equal(t, "Extension Write\n", string(content.Data), "Should contain updated value")
+	})
+
+	t.Run("Integer column has no extension", func(t *testing.T) {
+		// List columns and verify integer columns have no extension
+		rowPath := tablePath + "/1"
+		entries, fsErr := ops.ReadDir(ctx, rowPath)
+		require.Nil(t, fsErr, "ReadDir should succeed for row")
+
+		// id column should be bare (no extension) since it's integer
+		var foundId bool
+		for _, e := range entries {
+			if e.Name == "id" {
+				foundId = true
+				break
+			}
+		}
+		assert.True(t, foundId, "INTEGER column 'id' should be listed without extension")
+	})
+}

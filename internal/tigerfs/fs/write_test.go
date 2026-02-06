@@ -69,6 +69,12 @@ func TestWriteFile_UpdateColumn(t *testing.T) {
 		tables: map[string][]string{
 			"public": {"users"},
 		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
 		primaryKeys: map[string]*mockPK{
 			"public.users": {column: "id"},
 		},
@@ -125,6 +131,12 @@ func TestDelete_Column(t *testing.T) {
 	mockDB := &mockDBClient{
 		tables: map[string][]string{
 			"public": {"users"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
 		},
 		primaryKeys: map[string]*mockPK{
 			"public.users": {column: "id"},
