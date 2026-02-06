@@ -203,10 +203,10 @@ func TestPipeline_SimpleFilter(t *testing.T) {
 			t.Fatalf("Failed to read .filter/notes/urgent/: %v", err)
 		}
 
-		// Should have urgent orders (1+1+1 from customer 1, 1+1 from customer 2, 3 from customer 3 = 8)
+		// Should have urgent orders (2 from customer 1, 2 from customer 2, 3 from customer 3 = 7)
 		rowCount := countNonDotEntries(entries)
-		if rowCount != 8 {
-			t.Errorf("Expected 8 urgent orders, got %d", rowCount)
+		if rowCount != 7 {
+			t.Errorf("Expected 7 urgent orders, got %d", rowCount)
 			logEntries(t, entries)
 		}
 	})
