@@ -18,9 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// DirFilter is the name of the filter capability directory.
-const DirFilter = ".filter"
-
 // FileTableTooLarge is shown when a non-indexed column's table exceeds DirFilterLimit.
 // Users can still navigate directly to values, but value listing is not available.
 const FileTableTooLarge = ".table-too-large"
@@ -274,11 +271,26 @@ func (f *FilterColumnNode) isColumnIndexed(ctx context.Context) (bool, error) {
 }
 
 // listDistinctValues returns a directory stream of distinct column values.
+// Applies existing pipeline filters when getting distinct values.
 func (f *FilterColumnNode) listDistinctValues(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Use a reasonable limit for distinct values
 	const maxDistinctValues = 1000
 
-	values, err := f.db.GetDistinctValues(ctx, f.schema, f.table, f.column, maxDistinctValues)
+	var values []string
+	var err error
+
+	// If there are existing filters in the pipeline, apply them
+	if f.pipeline != nil && len(f.pipeline.Filters) > 0 {
+		filterColumns := make([]string, len(f.pipeline.Filters))
+		filterValues := make([]string, len(f.pipeline.Filters))
+		for i, filter := range f.pipeline.Filters {
+			filterColumns[i] = filter.Column
+			filterValues[i] = filter.Value
+		}
+		values, err = f.db.GetDistinctValuesFiltered(ctx, f.schema, f.table, f.column, filterColumns, filterValues, maxDistinctValues)
+	} else {
+		values, err = f.db.GetDistinctValues(ctx, f.schema, f.table, f.column, maxDistinctValues)
+	}
 	if err != nil {
 		// Check if this is a timeout error
 		if db.IsTimeoutError(err) {
