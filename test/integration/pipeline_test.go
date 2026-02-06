@@ -203,10 +203,10 @@ func TestPipeline_SimpleFilter(t *testing.T) {
 			t.Fatalf("Failed to read .filter/notes/urgent/: %v", err)
 		}
 
-		// Should have urgent orders (1+1+1 from customer 1, 1+1 from customer 2, 3 from customer 3 = 8)
+		// Should have urgent orders (2 from customer 1, 2 from customer 2, 3 from customer 3 = 7)
 		rowCount := countNonDotEntries(entries)
-		if rowCount != 8 {
-			t.Errorf("Expected 8 urgent orders, got %d", rowCount)
+		if rowCount != 7 {
+			t.Errorf("Expected 7 urgent orders, got %d", rowCount)
 			logEntries(t, entries)
 		}
 	})
@@ -418,16 +418,22 @@ func TestPipeline_ConflictingFilters(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	t.Run("SameColumnDifferentValues", func(t *testing.T) {
-		// .by/status/pending/.by/status/completed/ should return empty
+		// .by/status/pending/.by/status/completed/ should return empty directory
 		// (status cannot be both pending AND completed)
+		// Note: Empty results return an empty listing, not ENOENT, consistent with
+		// normal filesystem behavior where directories can be empty but still exist.
 		dir := filepath.Join(mountpoint, "orders", ".by", "status", "pending", ".by", "status", "completed")
-		_, err := os.ReadDir(dir)
+		entries, err := os.ReadDir(dir)
 
-		// Should get ENOENT because no rows match
-		if err == nil {
-			t.Error("Expected error (ENOENT) for conflicting filters, got nil")
-		} else if !os.IsNotExist(err) {
-			t.Errorf("Expected IsNotExist error, got: %v", err)
+		if err != nil {
+			t.Fatalf("Failed to read conflicting filter path: %v", err)
+		}
+
+		// Should have no rows (empty directory)
+		rowCount := countNonDotEntries(entries)
+		if rowCount != 0 {
+			t.Errorf("Expected 0 rows for conflicting filters, got %d", rowCount)
+			logEntries(t, entries)
 		}
 	})
 
@@ -512,7 +518,7 @@ func TestPipeline_OrderAndExport(t *testing.T) {
 	})
 
 	t.Run("ExportCSV", func(t *testing.T) {
-		// .first/5/.export/csv
+		// .first/5/.export/csv (no header, use .with-headers/csv for headers)
 		exportPath := filepath.Join(mountpoint, "orders", ".first", "5", ".export", "csv")
 		data, err := os.ReadFile(exportPath)
 		if err != nil {
@@ -520,9 +526,9 @@ func TestPipeline_OrderAndExport(t *testing.T) {
 		}
 
 		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-		// Should have header + 5 data rows = 6 lines
-		if len(lines) != 6 {
-			t.Errorf("Expected 6 lines (header + 5 rows), got %d", len(lines))
+		// Should have 5 data rows (no header - use .export/.with-headers/csv for headers)
+		if len(lines) != 5 {
+			t.Errorf("Expected 5 lines (5 data rows, no header), got %d", len(lines))
 		}
 	})
 }

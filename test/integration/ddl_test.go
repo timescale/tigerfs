@@ -433,6 +433,7 @@ func TestDDL_ViewCreateDelete(t *testing.T) {
 	viewsDir := filepath.Join(mountpoint, ".views")
 
 	t.Run("CreateView", func(t *testing.T) {
+		// View creation is at /.views/.create/{name}/
 		createDir := filepath.Join(viewsDir, ".create", viewName)
 
 		// Create staging directory
@@ -455,21 +456,23 @@ func TestDDL_ViewCreateDelete(t *testing.T) {
 
 		time.Sleep(500 * time.Millisecond)
 
-		// Verify view exists
-		viewPath := filepath.Join(viewsDir, viewName)
+		// Verify view exists - views appear at ROOT level like tables, not under /.views/
+		viewPath := filepath.Join(mountpoint, viewName)
 		if _, err := os.Stat(viewPath); os.IsNotExist(err) {
-			t.Errorf("View directory should exist after CREATE")
+			t.Errorf("View directory should exist after CREATE at root level")
 		} else {
 			t.Logf("View %s created successfully", viewName)
 		}
 	})
 
 	t.Run("DeleteView", func(t *testing.T) {
-		viewPath := filepath.Join(viewsDir, viewName)
+		// Views appear at root level, not under /.views/
+		viewPath := filepath.Join(mountpoint, viewName)
 		if _, err := os.Stat(viewPath); os.IsNotExist(err) {
 			t.Skip("View doesn't exist")
 		}
 
+		// Delete is at /{view}/.delete/ (like tables)
 		deleteDir := filepath.Join(viewPath, ".delete")
 
 		// Write DROP VIEW
@@ -716,7 +719,10 @@ func TestDDL_ScriptWorkflow(t *testing.T) {
 // Helper functions
 
 func touchFile(path string) error {
-	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0644)
+	// Use os.Create (O_RDWR|O_CREATE|O_TRUNC) instead of O_RDONLY|O_CREATE
+	// because DDL trigger files (.test, .commit, .abort) require a write
+	// operation to trigger. Opening read-only doesn't invoke the write path.
+	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}

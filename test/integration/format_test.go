@@ -13,47 +13,69 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/fuse"
+	"github.com/timescale/tigerfs/internal/tigerfs/nfs"
 )
 
-var (
-	fuseMountTestOnce sync.Once
-	fuseMountWorks    bool
-	fuseMountReason   string
-)
-
-// checkFUSEMountCapability performs a one-time test of FUSE mounting
-// This avoids repeatedly timing out on systems where FUSE doesn't work
-func checkFUSEMountCapability(t *testing.T) {
-	t.Helper()
-
-	fuseMountTestOnce.Do(func() {
-		// First check if FUSE files exist
-		if !isFUSEAvailable() {
-			fuseMountWorks = false
-			fuseMountReason = "FUSE not installed on this system"
-			return
-		}
-
-		// FUSE files exist, so we assume it can work
-		// The actual mount test will happen in the first test that runs
-		fuseMountWorks = true
-		fuseMountReason = ""
-	})
-
-	if !fuseMountWorks {
-		t.Skipf("FUSE mounting not available: %s", fuseMountReason)
-	}
+// Filesystem is an interface satisfied by both fuse.FS and nfs.FS.
+// This allows tests to work with either mount method.
+type Filesystem interface {
+	Close() error
 }
 
-// mountWithTimeout attempts to mount a FUSE filesystem with a timeout
-// Returns nil and skips the test if mount fails or times out
-// Also records failure so subsequent tests can skip immediately
-func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint string, timeout time.Duration) *fuse.FS {
+var (
+	mountTestOnce   sync.Once
+	mountTestWorks  bool
+	mountTestReason string
+	mountTestMethod MountMethod
+)
+
+// checkMountCapability performs a one-time check of filesystem mounting capability.
+// On Linux, checks for FUSE. On macOS, checks based on TEST_MOUNT_METHOD env var.
+// This avoids repeatedly timing out on systems where mounting doesn't work.
+func checkMountCapability(t *testing.T) MountMethod {
 	t.Helper()
 
-	// Check if we already know mounting doesn't work
-	if !fuseMountWorks {
-		t.Skipf("FUSE mounting not available: %s", fuseMountReason)
+	mountTestOnce.Do(func() {
+		method, reason := getMountMethod(t)
+		if reason != "" {
+			mountTestWorks = false
+			mountTestReason = reason
+			return
+		}
+		mountTestWorks = true
+		mountTestMethod = method
+	})
+
+	if !mountTestWorks {
+		t.Skipf("Filesystem mounting not available: %s", mountTestReason)
+	}
+
+	return mountTestMethod
+}
+
+// checkFUSEMountCapability is deprecated - use checkMountCapability instead.
+// Kept for backward compatibility with existing tests.
+func checkFUSEMountCapability(t *testing.T) {
+	t.Helper()
+	checkMountCapability(t)
+}
+
+// mountWithTimeout attempts to mount a filesystem with a timeout.
+// Uses FUSE on Linux, NFS on macOS (or Docker if TEST_MOUNT_METHOD=docker).
+// Returns nil and skips the test if mount fails or times out.
+// Also records failure so subsequent tests can skip immediately.
+func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint string, timeout time.Duration) Filesystem {
+	t.Helper()
+
+	// Check mount capability and get method
+	method := checkMountCapability(t)
+	if method == "" {
+		return nil
+	}
+
+	// Docker mount method not yet implemented
+	if method == MountMethodDocker {
+		t.Skip("TEST_MOUNT_METHOD=docker not yet implemented")
 		return nil
 	}
 
@@ -61,13 +83,24 @@ func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint stri
 	defer cancel()
 
 	type mountResult struct {
-		fs  *fuse.FS
+		fs  Filesystem
 		err error
 	}
 	resultCh := make(chan mountResult, 1)
 
 	go func() {
-		fs, err := fuse.Mount(mountCtx, cfg, connStr, mountpoint)
+		var fs Filesystem
+		var err error
+
+		switch method {
+		case MountMethodFUSE:
+			fs, err = fuse.Mount(mountCtx, cfg, connStr, mountpoint)
+		case MountMethodNFS:
+			fs, err = nfs.Mount(mountCtx, cfg, connStr, mountpoint)
+		default:
+			err = fmt.Errorf("unknown mount method: %s", method)
+		}
+
 		resultCh <- mountResult{fs: fs, err: err}
 	}()
 
@@ -75,17 +108,18 @@ func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint stri
 	case result := <-resultCh:
 		if result.err != nil {
 			// Record failure so other tests skip immediately
-			fuseMountWorks = false
-			fuseMountReason = fmt.Sprintf("Mount failed: %v", result.err)
-			t.Skipf("Mount failed (FUSE may not be properly configured): %v", result.err)
+			mountTestWorks = false
+			mountTestReason = fmt.Sprintf("Mount failed (%s): %v", method, result.err)
+			t.Skipf("Mount failed (%s may not be properly configured): %v", method, result.err)
 			return nil
 		}
+		t.Logf("Mounted filesystem using %s", method)
 		return result.fs
 	case <-mountCtx.Done():
 		// Record timeout so other tests skip immediately
-		fuseMountWorks = false
-		fuseMountReason = "Mount timed out - FUSE may not be properly configured"
-		t.Skip(fuseMountReason)
+		mountTestWorks = false
+		mountTestReason = fmt.Sprintf("Mount timed out - %s may not be properly configured", method)
+		t.Skip(mountTestReason)
 		return nil
 	}
 }
@@ -1092,8 +1126,8 @@ func TestMetadata_InfoColumns(t *testing.T) {
 }
 
 func TestMetadata_InfoCount(t *testing.T) {
-	// Get test database (tries local first, falls back to Docker)
-	dbResult := GetTestDB(t)
+	// Get empty test database to ensure clean state
+	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
 		return
 	}
@@ -1102,7 +1136,7 @@ func TestMetadata_InfoCount(t *testing.T) {
 	// Check FUSE capability once for all format tests
 	checkFUSEMountCapability(t)
 
-	// Seed format test data (creates 3 rows)
+	// Seed format test data (creates 5 rows)
 	ctx := context.Background()
 	if err := seedFormatTestData(ctx, dbResult.ConnStr); err != nil {
 		t.Fatalf("Failed to seed format test data: %v", err)
@@ -1143,9 +1177,9 @@ func TestMetadata_InfoCount(t *testing.T) {
 	content := strings.TrimSpace(string(data))
 	t.Logf(".info/count content: %s", content)
 
-	// Verify count is 3 (seedFormatTestData creates 3 rows)
-	if content != "3" {
-		t.Errorf("Expected count '3', got '%s'", content)
+	// Verify count is 5 (seedFormatTestData creates 5 rows)
+	if content != "5" {
+		t.Errorf("Expected count '5', got '%s'", content)
 	}
 }
 

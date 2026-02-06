@@ -205,24 +205,24 @@
 │   │           └── .abort                # Touch to cancel
 │   ├── .sample/                          # Random samples
 │   │   └── 100/                          # 100 random rows
-│   │       ├── 47392/                    # Actual PKs (row-as-directory)
-│   │       └── 103847.json               # Actual PK (row-as-file)
+│   │       ├── 47392/                    # Row directory
+│   │       └── 103847/                   # Row directory
 │   ├── .first/                           # First N rows (ascending)
 │   │   └── 50/                           # First 50 rows by PK
-│   │       ├── 1/
-│   │       └── 2/
+│   │       ├── 1/                        # Row directory
+│   │       └── 2/                        # Row directory
 │   ├── .last/                            # Last N rows (descending)
 │   │   └── 50/                           # Last 50 rows by PK
-│   │       ├── 99999/
-│   │       └── 99998/
-│   ├── 123                               # Row-as-file (default: TSV)
-│   ├── 123.json                          # Row-as-file (JSON)
-│   ├── 123.csv                           # Row-as-file (CSV)
-│   ├── 123.tsv                           # Row-as-file (TSV, explicit)
-│   └── 123/                              # Row-as-directory
-│       ├── email                         # Individual column
-│       ├── name                          # Individual column
-│       └── age                           # Individual column
+│   │       ├── 99999/                    # Row directory
+│   │       └── 99998/                    # Row directory
+│   └── 123/                              # Row directory - shown in ls
+│       ├── email.txt                     # Individual column file
+│       ├── name.txt                      # Individual column file
+│       ├── age                           # Individual column (no extension for numeric)
+│       ├── .json                         # Full row as JSON (inside row directory)
+│       ├── .csv                          # Full row as CSV
+│       └── .tsv                          # Full row as TSV
+│   # Note: Row files (123.json, 123.csv) are accessible but not shown in ls
 ├── schema_name/                          # Non-default schema
 │   └── table_name/                       # Tables under explicit schema
 └── .schemas/                             # Explicit schema access
@@ -273,17 +273,35 @@
 
 ### Dual Representation Model
 
-Every row accessible in **two ways simultaneously**:
+Every row accessible in **two ways**:
 
-#### 1. Row-as-File (Full Row Operations)
+1. **Row Directories** (`123/`) - Shown in directory listings, contain column files
+2. **Row Files** (`123.json`, `123.csv`, `123.tsv`) - Accessible but not shown in listings
 
-Single file containing complete row data. Format determined by file extension.
+**Directory Listing Behavior:**
+```bash
+$ ls /mount/users/
+.all/  .by/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
+1/  2/  3/  ...
+
+$ cd /mount/users/1        # Enter row directory
+$ ls
+email.txt  name.txt  age  .json  .csv  .tsv  .yaml
+
+$ cat /mount/users/1.json  # Direct access to row file (not in listing)
+{"id":1,"email":"alice@example.com",...}
+```
+
+Row directories are shown in listings and allow column-level operations. Row files (`1.json`, `1.csv`) are accessible via direct path or tab-completion but not shown in `ls` to keep listings clean.
+
+#### 1. Row Files (Full Row Operations)
+
+Single file containing complete row data. Format determined by file extension. Accessible via direct path but not shown in directory listings.
 
 **File Extensions:**
-- No extension (e.g., `/mount/users/123`) → TSV (default)
-- `.tsv` → Tab-separated values
-- `.csv` → Comma-separated values
 - `.json` → JSON object
+- `.csv` → Comma-separated values
+- `.tsv` → Tab-separated values
 
 **Format Details (Reading):**
 
@@ -337,9 +355,9 @@ echo '{"email":"new@example.com","name":"New Name"}' > /mount/users/123.json
 - Atomic updates (single UPDATE statement)
 - Partial updates (PATCH semantics with format extension)
 
-#### 2. Row-as-Directory (Column-Level Operations)
+#### 2. Row Directories (Column-Level Operations)
 
-Row represented as directory with individual column files.
+Row represented as directory with individual column files. Accessible via `cd /table/pk/` but not shown in table directory listings.
 
 **Structure:**
 ```
@@ -496,7 +514,11 @@ ls /mount/users/
 SELECT id FROM users ORDER BY id;
 ```
 
-**Output:** List of primary key values (one per line)
+**Output:**
+- Capability directories: `.all/`, `.by/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
+- Row directories: `1/`, `2/`, `3/`, ... (primary key values)
+
+**Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings.
 
 **Constraint:** Tables > `dir_listing_limit` (default: 10,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
 
