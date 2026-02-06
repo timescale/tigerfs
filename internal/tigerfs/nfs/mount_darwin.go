@@ -166,8 +166,9 @@ func unmount(mountpoint string) error {
 	// Try umount first
 	cmd := exec.Command("/sbin/umount", mountpoint)
 	if err := cmd.Run(); err != nil {
-		// Try diskutil unmount as fallback
-		cmd = exec.Command("/usr/sbin/diskutil", "unmount", mountpoint)
+		// Try diskutil unmount force as fallback
+		// Force is needed because during shutdown the NFS server may not respond cleanly
+		cmd = exec.Command("/usr/sbin/diskutil", "unmount", "force", mountpoint)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to unmount %s: %w", mountpoint, err)
 		}

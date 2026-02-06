@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MOUNTPOINT="/tmp/tigerfs-demo"
-CONN_STR="postgres://demo:demo@localhost:5432/demo"
+CONN_STR="postgres://demo:demo@localhost:5432/demo?sslmode=disable"
 
 # Colors for output
 RED='\033[0;31m'
@@ -54,6 +54,7 @@ start_demo() {
         sleep 1
     done
     info "PostgreSQL is ready"
+    info "Connection string: $CONN_STR"
 
     # Build TigerFS if needed
     if [[ ! -x "$REPO_ROOT/bin/tigerfs" ]]; then
@@ -80,10 +81,10 @@ start_demo() {
     info "TigerFS mounted successfully!"
     echo ""
     echo "Try these commands:"
-    echo "  ls $MOUNTPOINT"
-    echo "  ls $MOUNTPOINT/users"
-    echo "  cat $MOUNTPOINT/users/1.json"
-    echo "  cat $MOUNTPOINT/products/1.json"
+    echo "  cd $MOUNTPOINT ; ls -al"
+    echo "  cat users/1.json"
+    echo "  cat products/1.json"
+    echo "  cat categories/.export/tsv"
     echo ""
     echo "Stop the demo with: ./demo.sh stop"
 }
@@ -91,17 +92,52 @@ start_demo() {
 stop_demo() {
     info "Stopping TigerFS demo..."
 
-    # Unmount TigerFS
+    # Kill any tigerfs processes mounting to this mountpoint
+    if pgrep -f "tigerfs.*$MOUNTPOINT" > /dev/null 2>&1; then
+        info "Killing tigerfs processes for $MOUNTPOINT..."
+        pkill -f "tigerfs.*$MOUNTPOINT" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Also kill any tigerfs processes from this repo (in case of stale processes)
+    if pgrep -f "$REPO_ROOT/bin/tigerfs" > /dev/null 2>&1; then
+        info "Killing tigerfs processes from this repo..."
+        pkill -f "$REPO_ROOT/bin/tigerfs" 2>/dev/null || true
+        sleep 1
+    fi
+
+    # Unmount TigerFS (try multiple methods)
     if mount | grep -q "$MOUNTPOINT"; then
         info "Unmounting $MOUNTPOINT..."
-        umount "$MOUNTPOINT" 2>/dev/null || diskutil unmount force "$MOUNTPOINT" 2>/dev/null || true
+        # Try regular unmount first
+        umount "$MOUNTPOINT" 2>/dev/null || true
+        sleep 1
+        # If still mounted, try diskutil
+        if mount | grep -q "$MOUNTPOINT"; then
+            diskutil unmount force "$MOUNTPOINT" 2>/dev/null || true
+            sleep 1
+        fi
+        # If still mounted, try umount -f (force)
+        if mount | grep -q "$MOUNTPOINT"; then
+            umount -f "$MOUNTPOINT" 2>/dev/null || true
+        fi
+    fi
+
+    # Clean up mountpoint directory if empty
+    if [[ -d "$MOUNTPOINT" ]] && [[ -z "$(ls -A "$MOUNTPOINT" 2>/dev/null)" ]]; then
+        rmdir "$MOUNTPOINT" 2>/dev/null || true
     fi
 
     # Stop PostgreSQL
     info "Stopping PostgreSQL container..."
     docker compose -f "$SCRIPT_DIR/docker-compose.yml" down 2>/dev/null || true
 
-    info "Demo stopped"
+    # Final check
+    if mount | grep -q "$MOUNTPOINT"; then
+        warn "Warning: $MOUNTPOINT may still be mounted. Try: sudo umount -f $MOUNTPOINT"
+    else
+        info "Demo stopped successfully"
+    fi
 }
 
 show_status() {

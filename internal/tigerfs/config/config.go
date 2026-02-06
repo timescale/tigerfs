@@ -40,6 +40,12 @@ type Config struct {
 	// Metadata
 	MetadataRefreshInterval time.Duration `mapstructure:"metadata_refresh_interval"`
 
+	// NFS file cache settings (ADR-010)
+	NFSStreamingThreshold  int64         `mapstructure:"nfs_streaming_threshold"`   // Buffer size triggering streaming commit (default: 10MB)
+	NFSMaxRandomWriteSize  int64         `mapstructure:"nfs_max_random_write_size"` // Max buffer for random writes (default: 100MB)
+	NFSCacheReaperInterval time.Duration `mapstructure:"nfs_cache_reaper_interval"` // How often reaper checks for stale entries (default: 30s)
+	NFSCacheIdleTimeout    time.Duration `mapstructure:"nfs_cache_idle_timeout"`    // Idle time before force-commit (default: 5m)
+
 	// Logging
 	LogLevel  string `mapstructure:"log_level"`
 	LogFile   string `mapstructure:"log_file"`
@@ -71,6 +77,10 @@ func Init() error {
 	viper.SetDefault("query_timeout", 30*time.Second)
 	viper.SetDefault("dir_filter_limit", 100000)
 	viper.SetDefault("metadata_refresh_interval", 30*time.Second)
+	viper.SetDefault("nfs_streaming_threshold", int64(10*1024*1024))
+	viper.SetDefault("nfs_max_random_write_size", int64(100*1024*1024))
+	viper.SetDefault("nfs_cache_reaper_interval", 30*time.Second)
+	viper.SetDefault("nfs_cache_idle_timeout", 5*time.Minute)
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("log_format", "text")
 	viper.SetDefault("default_format", "tsv")

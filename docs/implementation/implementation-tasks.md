@@ -6288,9 +6288,1374 @@ grep -r "TODO" internal/
 
 ---
 
-## Phase 9: Performance & Scalability
+## Phase 9: Shared Core Library for FUSE/NFS Feature Parity
 
-### Task 9.1: Implement Hybrid Metadata Caching
+This phase creates a new `internal/tigerfs/fs/` package as a shared core library that both FUSE and NFS backends use. This achieves full feature parity—NFS gets all capabilities that FUSE has, including writes and DDL operations.
+
+**Reference Documents:**
+- ADR: `docs/adr/009-shared-core-library.md`
+- Detailed Plan: `docs/implementation/shared-core-plan.md`
+
+**Architecture:**
+```
+internal/tigerfs/
+├── fs/                 # NEW: Shared core (backend-agnostic)
+│   ├── context.go      # FSContext (from fuse/pipeline.go)
+│   ├── constants.go    # Capability names, extensions
+│   ├── path.go         # Path parsing → FSContext
+│   ├── operations.go   # ReadDir, Stat, ReadFile, WriteFile
+│   ├── directory.go    # Directory listing logic
+│   ├── file.go         # File read logic
+│   ├── write.go        # File write logic
+│   ├── ddl.go          # DDL staging operations
+│   ├── errors.go       # Backend-agnostic errors
+│   └── types.go        # Entry, FileContent, WriteHandle
+│
+├── fuse/               # FUSE adapter (thin wrapper)
+│   └── adapter.go      # Bridge fs.Operations → FUSE interfaces
+│
+├── nfs/                # NFS adapter (REWRITTEN)
+│   ├── handler.go      # Implement nfs.Handler directly (not billy)
+│   ├── handles.go      # File handle tracking for writes
+│   └── server.go       # Use handler.go
+│
+└── db/                 # Database layer (unchanged)
+```
+
+---
+
+### Task 9.1: Create fs/ Package Foundation
+
+**Objective:** Create the shared core package with types, errors, and move PipelineContext
+
+**Background:**
+The FUSE package contains `PipelineContext` which tracks query state as users navigate the filesystem. This core type needs to move to the shared `fs/` package so both FUSE and NFS can use it. We'll also establish the fundamental types (`Entry`, `FileContent`) and error handling.
+
+**Steps:**
+1. Create `internal/tigerfs/fs/` directory
+
+2. Create `internal/tigerfs/fs/types.go`:
+   ```go
+   package fs
+
+   import (
+       "os"
+       "time"
+   )
+
+   // Entry represents a filesystem entry (file or directory)
+   type Entry struct {
+       Name    string
+       IsDir   bool
+       Size    int64
+       Mode    os.FileMode
+       ModTime time.Time
+   }
+
+   // FileContent holds the content of a file read operation
+   type FileContent struct {
+       Data []byte
+       Size int64
+       Mode os.FileMode
+   }
+
+   // WriteHandle supports streaming writes for large files (.import/)
+   type WriteHandle struct {
+       Path    string
+       Buffer  []byte
+       OnClose func(data []byte) error
+   }
+   ```
+
+3. Create `internal/tigerfs/fs/errors.go`:
+   ```go
+   package fs
+
+   import "fmt"
+
+   // ErrorCode represents filesystem error types
+   type ErrorCode int
+
+   const (
+       ErrNone ErrorCode = iota
+       ErrNotExist
+       ErrPermission
+       ErrInvalidPath
+       ErrInvalidFormat
+       ErrInvalidOperation
+       ErrReadOnly
+       ErrNotEmpty
+       ErrAlreadyExists
+       ErrIO
+       ErrInternal
+   )
+
+   // FSError is a backend-agnostic filesystem error
+   type FSError struct {
+       Code    ErrorCode
+       Message string
+       Cause   error
+       Hint    string // User-friendly guidance
+   }
+
+   func (e *FSError) Error() string {
+       if e.Cause != nil {
+           return fmt.Sprintf("%s: %v", e.Message, e.Cause)
+       }
+       return e.Message
+   }
+
+   // Error constructors
+   func NewNotExistError(path string) *FSError { ... }
+   func NewPermissionError(op, path string) *FSError { ... }
+   func NewInvalidPathError(path, reason string) *FSError { ... }
+   ```
+
+4. Create `internal/tigerfs/fs/constants.go`:
+   - Copy constants from `fuse/constants.go`
+   - Include: capability directory names, format extensions, permission bits
+   - Keep fuse/constants.go importing from fs/ for backwards compatibility
+
+5. Create `internal/tigerfs/fs/context.go`:
+   - Move `PipelineContext` from `fuse/pipeline.go` to `fs/context.go`
+   - Rename to `FSContext` (clearer name for shared usage)
+   - Keep all existing fields and methods
+   - Add `PrimaryKey`, `Column`, `Format` fields for row/column level tracking
+
+6. Update `internal/tigerfs/fuse/pipeline.go`:
+   - Add type alias: `type PipelineContext = fs.FSContext`
+   - Update all imports to use fs.FSContext internally
+   - Keep existing method signatures for compatibility
+
+7. Update `internal/tigerfs/fuse/constants.go`:
+   - Import constants from fs/ package
+   - Re-export for backwards compatibility
+
+8. Write tests:
+   - `internal/tigerfs/fs/types_test.go` - Entry and FileContent constructors
+   - `internal/tigerfs/fs/errors_test.go` - Error creation, wrapping, code mapping
+   - `internal/tigerfs/fs/context_test.go` - All FSContext methods (WithFilter, WithOrder, WithLimit, CanAdd*, etc.)
+
+**Files to Create:**
+- `internal/tigerfs/fs/types.go`
+- `internal/tigerfs/fs/types_test.go`
+- `internal/tigerfs/fs/errors.go`
+- `internal/tigerfs/fs/errors_test.go`
+- `internal/tigerfs/fs/constants.go`
+- `internal/tigerfs/fs/context.go`
+- `internal/tigerfs/fs/context_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/pipeline.go` → type alias to fs.FSContext
+- `internal/tigerfs/fuse/constants.go` → import from fs/
+
+**Verification:**
+```bash
+# Build succeeds
+go build ./...
+
+# All tests pass
+go test ./internal/tigerfs/fs/...
+go test ./internal/tigerfs/fuse/...
+
+# Race detection
+go test -race ./internal/tigerfs/fs/...
+
+# Coverage check
+go test -cover ./internal/tigerfs/fs/...
+```
+
+**Completion Criteria:**
+- fs/ package created with types.go, errors.go, constants.go, context.go
+- FSContext has all PipelineContext functionality
+- Type alias in fuse/ maintains backwards compatibility
+- All existing tests pass
+- New unit tests for fs/ package pass
+- >80% coverage on fs/ package
+
+---
+
+### Task 9.2: Implement Path Parser
+
+**Objective:** Create path parsing logic that converts filesystem paths to FSContext
+
+**Background:**
+When NFS or FUSE receives a path like `/users/.by/email/foo@bar.com/.first/10/`, it needs to parse this into an FSContext with the table, index navigation, and pagination settings. Currently FUSE does this through node hierarchy traversal. The shared core needs a standalone path parser.
+
+**Steps:**
+1. Create `internal/tigerfs/fs/path.go`:
+   ```go
+   package fs
+
+   // ParsePath converts a filesystem path to FSContext
+   // Examples:
+   //   "/" → root context
+   //   "/users" → table context (schema=public, table=users)
+   //   "/public/users" → explicit schema
+   //   "/.schemas/myschema" → schema listing
+   //   "/users/.by/email/foo" → index navigation
+   //   "/users/.first/10" → pagination
+   //   "/users/.filter/status/active" → filter
+   //   "/users/123" → row by PK
+   //   "/users/123/name" → column
+   //   "/users/123.json" → row with format
+   //   "/.create/idx/sql" → DDL staging
+   func ParsePath(path string) (*FSContext, *FSError)
+
+   // PathType indicates what kind of path was parsed
+   type PathType int
+   const (
+       PathRoot PathType = iota
+       PathSchemaList
+       PathSchema
+       PathTable
+       PathCapability
+       PathRow
+       PathColumn
+       PathDDL
+       PathExport
+       PathImport
+   )
+   ```
+
+2. Implement path segment parsing:
+   - Split path by "/"
+   - Handle special prefixes: `.schemas/`, `.create/`, `.modify/`, `.delete/`
+   - Handle capability directories: `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.info/`, `.export/`, `.import/`
+   - Handle format extensions: `.json`, `.csv`, `.tsv`, `.yaml`
+   - Handle row primary keys (with escaping)
+
+3. Implement capability chain parsing:
+   - `.by/<column>/<value>` → sets index navigation
+   - `.filter/<column>/<value>` → adds filter condition
+   - `.order/<column>/` or `.order/<column>.desc/` → sets ordering
+   - `.first/<N>/` → sets LIMIT with ascending order
+   - `.last/<N>/` → sets LIMIT with descending order
+   - `.sample/<N>/` → sets random sampling
+   - Capabilities can chain: `/users/.filter/active/true/.order/created_at/.first/10/`
+
+4. Implement DDL path parsing:
+   - `/.create/<name>/` → DDL create staging
+   - `/.modify/<name>/` → DDL modify staging
+   - `/.delete/<name>/` → DDL delete staging
+   - Subpaths: `sql`, `.test`, `.commit`, `.abort`, `test.log`
+
+5. Write comprehensive tests in `internal/tigerfs/fs/path_test.go`:
+   - Root path `/`
+   - Schema paths `/.schemas/`, `/.schemas/public/`
+   - Table paths `/users/`, `/public/users/`
+   - Capability chains `/users/.by/email/foo/.first/10/`
+   - Row paths `/users/123`, `/users/123.json`
+   - Column paths `/users/123/name`
+   - DDL paths `/.create/myindex/sql`
+   - Invalid paths (proper error handling)
+   - Edge cases: special characters in PKs, dots in table names, URL-encoded values
+
+**Files to Create:**
+- `internal/tigerfs/fs/path.go`
+- `internal/tigerfs/fs/path_test.go`
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/fs/... -v -run TestParsePath
+
+# Coverage
+go test -cover ./internal/tigerfs/fs/...
+# Target: >90% coverage on path.go
+```
+
+**Completion Criteria:**
+- ParsePath handles all path types
+- All capability chains parse correctly
+- DDL paths parse correctly
+- Format extensions detected
+- Edge cases handled (special chars, escaping)
+- Comprehensive tests pass
+- >90% coverage on path.go
+
+---
+
+### Task 9.3: Implement Read Operations
+
+**Objective:** Implement ReadDir, Stat, and ReadFile operations in the shared core
+
+**Background:**
+Read operations are the foundation of the filesystem. These need to work identically for FUSE and NFS. The Operations struct will hold the database client and delegate to specialized functions for different path types.
+
+**Steps:**
+1. Create `internal/tigerfs/fs/operations.go`:
+   ```go
+   package fs
+
+   import (
+       "context"
+       "github.com/timescale/tigerfs/internal/tigerfs/config"
+       "github.com/timescale/tigerfs/internal/tigerfs/db"
+   )
+
+   // Operations provides filesystem operations backed by PostgreSQL
+   type Operations struct {
+       db      *db.Client
+       config  *config.Config
+       staging *StagingManager // Added in Task 9.5
+   }
+
+   func NewOperations(cfg *config.Config, dbClient *db.Client) *Operations
+
+   // ReadDir lists directory contents
+   func (o *Operations) ReadDir(ctx context.Context, path string) ([]Entry, *FSError)
+
+   // Stat returns metadata for a path
+   func (o *Operations) Stat(ctx context.Context, path string) (*Entry, *FSError)
+
+   // ReadFile returns file contents
+   func (o *Operations) ReadFile(ctx context.Context, path string) (*FileContent, *FSError)
+
+   // Context-based variants for FUSE efficiency (avoids re-parsing)
+   func (o *Operations) ReadDirWithContext(ctx context.Context, fsCtx *FSContext) ([]Entry, *FSError)
+   func (o *Operations) StatWithContext(ctx context.Context, fsCtx *FSContext) (*Entry, *FSError)
+   func (o *Operations) ReadFileWithContext(ctx context.Context, fsCtx *FSContext) (*FileContent, *FSError)
+   ```
+
+2. Create `internal/tigerfs/fs/directory.go`:
+   - Implement directory listing for each path type:
+     - Root: list schemas or flattened tables
+     - Schema: list tables
+     - Table: list rows (with pagination) + capability dirs
+     - Capability dir: list values/options
+     - Row: list columns
+     - Info dir: list metadata files
+     - Export dir: list format files
+   - Reuse existing logic from fuse/ package where possible
+
+3. Create `internal/tigerfs/fs/file.go`:
+   - Implement file reading for each file type:
+     - Row file: serialize row to format (JSON, CSV, TSV)
+     - Column file: return single column value
+     - Info files: `.count`, `.ddl`, `.columns`, `.indexes`
+     - Export files: bulk data export
+
+4. Create `internal/tigerfs/fs/capability.go`:
+   - Implement capability directory routing
+   - `.info/` → info file listing
+   - `.by/` → index listing, then value listing
+   - `.filter/` → column listing, then value input
+   - `.order/` → column listing
+   - `.first/N/`, `.last/N/`, `.sample/N/` → apply to context, continue
+   - `.export/` → format file listing
+
+5. Write tests:
+   - `internal/tigerfs/fs/operations_test.go` - Integration of components with mock db
+   - `internal/tigerfs/fs/directory_test.go` - Directory listing for all path types
+   - `internal/tigerfs/fs/file_test.go` - File content generation
+   - `internal/tigerfs/fs/capability_test.go` - Capability routing and validation
+
+**Files to Create:**
+- `internal/tigerfs/fs/operations.go`
+- `internal/tigerfs/fs/operations_test.go`
+- `internal/tigerfs/fs/directory.go`
+- `internal/tigerfs/fs/directory_test.go`
+- `internal/tigerfs/fs/file.go`
+- `internal/tigerfs/fs/file_test.go`
+- `internal/tigerfs/fs/capability.go`
+- `internal/tigerfs/fs/capability_test.go`
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/fs/... -v
+
+# Coverage
+go test -cover ./internal/tigerfs/fs/...
+# Target: >80% coverage
+
+# Integration test (requires db)
+go test ./test/integration/... -v -run TestFSOperations
+```
+
+**Completion Criteria:**
+- ReadDir works for all path types
+- Stat returns correct metadata
+- ReadFile returns correct content for all file types
+- Capability routing works correctly
+- All tests pass
+- >80% coverage
+
+---
+
+### Task 9.4: Implement Write Operations
+
+**Objective:** Implement WriteFile, Create, and Delete operations in the shared core
+
+**Background:**
+Write operations enable INSERT, UPDATE, and DELETE of database rows through filesystem operations. These must handle format parsing (JSON input), partial row tracking (incremental creates), and proper error handling.
+
+**Steps:**
+1. Create `internal/tigerfs/fs/write.go`:
+   ```go
+   package fs
+
+   // WriteFile writes content to a file path
+   // Handles:
+   //   /users/123.json → UPDATE row 123
+   //   /users/new.json → INSERT new row
+   //   /users/123/name → UPDATE column
+   //   /.create/idx/sql → DDL staging
+   func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *FSError
+
+   // Create creates a new file or directory
+   // Used for: new row files, DDL staging directories
+   func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FSError)
+
+   // Delete removes a file or directory
+   // Handles:
+   //   /users/123.json → DELETE row
+   //   /users/123/name → SET column to NULL
+   func (o *Operations) Delete(ctx context.Context, path string) *FSError
+
+   // Mkdir creates a directory (for DDL staging)
+   func (o *Operations) Mkdir(ctx context.Context, path string) *FSError
+   ```
+
+2. Implement row UPDATE:
+   - Parse path to get table and primary key
+   - Parse content based on format (JSON, CSV, TSV)
+   - Build UPDATE SQL
+   - Execute with transaction
+
+3. Implement row INSERT:
+   - Detect new row (filename "new" or non-existent PK)
+   - Parse content to extract columns
+   - Build INSERT SQL with RETURNING for new PK
+   - Handle serial vs non-serial PKs
+
+4. Implement column UPDATE:
+   - Parse path to get table, PK, and column
+   - Validate column exists and is writable
+   - Build UPDATE SQL for single column
+   - Execute with transaction
+
+5. Implement DELETE:
+   - Row delete: DELETE FROM table WHERE pk = value
+   - Column delete: UPDATE table SET column = NULL
+
+6. Create `internal/tigerfs/fs/staging.go`:
+   - Implement `StagingManager` for partial row tracking
+   - Track in-progress row creates (incremental column writes)
+   - Flush to database when complete
+   - Timeout stale staging entries
+
+7. Write tests in `internal/tigerfs/fs/write_test.go`:
+   - WriteFile UPDATE vs INSERT detection
+   - Format parsing (JSON, CSV input)
+   - Column UPDATE
+   - DELETE operations
+   - Partial row staging
+   - Error handling (permission denied, constraint violation)
+
+**Files to Create:**
+- `internal/tigerfs/fs/write.go`
+- `internal/tigerfs/fs/write_test.go`
+- `internal/tigerfs/fs/staging.go`
+- `internal/tigerfs/fs/staging_test.go`
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/fs/... -v -run TestWrite
+
+# Integration test
+go test ./test/integration/... -v -run TestFSWrite
+```
+
+**Completion Criteria:**
+- WriteFile handles UPDATE and INSERT
+- Format parsing works (JSON, CSV, TSV)
+- Column-level writes work
+- Delete operations work
+- Partial row staging works
+- Constraint violations return proper errors
+- >80% coverage on write.go
+
+---
+
+### Task 9.5: Implement DDL Operations
+
+**Objective:** Move DDL staging from FUSE to shared core
+
+**Background:**
+DDL operations (CREATE INDEX, ALTER TABLE, etc.) use a staging model: write SQL to a `sql` file, validate with `.test`, execute with `.commit`, or cancel with `.abort`. This logic needs to move to the shared core so NFS can use it.
+
+**Steps:**
+1. Create `internal/tigerfs/fs/ddl.go`:
+   ```go
+   package fs
+
+   // DDLOpType identifies the DDL operation
+   type DDLOpType int
+   const (
+       DDLCreate DDLOpType = iota
+       DDLModify
+       DDLDelete
+   )
+
+   // DDLStagingEntry tracks a DDL staging session
+   type DDLStagingEntry struct {
+       ID        string
+       Operation DDLOpType
+       Target    string    // table/index/schema name
+       SQL       string    // the DDL statement
+       TestLog   string    // output from .test
+       Validated bool      // .test succeeded
+       CreatedAt time.Time
+   }
+
+   // DDLManager handles DDL staging operations
+   type DDLManager struct {
+       db       *db.Client
+       sessions map[string]*DDLStagingEntry
+       mu       sync.RWMutex
+   }
+
+   // CreateSession starts a new DDL staging session
+   func (m *DDLManager) CreateSession(op DDLOpType, target string) (string, error)
+
+   // WriteSQL updates the SQL content
+   func (m *DDLManager) WriteSQL(sessionID, sql string) error
+
+   // Test validates the SQL (parse only, no execute)
+   func (m *DDLManager) Test(ctx context.Context, sessionID string) (string, error)
+
+   // Commit executes the SQL
+   func (m *DDLManager) Commit(ctx context.Context, sessionID string) error
+
+   // Abort cancels the session
+   func (m *DDLManager) Abort(sessionID string) error
+   ```
+
+2. Migrate logic from `fuse/staging.go`:
+   - Move template generation functions
+   - Move SQL validation logic
+   - Move transaction handling
+
+3. Integrate with Operations:
+   - Add `DDLManager` to `Operations` struct
+   - Handle DDL paths in ReadDir, ReadFile, WriteFile
+   - `/.create/<name>/` → create staging session, list control files
+   - `sql` → read/write SQL content
+   - `.test` → validate SQL, return success/failure
+   - `.commit` → execute SQL
+   - `.abort` → cancel staging
+   - `test.log` → read validation output
+
+4. Write tests in `internal/tigerfs/fs/ddl_test.go`:
+   - DDL staging lifecycle (create → write → test → commit)
+   - DDL abort workflow
+   - Test validation success and failure
+   - Test commit execution
+   - Test test.log content
+   - Multiple concurrent staging sessions
+
+**Files to Create:**
+- `internal/tigerfs/fs/ddl.go`
+- `internal/tigerfs/fs/ddl_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/fs/operations.go` - Add DDLManager
+- `internal/tigerfs/fuse/staging.go` - Delegate to fs/ddl.go or deprecate
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/fs/... -v -run TestDDL
+
+# Integration test
+go test ./test/integration/... -v -run TestDDL
+```
+
+**Completion Criteria:**
+- DDL staging moved to fs/ package
+- All DDL operations work through fs.Operations
+- .test validation works
+- .commit execution works
+- .abort cleanup works
+- test.log content correct
+- Concurrent sessions handled
+- >80% coverage on ddl.go
+
+---
+
+### Task 9.6: Implement NFS Handler (Read Operations)
+
+**Objective:** Create new NFS handler implementing go-nfs Handler interface directly
+
+**Background:**
+The current NFS implementation uses `billy.Filesystem` which limits what operations are available. By implementing `go-nfs`'s `Handler` interface directly, we get full control over all NFS operations and can use the shared fs.Operations.
+
+**Strategy:** Keep billy.Filesystem temporarily. Add config flag to switch between handlers during development for A/B comparison testing.
+
+**Steps:**
+1. Create `internal/tigerfs/nfs/handler.go`:
+   ```go
+   package nfs
+
+   import (
+       "github.com/willscott/go-nfs"
+       "github.com/timescale/tigerfs/internal/tigerfs/fs"
+   )
+
+   // Handler implements the go-nfs Handler interface using fs.Operations
+   type Handler struct {
+       ops     *fs.Operations
+       handles *HandleManager
+   }
+
+   func NewHandler(ops *fs.Operations) *Handler
+
+   // go-nfs Handler interface methods
+   func (h *Handler) Mount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (nfs.MountStatus, nfs.FileHandle, []nfs.AuthFlavor)
+   func (h *Handler) Lookup(ctx context.Context, handle nfs.FileHandle, name string) (nfs.FileHandle, *nfs.FileInfo, error)
+   func (h *Handler) ReadDir(ctx context.Context, handle nfs.FileHandle) ([]nfs.DirEntry, error)
+   func (h *Handler) ReadDirPlus(ctx context.Context, handle nfs.FileHandle) ([]nfs.DirEntryPlus, error)
+   func (h *Handler) GetAttr(ctx context.Context, handle nfs.FileHandle) (*nfs.FileInfo, error)
+   func (h *Handler) Read(ctx context.Context, handle nfs.FileHandle, offset int64, count uint32) ([]byte, error)
+   ```
+
+2. Create `internal/tigerfs/nfs/handles.go`:
+   ```go
+   package nfs
+
+   // HandleManager maps NFS file handles to filesystem paths
+   type HandleManager struct {
+       pathToHandle map[string]nfs.FileHandle
+       handleToPath map[string]string  // handle bytes as string key
+       nextID       uint64
+       mu           sync.RWMutex
+   }
+
+   func NewHandleManager() *HandleManager
+   func (m *HandleManager) GetOrCreateHandle(path string) nfs.FileHandle
+   func (m *HandleManager) GetPath(handle nfs.FileHandle) (string, bool)
+   ```
+
+3. Implement read-only NFS operations:
+   - `Mount` → return root handle
+   - `Lookup` → call fs.Stat, return handle and info
+   - `ReadDir` → call fs.ReadDir, convert to NFS entries
+   - `ReadDirPlus` → same as ReadDir but with attrs
+   - `GetAttr` → call fs.Stat, convert to NFS FileInfo
+   - `Read` → call fs.ReadFile, return slice at offset
+
+4. Add handler selection flag:
+   - Add `--nfs-handler=new|legacy` flag to mount command
+   - Default to `legacy` during development
+   - Wire both handlers in server.go
+
+5. Update `internal/tigerfs/nfs/server.go`:
+   - Support both handler types via flag
+   - Keep billy.Filesystem code for comparison
+   - Log which handler is active
+
+6. Write tests in `internal/tigerfs/nfs/handler_test.go`:
+   - All read operations against mock fs.Operations
+   - Handle allocation and lookup
+   - Error handling
+
+**Files to Create:**
+- `internal/tigerfs/nfs/handler.go`
+- `internal/tigerfs/nfs/handler_test.go`
+- `internal/tigerfs/nfs/handles.go`
+- `internal/tigerfs/nfs/handles_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/server.go` → support both handlers via flag
+- `internal/tigerfs/cmd/mount.go` → add --nfs-handler flag
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/nfs/... -v
+
+# Manual test on macOS
+# Build and run with new handler
+go build -o bin/tigerfs ./cmd/tigerfs
+./bin/tigerfs mount --nfs-handler=new postgres://... /tmp/db
+
+# Verify READ capabilities
+ls /tmp/db/
+ls /tmp/db/users/
+cat /tmp/db/users/.info/.count
+ls /tmp/db/users/.by/
+cat /tmp/db/users/1.json
+```
+
+**Completion Criteria:**
+- NFS Handler implements all read operations
+- Handle manager tracks path-to-handle mappings
+- Flag allows switching between legacy and new handlers
+- All read capabilities work via NFS mount
+- Unit tests pass
+- Manual testing on macOS succeeds
+
+---
+
+### Task 9.7: Implement NFS Handler (Write Operations)
+
+**Objective:** Add write support to NFS handler
+
+**Background:**
+Write operations in NFS require buffering (writes come in chunks) and executing SQL on Close(). This task adds Create, Write, SetAttr, and Remove operations to the NFS handler.
+
+**Steps:**
+1. Extend `internal/tigerfs/nfs/handles.go`:
+   ```go
+   // WriteState tracks an open file being written
+   type WriteState struct {
+       Path      string
+       Buffer    bytes.Buffer
+       Offset    int64
+       CreatedAt time.Time
+   }
+
+   // HandleManager additions
+   func (m *HandleManager) CreateWriteState(path string) nfs.FileHandle
+   func (m *HandleManager) GetWriteState(handle nfs.FileHandle) (*WriteState, bool)
+   func (m *HandleManager) CloseWriteState(handle nfs.FileHandle) ([]byte, error)
+   ```
+
+2. Add write operations to `internal/tigerfs/nfs/handler.go`:
+   ```go
+   // Write operations
+   func (h *Handler) Create(ctx context.Context, dirHandle nfs.FileHandle, name string, mode uint32) (nfs.FileHandle, *nfs.FileInfo, error)
+   func (h *Handler) Write(ctx context.Context, handle nfs.FileHandle, offset int64, data []byte) (uint32, error)
+   func (h *Handler) Commit(ctx context.Context, handle nfs.FileHandle, offset int64, count uint32) error
+   func (h *Handler) Remove(ctx context.Context, dirHandle nfs.FileHandle, name string) error
+   func (h *Handler) Mkdir(ctx context.Context, dirHandle nfs.FileHandle, name string, mode uint32) (nfs.FileHandle, *nfs.FileInfo, error)
+   func (h *Handler) Rmdir(ctx context.Context, dirHandle nfs.FileHandle, name string) error
+   func (h *Handler) SetAttr(ctx context.Context, handle nfs.FileHandle, attr nfs.SetAttrArgs) (*nfs.FileInfo, error)
+   ```
+
+3. Implement write buffering:
+   - `Create` → create write state, return handle
+   - `Write` → append to buffer at offset
+   - `Commit` → flush buffer to fs.WriteFile, execute SQL
+   - Close semantics: on last close, call fs.WriteFile with buffered data
+
+4. Implement other write operations:
+   - `Remove` → call fs.Delete
+   - `Mkdir` → call fs.Mkdir (for DDL staging)
+   - `Rmdir` → call fs.Delete
+   - `SetAttr` → handle truncate (size=0 clears buffer)
+
+5. Remove legacy billy code:
+   - After validating new handler works
+   - Remove `filesystem.go`
+   - Remove `--nfs-handler` flag (make new handler the default)
+
+6. Write additional tests:
+   - Write state lifecycle (create → write → commit)
+   - Chunked writes (multiple Write calls)
+   - Remove operations
+   - Mkdir/Rmdir operations
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/handler.go` - Add write operations
+- `internal/tigerfs/nfs/handles.go` - Add write state tracking
+- `internal/tigerfs/nfs/server.go` - Remove legacy handler after validation
+
+**Files to Delete (after validation):**
+- `internal/tigerfs/nfs/filesystem.go`
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/nfs/... -v
+
+# Manual test on macOS
+./bin/tigerfs mount postgres://... /tmp/db
+
+# Verify WRITE capabilities
+echo '{"name":"test"}' > /tmp/db/users/new.json      # INSERT
+echo '{"name":"updated"}' > /tmp/db/users/1.json     # UPDATE
+echo 'new value' > /tmp/db/users/1/name              # Column UPDATE
+rm /tmp/db/users/1.json                              # DELETE
+
+# Verify IMPORT
+cat data.csv > /tmp/db/users/.import/.sync/data.csv
+
+# Verify DDL
+echo 'CREATE INDEX...' > /tmp/db/.create/idx/sql
+cat /tmp/db/.create/idx/.test
+cat /tmp/db/.create/idx/.commit
+```
+
+**Completion Criteria:**
+- All write operations implemented
+- Write buffering works correctly
+- SQL executed on commit/close
+- Import works via NFS
+- DDL staging works via NFS
+- Legacy billy code removed
+- Unit tests pass
+- Manual testing on macOS succeeds
+
+---
+
+### Task 9.8: FUSE Integration and Migration
+
+**Objective:** Create FUSE adapter layer that delegates to fs.Operations
+
+**Background:**
+FUSE nodes currently contain both backend-specific code (inode management) and filesystem logic. Create an adapter layer so FUSE nodes can delegate to fs.Operations, reducing code duplication.
+
+**Steps:**
+1. Create `internal/tigerfs/fuse/adapter.go`:
+   ```go
+   package fuse
+
+   import (
+       "github.com/timescale/tigerfs/internal/tigerfs/fs"
+       "github.com/hanwen/go-fuse/v2/fuse"
+   )
+
+   // FSAdapter bridges fs.Operations to FUSE interfaces
+   type FSAdapter struct {
+       ops *fs.Operations
+   }
+
+   func NewFSAdapter(ops *fs.Operations) *FSAdapter
+
+   // Convert fs.Entry to FUSE Attr
+   func (a *FSAdapter) EntryToAttr(entry *fs.Entry, out *fuse.Attr)
+
+   // Convert fs.FSError to syscall.Errno
+   func (a *FSAdapter) ErrorToErrno(err *fs.FSError) syscall.Errno
+
+   // ReadDir using fs.Operations (for GenericNode)
+   func (a *FSAdapter) ReadDir(ctx context.Context, path string) ([]fuse.DirEntry, syscall.Errno)
+   ```
+
+2. Create optional GenericNode:
+   ```go
+   // GenericNode is a FUSE node that delegates everything to fs.Operations
+   // Use for simple nodes; keep specialized nodes for performance-critical paths
+   type GenericNode struct {
+       path    string
+       adapter *FSAdapter
+   }
+
+   func (n *GenericNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno
+   func (n *GenericNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno)
+   func (n *GenericNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
+   func (n *GenericNode) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno)
+   ```
+
+3. Migrate one simple node to use adapter:
+   - Choose a simple node (e.g., InfoDirNode or ExportDirNode)
+   - Refactor to use FSAdapter for read operations
+   - Verify behavior unchanged
+
+4. Document migration strategy:
+   - Which nodes should migrate to GenericNode
+   - Which nodes should keep specialized implementations
+   - Performance considerations
+
+5. Write tests:
+   - `internal/tigerfs/fuse/adapter_test.go` - Adapter conversions
+   - Verify migrated node behaves identically
+
+**Files to Create:**
+- `internal/tigerfs/fuse/adapter.go`
+- `internal/tigerfs/fuse/adapter_test.go`
+
+**Files to Modify:**
+- One simple FUSE node (as proof of concept)
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/fuse/... -v
+
+# Integration tests (verify no regression)
+go test ./test/integration/... -v
+
+# Manual test on Linux
+./bin/tigerfs mount postgres://... /tmp/db
+# Verify all operations work as before
+```
+
+**Completion Criteria:**
+- FSAdapter created with conversion functions
+- GenericNode implemented (optional use)
+- One node migrated as proof of concept
+- No behavior regression
+- Migration strategy documented
+- Tests pass
+
+---
+
+### Task 9.9: Feature Parity Verification and Integration Tests
+
+**Objective:** Write integration tests verifying FUSE and NFS feature parity
+
+**Background:**
+After implementing the shared core, we need to verify that FUSE and NFS produce identical results for the same operations. This task creates parity tests and updates documentation.
+
+**Steps:**
+1. Create `test/integration/fs_operations_test.go`:
+   - Test fs.Operations against real PostgreSQL
+   - Test all path types
+   - Test all capabilities
+   - Test read and write operations
+
+2. Create `test/integration/parity_test.go`:
+   ```go
+   // ParityTest verifies FUSE and NFS produce identical results
+   func TestParity(t *testing.T) {
+       // Setup: create test database
+       // Mount via FUSE (Linux) or NFS (macOS)
+       // Execute operations
+       // Compare results
+   }
+
+   func TestParityReadDir(t *testing.T) { ... }
+   func TestParityReadFile(t *testing.T) { ... }
+   func TestParityWriteFile(t *testing.T) { ... }
+   func TestParityCapabilities(t *testing.T) { ... }
+   ```
+
+3. Update documentation:
+   - Update `docs/spec.md` with shared core architecture
+   - Add section on NFS write support
+   - Document platform differences (if any remain)
+
+4. Update feature parity checklist:
+   - Verify all items in ADR-009 checklist
+   - Document any gaps or platform-specific limitations
+
+5. Final verification:
+   - Run all tests on Linux (FUSE)
+   - Run all tests on macOS (NFS)
+   - Document any failures or limitations
+
+**Files to Create:**
+- `test/integration/fs_operations_test.go`
+- `test/integration/parity_test.go`
+
+**Files to Modify:**
+- `docs/spec.md` - Update architecture section
+- `docs/adr/009-shared-core-library.md` - Mark as implemented, update any learnings
+
+**Verification:**
+```bash
+# Run all integration tests
+go test ./test/integration/... -v
+
+# Run with coverage
+go test -cover ./internal/tigerfs/fs/...
+go test -cover ./internal/tigerfs/nfs/...
+
+# Verify on Linux
+GOOS=linux go test ./test/integration/... -v
+
+# Verify on macOS
+GOOS=darwin go test ./test/integration/... -v
+```
+
+**Completion Criteria:**
+- Integration tests for fs.Operations pass
+- Parity tests comparing FUSE vs NFS pass
+- All features from ADR checklist verified
+- Documentation updated
+- >80% coverage on fs/ package
+- >80% coverage on nfs/handler.go
+- No platform-specific behavior differences (or documented if unavoidable)
+
+---
+
+### Task 9.10: Add cachedFile Structure and File Cache
+
+**Objective:** Introduce the core caching data structures for persistent memFile (ADR-010)
+
+**Background:**
+The current NFS implementation creates a fresh `memFile` for each NFS operation, causing O(n²) database traffic for large file writes. ADR-010 introduces a persistent file cache with reference counting to commit once instead of per-chunk.
+
+**Steps:**
+1. Add `cachedFile` struct to `ops_filesystem.go`:
+   ```go
+   type cachedFile struct {
+       mu           sync.RWMutex
+       path         string
+       data         []byte
+       dirty        bool
+       refCount     int
+       lastActivity time.Time
+       truncated    bool
+       deleted      bool
+       isSequential bool
+       ops          *fs.Operations
+       isTrigger    bool
+       isDDLSQL     bool
+       isRowFile    bool
+   }
+   ```
+
+2. Modify `OpsFilesystem` struct:
+   - Replace `inFlightFiles` and `truncatedFiles` with unified `fileCache map[string]*cachedFile`
+   - Add `cacheMu sync.RWMutex`
+
+3. Update `NewOpsFilesystem()` to initialize `fileCache`
+
+4. Add helper methods:
+   - `getOrCreateCachedFile(path string, flags int) *cachedFile`
+   - `removeFromCache(path string)`
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+
+**Verification:**
+```bash
+go build ./...
+go test ./internal/tigerfs/nfs/... -run TestMemFile
+```
+
+**Completion Criteria:**
+- `cachedFile` struct defined
+- `OpsFilesystem` uses `fileCache` map
+- Helper methods implemented
+- Existing tests still pass (data structures in place but not yet used)
+
+---
+
+### Task 9.11: Modify OpenFile for Cache Lookup
+
+**Objective:** Check cache before reading from database
+
+**Background:**
+With the cache in place, `OpenFile` should check the cache first. If a file is already cached, increment the reference count and return a memFile wrapping the cached entry. This prevents redundant database reads.
+
+**Steps:**
+1. Modify `OpenFile` to:
+   - Check `fileCache` first for existing entry
+   - If found: increment `refCount`, return memFile wrapping cached entry
+   - If not found: create new `cachedFile`, load from DB (unless O_TRUNC/O_CREATE)
+   - Handle O_TRUNC: set `cached.truncated=true`, clear data
+
+2. Modify `Create` to use new cache structure
+
+3. Update `memFile` struct:
+   - Add `cached *cachedFile` field
+   - Remove direct `data []byte` field (use `cached.data` instead)
+
+4. Ensure `lastActivity` updated on each operation
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/nfs/... -v
+# Verify cache hit/miss in logs with debug enabled
+```
+
+**Completion Criteria:**
+- `OpenFile` checks cache before DB read
+- `memFile` uses shared `cachedFile`
+- Existing write tests pass
+- Cache hit avoids database round-trip
+
+---
+
+### Task 9.12: Implement Reference Counting and Sync
+
+**Objective:** Commit on Sync() and when last handle closes
+
+**Background:**
+Editor saves trigger `fsync()` which calls `Sync()`. We should commit to DB immediately on Sync. On Close, we only commit when the reference count drops to zero (last handle closes).
+
+**Steps:**
+1. Add `memFile.Sync()` method:
+   - If dirty and has data, commit to DB immediately
+   - Clear dirty flag after successful commit
+   - This handles editor saves (fsync)
+
+2. Modify `memFile.Close()`:
+   - Decrement `refCount`
+   - Only commit to DB when `refCount == 0 && dirty`
+   - Remove from cache after successful commit
+
+3. Modify `memFile.Write()`:
+   - Lock `cached.mu` during writes
+   - Write to `cached.data`
+   - Track `isSequential` (offset == len(data) before write)
+
+4. Update `Stat` to return size from `cached.data` if file is in cache
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/nfs/... -v
+go test ./test/integration/... -run TestNFS_LargeWrite
+```
+
+**Completion Criteria:**
+- `Sync()` commits immediately (editor save works)
+- `Close()` uses reference counting
+- Large file writes commit once (not per-chunk)
+- `Stat` returns cached size
+
+---
+
+### Task 9.13: Large File Streaming and Memory Limits
+
+**Objective:** Handle large files without OOM
+
+**Background:**
+PostgreSQL stores column values atomically (~1GB max with TOAST). For sequential writes, we can stream: commit at 10MB threshold, clear buffer, continue. For random writes, we buffer up to 100MB then reject.
+
+**Steps:**
+1. Add configuration constants:
+   - `streamingThreshold = 10 * 1024 * 1024` (10MB)
+   - `maxRandomWriteSize = 100 * 1024 * 1024` (100MB)
+
+2. Implement streaming mode in `memFile.Write()`:
+   - If `isSequential && len(cached.data) > streamingThreshold`:
+     - Commit current buffer to DB
+     - Clear buffer, continue accepting writes
+   - Track that file has been streamed
+
+3. Implement size limit for random writes:
+   - If `!isSequential && len(cached.data) > maxRandomWriteSize`:
+     - Return `syscall.EFBIG`
+
+4. Update unit tests for streaming behavior
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+- `internal/tigerfs/nfs/memfile_test.go`
+
+**Verification:**
+```bash
+# Should complete without OOM, commits in ~10MB chunks
+dd if=/dev/zero of=/mnt/db/table/1/data.txt bs=1M count=100
+```
+
+**Completion Criteria:**
+- Sequential writes >10MB stream (commit and clear)
+- Random writes >100MB return EFBIG
+- Large file writes work without memory exhaustion
+
+---
+
+### Task 9.14: Cache Reaper and Graceful Shutdown
+
+**Objective:** Prevent memory leaks, flush on shutdown
+
+**Background:**
+NFS clients can crash without closing files. A background reaper commits stale entries after 5 minutes of inactivity. On graceful shutdown, all dirty entries are flushed.
+
+**Steps:**
+1. Add background reaper goroutine:
+   - `startCacheReaper()` - ticker every 30s
+   - `reapStaleCacheEntries()` - force-commit entries idle > 5 min
+   - `stopCacheReaper()` - stop ticker via context/channel
+
+2. Implement `OpsFilesystem.Close()`:
+   - Stop reaper goroutine
+   - Iterate all cache entries, commit dirty ones
+   - Clear cache
+
+3. Handle Remove/Rename:
+   - `Remove()`: mark `cached.deleted=true`, delete from cache
+   - `Rename()`: update cache key from old to new path
+   - `memFile.Write()`: check `deleted` flag, return EIO
+
+4. Update `server.go`:
+   - Call `billyFS.startCacheReaper()` on start
+   - Call `billyFS.Close()` on stop
+
+**Files to Modify:**
+- `internal/tigerfs/nfs/ops_filesystem.go`
+- `internal/tigerfs/nfs/server.go`
+- `internal/tigerfs/nfs/memfile_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/nfs/... -run TestReaper
+go test ./test/integration/... -run TestNFS
+```
+
+**Completion Criteria:**
+- Reaper commits stale entries after 5 min idle
+- Graceful shutdown flushes all dirty entries
+- Delete while open returns EIO on subsequent writes
+- No memory leaks from unclosed handles
+
+---
+
+### Task 9.15: Cleanup and Refactoring
+
+**Objective:** Remove backwards compatibility shims and refactor FUSE to use fs.FSContext directly
+
+**Background:**
+Task 9.1 introduced `PipelineContext` as a type alias to `fs.FSContext` for backwards compatibility. Now that the shared core is complete, we should remove the alias and update all FUSE code to use `fs.FSContext` directly. This ensures a clean codebase without legacy indirection.
+
+**Steps:**
+1. Update all FUSE files to import and use `fs.FSContext` directly:
+   - Replace `*PipelineContext` with `*fs.FSContext`
+   - Replace `NewPipelineContext()` with `fs.NewFSContext()`
+   - Update type references in function signatures
+
+2. Update FUSE files to use constants from `fs` directly:
+   - Replace `fuse.DirBy` with `fs.DirBy` (etc.)
+   - Remove redundant constant re-exports from `fuse/constants.go`
+
+3. Simplify `internal/tigerfs/fuse/pipeline.go`:
+   - Remove `PipelineContext` type alias
+   - Remove `NewPipelineContext` wrapper function
+   - Keep only necessary re-exports (LimitType constants for external callers)
+
+4. Simplify `internal/tigerfs/fuse/constants.go`:
+   - Remove re-exported constants that are only used internally
+   - Keep only constants needed by external packages
+
+5. Run all tests to verify no regressions
+
+6. Update any documentation referencing `PipelineContext`
+
+7. Implement Docker-on-macOS integration test support:
+   - Currently, integration tests use NFS on macOS and FUSE on Linux
+   - Add `TEST_MOUNT_METHOD=docker` option on macOS to run tests using Linux FUSE in Docker
+   - Requires refactoring FUSE layer to use an OS abstraction interface
+   - DockerFS wrapper executes file operations via `docker exec` commands
+   - Build TigerFS for Linux, run in privileged container with FUSE device
+
+**Files to Modify:**
+- `internal/tigerfs/fuse/pipeline.go` - Remove alias
+- `internal/tigerfs/fuse/constants.go` - Simplify re-exports
+- `internal/tigerfs/fuse/*.go` - Use fs.FSContext directly
+- Any files importing fuse.PipelineContext
+
+**Verification:**
+```bash
+# Ensure no references to PipelineContext remain (except comments)
+grep -r "PipelineContext" internal/tigerfs/fuse/*.go | grep -v "//"
+
+# Build succeeds
+go build ./...
+
+# All tests pass
+go test ./...
+
+# Race detection
+go test -race ./...
+```
+
+**Completion Criteria:**
+- No `PipelineContext` type alias in fuse/pipeline.go
+- All FUSE code uses `fs.FSContext` directly
+- Constants imported from `fs` package where appropriate
+- All tests pass
+- No behavior changes
+- `TEST_MOUNT_METHOD=docker` runs integration tests on macOS using Linux FUSE in Docker
+
+---
+
+### Task 9.16: Final Testing and v0.2.0 Release
+
+**Objective:** Comprehensive testing of shared core and v0.2.0 release
+
+**Background:**
+Phase 9 adds significant new functionality (NFS write support, DDL via NFS, full feature parity). Before releasing v0.2.0, we need thorough testing on both platforms and updated documentation.
+
+**Steps:**
+1. Comprehensive manual testing on macOS (NFS):
+   ```bash
+   # Mount and test all capabilities
+   tigerfs mount postgres://... /tmp/db
+
+   # Read capabilities
+   ls /tmp/db/users/.info/
+   cat /tmp/db/users/.info/.count
+   ls /tmp/db/users/.by/email/
+   ls /tmp/db/users/.filter/status/
+   ls /tmp/db/users/.first/10/
+   cat /tmp/db/users/.export/all.csv
+
+   # Write capabilities
+   echo '{"name":"test"}' > /tmp/db/users/new.json
+   echo '{"name":"updated"}' > /tmp/db/users/1.json
+   rm /tmp/db/users/999.json
+
+   # DDL capabilities
+   mkdir /tmp/db/.create/test_idx
+   echo 'CREATE INDEX...' > /tmp/db/.create/test_idx/sql
+   cat /tmp/db/.create/test_idx/.test
+   cat /tmp/db/.create/test_idx/.abort
+   ```
+
+2. Comprehensive manual testing on Linux (FUSE):
+   - Same tests as macOS
+   - Verify no regressions from refactoring
+
+3. Update documentation:
+   - Update README.md with NFS write support
+   - Update docs/spec.md with shared core architecture
+   - Add platform parity section
+
+4. Update version to v0.2.0:
+   - Update version in relevant files
+   - Update CHANGELOG.md
+
+5. Create release:
+   ```bash
+   git tag v0.2.0
+   git push origin v0.2.0
+   # GoReleaser builds binaries
+   ```
+
+6. Verify release:
+   - Download and test release binaries
+   - Verify install script works
+
+**Files to Modify:**
+- `README.md` - Update feature list
+- `docs/spec.md` - Add shared core architecture
+- `CHANGELOG.md` - Add v0.2.0 changes
+- Version files as needed
+
+**Verification:**
+```bash
+# All tests pass
+go test ./...
+
+# Integration tests pass
+go test ./test/integration/... -v
+
+# Build release
+goreleaser release --snapshot --clean
+
+# Verify binaries
+./dist/tigerfs_darwin_arm64/tigerfs --version
+./dist/tigerfs_linux_amd64/tigerfs --version
+```
+
+**Completion Criteria:**
+- All manual tests pass on macOS (NFS)
+- All manual tests pass on Linux (FUSE)
+- Documentation updated
+- v0.2.0 tagged and released
+- Release binaries working
+- Install script updated if needed
+
+---
+
+## Phase 10: Performance & Scalability
+
+### Task 10.1: Implement Hybrid Metadata Caching
 
 **Objective:** Optimize metadata caching for databases with many tables (100s-1000s)
 
@@ -6357,7 +7722,7 @@ TIGERFS_METADATA_PRELOAD_LIMIT=1 ./bin/tigerfs postgres://... /tmp/mount
 
 ---
 
-### Task 9.2: Evaluate Multi-User Mount Support (allow_other)
+### Task 10.2: Evaluate Multi-User Mount Support (allow_other)
 
 **Objective:** Research and potentially implement `--allow-other` flag for multi-user mount access
 
@@ -6395,7 +7760,7 @@ FUSE's `allow_other` option allows users other than the mounting user to access 
 
 ---
 
-### Task 9.3: Row Timestamps from Database Columns (Optional)
+### Task 10.3: Row Timestamps from Database Columns (Optional)
 
 **Objective:** Show file modification times based on table timestamp columns
 

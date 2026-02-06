@@ -40,6 +40,9 @@ func buildUnmountCmd() *cobra.Command {
 		Short: "Unmount a TigerFS filesystem",
 		Long: `Gracefully unmount a TigerFS instance.
 
+This command signals the TigerFS process to stop, which triggers a clean
+unmount. Equivalent to 'tigerfs stop <pid>' if you know the process ID.
+
 Examples:
   # Unmount filesystem
   tigerfs unmount /mnt/db
