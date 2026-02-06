@@ -216,6 +216,12 @@ func TestReadFile_ColumnFile(t *testing.T) {
 		tables: map[string][]string{
 			"public": {"users"},
 		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
 		primaryKeys: map[string]*mockPK{
 			"public.users": {column: "id"},
 		},
@@ -304,6 +310,12 @@ func TestStat_Column(t *testing.T) {
 	mockDB := &mockDBClient{
 		tables: map[string][]string{
 			"public": {"users"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
 		},
 		primaryKeys: map[string]*mockPK{
 			"public.users": {column: "id"},
@@ -874,9 +886,10 @@ func TestReadDir_RowDirectory(t *testing.T) {
 		names[i] = e.Name
 	}
 
-	assert.Contains(t, names, "id")
-	assert.Contains(t, names, "name")
-	assert.Contains(t, names, "email")
+	// Columns now have type-appropriate extensions
+	assert.Contains(t, names, "id")        // integer has no extension
+	assert.Contains(t, names, "name.txt")  // text gets .txt extension
+	assert.Contains(t, names, "email.txt") // text gets .txt extension
 }
 
 // TestReadDir_DDL tests listing DDL staging directories.

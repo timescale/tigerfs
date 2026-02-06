@@ -350,9 +350,13 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		{Name: ".yaml", IsDir: false, Mode: 0444, ModTime: now},
 	}
 
-	// Add column files
+	// Add column files with extensions based on data type
 	for _, col := range columns {
-		entries = append(entries, Entry{Name: col.Name, IsDir: false, Mode: 0600, ModTime: now})
+		filename := col.Name
+		if !o.config.NoFilenameExtensions {
+			filename = AddExtensionToColumn(col.Name, col.DataType)
+		}
+		entries = append(entries, Entry{Name: filename, IsDir: false, Mode: 0600, ModTime: now})
 	}
 
 	return entries, nil
@@ -952,6 +956,8 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 }
 
 // statColumn returns metadata for a column file.
+// Resolves the filename (which may have an extension like "name.txt") to the
+// actual column name, and returns the Entry with the filename as provided.
 func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -963,6 +969,25 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 
 	now := time.Now()
 
+	// Get columns to resolve the filename
+	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to get columns",
+			Cause:   err,
+		}
+	}
+
+	// Resolve filename to actual column name (handles extensions)
+	actualColumn, found := o.resolveColumn(columns, parsed.Column)
+	if !found {
+		return nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("column not found: %s", parsed.Column),
+		}
+	}
+
 	// Get primary key
 	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
@@ -973,8 +998,8 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		}
 	}
 
-	// Get column value
-	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey, parsed.Column)
+	// Get column value using the resolved column name
+	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey, actualColumn)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrNotExist,
@@ -994,6 +1019,7 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 	}
 	size := int64(len(str) + 1) // +1 for trailing newline
 
+	// Return Entry with the filename as provided (may include extension)
 	return &Entry{
 		Name:    parsed.Column,
 		IsDir:   false,
@@ -1001,6 +1027,29 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		Mode:    0600,
 		ModTime: now,
 	}, nil
+}
+
+// resolveColumn finds a column by filename, handling extensions.
+// Returns the actual column name and whether it was found.
+//
+// When NoFilenameExtensions is enabled, only exact matches are allowed.
+// Otherwise, uses FindColumnByFilename which supports both exact matches
+// and extension-stripped matches (e.g., "name.txt" → "name" for TEXT columns).
+func (o *Operations) resolveColumn(columns []db.Column, filename string) (string, bool) {
+	if o.config.NoFilenameExtensions {
+		// Exact match only
+		for _, col := range columns {
+			if col.Name == filename {
+				return col.Name, true
+			}
+		}
+		return "", false
+	}
+	col, found := FindColumnByFilename(columns, filename)
+	if found {
+		return col.Name, true
+	}
+	return "", false
 }
 
 // statInfoFile returns metadata for an info file.
@@ -1323,12 +1372,33 @@ func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*File
 }
 
 // readColumnFile reads a single column value.
+// The filename may include an extension (e.g., "name.txt" for a TEXT column),
+// which is resolved to the actual column name before querying.
 func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
 			Message: "missing context for column path",
+		}
+	}
+
+	// Get columns to resolve the filename
+	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to get columns",
+			Cause:   err,
+		}
+	}
+
+	// Resolve filename to actual column name (handles extensions)
+	actualColumn, found := o.resolveColumn(columns, parsed.Column)
+	if !found {
+		return nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("column not found: %s", parsed.Column),
 		}
 	}
 
@@ -1342,8 +1412,8 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 		}
 	}
 
-	// Get column value
-	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey, parsed.Column)
+	// Get column value using the resolved column name
+	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey, actualColumn)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrNotExist,

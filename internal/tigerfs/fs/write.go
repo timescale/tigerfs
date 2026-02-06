@@ -134,6 +134,8 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 }
 
 // writeColumnFile writes a single column value.
+// The filename may include an extension (e.g., "name.txt" for a TEXT column),
+// which is resolved to the actual column name before updating.
 func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -146,6 +148,25 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 	// Check write permission
 	if fsErr := o.checkWritePermission(ctx, fsCtx.Schema, fsCtx.TableName); fsErr != nil {
 		return fsErr
+	}
+
+	// Get columns to resolve the filename
+	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to get columns",
+			Cause:   err,
+		}
+	}
+
+	// Resolve filename to actual column name (handles extensions)
+	actualColumn, found := o.resolveColumn(columns, parsed.Column)
+	if !found {
+		return &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("column not found: %s", parsed.Column),
+		}
 	}
 
 	// Get primary key
@@ -173,7 +194,7 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 	if !rowExists {
 		// Row doesn't exist - use staging for incremental creation
 		if o.staging != nil {
-			o.staging.SetColumn(fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, parsed.Column, value)
+			o.staging.SetColumn(fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, actualColumn, value)
 			// Try to commit if enough columns provided
 			_, commitErr := o.staging.TryCommit(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, o.db)
 			if commitErr != nil {
@@ -191,8 +212,8 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 		}
 	}
 
-	// Row exists - update column
-	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, parsed.Column, value)
+	// Row exists - update column using the resolved column name
+	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, actualColumn, value)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -476,6 +497,8 @@ func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError
 }
 
 // deleteColumn sets a column to NULL.
+// The filename may include an extension (e.g., "name.txt" for a TEXT column),
+// which is resolved to the actual column name before updating.
 func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSError {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -490,6 +513,25 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 		return fsErr
 	}
 
+	// Get columns to resolve the filename
+	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to get columns",
+			Cause:   err,
+		}
+	}
+
+	// Resolve filename to actual column name (handles extensions)
+	actualColumn, found := o.resolveColumn(columns, parsed.Column)
+	if !found {
+		return &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("column not found: %s", parsed.Column),
+		}
+	}
+
 	// Get primary key
 	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
@@ -502,8 +544,8 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 
 	pkColumn := pk.Columns[0]
 
-	// Set column to NULL (represented as empty string in UpdateColumn)
-	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, parsed.Column, "")
+	// Set column to NULL using the resolved column name
+	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, actualColumn, "")
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
