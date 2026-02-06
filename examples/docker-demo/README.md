@@ -12,12 +12,12 @@ A containerized environment to try TigerFS with PostgreSQL.
 ./demo.sh shell
 
 # Inside container:
-ls /mnt/db
-cat /mnt/db/users/1.json
+cat users/1.json
+cat products/1.json
+cat categories/.export/tsv
 
 # Or run commands directly from host
-docker compose exec tigerfs ls /mnt/db
-docker compose exec tigerfs cat /mnt/db/users/1.json
+docker compose exec tigerfs ls -l /mnt/db
 
 # Stop when done
 ./demo.sh stop

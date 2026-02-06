@@ -56,6 +56,7 @@ start_demo() {
         sleep 1
     done
     info "PostgreSQL is ready"
+    info "Connection string: $CONN_STR"
 
     # Mount TigerFS inside the container
     info "Mounting TigerFS at $MOUNTPOINT (inside container)..."
@@ -72,10 +73,10 @@ start_demo() {
     info "TigerFS mounted successfully!"
     echo ""
     echo "Enter the container to explore:"
-    echo "  docker compose exec tigerfs bash"
+    echo "  ./demo.sh shell"
     echo ""
     echo "Or run commands directly:"
-    echo "  docker compose exec tigerfs ls $MOUNTPOINT"
+    echo "  docker compose exec tigerfs ls -al $MOUNTPOINT/"
     echo "  docker compose exec tigerfs cat $MOUNTPOINT/users/1.json"
     echo ""
     echo "Stop the demo with: ./demo.sh stop"

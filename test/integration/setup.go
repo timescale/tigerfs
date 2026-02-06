@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,15 @@ type TestDBSource int
 const (
 	SourceLocal  TestDBSource = iota // Local PostgreSQL
 	SourceDocker                     // Docker container via testcontainers
+)
+
+// MountMethod indicates the filesystem mount method to use for tests
+type MountMethod string
+
+const (
+	MountMethodFUSE   MountMethod = "fuse"   // Linux FUSE (native)
+	MountMethodNFS    MountMethod = "nfs"    // macOS NFS (native)
+	MountMethodDocker MountMethod = "docker" // Docker container with Linux FUSE
 )
 
 // TestDBResult contains the connection info and cleanup function
@@ -383,20 +393,200 @@ func SetupTestDB(t *testing.T) (string, func()) {
 	return result.ConnStr, result.Cleanup
 }
 
-// isFUSEAvailable checks if FUSE is available on the system
-func isFUSEAvailable() bool {
-	// On macOS, check for osxfuse/macfuse
-	if _, err := os.Stat("/Library/Filesystems/osxfuse.fs"); err == nil {
-		return true
-	}
-	if _, err := os.Stat("/Library/Filesystems/macfuse.fs"); err == nil {
-		return true
+// GetTestDBEmpty returns a test database connection without seeding any data.
+// Use this when tests will seed their own data (e.g., command tests with demo data).
+func GetTestDBEmpty(t *testing.T) *TestDBResult {
+	t.Helper()
+
+	// Try local PostgreSQL first
+	probeLocalPostgreSQL()
+	if localPGAvailable {
+		return setupLocalTestDBEmpty(t, localPGConnStr)
 	}
 
+	t.Logf("Local PostgreSQL not available (%s), trying Docker...", localPGProbeReason)
+
+	// Fall back to Docker
+	if !isDockerAvailable() {
+		t.Skip("Neither local PostgreSQL nor Docker available, skipping test")
+		return nil
+	}
+
+	return setupDockerTestDBEmpty(t)
+}
+
+// setupLocalTestDBEmpty sets up a test schema without seeding data
+func setupLocalTestDBEmpty(t *testing.T, connStr string) *TestDBResult {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		t.Fatalf("Failed to connect to local PostgreSQL: %v", err)
+	}
+
+	// Create a unique schema for this test to avoid conflicts
+	schemaName := fmt.Sprintf("tigerfs_test_%d", time.Now().UnixNano())
+
+	_, err = pool.Exec(ctx, fmt.Sprintf("CREATE SCHEMA %s", schemaName))
+	if err != nil {
+		pool.Close()
+		t.Fatalf("Failed to create test schema: %v", err)
+	}
+
+	// Set search path to our test schema
+	schemaConnStr := connStr + fmt.Sprintf("&search_path=%s", schemaName)
+
+	pool.Close()
+
+	t.Logf("Using local PostgreSQL with schema %s (empty)", schemaName)
+
+	cleanup := func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
+		cleanupPool, err := pgxpool.New(cleanupCtx, connStr)
+		if err != nil {
+			t.Logf("Failed to connect for cleanup: %v", err)
+			return
+		}
+		defer cleanupPool.Close()
+
+		_, err = cleanupPool.Exec(cleanupCtx, fmt.Sprintf("DROP SCHEMA %s CASCADE", schemaName))
+		if err != nil {
+			t.Logf("Failed to drop test schema: %v", err)
+		}
+	}
+
+	return &TestDBResult{
+		ConnStr: schemaConnStr,
+		Source:  SourceLocal,
+		Cleanup: cleanup,
+	}
+}
+
+// setupDockerTestDBEmpty starts a PostgreSQL container without seeding data
+func setupDockerTestDBEmpty(t *testing.T) *TestDBResult {
+	t.Helper()
+
+	ctx := context.Background()
+
+	// Start PostgreSQL container
+	pgContainer, err := postgres.Run(ctx,
+		"postgres:17-alpine",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("testuser"),
+		postgres.WithPassword("testpass"),
+		postgres.BasicWaitStrategies(),
+		postgres.WithSQLDriver("pgx"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to start PostgreSQL container: %v", err)
+	}
+
+	// Get connection string
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		_ = pgContainer.Terminate(ctx)
+		t.Fatalf("Failed to get connection string: %v", err)
+	}
+
+	// Wait for PostgreSQL to be ready
+	time.Sleep(2 * time.Second)
+
+	// No seeding - empty database
+
+	t.Log("Using Docker PostgreSQL container (empty)")
+
+	cleanup := func() {
+		if err := pgContainer.Terminate(ctx); err != nil {
+			t.Logf("Failed to terminate PostgreSQL container: %v", err)
+		}
+	}
+
+	return &TestDBResult{
+		ConnStr: connStr,
+		Source:  SourceDocker,
+		Cleanup: cleanup,
+	}
+}
+
+// isFUSEAvailable checks if FUSE is available on the system.
+// On macOS, FUSE (macFUSE) is no longer supported; use NFS instead.
+// On Linux, checks for /dev/fuse.
+func isFUSEAvailable() bool {
 	// On Linux, check for /dev/fuse
 	if _, err := os.Stat("/dev/fuse"); err == nil {
 		return true
 	}
 
+	// macFUSE is no longer available/maintained on macOS
+	// Tests should use NFS on macOS instead
 	return false
+}
+
+// isNFSAvailable checks if NFS mounting is available on the system.
+// On macOS, NFS is built into the OS and always available.
+// On Linux, NFS is not used for integration tests (use FUSE instead).
+func isNFSAvailable() bool {
+	// Check if we're on macOS by looking for mount_nfs
+	if _, err := os.Stat("/sbin/mount_nfs"); err == nil {
+		return true
+	}
+
+	return false
+}
+
+// isMountAvailable checks if any filesystem mount method is available.
+// Returns true if FUSE (Linux) or NFS (macOS) is available.
+func isMountAvailable() (available bool, method string) {
+	if isFUSEAvailable() {
+		return true, "fuse"
+	}
+	if isNFSAvailable() {
+		return true, "nfs"
+	}
+	return false, ""
+}
+
+// getMountMethod determines the mount method to use based on platform and environment.
+//
+// On Linux: Always uses FUSE (native).
+// On macOS: Uses TEST_MOUNT_METHOD environment variable:
+//   - "nfs" (default): Use native macOS NFS
+//   - "docker": Run tests in a Docker container with Linux FUSE
+//
+// Returns the mount method and a reason string if skipping.
+func getMountMethod(t *testing.T) (MountMethod, string) {
+	t.Helper()
+
+	if runtime.GOOS == "linux" {
+		if !isFUSEAvailable() {
+			return "", "FUSE not available on Linux (/dev/fuse not found)"
+		}
+		return MountMethodFUSE, ""
+	}
+
+	if runtime.GOOS == "darwin" {
+		method := os.Getenv("TEST_MOUNT_METHOD")
+		switch method {
+		case "", "nfs":
+			// Default to NFS on macOS
+			if !isNFSAvailable() {
+				return "", "NFS not available on macOS (/sbin/mount_nfs not found)"
+			}
+			return MountMethodNFS, ""
+		case "docker":
+			if !isDockerAvailable() {
+				return "", "Docker not available for TEST_MOUNT_METHOD=docker"
+			}
+			return MountMethodDocker, ""
+		default:
+			return "", fmt.Sprintf("invalid TEST_MOUNT_METHOD=%q (use 'nfs' or 'docker')", method)
+		}
+	}
+
+	return "", fmt.Sprintf("unsupported platform: %s", runtime.GOOS)
 }
