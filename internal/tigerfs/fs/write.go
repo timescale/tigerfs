@@ -322,15 +322,13 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 		}
 	}
 
+	// Ensure session exists (auto-create for table-level DDL)
+	if err := o.ensureDDLSession(parsed, op); err != nil {
+		return err
+	}
+
 	// Find session by name
 	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
-	if sessionID == "" {
-		return &FSError{
-			Code:    ErrNotExist,
-			Message: fmt.Sprintf("no DDL session found for %s", parsed.DDLName),
-			Hint:    fmt.Sprintf("create session first with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
-		}
-	}
 
 	// Handle the specific file
 	switch parsed.DDLFile {

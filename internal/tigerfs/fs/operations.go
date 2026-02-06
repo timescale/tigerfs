@@ -664,18 +664,16 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 		return entries, nil
 	}
 
-	// For a specific staging directory, check if session exists first
+	// For a specific staging directory, ensure session exists
 	op, valid := ParseDDLOpType(parsed.DDLOp)
 	if !valid {
 		return nil, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
 	}
-	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
-	if sessionID == "" {
-		return nil, &FSError{
-			Code:    ErrNotExist,
-			Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
-			Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
-		}
+
+	// Auto-create session for table-level DDL (modify/delete on existing tables)
+	// This matches FUSE behavior where accessing /table/.modify/ works without explicit mkdir
+	if err := o.ensureDDLSession(parsed, op); err != nil {
+		return nil, err
 	}
 
 	// List control files for a specific staging operation
@@ -687,6 +685,51 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 		{Name: ".abort", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
 	}
 	return entries, nil
+}
+
+// ensureDDLSession ensures a DDL session exists, auto-creating for table-level DDL.
+// For table-level DDL (modify/delete on existing tables, index operations), sessions are
+// auto-created on access to match FUSE behavior. For root-level create (/.create/), explicit
+// mkdir is required since the object doesn't exist yet.
+func (o *Operations) ensureDDLSession(parsed *ParsedPath, op DDLOpType) *FSError {
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID != "" {
+		return nil // Session already exists
+	}
+
+	// Auto-create for table-level DDL where we have context (table exists)
+	// This includes: /{table}/.modify/, /{table}/.delete/, /{table}/.indexes/.create/{idx}/,
+	// /{table}/.indexes/{idx}/.delete/, /.schemas/{schema}/.delete/, /.views/.create/{name}/
+	if parsed.Context != nil || parsed.DDLObjectType == "schema" || parsed.DDLObjectType == "index" || parsed.DDLObjectType == "view" {
+		objectType := parsed.DDLObjectType
+		if objectType == "" {
+			objectType = "table"
+		}
+
+		schema := "public"
+		if objectType == "schema" {
+			schema = ""
+		} else if parsed.Context != nil && parsed.Context.Schema != "" {
+			schema = parsed.Context.Schema
+		}
+
+		_, err := o.ddl.CreateSession(op, objectType, schema, parsed.DDLName, parsed.DDLParentTable)
+		if err != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: "failed to create DDL session",
+				Cause:   err,
+			}
+		}
+		return nil
+	}
+
+	// For root-level create (/.create/name), require explicit mkdir
+	return &FSError{
+		Code:    ErrNotExist,
+		Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
+		Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
+	}
 }
 
 // Stat returns metadata for a path.
@@ -720,7 +763,18 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathSchema:
-		return &Entry{Name: parsed.Context.Schema, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+		// Verify the schema actually exists in the database
+		schemas, err := o.db.GetSchemas(ctx)
+		if err != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to list schemas", Cause: err}
+		}
+		schemaName := parsed.Context.Schema
+		for _, s := range schemas {
+			if s == schemaName {
+				return &Entry{Name: schemaName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+			}
+		}
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("schema %s not found", schemaName)}
 
 	case PathViewList:
 		return &Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
@@ -733,15 +787,34 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 				Message: "missing context for table path",
 			}
 		}
-		// Verify table exists by checking if we can get its primary key.
-		// This is necessary because table paths are parsed without database validation,
-		// and NFS clients need accurate stat responses to avoid caching nonexistent entries.
+		// Verify table or view exists. We first try GetPrimaryKey (works for tables),
+		// and if that fails, check if it's a view. This is necessary because table paths
+		// are parsed without database validation, and NFS clients need accurate stat
+		// responses to avoid caching nonexistent entries.
 		_, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 		if err != nil {
-			return nil, &FSError{
-				Code:    ErrNotExist,
-				Message: fmt.Sprintf("table not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
-				Cause:   err,
+			// Maybe it's a view - views don't have primary keys
+			views, viewErr := o.db.GetViews(ctx, fsCtx.Schema)
+			if viewErr != nil {
+				return nil, &FSError{
+					Code:    ErrNotExist,
+					Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
+					Cause:   err,
+				}
+			}
+			isView := false
+			for _, v := range views {
+				if v == fsCtx.TableName {
+					isView = true
+					break
+				}
+			}
+			if !isView {
+				return nil, &FSError{
+					Code:    ErrNotExist,
+					Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
+					Cause:   err,
+				}
 			}
 		}
 		name := fsCtx.TableName
@@ -775,6 +848,10 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return o.statInfoFile(ctx, parsed)
 
 	case PathCapability:
+		// For specific resources (e.g., /table/.indexes/idx_name), verify they exist
+		if parsed.CapabilityArg != "" && parsed.CapabilityDir == DirIndexes {
+			return o.statIndexEntry(ctx, parsed)
+		}
 		return &Entry{Name: parsed.CapabilityDir, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathExport:
@@ -787,19 +864,15 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		if parsed.DDLFile != "" {
 			return o.statDDLFile(ctx, parsed)
 		}
-		// If DDLName is set, this is a staging directory - check if session exists
+		// If DDLName is set, this is a staging directory - ensure session exists
 		if parsed.DDLName != "" {
 			op, valid := ParseDDLOpType(parsed.DDLOp)
 			if !valid {
 				return nil, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
 			}
-			sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
-			if sessionID == "" {
-				return nil, &FSError{
-					Code:    ErrNotExist,
-					Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
-					Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
-				}
+			// Auto-create session for table-level DDL (modify/delete on existing tables)
+			if err := o.ensureDDLSession(parsed, op); err != nil {
+				return nil, err
 			}
 			return &Entry{Name: parsed.DDLName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 		}
@@ -948,6 +1021,46 @@ func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Ent
 	}, nil
 }
 
+// statIndexEntry returns metadata for a specific index directory.
+// Checks if the index actually exists in the database.
+func (o *Operations) statIndexEntry(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+	fsCtx := parsed.Context
+	if fsCtx == nil {
+		return nil, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "missing context for index path",
+		}
+	}
+
+	// Query database for indexes on this table
+	indexes, err := o.db.GetIndexes(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to get indexes",
+			Cause:   err,
+		}
+	}
+
+	// Check if the specific index exists
+	indexName := parsed.CapabilityArg
+	for _, idx := range indexes {
+		if idx.Name == indexName {
+			return &Entry{
+				Name:    indexName,
+				IsDir:   true,
+				Mode:    os.ModeDir | 0755,
+				ModTime: time.Now(),
+			}, nil
+		}
+	}
+
+	return nil, &FSError{
+		Code:    ErrNotExist,
+		Message: fmt.Sprintf("index %s not found", indexName),
+	}
+}
+
 // statDDLFile returns metadata for a DDL control file.
 func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
 	// Validate operation type
@@ -975,15 +1088,12 @@ func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entr
 		}, nil
 	}
 
-	// For other files (sql, test.log), we need the session to exist
-	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
-	if sessionID == "" {
-		return nil, &FSError{
-			Code:    ErrNotExist,
-			Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName),
-			Hint:    fmt.Sprintf("create session with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
-		}
+	// For other files (sql, test.log), ensure session exists (auto-create for table-level DDL)
+	if err := o.ensureDDLSession(parsed, op); err != nil {
+		return nil, err
 	}
+
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
 
 	var mode os.FileMode
 	var size int64
@@ -1475,15 +1585,13 @@ func (o *Operations) readDDLFile(ctx context.Context, parsed *ParsedPath) (*File
 		}
 	}
 
+	// Ensure session exists (auto-create for table-level DDL)
+	if err := o.ensureDDLSession(parsed, op); err != nil {
+		return nil, err
+	}
+
 	// Find session by name
 	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
-	if sessionID == "" {
-		return nil, &FSError{
-			Code:    ErrNotExist,
-			Message: fmt.Sprintf("no DDL session found for %s", parsed.DDLName),
-			Hint:    fmt.Sprintf("create session first with: mkdir /.%s/%s", parsed.DDLOp, parsed.DDLName),
-		}
-	}
 
 	// Handle the specific file
 	switch parsed.DDLFile {
