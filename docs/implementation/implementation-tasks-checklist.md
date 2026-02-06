@@ -200,8 +200,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 9.12 | Implement Reference Counting and Sync | ~7400 |
 | ✅ | 9.13 | Large File Streaming and Memory Limits | ~7470 |
 | ✅ | 9.14 | Cache Reaper and Graceful Shutdown | ~7540 |
-| ⬜ | 9.15 | Cleanup, Refactoring, and Docker-on-macOS Integration Tests | ~7610 |
-| ⬜ | 9.16 | Final Testing and v0.2.0 Release | ~7710 |
+| ⬜ | 9.15 | Docker-on-macOS Integration Tests | ~7749 |
+| ⬜ | 9.16 | Cleanup and Refactoring | ~7800 |
+| ⬜ | 9.17 | Final Testing and v0.2.0 Release | ~7860 |
 
 ---
 
@@ -229,6 +230,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 |   6.2: Tasks | 0 | 6 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
-| Phase 9: Shared Core Library | 14 | 16 | 88% |
+| Phase 9: Shared Core Library | 14 | 17 | 82% |
 | Phase 10: Performance | 0 | 3 | 0% |
-| **Total** | **84** | **109** | **77%** |
+| **Total** | **84** | **110** | **76%** |

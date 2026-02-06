@@ -7746,7 +7746,44 @@ go test ./test/integration/... -run TestNFS
 
 ---
 
-### Task 9.15: Cleanup and Refactoring
+### Task 9.15: Docker-on-macOS Integration Tests
+
+**Objective:** Enable running FUSE integration tests on macOS via Docker
+
+**Background:**
+Currently, integration tests use NFS on macOS and FUSE on Linux. This task adds a `TEST_MOUNT_METHOD=docker` option on macOS to run tests using Linux FUSE in Docker, enabling full FUSE test coverage on macOS development machines.
+
+**Steps:**
+1. Implement Docker-on-macOS integration test support:
+   - Add `TEST_MOUNT_METHOD=docker` option on macOS to run tests using Linux FUSE in Docker
+   - Requires refactoring FUSE layer to use an OS abstraction interface
+   - DockerFS wrapper executes file operations via `docker exec` commands
+   - Build TigerFS for Linux, run in privileged container with FUSE device
+
+2. Run all tests to verify no regressions
+
+**Files to Modify:**
+- Test infrastructure files for Docker mount method
+- Dockerfile or Docker Compose for FUSE-in-container setup
+- OS abstraction interface for FUSE layer
+
+**Verification:**
+```bash
+# Docker-based tests on macOS
+TEST_MOUNT_METHOD=docker go test ./test/integration/... -v
+
+# All existing tests still pass
+go test ./...
+```
+
+**Completion Criteria:**
+- `TEST_MOUNT_METHOD=docker` runs integration tests on macOS using Linux FUSE in Docker
+- All existing tests continue to pass
+- No behavior changes to production code
+
+---
+
+### Task 9.16: Cleanup and Refactoring
 
 **Objective:** Remove backwards compatibility shims and refactor FUSE to use fs.FSContext directly
 
@@ -7776,13 +7813,6 @@ Task 9.1 introduced `PipelineContext` as a type alias to `fs.FSContext` for back
 
 6. Update any documentation referencing `PipelineContext`
 
-7. Implement Docker-on-macOS integration test support:
-   - Currently, integration tests use NFS on macOS and FUSE on Linux
-   - Add `TEST_MOUNT_METHOD=docker` option on macOS to run tests using Linux FUSE in Docker
-   - Requires refactoring FUSE layer to use an OS abstraction interface
-   - DockerFS wrapper executes file operations via `docker exec` commands
-   - Build TigerFS for Linux, run in privileged container with FUSE device
-
 **Files to Modify:**
 - `internal/tigerfs/fuse/pipeline.go` - Remove alias
 - `internal/tigerfs/fuse/constants.go` - Simplify re-exports
@@ -7810,11 +7840,10 @@ go test -race ./...
 - Constants imported from `fs` package where appropriate
 - All tests pass
 - No behavior changes
-- `TEST_MOUNT_METHOD=docker` runs integration tests on macOS using Linux FUSE in Docker
 
 ---
 
-### Task 9.16: Final Testing and v0.2.0 Release
+### Task 9.17: Final Testing and v0.2.0 Release
 
 **Objective:** Comprehensive testing of shared core and v0.2.0 release
 
