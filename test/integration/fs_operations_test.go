@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,11 +106,6 @@ func TestFSOperations_ReadDir_Table(t *testing.T) {
 	}
 	defer result.Cleanup()
 
-	// Skip in Docker mode - path handling differs
-	if result.Source == SourceDocker {
-		t.Skip("Skipping in Docker mode - path handling requires schema prefix")
-	}
-
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
@@ -119,19 +115,28 @@ func TestFSOperations_ReadDir_Table(t *testing.T) {
 	entries, fsErr := ops.ReadDir(ctx, tablePath)
 	require.Nil(t, fsErr, "ReadDir should succeed for table")
 
+	// Log all entries for debugging
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	t.Logf("Table directory contains: %v", names)
+
 	var hasInfo, hasRows bool
 	for _, e := range entries {
 		if e.Name == ".info" {
 			hasInfo = true
 			assert.True(t, e.IsDir, ".info should be a directory")
 		}
-		if strings.HasSuffix(e.Name, ".json") || strings.HasSuffix(e.Name, ".csv") || strings.HasSuffix(e.Name, ".tsv") {
+		// Rows are listed by primary key value (e.g., "1", "2", "3")
+		// They can be accessed with extensions like 1.json, 1.csv, 1.tsv
+		if _, err := strconv.Atoi(e.Name); err == nil {
 			hasRows = true
 		}
 	}
 
 	assert.True(t, hasInfo, "Table should have .info directory")
-	assert.True(t, hasRows, "Table should have row files")
+	assert.True(t, hasRows, "Table should have row entries")
 }
 
 // TestFSOperations_ReadDir_Info tests reading the .info metadata directory.
@@ -141,11 +146,6 @@ func TestFSOperations_ReadDir_Info(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
-
-	// Skip in Docker mode - .info paths require schema prefix
-	if result.Source == SourceDocker {
-		t.Skip("Skipping in Docker mode - .info paths require schema prefix")
-	}
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -228,19 +228,12 @@ func TestFSOperations_ReadFile_RowJSON(t *testing.T) {
 }
 
 // TestFSOperations_ReadFile_InfoCount tests reading the count file.
-// Note: This test is skipped in Docker mode as .info file paths require
-// schema-qualified table paths. Works correctly with FUSE mount.
 func TestFSOperations_ReadFile_InfoCount(t *testing.T) {
 	result := GetTestDB(t)
 	if result == nil {
 		return
 	}
 	defer result.Cleanup()
-
-	// Skip in Docker mode where tables appear at root without schema
-	if result.Source == SourceDocker {
-		t.Skip("Skipping .info test in Docker mode - requires schema-qualified path")
-	}
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -387,11 +380,6 @@ func TestFSOperations_WriteFile_PipelineColumn(t *testing.T) {
 	}
 	defer result.Cleanup()
 
-	// Skip in Docker mode - pipeline paths need schema-qualified tables
-	if result.Source == SourceDocker {
-		t.Skip("Skipping pipeline test in Docker mode - requires schema-qualified path")
-	}
-
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
@@ -423,11 +411,6 @@ func TestFSOperations_Import_Sync(t *testing.T) {
 	}
 	defer result.Cleanup()
 
-	// Skip in Docker mode - import paths need specific setup
-	if result.Source == SourceDocker {
-		t.Skip("Skipping import test in Docker mode")
-	}
-
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
@@ -457,11 +440,6 @@ func TestFSOperations_Import_Append(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
-
-	// Skip in Docker mode - import paths need specific setup
-	if result.Source == SourceDocker {
-		t.Skip("Skipping import test in Docker mode")
-	}
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -529,11 +507,6 @@ func TestFSOperations_Import_Overwrite(t *testing.T) {
 	}
 	defer result.Cleanup()
 
-	// Skip in Docker mode - import paths need specific setup
-	if result.Source == SourceDocker {
-		t.Skip("Skipping import test in Docker mode")
-	}
-
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
@@ -576,11 +549,6 @@ func TestFSOperations_Export_CSV(t *testing.T) {
 	}
 	defer result.Cleanup()
 
-	// Skip in Docker mode - export paths need specific setup
-	if result.Source == SourceDocker {
-		t.Skip("Skipping export test in Docker mode")
-	}
-
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
@@ -607,11 +575,6 @@ func TestFSOperations_Export_WithHeaders(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
-
-	// Skip in Docker mode - export paths need specific setup
-	if result.Source == SourceDocker {
-		t.Skip("Skipping export test in Docker mode")
-	}
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -644,11 +607,6 @@ func TestFSOperations_Export_JSON(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
-
-	// Skip in Docker mode - export paths need specific setup
-	if result.Source == SourceDocker {
-		t.Skip("Skipping export test in Docker mode")
-	}
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()

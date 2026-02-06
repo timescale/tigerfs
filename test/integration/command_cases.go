@@ -568,13 +568,151 @@ var WriteTestCases = []CommandTestCase{
 }
 
 // DDLTestCases contains DDL test cases (create/alter/drop tables/indexes).
-// Currently skipped until NFS DDL writes are fixed.
 var DDLTestCases = []CommandTestCase{
+	// Test .create directory exists at root
 	{
-		Name:     "DDL_Placeholder",
+		Name:     "DDL_CreateDirExists",
+		Category: "ddl",
+		Input:    CommandInput{Op: "ls", Path: ".create"},
+		Expected: ExpectedOutput{
+			Contains: []string{}, // Empty is fine, just verify the directory exists
+		},
+	},
+	// Test creating a table staging directory
+	{
+		Name:     "DDL_MkdirCreateTable",
+		Category: "ddl",
+		Input:    CommandInput{Op: "mkdir", Path: ".create/ddl_test_table"},
+		Expected: ExpectedOutput{},
+	},
+	// Test staging directory has control files
+	{
+		Name:     "DDL_CreateHasControlFiles",
+		Category: "ddl",
+		Input:    CommandInput{Op: "ls", Path: ".create/ddl_test_table"},
+		Expected: ExpectedOutput{
+			Contains: []string{"sql", ".test", ".commit", ".abort"},
+		},
+	},
+	// Test reading sql template
+	{
+		Name:     "DDL_ReadSqlTemplate",
+		Category: "ddl",
+		Input:    CommandInput{Op: "cat", Path: ".create/ddl_test_table/sql"},
+		Expected: ExpectedOutput{
+			Contains: []string{"CREATE TABLE", "ddl_test_table"},
+		},
+	},
+	// Test writing custom SQL
+	{
+		Name:     "DDL_WriteSql",
+		Category: "ddl",
+		Input:    CommandInput{Op: "echo", Path: ".create/ddl_test_table/sql", Content: "CREATE TABLE ddl_test_table (id SERIAL PRIMARY KEY, name TEXT);"},
+		Expected: ExpectedOutput{},
+	},
+	// Test .test validation (touch triggers, then read test.log)
+	{
+		Name:     "DDL_TestValidation",
+		Category: "ddl",
+		Input:    CommandInput{Op: "touch", Path: ".create/ddl_test_table/.test"},
+		Expected: ExpectedOutput{},
+	},
+	// Read test.log to verify validation result
+	{
+		Name:     "DDL_TestValidationResult",
+		Category: "ddl",
+		Input:    CommandInput{Op: "cat", Path: ".create/ddl_test_table/test.log"},
+		Expected: ExpectedOutput{
+			Contains: []string{"OK"},
+		},
+	},
+	// Test .commit to execute DDL (touch triggers)
+	{
+		Name:     "DDL_Commit",
+		Category: "ddl",
+		Input:    CommandInput{Op: "touch", Path: ".create/ddl_test_table/.commit"},
+		Expected: ExpectedOutput{},
+	},
+	// Verify table was created
+	{
+		Name:     "DDL_VerifyTableCreated",
+		Category: "ddl",
+		Input:    CommandInput{Op: "ls", Path: "ddl_test_table"},
+		Expected: ExpectedOutput{
+			Contains: []string{".info"},
+		},
+	},
+	// Test table modify - auto-creates session
+	{
+		Name:     "DDL_ModifyHasControlFiles",
+		Category: "ddl",
+		Input:    CommandInput{Op: "ls", Path: "ddl_test_table/.modify"},
+		Expected: ExpectedOutput{
+			Contains: []string{"sql", ".test", ".commit", ".abort"},
+		},
+	},
+	// Test table delete - auto-creates session
+	{
+		Name:     "DDL_DeleteHasControlFiles",
+		Category: "ddl",
+		Input:    CommandInput{Op: "ls", Path: "ddl_test_table/.delete"},
+		Expected: ExpectedOutput{
+			Contains: []string{"sql", ".test", ".commit", ".abort"},
+		},
+	},
+	// Test .abort clears session (touch triggers)
+	{
+		Name:     "DDL_AbortDelete",
+		Category: "ddl",
+		Input:    CommandInput{Op: "touch", Path: "ddl_test_table/.delete/.abort"},
+		Expected: ExpectedOutput{},
+	},
+	// Re-open delete session - read sql to verify template regenerated
+	{
+		Name:     "DDL_DeleteSqlAfterAbort",
+		Category: "ddl",
+		Input:    CommandInput{Op: "cat", Path: "ddl_test_table/.delete/sql"},
+		Expected: ExpectedOutput{
+			Contains: []string{"DROP TABLE"},
+		},
+	},
+	// Write the DROP TABLE SQL (template is read-only, need to write actual DDL)
+	{
+		Name:     "DDL_WriteDeleteSql",
+		Category: "ddl",
+		Input:    CommandInput{Op: "echo", Path: "ddl_test_table/.delete/sql", Content: "DROP TABLE ddl_test_table;"},
+		Expected: ExpectedOutput{},
+	},
+	// Test delete validation before commit
+	{
+		Name:     "DDL_DeleteTestValidation",
+		Category: "ddl",
+		Input:    CommandInput{Op: "touch", Path: "ddl_test_table/.delete/.test"},
+		Expected: ExpectedOutput{},
+	},
+	// Check test.log for delete validation
+	{
+		Name:     "DDL_DeleteTestResult",
+		Category: "ddl",
+		Input:    CommandInput{Op: "cat", Path: "ddl_test_table/.delete/test.log"},
+		Expected: ExpectedOutput{
+			Contains: []string{"OK"},
+		},
+	},
+	// Actually delete the table
+	{
+		Name:     "DDL_DeleteTable",
+		Category: "ddl",
+		Input:    CommandInput{Op: "touch", Path: "ddl_test_table/.delete/.commit"},
+		Expected: ExpectedOutput{},
+	},
+	// Verify table was deleted (ls should fail or not contain the table)
+	{
+		Name:     "DDL_VerifyTableDeleted",
 		Category: "ddl",
 		Input:    CommandInput{Op: "ls", Path: ""},
-		Expected: ExpectedOutput{},
-		Skip:     "DDL tests not yet implemented - NFS DDL writes need fixing",
+		Expected: ExpectedOutput{
+			NotContains: []string{"ddl_test_table"},
+		},
 	},
 }
