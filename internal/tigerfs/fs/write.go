@@ -724,8 +724,18 @@ func (o *Operations) parseWriteDataNoHeaders(ctx context.Context, schema, table 
 
 // mkdirDDL creates a DDL staging session.
 //
-// This is triggered by mkdir /.create/name, /.modify/name, or /.delete/name.
-// Creates a new DDL staging session for the named object.
+// Handles DDL paths including:
+//   - /.create/<name>/       - create table/view (root level)
+//   - /<table>/.modify/      - modify table
+//   - /<table>/.delete/      - delete table
+//   - /.schemas/.create/<name>/ - create schema
+//   - /.schemas/<name>/.delete/ - delete schema
+//   - /.views/.create/<name>/   - create view
+//   - /<table>/.indexes/.create/<name>/ - create index
+//   - /<table>/.indexes/<name>/.delete/ - delete index
+//
+// The parsed path contains DDLObjectType, DDLParentTable, and Context.Schema
+// which determine the parameters passed to CreateSession.
 func (o *Operations) mkdirDDL(ctx context.Context, parsed *ParsedPath) *FSError {
 	// Validate DDLName is not empty
 	if parsed.DDLName == "" {
@@ -755,10 +765,27 @@ func (o *Operations) mkdirDDL(ctx context.Context, parsed *ParsedPath) *FSError 
 		}
 	}
 
-	// Create new session
-	// Default object type is "table"; for indexes, the FUSE layer parses additional
-	// context from the path (e.g., /table/.indexes/.create/idx_name)
-	_, err := o.ddl.CreateSession(op, "table", "public", parsed.DDLName, "")
+	// Determine object type - default to "table" if not specified
+	// TODO: For view operations (delete/modify), the path parser can't distinguish
+	// views from tables without a DB call. This is handled at commit time when the
+	// actual DDL is executed. If we want to validate earlier, we'd need to query
+	// pg_class to check relkind, but that adds latency to every mkdir.
+	objectType := parsed.DDLObjectType
+	if objectType == "" {
+		objectType = "table"
+	}
+
+	// Determine schema from context, default to "public"
+	// Schema DDL operations don't use a schema parameter
+	schema := "public"
+	if objectType == "schema" {
+		schema = ""
+	} else if parsed.Context != nil && parsed.Context.Schema != "" {
+		schema = parsed.Context.Schema
+	}
+
+	// Create new session with parsed fields
+	_, err := o.ddl.CreateSession(op, objectType, schema, parsed.DDLName, parsed.DDLParentTable)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
