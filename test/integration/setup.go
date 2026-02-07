@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
@@ -56,6 +57,7 @@ func probeLocalPostgreSQL() {
 		if connStr == "" {
 			localPGAvailable = false
 			localPGProbeReason = "no connection string could be built"
+			fmt.Fprintf(os.Stderr, "Local PG probe: not available (%s)\n", localPGProbeReason)
 			return
 		}
 
@@ -66,6 +68,7 @@ func probeLocalPostgreSQL() {
 		if err != nil {
 			localPGAvailable = false
 			localPGProbeReason = fmt.Sprintf("connection failed: %v", err)
+			fmt.Fprintf(os.Stderr, "Local PG probe: not available (%s)\n", localPGProbeReason)
 			return
 		}
 		defer pool.Close()
@@ -73,16 +76,23 @@ func probeLocalPostgreSQL() {
 		if err := pool.Ping(ctx); err != nil {
 			localPGAvailable = false
 			localPGProbeReason = fmt.Sprintf("ping failed: %v", err)
+			fmt.Fprintf(os.Stderr, "Local PG probe: not available (%s)\n", localPGProbeReason)
 			return
 		}
 
 		localPGAvailable = true
 		localPGConnStr = connStr
 		localPGProbeReason = ""
+		fmt.Fprintf(os.Stderr, "Local PG probe: available (using %s)\n", connStr)
 	})
 }
 
-// buildLocalConnStr builds a connection string from environment variables
+// buildLocalConnStr builds a connection string from environment variables.
+//
+// When no PGHOST or PGPASSWORD is set, it checks for a PostgreSQL Unix socket
+// at well-known paths (/tmp, /var/run/postgresql) and uses that for the connection.
+// This matches psql's default behavior and avoids SASL auth failures on TCP
+// when local PostgreSQL is configured with trust auth on Unix sockets.
 func buildLocalConnStr() string {
 	// Check for explicit test connection string
 	if connStr := os.Getenv("TEST_DATABASE_URL"); connStr != "" {
@@ -91,10 +101,6 @@ func buildLocalConnStr() string {
 
 	// Build from PG environment variables
 	host := os.Getenv("PGHOST")
-	if host == "" {
-		host = "localhost"
-	}
-
 	port := os.Getenv("PGPORT")
 	if port == "" {
 		port = "5432"
@@ -111,6 +117,25 @@ func buildLocalConnStr() string {
 	}
 
 	password := os.Getenv("PGPASSWORD")
+
+	// If no explicit host or password, try Unix socket first.
+	// pgx connects via Unix socket when host is a directory path (starts with /).
+	if host == "" && password == "" {
+		socketDirs := []string{"/tmp", "/var/run/postgresql"}
+		for _, dir := range socketDirs {
+			socketPath := filepath.Join(dir, fmt.Sprintf(".s.PGSQL.%s", port))
+			if _, err := os.Stat(socketPath); err == nil {
+				host = dir
+				break
+			}
+		}
+		if host == "" {
+			host = "localhost" // fallback to TCP
+		}
+	} else if host == "" {
+		host = "localhost"
+	}
+
 	if password != "" {
 		return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, database)
 	}
