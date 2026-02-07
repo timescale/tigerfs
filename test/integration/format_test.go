@@ -73,9 +73,9 @@ func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint stri
 		return nil
 	}
 
-	// Docker mount method not yet implemented
+	// Docker mount method runs inside a container, not from the host
 	if method == MountMethodDocker {
-		t.Skip("TEST_MOUNT_METHOD=docker not yet implemented")
+		t.Skip("Docker FUSE tests run inside a container, not from the host. Use: ./scripts/test-docker.sh")
 		return nil
 	}
 
