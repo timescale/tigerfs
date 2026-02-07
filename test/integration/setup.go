@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // TestDBSource indicates where the test database is running
@@ -43,6 +42,11 @@ var (
 	localPGAvailable   bool
 	localPGConnStr     string
 	localPGProbeReason string
+
+	// Shared PostgreSQL container for all integration tests.
+	// Started once by TestMain (in main_test.go) when local PG is not available.
+	sharedContainerConnStr string
+	sharedContainerCleanup func()
 )
 
 // probeLocalPostgreSQL checks if local PostgreSQL is available (one-time check)
@@ -129,26 +133,33 @@ func isDockerAvailable() bool {
 	return false
 }
 
-// GetTestDB returns a test database connection, trying local first then Docker
-// This is the primary function all integration tests should use
-func GetTestDB(t *testing.T) *TestDBResult {
+// getBaseConnStr returns the base connection string for test database setup.
+// Prefers local PostgreSQL, falls back to shared Docker container (started by TestMain).
+func getBaseConnStr(t *testing.T) string {
 	t.Helper()
 
-	// Try local PostgreSQL first
 	probeLocalPostgreSQL()
 	if localPGAvailable {
-		return setupLocalTestDB(t, localPGConnStr)
+		return localPGConnStr
 	}
 
-	t.Logf("Local PostgreSQL not available (%s), trying Docker...", localPGProbeReason)
+	if sharedContainerConnStr != "" {
+		return sharedContainerConnStr
+	}
 
-	// Fall back to Docker
-	if !isDockerAvailable() {
-		t.Skip("Neither local PostgreSQL nor Docker available, skipping test")
+	t.Skip("Neither local PostgreSQL nor Docker available, skipping test")
+	return ""
+}
+
+// GetTestDB returns a test database connection, trying local first then Docker.
+// This is the primary function all integration tests should use.
+func GetTestDB(t *testing.T) *TestDBResult {
+	t.Helper()
+	connStr := getBaseConnStr(t)
+	if connStr == "" {
 		return nil
 	}
-
-	return setupDockerTestDB(t)
+	return setupLocalTestDB(t, connStr)
 }
 
 // setupLocalTestDB sets up test tables in local PostgreSQL
@@ -206,56 +217,6 @@ func setupLocalTestDB(t *testing.T, connStr string) *TestDBResult {
 	return &TestDBResult{
 		ConnStr: schemaConnStr,
 		Source:  SourceLocal,
-		Cleanup: cleanup,
-	}
-}
-
-// setupDockerTestDB starts a PostgreSQL container and seeds test data
-func setupDockerTestDB(t *testing.T) *TestDBResult {
-	t.Helper()
-
-	ctx := context.Background()
-
-	// Start PostgreSQL container
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		postgres.BasicWaitStrategies(),
-		postgres.WithSQLDriver("pgx"),
-	)
-	if err != nil {
-		t.Fatalf("Failed to start PostgreSQL container: %v", err)
-	}
-
-	// Get connection string
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		_ = pgContainer.Terminate(ctx)
-		t.Fatalf("Failed to get connection string: %v", err)
-	}
-
-	// Wait for PostgreSQL to be ready
-	time.Sleep(2 * time.Second)
-
-	// Seed test data
-	if err := seedTestData(ctx, connStr); err != nil {
-		_ = pgContainer.Terminate(ctx)
-		t.Fatalf("Failed to seed test data: %v", err)
-	}
-
-	t.Log("Using Docker PostgreSQL container")
-
-	cleanup := func() {
-		if err := pgContainer.Terminate(ctx); err != nil {
-			t.Logf("Failed to terminate PostgreSQL container: %v", err)
-		}
-	}
-
-	return &TestDBResult{
-		ConnStr: connStr,
-		Source:  SourceDocker,
 		Cleanup: cleanup,
 	}
 }
@@ -321,67 +282,6 @@ func seedTestDataInSchema(ctx context.Context, connStr, schemaName string) error
 	return nil
 }
 
-// seedTestData creates test tables and inserts test data (for Docker - uses public schema)
-func seedTestData(ctx context.Context, connStr string) error {
-	pool, err := pgxpool.New(ctx, connStr)
-	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
-	}
-	defer pool.Close()
-
-	// Create users table
-	_, err = pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS users (
-			id serial PRIMARY KEY,
-			name text NOT NULL,
-			email text NOT NULL,
-			age int,
-			active boolean DEFAULT true,
-			created_at timestamp DEFAULT NOW()
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to create users table: %w", err)
-	}
-
-	// Insert test users
-	_, err = pool.Exec(ctx, `
-		INSERT INTO users (name, email, age, active) VALUES
-		('Alice', 'alice@example.com', 30, true),
-		('Bob', 'bob@example.com', 25, true),
-		('Charlie', 'charlie@example.com', 35, false)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to insert test users: %w", err)
-	}
-
-	// Create products table
-	_, err = pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS products (
-			id serial PRIMARY KEY,
-			name text NOT NULL,
-			price numeric(10,2) NOT NULL,
-			in_stock boolean DEFAULT true
-		)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to create products table: %w", err)
-	}
-
-	// Insert test products
-	_, err = pool.Exec(ctx, `
-		INSERT INTO products (name, price, in_stock) VALUES
-		('Widget', 19.99, true),
-		('Gadget', 29.99, true),
-		('Doohickey', 39.99, false)
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to insert test products: %w", err)
-	}
-
-	return nil
-}
-
 // SetupTestDB is kept for backward compatibility - wraps GetTestDB
 // Deprecated: Use GetTestDB instead
 func SetupTestDB(t *testing.T) (string, func()) {
@@ -397,22 +297,11 @@ func SetupTestDB(t *testing.T) (string, func()) {
 // Use this when tests will seed their own data (e.g., command tests with demo data).
 func GetTestDBEmpty(t *testing.T) *TestDBResult {
 	t.Helper()
-
-	// Try local PostgreSQL first
-	probeLocalPostgreSQL()
-	if localPGAvailable {
-		return setupLocalTestDBEmpty(t, localPGConnStr)
-	}
-
-	t.Logf("Local PostgreSQL not available (%s), trying Docker...", localPGProbeReason)
-
-	// Fall back to Docker
-	if !isDockerAvailable() {
-		t.Skip("Neither local PostgreSQL nor Docker available, skipping test")
+	connStr := getBaseConnStr(t)
+	if connStr == "" {
 		return nil
 	}
-
-	return setupDockerTestDBEmpty(t)
+	return setupLocalTestDBEmpty(t, connStr)
 }
 
 // setupLocalTestDBEmpty sets up a test schema without seeding data
@@ -463,52 +352,6 @@ func setupLocalTestDBEmpty(t *testing.T, connStr string) *TestDBResult {
 	return &TestDBResult{
 		ConnStr: schemaConnStr,
 		Source:  SourceLocal,
-		Cleanup: cleanup,
-	}
-}
-
-// setupDockerTestDBEmpty starts a PostgreSQL container without seeding data
-func setupDockerTestDBEmpty(t *testing.T) *TestDBResult {
-	t.Helper()
-
-	ctx := context.Background()
-
-	// Start PostgreSQL container
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:17-alpine",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("testuser"),
-		postgres.WithPassword("testpass"),
-		postgres.BasicWaitStrategies(),
-		postgres.WithSQLDriver("pgx"),
-	)
-	if err != nil {
-		t.Fatalf("Failed to start PostgreSQL container: %v", err)
-	}
-
-	// Get connection string
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		_ = pgContainer.Terminate(ctx)
-		t.Fatalf("Failed to get connection string: %v", err)
-	}
-
-	// Wait for PostgreSQL to be ready
-	time.Sleep(2 * time.Second)
-
-	// No seeding - empty database
-
-	t.Log("Using Docker PostgreSQL container (empty)")
-
-	cleanup := func() {
-		if err := pgContainer.Terminate(ctx); err != nil {
-			t.Logf("Failed to terminate PostgreSQL container: %v", err)
-		}
-	}
-
-	return &TestDBResult{
-		ConnStr: connStr,
-		Source:  SourceDocker,
 		Cleanup: cleanup,
 	}
 }
