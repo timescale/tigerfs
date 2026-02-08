@@ -14,11 +14,11 @@ import (
 // =============================================================================
 // Category 11: Edge Cases (Integration Tests)
 //
-// These tests verify error handling and boundary conditions for NFS write
+// These tests verify error handling and boundary conditions for write
 // operations. Each test documents the specific edge case it covers.
 // =============================================================================
 
-// TestNFS_EdgeCase_WriteNonExistentRow verifies that writing to a non-existent
+// TestWrite_EdgeCase_NonExistentRow verifies that writing to a non-existent
 // row returns an appropriate error (or creates the row, depending on operation).
 //
 // EDGE CASE: Write to non-existent row
@@ -28,12 +28,12 @@ import (
 //
 // Expected: Writing to /table/999/col.txt for non-existent row 999 should
 // return ENOENT (file not found), since the row doesn't exist.
-func TestNFS_EdgeCase_WriteNonExistentRow(t *testing.T) {
+func TestWrite_EdgeCase_NonExistentRow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	// Ensure row 999 doesn't exist
@@ -63,19 +63,19 @@ func TestNFS_EdgeCase_WriteNonExistentRow(t *testing.T) {
 	}
 }
 
-// TestNFS_EdgeCase_WriteNonExistentTable verifies that writing to a
+// TestWrite_EdgeCase_NonExistentTable verifies that writing to a
 // non-existent table returns an appropriate error.
 //
 // EDGE CASE: Write to non-existent table
 //
 // When writing to a table that doesn't exist, the operation should fail
 // with ENOENT rather than creating a table or silently failing.
-func TestNFS_EdgeCase_WriteNonExistentTable(t *testing.T) {
+func TestWrite_EdgeCase_NonExistentTable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	// Path to non-existent table
@@ -90,19 +90,19 @@ func TestNFS_EdgeCase_WriteNonExistentTable(t *testing.T) {
 		"error should indicate table not found")
 }
 
-// TestNFS_EdgeCase_WriteNonExistentColumn verifies that writing to a
+// TestWrite_EdgeCase_NonExistentColumn verifies that writing to a
 // non-existent column returns an appropriate error.
 //
 // EDGE CASE: Write to non-existent column
 //
 // When writing to a column that doesn't exist in the table schema,
 // the operation should fail rather than creating the column.
-func TestNFS_EdgeCase_WriteNonExistentColumn(t *testing.T) {
+func TestWrite_EdgeCase_NonExistentColumn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	// Path to non-existent column in existing table/row
@@ -113,8 +113,8 @@ func TestNFS_EdgeCase_WriteNonExistentColumn(t *testing.T) {
 
 	// Should fail
 	require.Error(t, err, "write to non-existent column should fail")
-	// NFS errors may manifest as I/O errors rather than "not exist"
-	// The actual error ("column not found") is logged but not propagated through NFS
+	// Errors may manifest as I/O errors rather than "not exist"
+	// The actual error ("column not found") is logged but not propagated through the filesystem
 	errStr := err.Error()
 	assert.True(t, strings.Contains(errStr, "not exist") ||
 		strings.Contains(errStr, "no such file") ||
@@ -123,7 +123,7 @@ func TestNFS_EdgeCase_WriteNonExistentColumn(t *testing.T) {
 		"error should indicate column not found or I/O error, got: %v", err)
 }
 
-// TestNFS_EdgeCase_WriteEmptyContent verifies the behavior when writing
+// TestWrite_EdgeCase_EmptyContent verifies the behavior when writing
 // empty content (zero bytes) to a column.
 //
 // EDGE CASE: Zero-byte write
@@ -134,12 +134,12 @@ func TestNFS_EdgeCase_WriteNonExistentColumn(t *testing.T) {
 // - Return an error (if NOT NULL constraint applies)
 //
 // This test documents the actual behavior.
-func TestNFS_EdgeCase_WriteEmptyContent(t *testing.T) {
+func TestWrite_EdgeCase_EmptyContent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	// Set known initial value
@@ -165,7 +165,7 @@ func TestNFS_EdgeCase_WriteEmptyContent(t *testing.T) {
 	// Current limitation: empty writes are skipped
 }
 
-// TestNFS_EdgeCase_VeryLongColumnValue verifies handling of very long
+// TestWrite_EdgeCase_VeryLongColumnValue verifies handling of very long
 // text values (near or at column type limits).
 //
 // EDGE CASE: Very long content
@@ -174,12 +174,12 @@ func TestNFS_EdgeCase_WriteEmptyContent(t *testing.T) {
 // values may stress buffer handling, network chunking, or memory allocation.
 //
 // Test uses a 100KB value to verify handling of moderately large content.
-func TestNFS_EdgeCase_VeryLongColumnValue(t *testing.T) {
+func TestWrite_EdgeCase_VeryLongColumnValue(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	colPath := filepath.Join(ctx.mountPoint, "write_test", "1", "data.txt")
@@ -210,7 +210,7 @@ func TestNFS_EdgeCase_VeryLongColumnValue(t *testing.T) {
 	}
 }
 
-// TestNFS_EdgeCase_WriteReadImmediately verifies that a value written
+// TestWrite_EdgeCase_ReadImmediately verifies that a value written
 // can be read back immediately (close-to-open consistency).
 //
 // EDGE CASE: Immediate read after write
@@ -218,12 +218,12 @@ func TestNFS_EdgeCase_VeryLongColumnValue(t *testing.T) {
 // NFS close-to-open consistency should ensure that after a file is closed,
 // subsequent opens see the written data. This tests the basic case without
 // any intentional delays.
-func TestNFS_EdgeCase_WriteReadImmediately(t *testing.T) {
+func TestWrite_EdgeCase_ReadImmediately(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	colPath := filepath.Join(ctx.mountPoint, "write_test", "1", "name.txt")
@@ -241,7 +241,7 @@ func TestNFS_EdgeCase_WriteReadImmediately(t *testing.T) {
 		"immediate read should return written content with trailing newline (text file semantics)")
 }
 
-// TestNFS_EdgeCase_OverwriteMultipleTimes verifies that a file can be
+// TestWrite_EdgeCase_OverwriteMultipleTimes verifies that a file can be
 // overwritten multiple times with correct final value.
 //
 // EDGE CASE: Multiple sequential overwrites
@@ -249,12 +249,12 @@ func TestNFS_EdgeCase_WriteReadImmediately(t *testing.T) {
 // When a file is overwritten multiple times in sequence, each write
 // should completely replace the previous content, and the final read
 // should return the last written value.
-func TestNFS_EdgeCase_OverwriteMultipleTimes(t *testing.T) {
+func TestWrite_EdgeCase_OverwriteMultipleTimes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	colPath := filepath.Join(ctx.mountPoint, "write_test", "1", "name.txt")
@@ -282,7 +282,7 @@ func TestNFS_EdgeCase_OverwriteMultipleTimes(t *testing.T) {
 		"database should contain final value")
 }
 
-// TestNFS_EdgeCase_ConcurrentWriteDifferentColumns verifies that
+// TestWrite_EdgeCase_ConcurrentWriteDifferentColumns verifies that
 // concurrent writes to different columns don't interfere.
 //
 // EDGE CASE: Concurrent writes to different columns
@@ -292,12 +292,12 @@ func TestNFS_EdgeCase_OverwriteMultipleTimes(t *testing.T) {
 //
 // Note: This tests concurrent file operations, not true concurrent
 // database transactions. The test verifies final state consistency.
-func TestNFS_EdgeCase_ConcurrentWriteDifferentColumns(t *testing.T) {
+func TestWrite_EdgeCase_ConcurrentWriteDifferentColumns(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	namePath := filepath.Join(ctx.mountPoint, "write_test", "1", "name.txt")
@@ -333,4 +333,3 @@ func TestNFS_EdgeCase_ConcurrentWriteDifferentColumns(t *testing.T) {
 	assert.Equal(t, "concurrent_data", data,
 		"data column should have concurrent write value")
 }
-

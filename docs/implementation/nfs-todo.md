@@ -55,7 +55,7 @@ DDL operations are now fully implemented via the staging pattern:
 - `touch /.create/<name>/.commit` - execute DDL
 - `touch /.create/<name>/.abort` - cancel session
 
-**Tests:** `TestCommandCases_DDL` (18 test cases), `TestNFSDDL_*` tests all pass.
+**Tests:** `TestCommandCases_DDL` (18 test cases), `TestWriteDDL_*` tests all pass.
 
 ## 4. Pre-existing pipeline test failures
 

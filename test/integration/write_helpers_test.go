@@ -11,9 +11,9 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // Register pgx driver for database/sql
 )
 
-// nfsWriteTestContext holds the test context for NFS write tests.
+// writeTestContext holds the test context for write tests.
 // It provides helpers for database queries and cleanup.
-type nfsWriteTestContext struct {
+type writeTestContext struct {
 	t          *testing.T
 	mountPoint string
 	connStr    string
@@ -21,12 +21,12 @@ type nfsWriteTestContext struct {
 	cleanup    func()
 }
 
-// setupNFSWriteTestContext creates a test context with a mounted NFS filesystem
+// setupWriteTestContext creates a test context with a mounted filesystem
 // and a test table with id (int), name (text), and data (text) columns.
-func setupNFSWriteTestContext(t *testing.T) *nfsWriteTestContext {
+func setupWriteTestContext(t *testing.T) *writeTestContext {
 	t.Helper()
 
-	checkFUSEMountCapability(t)
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -88,7 +88,7 @@ func setupNFSWriteTestContext(t *testing.T) *nfsWriteTestContext {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 
-	return &nfsWriteTestContext{
+	return &writeTestContext{
 		t:          t,
 		mountPoint: mountpoint,
 		connStr:    dbResult.ConnStr,
@@ -102,7 +102,7 @@ func setupNFSWriteTestContext(t *testing.T) *nfsWriteTestContext {
 }
 
 // queryColumn returns the value of a column for a given table and row ID.
-func (ctx *nfsWriteTestContext) queryColumn(table string, id int, column string) string {
+func (ctx *writeTestContext) queryColumn(table string, id int, column string) string {
 	ctx.t.Helper()
 
 	query := fmt.Sprintf("SELECT %s FROM %s WHERE id = $1", column, table)
@@ -118,7 +118,7 @@ func (ctx *nfsWriteTestContext) queryColumn(table string, id int, column string)
 }
 
 // execSQL executes a SQL statement.
-func (ctx *nfsWriteTestContext) execSQL(query string, args ...interface{}) {
+func (ctx *writeTestContext) execSQL(query string, args ...interface{}) {
 	ctx.t.Helper()
 
 	_, err := ctx.db.Exec(query, args...)

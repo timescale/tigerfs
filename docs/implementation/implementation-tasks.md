@@ -7648,7 +7648,7 @@ Editor saves trigger `fsync()` which calls `Sync()`. We should commit to DB imme
 **Verification:**
 ```bash
 go test ./internal/tigerfs/nfs/... -v
-go test ./test/integration/... -run TestNFS_LargeWrite
+go test ./test/integration/... -run TestLargeWrite
 ```
 
 **Completion Criteria:**
@@ -7735,7 +7735,7 @@ NFS clients can crash without closing files. A background reaper commits stale e
 **Verification:**
 ```bash
 go test ./internal/tigerfs/nfs/... -run TestReaper
-go test ./test/integration/... -run TestNFS
+go test ./test/integration/... -run TestWrite
 ```
 
 **Completion Criteria:**

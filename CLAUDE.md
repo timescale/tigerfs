@@ -27,6 +27,10 @@ go fmt ./... && go vet ./... && go test ./... && go mod tidy
 
 ## Architecture
 
+### Code Style
+
+This is primarily a Go codebase. Follow Go idioms: error handling with explicit returns, table-driven tests, and gofmt formatting.
+
 ### Key Packages
 
 | Package | Purpose |
@@ -153,6 +157,18 @@ For each implementation task:
 
 Integration tests use testcontainers-go for PostgreSQL. See `test/integration/` for examples.
 
+### Test Naming Convention
+
+Integration tests that mount the filesystem work with **both** FUSE (Linux) and NFS (macOS) — the mount method is auto-detected. Name tests by what they test, not the mount method:
+
+| Prefix | Meaning | When to use |
+|--------|---------|-------------|
+| `TestMount_`, `TestWrite_`, `TestDDL_`, etc. | Generic — works with any mount method | Default for all mount-based tests |
+| `TestNFS_` | NFS-only — skipped on FUSE/Linux | Only if the test exercises NFS-specific behavior that cannot work with FUSE |
+| `TestFUSE_` | FUSE-only — skipped on NFS/macOS | Only if the test exercises FUSE-specific behavior that cannot work with NFS |
+
+**Do not** prefix tests with a mount method name unless they are truly specific to that method.
+
 ## Code Documentation Standards
 
 ### Comment Levels
@@ -194,6 +210,8 @@ When writing new code, ensure:
 Existing code may not meet these standards. When modifying files, update comments for code you touch but don't document the entire file.
 
 ## Development Workflow
+
+Before implementing any feature, confirm the spec/requirements with me first. Ask clarifying questions about edge cases and expected behavior before writing code.
 
 ### Adding a Command
 

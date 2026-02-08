@@ -223,7 +223,7 @@ Only commit when NFS COMMIT RPC is received.
 go test ./internal/tigerfs/nfs/... -run TestMemFile
 
 # Integration tests
-go test ./test/integration/... -run TestNFS_LargeWrite
+go test ./test/integration/... -run TestLargeWrite
 
 # Manual test
 ./bin/tigerfs mount postgres://... /mnt/db --nfs
