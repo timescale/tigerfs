@@ -22,14 +22,14 @@ func touchTriggerFile(t *testing.T, path string) error {
 	return f.Close()
 }
 
-// TestNFSDDL_EndToEndTableWorkflow tests the complete DDL workflow via NFS:
+// TestWriteDDL_EndToEndTableWorkflow tests the complete DDL workflow via the mounted filesystem:
 // 1. Create table via DDL staging
 // 2. Verify table exists
 // 3. Write rows to the table
 // 4. Read rows back
 // 5. Delete the table
-func TestNFSDDL_EndToEndTableWorkflow(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestWriteDDL_EndToEndTableWorkflow(t *testing.T) {
+	checkMountCapability(t)
 
 	// Use empty database - we'll create our own table
 	dbResult := GetTestDBEmpty(t)
@@ -85,7 +85,7 @@ func TestNFSDDL_EndToEndTableWorkflow(t *testing.T) {
 		}
 
 		// Verify the DDL was written by reading it back
-		time.Sleep(100 * time.Millisecond) // Allow NFS to sync
+		time.Sleep(100 * time.Millisecond) // Allow filesystem to sync
 		writtenSQL, err := os.ReadFile(sqlPath)
 		if err != nil {
 			t.Fatalf("Failed to read back DDL: %v", err)
@@ -331,9 +331,9 @@ func TestNFSDDL_EndToEndTableWorkflow(t *testing.T) {
 	})
 }
 
-// TestNFSDDL_ValidationErrors tests DDL validation error handling.
-func TestNFSDDL_ValidationErrors(t *testing.T) {
-	checkFUSEMountCapability(t)
+// TestWriteDDL_ValidationErrors tests DDL validation error handling.
+func TestWriteDDL_ValidationErrors(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -424,9 +424,9 @@ func TestNFSDDL_ValidationErrors(t *testing.T) {
 	})
 }
 
-// TestNFSDDL_AbortClearsSession tests that .abort properly clears the staging session.
-func TestNFSDDL_AbortClearsSession(t *testing.T) {
-	checkFUSEMountCapability(t)
+// TestWriteDDL_AbortClearsSession tests that .abort properly clears the staging session.
+func TestWriteDDL_AbortClearsSession(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -490,9 +490,9 @@ func TestNFSDDL_AbortClearsSession(t *testing.T) {
 	t.Logf("Abort correctly prevented table creation")
 }
 
-// TestNFSDDL_ModifyExistingTable tests modifying an existing table via .modify.
-func TestNFSDDL_ModifyExistingTable(t *testing.T) {
-	checkFUSEMountCapability(t)
+// TestWriteDDL_ModifyExistingTable tests modifying an existing table via .modify.
+func TestWriteDDL_ModifyExistingTable(t *testing.T) {
+	checkMountCapability(t)
 
 	// Use database with seeded tables (users, products)
 	dbResult := GetTestDB(t)
@@ -578,15 +578,15 @@ func TestNFSDDL_ModifyExistingTable(t *testing.T) {
 	})
 }
 
-// TestNFS_WriteReadScenarios tests 8 comprehensive write/read scenarios via NFS.
+// TestWriteDDL_WriteReadScenarios tests 8 comprehensive write/read scenarios via the mounted filesystem.
 // This tests different access patterns:
 // - Write without prior read
 // - Read before write
 // - Different format extensions
 // - Column file access
 // - Creating new rows
-func TestNFS_WriteReadScenarios(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestWriteDDL_WriteReadScenarios(t *testing.T) {
+	checkMountCapability(t)
 
 	// Use empty database - we'll create our own table with 1000 rows
 	dbResult := GetTestDBEmpty(t)

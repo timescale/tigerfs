@@ -16,12 +16,12 @@ import (
 // Category 7: File Format Handling (Integration Tests)
 //
 // These tests verify that different file formats (JSON, CSV, TSV, TXT) are
-// parsed and stored correctly when written via NFS.
+// parsed and stored correctly when written via the mounted filesystem.
 //
 // Each test documents the specific write issue it's designed to catch.
 // =============================================================================
 
-// TestNFS_Format_ValidJSON verifies that valid JSON files are parsed and
+// TestWriteFormat_ValidJSON verifies that valid JSON files are parsed and
 // stored correctly, updating the appropriate database columns.
 //
 // WRITE ISSUE CAPTURED: JSON parsing failure
@@ -33,12 +33,12 @@ import (
 //  1. Write '{"name":"test","age":30}' to /users/1.json
 //  2. If JSON parsing fails or column mapping is wrong, row is corrupted
 //  3. Database should have name="test", age=30
-func TestNFS_Format_ValidJSON(t *testing.T) {
+func TestWriteFormat_ValidJSON(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	jsonPath := filepath.Join(ctx.mountPoint, "write_test", "1.json")
@@ -59,7 +59,7 @@ func TestNFS_Format_ValidJSON(t *testing.T) {
 	assert.Equal(t, "testdata", data, "data column should be updated")
 }
 
-// TestNFS_Format_InvalidJSON verifies that invalid JSON is rejected with
+// TestWriteFormat_InvalidJSON verifies that invalid JSON is rejected with
 // an appropriate error.
 //
 // WRITE ISSUE CAPTURED: Invalid JSON silently accepted
@@ -71,12 +71,12 @@ func TestNFS_Format_ValidJSON(t *testing.T) {
 //  1. Write 'not valid json' to /users/1.json
 //  2. Without validation, raw text might be stored or row corrupted
 //  3. Expected: Write returns error (EINVAL or EIO)
-func TestNFS_Format_InvalidJSON(t *testing.T) {
+func TestWriteFormat_InvalidJSON(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	jsonPath := filepath.Join(ctx.mountPoint, "write_test", "1.json")
@@ -106,7 +106,7 @@ func TestNFS_Format_InvalidJSON(t *testing.T) {
 		"original data should be preserved after invalid JSON write attempt")
 }
 
-// TestNFS_Format_ColumnText verifies that writing to individual column
+// TestWriteFormat_ColumnText verifies that writing to individual column
 // files (.txt extension) correctly updates just that column.
 //
 // WRITE ISSUE CAPTURED: Column file write corruption
@@ -119,12 +119,12 @@ func TestNFS_Format_InvalidJSON(t *testing.T) {
 //  2. Write "updated\n" to /table/1/name.txt
 //  3. If column targeting is wrong, other columns may be corrupted
 //  4. Expected: name="updated\n", data="preserved"
-func TestNFS_Format_ColumnText(t *testing.T) {
+func TestWriteFormat_ColumnText(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	// Ensure row has known initial state
@@ -148,7 +148,7 @@ func TestNFS_Format_ColumnText(t *testing.T) {
 	assert.Equal(t, "preserved", data, "other columns should be preserved")
 }
 
-// TestNFS_Format_JSONNewline verifies that JSON with trailing newline is
+// TestWriteFormat_JSONNewline verifies that JSON with trailing newline is
 // handled correctly.
 //
 // WRITE ISSUE CAPTURED: Trailing newline causes JSON parse error
@@ -160,12 +160,12 @@ func TestNFS_Format_ColumnText(t *testing.T) {
 //  1. Write '{"name":"test"}\n' (with newline at end)
 //  2. Strict JSON parser fails: "invalid character '\n' after top-level value"
 //  3. Expected: Newline trimmed, JSON parsed correctly
-func TestNFS_Format_JSONNewline(t *testing.T) {
+func TestWriteFormat_JSONNewline(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	jsonPath := filepath.Join(ctx.mountPoint, "write_test", "1.json")
@@ -184,7 +184,7 @@ func TestNFS_Format_JSONNewline(t *testing.T) {
 		"JSON with trailing newline should parse correctly")
 }
 
-// TestNFS_Format_JSONUnicode verifies that JSON with Unicode characters
+// TestWriteFormat_JSONUnicode verifies that JSON with Unicode characters
 // is handled correctly.
 //
 // WRITE ISSUE CAPTURED: Unicode encoding corruption
@@ -196,12 +196,12 @@ func TestNFS_Format_JSONNewline(t *testing.T) {
 //  1. Write '{"name":"日本語","emoji":"🎉"}'
 //  2. If encoding is wrong, characters become garbled or question marks
 //  3. Expected: Unicode preserved exactly
-func TestNFS_Format_JSONUnicode(t *testing.T) {
+func TestWriteFormat_JSONUnicode(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	jsonPath := filepath.Join(ctx.mountPoint, "write_test", "1.json")
@@ -229,7 +229,7 @@ func TestNFS_Format_JSONUnicode(t *testing.T) {
 // in another format, ensuring consistent database representation.
 // =============================================================================
 
-// TestNFS_CrossFormat_WriteJSON_ReadColumn verifies that JSON writes can
+// TestWriteFormat_Cross_WriteJSON_ReadColumn verifies that JSON writes can
 // be read back as individual column files.
 //
 // WRITE ISSUE CAPTURED: Format-specific storage causing read inconsistency
@@ -242,12 +242,12 @@ func TestNFS_Format_JSONUnicode(t *testing.T) {
 //  1. Write '{"name":"test"}' to /table/1.json
 //  2. Read /table/1/name.txt
 //  3. Should return "test" (the value written via JSON)
-func TestNFS_CrossFormat_WriteJSON_ReadColumn(t *testing.T) {
+func TestWriteFormat_Cross_WriteJSON_ReadColumn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	jsonPath := filepath.Join(ctx.mountPoint, "write_test", "1.json")
@@ -269,7 +269,7 @@ func TestNFS_CrossFormat_WriteJSON_ReadColumn(t *testing.T) {
 		"column read should return JSON-written value with trailing newline")
 }
 
-// TestNFS_CrossFormat_WriteColumn_ReadJSON verifies that column file writes
+// TestWriteFormat_Cross_WriteColumn_ReadJSON verifies that column file writes
 // can be read back as JSON.
 //
 // WRITE ISSUE CAPTURED: Column writes not reflected in JSON reads
@@ -282,12 +282,12 @@ func TestNFS_CrossFormat_WriteJSON_ReadColumn(t *testing.T) {
 //  2. Write "updated\n" to /table/1/name.txt
 //  3. Read /table/1.json
 //  4. JSON should contain "name":"updated\n"
-func TestNFS_CrossFormat_WriteColumn_ReadJSON(t *testing.T) {
+func TestWriteFormat_Cross_WriteColumn_ReadJSON(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	// Set known initial state
@@ -318,7 +318,7 @@ func TestNFS_CrossFormat_WriteColumn_ReadJSON(t *testing.T) {
 		"other columns should be preserved in JSON")
 }
 
-// TestNFS_CrossFormat_MultipleColumnWrites verifies that multiple column
+// TestWriteFormat_Cross_MultipleColumnWrites verifies that multiple column
 // writes are all reflected when reading as JSON.
 //
 // WRITE ISSUE CAPTURED: Race condition between column writes
@@ -331,12 +331,12 @@ func TestNFS_CrossFormat_WriteColumn_ReadJSON(t *testing.T) {
 //  2. Write "data1" to /table/1/data.txt
 //  3. Read /table/1.json
 //  4. JSON should have both updated values
-func TestNFS_CrossFormat_MultipleColumnWrites(t *testing.T) {
+func TestWriteFormat_Cross_MultipleColumnWrites(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	namePath := filepath.Join(ctx.mountPoint, "write_test", "1", "name.txt")
@@ -369,7 +369,7 @@ func TestNFS_CrossFormat_MultipleColumnWrites(t *testing.T) {
 		"data column should be updated")
 }
 
-// TestNFS_Format_JSONSpecialCharacters verifies that JSON with special
+// TestWriteFormat_JSONSpecialCharacters verifies that JSON with special
 // characters (quotes, backslashes, control chars) is handled correctly.
 //
 // WRITE ISSUE CAPTURED: JSON escaping corruption
@@ -381,12 +381,12 @@ func TestNFS_CrossFormat_MultipleColumnWrites(t *testing.T) {
 //  1. Write '{"name":"has \"quotes\" and \\backslash"}'
 //  2. If escaping is wrong, stored value is corrupted
 //  3. Expected: Stored as: has "quotes" and \backslash
-func TestNFS_Format_JSONSpecialCharacters(t *testing.T) {
+func TestWriteFormat_JSONSpecialCharacters(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	ctx := setupNFSWriteTestContext(t)
+	ctx := setupWriteTestContext(t)
 	defer ctx.cleanup()
 
 	jsonPath := filepath.Join(ctx.mountPoint, "write_test", "1.json")

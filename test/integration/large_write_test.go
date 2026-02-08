@@ -14,8 +14,8 @@ import (
 // =============================================================================
 // Category 5: Large File Write Tests
 //
-// These tests verify that large file writes complete correctly despite NFS
-// chunking behavior. NFS clients may split large writes into multiple WRITE
+// These tests verify that large file writes complete correctly despite
+// chunking behavior. The OS may split large writes into multiple WRITE
 // RPCs based on the wsize mount option.
 //
 // ⚠️ FLAKINESS RISKS (documented in test plan):
@@ -43,15 +43,15 @@ import (
 //   - Test may be slow; don't assert on timing
 // =============================================================================
 
-// TestNFS_LargeWrite_64KB tests writing and reading back 64KB of content.
+// TestLargeWrite_64KB tests writing and reading back 64KB of content.
 //
 // WRITE ISSUE CAPTURED: Large file write corruption from chunking
 //
 // When writing files larger than NFS wsize (typically 32KB-1MB), the NFS
 // client splits the write into multiple WRITE RPCs. Each RPC must be
 // handled correctly to produce the complete file.
-func TestNFS_LargeWrite_64KB(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestLargeWrite_64KB(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -108,7 +108,7 @@ func TestNFS_LargeWrite_64KB(t *testing.T) {
 
 		dataPath := filepath.Join(mountpoint, tableName, "1", "data")
 
-		// Write via NFS
+		// Write via the mounted filesystem
 		f, err := os.Create(dataPath)
 		if err != nil {
 			t.Fatalf("Failed to create file: %v", err)
@@ -172,7 +172,7 @@ func TestNFS_LargeWrite_64KB(t *testing.T) {
 	})
 }
 
-// TestNFS_LargeWrite_1MB tests writing and reading back 1MB of content.
+// TestLargeWrite_1MB tests writing and reading back 1MB of content.
 //
 // WRITE ISSUE CAPTURED: Very large file corruption with many chunks
 //
@@ -181,8 +181,8 @@ func TestNFS_LargeWrite_64KB(t *testing.T) {
 //
 // Note: This test may be slow with current architecture due to O(n²)
 // data transfer pattern (each write reads existing data, overlays, commits).
-func TestNFS_LargeWrite_1MB(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestLargeWrite_1MB(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -288,14 +288,14 @@ func TestNFS_LargeWrite_1MB(t *testing.T) {
 	})
 }
 
-// TestNFS_LargeWrite_Checksum tests large write integrity using SHA-256.
+// TestLargeWrite_Checksum tests large write integrity using SHA-256.
 //
 // WRITE ISSUE CAPTURED: Byte-level corruption in large writes
 //
 // Uses cryptographic checksum to detect any byte-level corruption that
 // might occur during chunked writes. More sensitive than pattern matching.
-func TestNFS_LargeWrite_Checksum(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestLargeWrite_Checksum(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -395,15 +395,15 @@ func TestNFS_LargeWrite_Checksum(t *testing.T) {
 	})
 }
 
-// TestNFS_LargeWrite_BinaryContent tests writing binary content with all byte values.
+// TestLargeWrite_BinaryContent tests writing binary content with all byte values.
 //
 // WRITE ISSUE CAPTURED: Encoding/escaping issues with binary data
 //
 // Ensures that all 256 byte values (0x00-0xFF) are correctly stored and
 // retrieved. Catches issues with NULL bytes, control characters, or
 // encoding transformations.
-func TestNFS_LargeWrite_BinaryContent(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestLargeWrite_BinaryContent(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
@@ -510,15 +510,15 @@ func TestNFS_LargeWrite_BinaryContent(t *testing.T) {
 	})
 }
 
-// TestNFS_LargeWrite_JSON tests writing large JSON content.
+// TestLargeWrite_JSON tests writing large JSON content.
 //
 // WRITE ISSUE CAPTURED: JSON parsing fails with stale data at end
 //
 // When writing JSON, the entire content must be valid JSON. If old data
 // remains at the end of the buffer, JSON parsing will fail with errors
 // like "invalid character after top-level value".
-func TestNFS_LargeWrite_JSON(t *testing.T) {
-	checkFUSEMountCapability(t)
+func TestLargeWrite_JSON(t *testing.T) {
+	checkMountCapability(t)
 
 	dbResult := GetTestDBEmpty(t)
 	if dbResult == nil {
