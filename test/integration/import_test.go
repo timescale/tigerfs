@@ -530,10 +530,12 @@ func TestAccess_ViaSchemaPath(t *testing.T) {
 		t.Fatalf("Failed to seed export test table: %v", err)
 	}
 
+	schemaName := extractSchemaName(dbResult.ConnStr)
+
 	cfg := &config.Config{
 		PoolSize:                5,
 		PoolMaxIdle:             2,
-		DefaultSchema:           "public",
+		DefaultSchema:           schemaName,
 		DirListingLimit:         10000,
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
@@ -551,8 +553,8 @@ func TestAccess_ViaSchemaPath(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// Access via .schemas path
-	schemaPath := mountpoint + "/.schemas/public/export_test/.export/csv"
+	// Access via .schemas path using the actual test schema
+	schemaPath := mountpoint + "/.schemas/" + schemaName + "/export_test/.export/csv"
 	data, err := os.ReadFile(schemaPath)
 	if err != nil {
 		t.Fatalf("Failed to read via schema path: %v", err)
