@@ -323,9 +323,12 @@ func parseViewPath(segments []string) (*ParsedPath, *FSError) {
 // Root-level paths always use public schema: /table or /table/row.
 // For explicit schema access, use /.schemas/schemaname/table.
 func parseTablePath(segments []string) (*ParsedPath, *FSError) {
-	// Always use public schema for root-level table paths.
-	// This avoids ambiguity between /schema/table and /table/row for text PKs.
-	schema := "public"
+	// Use empty schema for root-level table paths (e.g., /users, /products).
+	// Empty means "resolve at runtime via current_schema()" — the Operations layer
+	// fills this in from the database connection's search_path.
+	// Explicit schema paths (/.schemas/myschema/table) bypass this function entirely
+	// and set the schema directly in parseSchemaPath.
+	schema := ""
 	table := segments[0]
 	startIdx := 1
 

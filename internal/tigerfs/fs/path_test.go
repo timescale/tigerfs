@@ -73,8 +73,8 @@ func TestParsePathTable(t *testing.T) {
 		schema string
 		table  string
 	}{
-		{"/users", "public", "users"},
-		{"/users/", "public", "users"},
+		{"/users", "", "users"},
+		{"/users/", "", "users"},
 		// Explicit schema access via /.schemas/
 		{"/.schemas/public/users", "public", "users"},
 		{"/.schemas/myschema/mytable", "myschema", "mytable"},
