@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
@@ -22,6 +23,13 @@ type Operations struct {
 	db      db.DBClient
 	staging *StagingManager // Tracks partial rows for incremental creation
 	ddl     *DDLManager     // Handles DDL staging operations
+
+	// Schema caching: the current schema doesn't change during a mount session,
+	// so we resolve it once and reuse. This eliminates ~4-6 DB queries per NFS RPC
+	// that were caused by parsePath calling GetCurrentSchema on every operation.
+	schemaOnce   sync.Once
+	cachedSchema string
+	schemaErr    error
 }
 
 // NewOperations creates a new Operations instance.
@@ -60,15 +68,20 @@ func (o *Operations) parsePath(ctx context.Context, path string) (*ParsedPath, *
 // current_schema(). This is needed because ParsePath uses empty string as the
 // default schema for root-level table paths (e.g., /users), since it has no
 // database access. The actual schema depends on the connection's search_path.
+//
+// The schema is cached using sync.Once since it doesn't change during a mount
+// session. This eliminates redundant DB queries on every parsePath call.
 func (o *Operations) resolveSchema(ctx context.Context, parsed *ParsedPath) *FSError {
 	if parsed.Context == nil || parsed.Context.Schema != "" {
 		return nil // No context, or schema already set (explicit path like /.schemas/foo/)
 	}
-	schema, dbErr := o.db.GetCurrentSchema(ctx)
-	if dbErr != nil {
-		return &FSError{Code: ErrIO, Message: "failed to resolve current schema", Cause: dbErr}
+	o.schemaOnce.Do(func() {
+		o.cachedSchema, o.schemaErr = o.db.GetCurrentSchema(ctx)
+	})
+	if o.schemaErr != nil {
+		return &FSError{Code: ErrIO, Message: "failed to resolve current schema", Cause: o.schemaErr}
 	}
-	parsed.Context.Schema = schema
+	parsed.Context.Schema = o.cachedSchema
 	return nil
 }
 
@@ -133,15 +146,18 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 // readDirRoot lists the root directory.
 // Shows tables from the default schema (flattened) plus special directories.
 func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
-	// Get current schema (default is "public")
-	currentSchema, err := o.db.GetCurrentSchema(ctx)
-	if err != nil {
+	// Get current schema (default is "public") - uses cached value
+	o.schemaOnce.Do(func() {
+		o.cachedSchema, o.schemaErr = o.db.GetCurrentSchema(ctx)
+	})
+	if o.schemaErr != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
 			Message: "failed to get current schema",
-			Cause:   err,
+			Cause:   o.schemaErr,
 		}
 	}
+	currentSchema := o.cachedSchema
 
 	// Get tables from current schema
 	tables, err := o.db.GetTables(ctx, currentSchema)
