@@ -11,6 +11,17 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
+// schemaFromDB returns the current_schema() for the given connection,
+// which reflects the test schema set via search_path.
+func schemaFromDB(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+	t.Helper()
+	var schema string
+	if err := pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema); err != nil {
+		t.Fatalf("Failed to get current_schema: %v", err)
+	}
+	return schema
+}
+
 // rowToMap converts a Row struct to a map for easier access
 func rowToMap(row *db.Row) map[string]interface{} {
 	result := make(map[string]interface{})
@@ -72,12 +83,14 @@ func TestCRUDFullCycle(t *testing.T) {
 	tableName, cleanup := setupTestTable(t, ctx, pool)
 	defer cleanup()
 
+	schema := schemaFromDB(t, ctx, pool)
+
 	// 1. INSERT - Create a new row
 	t.Run("Insert", func(t *testing.T) {
 		columns := []string{"email", "name", "age", "bio"}
 		values := []interface{}{"alice@example.com", "Alice Smith", 30, "Software engineer"}
 
-		pkValue, err := db.InsertRow(ctx, pool, "public", tableName, columns, values)
+		pkValue, err := db.InsertRow(ctx, pool, schema, tableName, columns, values)
 		if err != nil {
 			t.Fatalf("Failed to insert row: %v", err)
 		}
@@ -91,7 +104,7 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 2. SELECT - Read the row back
 	t.Run("Select", func(t *testing.T) {
-		row, err := db.GetRow(ctx, pool, "public", tableName, "id", "1")
+		row, err := db.GetRow(ctx, pool, schema, tableName, "id", "1")
 		if err != nil {
 			t.Fatalf("Failed to get row: %v", err)
 		}
@@ -114,13 +127,13 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 3. UPDATE - Modify column values
 	t.Run("Update", func(t *testing.T) {
-		err := db.UpdateColumn(ctx, pool, "public", tableName, "id", "1", "age", "31")
+		err := db.UpdateColumn(ctx, pool, schema, tableName, "id", "1", "age", "31")
 		if err != nil {
 			t.Fatalf("Failed to update column: %v", err)
 		}
 
 		// Verify update
-		value, err := db.GetColumn(ctx, pool, "public", tableName, "id", "1", "age")
+		value, err := db.GetColumn(ctx, pool, schema, tableName, "id", "1", "age")
 		if err != nil {
 			t.Fatalf("Failed to get updated column: %v", err)
 		}
@@ -138,13 +151,13 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 4. UPDATE to NULL - Set nullable column to NULL
 	t.Run("UpdateToNull", func(t *testing.T) {
-		err := db.UpdateColumn(ctx, pool, "public", tableName, "id", "1", "bio", "")
+		err := db.UpdateColumn(ctx, pool, schema, tableName, "id", "1", "bio", "")
 		if err != nil {
 			t.Fatalf("Failed to update column to NULL: %v", err)
 		}
 
 		// Verify NULL
-		value, err := db.GetColumn(ctx, pool, "public", tableName, "id", "1", "bio")
+		value, err := db.GetColumn(ctx, pool, schema, tableName, "id", "1", "bio")
 		if err != nil {
 			t.Fatalf("Failed to get column: %v", err)
 		}
@@ -156,13 +169,13 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 5. DELETE - Remove the row
 	t.Run("Delete", func(t *testing.T) {
-		err := db.DeleteRow(ctx, pool, "public", tableName, "id", "1")
+		err := db.DeleteRow(ctx, pool, schema, tableName, "id", "1")
 		if err != nil {
 			t.Fatalf("Failed to delete row: %v", err)
 		}
 
 		// Verify deletion
-		_, err = db.GetRow(ctx, pool, "public", tableName, "id", "1")
+		_, err = db.GetRow(ctx, pool, schema, tableName, "id", "1")
 		if err == nil {
 			t.Error("Expected error when getting deleted row")
 		}
@@ -190,23 +203,25 @@ func TestCRUDPartialUpdates(t *testing.T) {
 	tableName, cleanup := setupTestTable(t, ctx, pool)
 	defer cleanup()
 
+	schema := schemaFromDB(t, ctx, pool)
+
 	// Insert initial row
 	columns := []string{"email", "name"}
 	values := []interface{}{"bob@example.com", "Bob Jones"}
-	pkValue, err := db.InsertRow(ctx, pool, "public", tableName, columns, values)
+	pkValue, err := db.InsertRow(ctx, pool, schema, tableName, columns, values)
 	if err != nil {
 		t.Fatalf("Failed to insert row: %v", err)
 	}
 
 	// Test partial update - only update one column
 	t.Run("UpdateSingleColumn", func(t *testing.T) {
-		err := db.UpdateColumn(ctx, pool, "public", tableName, "id", pkValue, "age", "25")
+		err := db.UpdateColumn(ctx, pool, schema, tableName, "id", pkValue, "age", "25")
 		if err != nil {
 			t.Fatalf("Failed to update column: %v", err)
 		}
 
 		// Verify other columns unchanged
-		row, err := db.GetRow(ctx, pool, "public", tableName, "id", pkValue)
+		row, err := db.GetRow(ctx, pool, schema, tableName, "id", pkValue)
 		if err != nil {
 			t.Fatalf("Failed to get row: %v", err)
 		}
@@ -244,18 +259,20 @@ func TestCRUDNullHandling(t *testing.T) {
 	tableName, cleanup := setupTestTable(t, ctx, pool)
 	defer cleanup()
 
+	schema := schemaFromDB(t, ctx, pool)
+
 	// Test inserting with NULL values
 	t.Run("InsertWithNull", func(t *testing.T) {
 		columns := []string{"email", "name", "age", "bio"}
 		values := []interface{}{"charlie@example.com", "Charlie Brown", nil, nil}
 
-		pkValue, err := db.InsertRow(ctx, pool, "public", tableName, columns, values)
+		pkValue, err := db.InsertRow(ctx, pool, schema, tableName, columns, values)
 		if err != nil {
 			t.Fatalf("Failed to insert row with NULL: %v", err)
 		}
 
 		// Read back and verify NULLs
-		row, err := db.GetRow(ctx, pool, "public", tableName, "id", pkValue)
+		row, err := db.GetRow(ctx, pool, schema, tableName, "id", pkValue)
 		if err != nil {
 			t.Fatalf("Failed to get row: %v", err)
 		}
@@ -273,7 +290,7 @@ func TestCRUDNullHandling(t *testing.T) {
 
 	// Test reading NULL as empty string
 	t.Run("ReadNullAsEmpty", func(t *testing.T) {
-		value, err := db.GetColumn(ctx, pool, "public", tableName, "id", "1", "age")
+		value, err := db.GetColumn(ctx, pool, schema, tableName, "id", "1", "age")
 		if err != nil {
 			t.Fatalf("Failed to get column: %v", err)
 		}
@@ -316,10 +333,12 @@ func TestCRUDConstraintViolations(t *testing.T) {
 	tableName, cleanup := setupTestTable(t, ctx, pool)
 	defer cleanup()
 
+	schema := schemaFromDB(t, ctx, pool)
+
 	// Insert test row
 	columns := []string{"email", "name"}
 	values := []interface{}{"test@example.com", "Test User"}
-	_, err = db.InsertRow(ctx, pool, "public", tableName, columns, values)
+	_, err = db.InsertRow(ctx, pool, schema, tableName, columns, values)
 	if err != nil {
 		t.Fatalf("Failed to insert row: %v", err)
 	}
@@ -329,7 +348,7 @@ func TestCRUDConstraintViolations(t *testing.T) {
 		columns := []string{"email", "name"}
 		values := []interface{}{"test@example.com", "Another User"}
 
-		_, err := db.InsertRow(ctx, pool, "public", tableName, columns, values)
+		_, err := db.InsertRow(ctx, pool, schema, tableName, columns, values)
 		if err == nil {
 			t.Error("Expected error for UNIQUE constraint violation")
 		}
@@ -342,7 +361,7 @@ func TestCRUDConstraintViolations(t *testing.T) {
 			"name":  "User",
 		}
 
-		err := db.ValidateConstraints(ctx, pool, "public", tableName, valuesMap)
+		err := db.ValidateConstraints(ctx, pool, schema, tableName, valuesMap)
 		if err == nil {
 			t.Error("Expected error for NOT NULL constraint violation")
 		}
@@ -370,6 +389,8 @@ func TestCRUDConcurrentOperations(t *testing.T) {
 	tableName, cleanup := setupTestTable(t, ctx, pool)
 	defer cleanup()
 
+	schema := schemaFromDB(t, ctx, pool)
+
 	// Test concurrent inserts
 	t.Run("ConcurrentInserts", func(t *testing.T) {
 		const numGoroutines = 5
@@ -385,7 +406,7 @@ func TestCRUDConcurrentOperations(t *testing.T) {
 					fmt.Sprintf("User %d", id),
 				}
 
-				_, err := db.InsertRow(ctx, pool, "public", tableName, columns, values)
+				_, err := db.InsertRow(ctx, pool, schema, tableName, columns, values)
 				if err != nil {
 					errors <- err
 				}
@@ -406,7 +427,7 @@ func TestCRUDConcurrentOperations(t *testing.T) {
 		}
 
 		// Verify all rows inserted
-		count, err := db.GetRowCount(ctx, pool, "public", tableName)
+		count, err := db.GetRowCount(ctx, pool, schema, tableName)
 		if err != nil {
 			t.Fatalf("Failed to get row count: %v", err)
 		}
@@ -438,6 +459,8 @@ func TestCRUDMultipleRows(t *testing.T) {
 	tableName, cleanup := setupTestTable(t, ctx, pool)
 	defer cleanup()
 
+	schema := schemaFromDB(t, ctx, pool)
+
 	// Insert multiple rows
 	t.Run("InsertMultiple", func(t *testing.T) {
 		for i := 1; i <= 5; i++ {
@@ -448,14 +471,14 @@ func TestCRUDMultipleRows(t *testing.T) {
 				20 + i,
 			}
 
-			_, err := db.InsertRow(ctx, pool, "public", tableName, columns, values)
+			_, err := db.InsertRow(ctx, pool, schema, tableName, columns, values)
 			if err != nil {
 				t.Fatalf("Failed to insert row %d: %v", i, err)
 			}
 		}
 
 		// Verify count
-		count, err := db.GetRowCount(ctx, pool, "public", tableName)
+		count, err := db.GetRowCount(ctx, pool, schema, tableName)
 		if err != nil {
 			t.Fatalf("Failed to get row count: %v", err)
 		}
@@ -467,7 +490,7 @@ func TestCRUDMultipleRows(t *testing.T) {
 
 	// List rows
 	t.Run("ListRows", func(t *testing.T) {
-		rows, err := db.ListRows(ctx, pool, "public", tableName, "id", 100)
+		rows, err := db.ListRows(ctx, pool, schema, tableName, "id", 100)
 		if err != nil {
 			t.Fatalf("Failed to list rows: %v", err)
 		}

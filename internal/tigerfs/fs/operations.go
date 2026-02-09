@@ -39,9 +39,42 @@ func (o *Operations) GetDDLManager() *DDLManager {
 	return o.ddl
 }
 
+// parsePath parses a filesystem path and resolves the default schema.
+//
+// Unlike ParsePath (a pure function), this method uses the database connection
+// to resolve the default schema. Paths like /users parse with an empty schema,
+// which this method fills in from the connection's current_schema().
+// Explicit schema paths (/.schemas/myschema/table) are left unchanged.
+func (o *Operations) parsePath(ctx context.Context, path string) (*ParsedPath, *FSError) {
+	parsed, err := ParsePath(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.resolveSchema(ctx, parsed); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+// resolveSchema fills in empty schema fields with the database connection's
+// current_schema(). This is needed because ParsePath uses empty string as the
+// default schema for root-level table paths (e.g., /users), since it has no
+// database access. The actual schema depends on the connection's search_path.
+func (o *Operations) resolveSchema(ctx context.Context, parsed *ParsedPath) *FSError {
+	if parsed.Context == nil || parsed.Context.Schema != "" {
+		return nil // No context, or schema already set (explicit path like /.schemas/foo/)
+	}
+	schema, dbErr := o.db.GetCurrentSchema(ctx)
+	if dbErr != nil {
+		return &FSError{Code: ErrIO, Message: "failed to resolve current schema", Cause: dbErr}
+	}
+	parsed.Context.Schema = schema
+	return nil
+}
+
 // ReadDir lists directory contents for the given path.
 func (o *Operations) ReadDir(ctx context.Context, path string) ([]Entry, *FSError) {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -56,6 +89,9 @@ func (o *Operations) ReadDirWithContext(ctx context.Context, fsCtx *FSContext) (
 	parsed := &ParsedPath{
 		Type:    PathTable,
 		Context: fsCtx,
+	}
+	if err := o.resolveSchema(ctx, parsed); err != nil {
+		return nil, err
 	}
 	return o.readDirWithParsed(ctx, parsed)
 }
@@ -738,7 +774,7 @@ func (o *Operations) ensureDDLSession(parsed *ParsedPath, op DDLOpType) *FSError
 
 // Stat returns metadata for a path.
 func (o *Operations) Stat(ctx context.Context, path string) (*Entry, *FSError) {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -751,6 +787,9 @@ func (o *Operations) StatWithContext(ctx context.Context, fsCtx *FSContext) (*En
 	parsed := &ParsedPath{
 		Type:    PathTable,
 		Context: fsCtx,
+	}
+	if err := o.resolveSchema(ctx, parsed); err != nil {
+		return nil, err
 	}
 	return o.statWithParsed(ctx, parsed, "")
 }
@@ -1270,7 +1309,7 @@ func (o *Operations) calculateRowSize(row *db.Row, fmt string) (int64, error) {
 
 // ReadFile returns file contents for the given path.
 func (o *Operations) ReadFile(ctx context.Context, path string) (*FileContent, *FSError) {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
