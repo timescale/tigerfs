@@ -28,7 +28,7 @@ import (
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *FSError {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -425,7 +425,7 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) Delete(ctx context.Context, path string) *FSError {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -570,7 +570,7 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 // operation when closed, or an FSError if the path type doesn't support
 // creation.
 func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FSError) {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +614,7 @@ func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FS
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
-	parsed, err := ParsePath(path)
+	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return err
 	}
