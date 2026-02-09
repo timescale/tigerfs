@@ -77,11 +77,18 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	// - port=N: NFS server port
 	// - mountport=N: Mount protocol port (same as NFS port for go-nfs)
 	// - soft: Return errors on timeout (rather than hanging)
-	// - timeo=10: Timeout in deciseconds (1 second)
+	// - timeo=300: Timeout in deciseconds (30 seconds). Large writes (1MB)
+	//   to Docker PostgreSQL can take several seconds for XDR decode + DB commit.
 	// - retrans=2: Number of retries
 	// - resvport: Don't require reserved port (needed for non-root)
 	// - nolocks: Disable NFS locking (not supported by go-nfs)
-	mountOpts := fmt.Sprintf("locallocks,vers=3,tcp,port=%d,mountport=%d,soft,timeo=10,retrans=2,noresvport,nolocks", port, port)
+	// - wsize=131072: 128KB write chunks. macOS default is 32KB-64KB, which
+	//   causes many small RPCs with O(n²) DB writes. Larger values like 1MB
+	//   can trigger GC deadlocks in test environments where the NFS server
+	//   (go-nfs) runs in the same process as the client. 128KB is a safe
+	//   balance: 4x fewer RPCs than the default with no GC issues.
+	// - rsize=131072: 128KB read chunks (match wsize for consistency)
+	mountOpts := fmt.Sprintf("locallocks,vers=3,tcp,port=%d,mountport=%d,soft,timeo=300,retrans=2,noresvport,nolocks,wsize=131072,rsize=131072", port, port)
 
 	cmd := exec.CommandContext(ctx, "/sbin/mount_nfs",
 		"-o", mountOpts,

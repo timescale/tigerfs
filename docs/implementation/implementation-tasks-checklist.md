@@ -213,6 +213,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ⬜ | 10.1 | Implement Hybrid Metadata Caching | ~7405 |
 | ⬜ | 10.2 | Evaluate Multi-User Mount Support (allow_other) | ~7470 |
 | ⬜ | 10.3 | Row Timestamps from Database Columns (Optional) | ~7510 |
+| ⬜ | 10.4 | Patch go-nfs for UNSTABLE Writes and COMMIT Flush | ~8090 |
 
 ---
 
@@ -231,5 +232,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Shared Core Library | 15 | 17 | 88% |
-| Phase 10: Performance | 0 | 3 | 0% |
-| **Total** | **84** | **110** | **76%** |
+| Phase 10: Performance | 0 | 4 | 0% |
+| **Total** | **84** | **111** | **76%** |

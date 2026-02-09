@@ -8088,6 +8088,36 @@ FUSE filesystems can report mtime (modification time) for files. For row files, 
 
 ---
 
+### Task 10.4: Patch go-nfs for UNSTABLE Writes and COMMIT Flush
+
+**Objective:** Eliminate O(n²) write amplification by patching go-nfs to use proper NFS v3 write buffering.
+
+**Background:** go-nfs currently calls billy.File Close() after every WRITE RPC and always returns
+FILE_SYNC stability, making COMMIT a no-op. This forces our adapter to commit the full accumulated
+buffer on every WRITE RPC, producing O(n²) DB write volume for multi-chunk writes.
+
+The proper NFS v3 model: WRITE returns UNSTABLE (data buffered), COMMIT flushes to storage.
+This would give O(n) writes with correct durability semantics.
+
+**Approach:** Use `go mod replace` with a local patched copy of go-nfs (~10 lines changed):
+- `nfs_onwrite.go`: Return `unstable` instead of `fileSync`
+- `nfs_oncommit.go`: Call `file.Sync()` on the billy.File to trigger DB flush
+
+**Files to Modify:**
+- `go.mod` (add replace directive)
+- Local copy of go-nfs `nfs_onwrite.go`
+- Local copy of go-nfs `nfs_oncommit.go`
+- `internal/tigerfs/nfs/ops_filesystem.go` — Sync() becomes the real commit point
+
+**Completion Criteria:**
+- go-nfs WRITE RPCs return UNSTABLE stability level
+- go-nfs COMMIT RPCs trigger billy.File Sync()
+- Multi-chunk writes produce O(n) DB write volume instead of O(n²)
+- All existing integration tests pass
+- No durability regressions (data reaches DB on COMMIT)
+
+---
+
 ## Task Execution Guidelines
 
 ### Before Starting Each Task
