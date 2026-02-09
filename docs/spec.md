@@ -2732,6 +2732,32 @@ For complex schema migrations, consider using migration tools (Flyway, Liquibase
 
 ---
 
+## NFS Write Limitations
+
+### O(n²) Write Amplification (go-nfs)
+
+The go-nfs library fabricates an `Open → Write → Close` cycle per NFS WRITE RPC. NFS v3 is stateless and has no open/close — go-nfs synthesizes this because its `billy.Filesystem` abstraction requires it. Each `Close()` commits the full accumulated buffer to PostgreSQL.
+
+For multi-chunk writes, this produces **O(n²) total DB write volume**: the first chunk writes 128KB, the second writes 256KB, the third writes 384KB, etc. For a 1MB file with 128KB wsize, that's 8 commits totaling ~4.5MB of actual DB writes.
+
+**Mitigations in place:**
+
+1. **wsize=128KB** (macOS mount option): 4x fewer RPCs than macOS default (32KB-64KB). Larger values (e.g., 1MB) can trigger GC deadlocks in test environments where the NFS server runs in the same process as the client. 128KB is a safe balance.
+2. **Schema caching**: Schema resolution is cached with `sync.Once`, eliminating ~4-6 DB queries per RPC.
+3. **Stat cache**: Dirty cached files return size from memory, avoiding a DB read after each write.
+4. **Per-RPC overhead**: Reduced from ~7-9 DB queries to ~1 DB write per WRITE RPC.
+
+**Behavior:**
+
+- Data reaches PostgreSQL immediately on every WRITE RPC — no deferred commits, no durability gap.
+- Cache entries persist after Close() for Stat to use; the reaper evicts them after idle timeout.
+- go-nfs FSINFO advertises `Wtpref=1GB`; actual wsize depends on the NFS client's own default (macOS ~32KB without override, Linux ~1MB).
+- Files under 128KB complete in a single WRITE RPC, eliminating O(n²) entirely.
+
+**Long-term fix:** Patch go-nfs to return `UNSTABLE` from WRITE RPCs and flush on COMMIT (the NFS v3 mechanism for signaling "I'm done writing"). This would give O(n) writes with correct durability semantics. See Task 10.4 in `docs/implementation/implementation-tasks.md`.
+
+---
+
 ## Special PostgreSQL Types
 
 ### Simple Types

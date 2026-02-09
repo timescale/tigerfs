@@ -25,11 +25,13 @@ import (
 //
 // # File Caching (ADR-010)
 //
-// The filesystem uses a persistent file cache to enable efficient large file writes.
-// Files are cached in memory until all handles close, then committed once to the
-// database. This reduces O(n²) database traffic to O(n) for multi-chunk NFS writes.
+// The filesystem uses a persistent file cache to reduce per-RPC overhead.
+// go-nfs fabricates Open/Write/Close per WRITE RPC; the cache ensures that
+// Stat returns the current buffer size (avoiding a DB read) and that subsequent
+// writes reuse the cached buffer. Data is committed to DB on every Close().
 //
-// See cachedFile for cache entry lifecycle details.
+// See cachedFile for cache entry lifecycle details and docs/spec.md § NFS Write
+// Limitations for the O(n²) write amplification discussion.
 type OpsFilesystem struct {
 	ops *fs.Operations
 	cfg *config.Config
@@ -47,23 +49,23 @@ type OpsFilesystem struct {
 	reaperStop chan struct{}
 }
 
-// cachedFile persists across NFS RPCs until refCount drops to zero.
-// This enables O(n) instead of O(n²) database traffic for large file writes.
+// cachedFile persists across NFS RPCs to reduce per-RPC overhead.
 //
 // # Problem Solved
 //
-// Without caching, each NFS WRITE RPC triggers: Open → Read from DB → Overlay → Write to DB → Close.
-// For a 1MB file with 32KB wsize, this means 32 round-trips, each transferring the full file.
-// With caching, we buffer writes in memory and commit once when the last handle closes.
+// Without caching, each NFS WRITE RPC triggers: Open → Read from DB → Overlay → Write to DB → Close,
+// plus schema resolution queries and a post-op Stat reading the full value from DB.
+// With caching, per-RPC overhead is reduced to ~1 DB write (the commit in Close).
 //
 // # Lifecycle
 //
 //  1. First OpenFile: creates cachedFile with refCount=1, loads data from DB (or empty if O_TRUNC)
-//  2. Subsequent OpenFile: increments refCount, returns memFile wrapping same cachedFile
-//  3. Write: modifies cached data buffer, sets dirty=true
-//  4. Sync: commits to DB immediately (handles editor saves)
-//  5. Close: decrements refCount; if zero and dirty, commits to DB and removes from cache
-//  6. Reaper: force-commits and removes entries idle for >5 minutes (handles client crashes)
+//  2. Subsequent OpenFile (write): increments refCount, returns memFile wrapping same cachedFile
+//  3. Subsequent OpenFile (read): bypasses cache, reads from DB for proper formatting
+//  4. Write: modifies cached data buffer, sets dirty=true
+//  5. Sync: commits to DB immediately (handles editor saves)
+//  6. Close: decrements refCount; if zero and dirty, commits to DB, marks clean, keeps in cache
+//  7. Reaper: force-commits and removes entries idle for >5 minutes (handles client crashes)
 //
 // # Thread Safety
 //
@@ -368,7 +370,9 @@ func (f *OpsFilesystem) reapStaleCacheEntries() {
 				zap.String("path", path),
 				zap.Int("size", len(data)))
 
-			fsErr := ops.WriteFile(ctx(), path, data)
+			wctx, wcancel := ctx()
+			fsErr := ops.WriteFile(wctx, path, data)
+			wcancel()
 			if fsErr != nil {
 				logging.Error("Reaper commit failed",
 					zap.String("path", path),
@@ -378,7 +382,9 @@ func (f *OpsFilesystem) reapStaleCacheEntries() {
 			// DDL sql files need empty write committed
 			logging.Debug("Reaper committing empty DDL sql file",
 				zap.String("path", path))
-			ops.WriteFile(ctx(), path, data)
+			wctx, wcancel := ctx()
+			ops.WriteFile(wctx, path, data)
+			wcancel()
 		}
 
 		// Remove from cache
@@ -449,7 +455,9 @@ func (f *OpsFilesystem) Close() error {
 				zap.String("path", path),
 				zap.Int("size", len(data)))
 
-			fsErr := ops.WriteFile(ctx(), path, data)
+			wctx, wcancel := ctx()
+			fsErr := ops.WriteFile(wctx, path, data)
+			wcancel()
 			if fsErr != nil {
 				logging.Error("OpsFilesystem.Close: flush failed",
 					zap.String("path", path),
@@ -545,37 +553,45 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 	// Check if file is already in cache (includes in-flight and truncated files)
 	cached := f.getCachedFile(filename)
 	if cached != nil {
-		// File is already cached - get another reference
-		cached.mu.Lock()
-		cached.refCount++
-		cached.lastActivity = time.Now()
-
-		// Handle O_TRUNC on already-cached file
-		if flag&os.O_TRUNC != 0 {
-			cached.data = []byte{}
-			cached.truncated = true
-			logging.Debug("OpsFilesystem.OpenFile: truncated cached file",
+		if !isWrite {
+			// Read-only: bypass cache, read from DB for proper formatting
+			// (e.g., trailing newline for column files). Cache entry stays
+			// for Stat/write use. Fall through to DB read below.
+			logging.Debug("OpsFilesystem.OpenFile: read-only, bypassing cache for DB read",
 				zap.String("filename", filename))
+		} else {
+			// Write: use cache (increment refCount, existing behavior)
+			cached.mu.Lock()
+			cached.refCount++
+			cached.lastActivity = time.Now()
+
+			// Handle O_TRUNC on already-cached file
+			if flag&os.O_TRUNC != 0 {
+				cached.data = []byte{}
+				cached.truncated = true
+				logging.Debug("OpsFilesystem.OpenFile: truncated cached file",
+					zap.String("filename", filename))
+			}
+
+			refCount := cached.refCount
+			cached.mu.Unlock()
+
+			logging.Debug("OpsFilesystem.OpenFile: cache hit (write)",
+				zap.String("filename", filename),
+				zap.Int("refCount", refCount),
+				zap.Int("flag", flag))
+
+			return &memFile{
+				name:     path.Base(filename),
+				offset:   0,
+				writable: isWrite,
+				fs:       f,
+				cached:   cached,
+			}, nil
 		}
-
-		refCount := cached.refCount
-		cached.mu.Unlock()
-
-		logging.Debug("OpsFilesystem.OpenFile: cache hit",
-			zap.String("filename", filename),
-			zap.Int("refCount", refCount),
-			zap.Int("flag", flag))
-
-		return &memFile{
-			name:     path.Base(filename),
-			offset:   0,
-			writable: isWrite,
-			fs:       f,
-			cached:   cached,
-		}, nil
 	}
 
-	// File not in cache - determine if we need to load from DB or create fresh
+	// File not in cache, or read-only open bypassing cache
 
 	// For O_TRUNC or O_CREATE, start with empty data (don't read from DB)
 	if flag&os.O_TRUNC != 0 || flag&os.O_CREATE != 0 {
@@ -615,7 +631,9 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 	}
 
 	// Try to read existing content from database
-	content, fsErr := f.ops.ReadFile(ctx(), filename)
+	rctx, rcancel := ctx()
+	defer rcancel()
+	content, fsErr := f.ops.ReadFile(rctx, filename)
 	if fsErr != nil {
 		if fsErr.Code == fs.ErrNotExist {
 			// If O_CREATE was set, create empty file
@@ -686,28 +704,38 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Stat", zap.String("filename", filename))
 
-	// Check for cached files first (files being created/modified but not yet in DB).
-	// NFS calls Stat after Create but before Close, and the data may not exist
-	// in the database yet. Return info from cache for these files.
+	// Check for cached files with dirty (uncommitted) data.
+	// NFS calls Stat after Write but before Close, and the data may not be in
+	// the database yet. Return info from cache for these in-flight files.
+	// Clean (committed) cache entries are skipped — Stat falls through to DB
+	// to get the properly formatted size (e.g., with trailing newline).
 	cached := f.getCachedFile(filename)
 	if cached != nil {
 		cached.mu.RLock()
+		dirty := cached.dirty
 		size := int64(len(cached.data))
 		cached.mu.RUnlock()
 
-		logging.Debug("OpsFilesystem.Stat: returning cached file info",
-			zap.String("filename", filename),
-			zap.Int64("size", size))
-		return &inFlightFileInfo{
-			name:    path.Base(filename),
-			size:    size,
-			mode:    0644,
-			modTime: time.Now(),
-			path:    filename,
-		}, nil
+		if dirty {
+			logging.Debug("OpsFilesystem.Stat: returning dirty cached file info",
+				zap.String("filename", filename),
+				zap.Int64("size", size))
+			return &inFlightFileInfo{
+				name:    path.Base(filename),
+				size:    size,
+				mode:    0644,
+				modTime: time.Now(),
+				path:    filename,
+			}, nil
+		}
+		// Clean cache entry — fall through to DB for accurate size
+		logging.Debug("OpsFilesystem.Stat: clean cache entry, falling through to DB",
+			zap.String("filename", filename))
 	}
 
-	entry, fsErr := f.ops.Stat(ctx(), filename)
+	sctx, scancel := ctx()
+	defer scancel()
+	entry, fsErr := f.ops.Stat(sctx, filename)
 	if fsErr != nil {
 		logging.Debug("OpsFilesystem.Stat error",
 			zap.String("filename", filename),
@@ -762,7 +790,9 @@ func (f *OpsFilesystem) Remove(filename string) error {
 			zap.String("filename", filename))
 	}
 
-	fsErr := f.ops.Delete(ctx(), filename)
+	dctx, dcancel := ctx()
+	defer dcancel()
+	fsErr := f.ops.Delete(dctx, filename)
 	if fsErr != nil {
 		if fsErr.Code == fs.ErrNotExist {
 			return os.ErrNotExist
@@ -787,7 +817,9 @@ func (f *OpsFilesystem) ReadDir(dirname string) ([]os.FileInfo, error) {
 	dirname = normalizePath(dirname)
 	logging.Debug("OpsFilesystem.ReadDir", zap.String("dirname", dirname))
 
-	entries, fsErr := f.ops.ReadDir(ctx(), dirname)
+	rdctx, rdcancel := ctx()
+	defer rdcancel()
+	entries, fsErr := f.ops.ReadDir(rdctx, dirname)
 	if fsErr != nil {
 		logging.Debug("OpsFilesystem.ReadDir error",
 			zap.String("dirname", dirname),
@@ -836,7 +868,9 @@ func (f *OpsFilesystem) MkdirAll(filename string, perm os.FileMode) error {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.MkdirAll", zap.String("filename", filename))
 
-	fsErr := f.ops.Mkdir(ctx(), filename)
+	mctx, mcancel := ctx()
+	defer mcancel()
+	fsErr := f.ops.Mkdir(mctx, filename)
 	if fsErr != nil {
 		if fsErr.Code == fs.ErrAlreadyExists {
 			return nil // MkdirAll doesn't fail if directory exists
@@ -1074,10 +1108,12 @@ func (c *opsChrootFilesystem) Chtimes(name string, atime time.Time, mtime time.T
 	return c.fs.Chtimes(path.Join(c.root, name), atime, mtime)
 }
 
-// ctx returns a background context for operations.
-// In a real implementation, this should be passed through from the NFS request.
-func ctx() context.Context {
-	return context.Background()
+// ctx returns a context with a 30-second timeout for NFS operations.
+// go-nfs doesn't provide request-scoped contexts (unlike go-fuse which passes
+// kernel contexts through node methods), so we add our own deadline to prevent
+// operations from blocking indefinitely when the database is slow or unreachable.
+func ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
 // isDDLPath checks if a path is within a DDL staging directory (.create, .modify, .delete).
@@ -1273,7 +1309,9 @@ func (f *memFile) Write(p []byte) (int, error) {
 				zap.String("path", path),
 				zap.Int("size", len(data)))
 
-			fsErr := ops.WriteFile(ctx(), path, data)
+			wctx, wcancel := ctx()
+			fsErr := ops.WriteFile(wctx, path, data)
+			wcancel()
 			if fsErr != nil {
 				logging.Error("memFile.Write: streaming commit failed",
 					zap.String("path", path),
@@ -1353,7 +1391,6 @@ func (f *memFile) Close() error {
 	dirty = f.cached.dirty
 	data := f.cached.data
 	deleted := f.cached.deleted
-	truncated := f.cached.truncated
 	f.cached.mu.Unlock()
 
 	// If file was deleted while open, discard changes
@@ -1369,7 +1406,9 @@ func (f *memFile) Close() error {
 	if isTrigger && ops != nil && filePath != "" {
 		logging.Debug("memFile.Close: DDL trigger file, triggering operation",
 			zap.String("path", filePath))
-		fsErr := ops.WriteFile(ctx(), filePath, []byte{})
+		wctx, wcancel := ctx()
+		fsErr := ops.WriteFile(wctx, filePath, []byte{})
+		wcancel()
 		if fsErr != nil {
 			logging.Error("memFile.Close: DDL trigger failed",
 				zap.String("path", filePath),
@@ -1382,46 +1421,23 @@ func (f *memFile) Close() error {
 	}
 
 	if dirty && ops != nil && filePath != "" {
-		// WORKAROUND: Skip writing empty content to database columns.
-		//
-		// Background: The macOS NFS client uses a truncate-before-write pattern:
-		//   1. SETATTR with size=0 (truncates file to empty)
-		//   2. WRITE operations with actual content
-		//   3. COMMIT to finalize
-		//
-		// The go-nfs library handles SETATTR by opening the file, calling Truncate(0),
-		// and then Close(). Our memFile.Close() writes data back to the database.
-		// This means truncating a file immediately writes empty content to the DB,
-		// BEFORE the actual content arrives in step 2.
-		//
-		// Problem: Writing empty content to a database column can fail:
-		//   - NOT NULL constraints: empty string converts to NULL, violating constraint
-		//   - Data integrity: user intended to write content, not clear it
-		//
-		// This workaround skips the database write when content is empty. The actual
-		// content will be written when the NFS WRITE operations arrive with data.
-		//
-		// EXCEPTION: DDL sql files MUST write empty content to clear the session.
-		// Without this, the truncate-before-write pattern leaves stale template
-		// content in the DDL session, causing partial overwrites.
-		//
-		// Limitation: This workaround means users cannot intentionally clear a column
-		// to empty by truncating. They should use Delete (rm) to set columns to NULL.
-		if len(data) == 0 && !isDDLSQL {
-			// For empty data with dirty flag, this is likely the truncate phase of
-			// truncate-before-write pattern. Keep the cache entry so the subsequent
-			// WRITE operation can find it with truncated=true.
-			// The reaper will clean it up if no write comes within 5 minutes.
-			logging.Debug("memFile.Close: skipping write of empty content, keeping cache for subsequent write",
-				zap.String("path", filePath))
-			// Don't remove from cache - wait for subsequent write or reaper
-			return nil
-		}
+		// WORKAROUND(go-nfs O(n²) writes): go-nfs calls Close() after every WRITE
+		// RPC, so we commit the full accumulated buffer each time. This produces
+		// O(n²) total DB write volume for multi-chunk writes. The proper fix is to
+		// patch go-nfs to return UNSTABLE from WRITE and flush on COMMIT (see Task
+		// 10.4 in docs/implementation/implementation-tasks.md). For now this is
+		// acceptable because wsize=128KB reduces RPC count by 4x vs macOS default,
+		// and per-RPC overhead is reduced to ~1 DB write via the schema cache and
+		// Stat cache. See docs/spec.md § NFS Write Limitations.
 
-		logging.Debug("memFile.Close writing back",
+		logging.Debug("memFile.Close: committing dirty data to DB",
 			zap.String("path", filePath),
-			zap.Int("size", len(data)))
-		fsErr := ops.WriteFile(ctx(), filePath, data)
+			zap.Int("size", len(data)),
+			zap.Bool("isDDLSQL", isDDLSQL))
+
+		wctx, wcancel := ctx()
+		fsErr := ops.WriteFile(wctx, filePath, data)
+		wcancel()
 		if fsErr != nil {
 			logging.Error("memFile.Close WriteFile failed",
 				zap.String("path", filePath),
@@ -1430,27 +1446,18 @@ func (f *memFile) Close() error {
 			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 		}
 
-		// Mark as not dirty after successful write
+		// Mark cache entry clean but keep it alive for Stat to use.
+		// The reaper will evict it after idle timeout.
 		f.cached.mu.Lock()
 		f.cached.dirty = false
-		f.cached.truncated = false // Clear truncated since we've now committed
+		f.cached.truncated = false
 		f.cached.mu.Unlock()
-
-		// Remove from cache after successful commit
-		f.fs.removeFromCache(filePath)
+		// Do NOT call removeFromCache — let reaper handle eviction.
 		return nil
 	}
 
-	// File wasn't dirty - check if we should keep it in cache
-	// Keep truncated entries for the truncate-before-write pattern
-	if truncated {
-		logging.Debug("memFile.Close: keeping truncated entry in cache for subsequent write",
-			zap.String("path", filePath))
-		return nil
-	}
-
-	// Nothing was written and file wasn't truncated - remove from cache
-	f.fs.removeFromCache(filePath)
+	// File wasn't dirty - keep in cache for Stat to use (reaper handles eviction).
+	// This covers the truncate-before-write pattern and clean cache entries.
 	return nil
 }
 
@@ -1526,7 +1533,9 @@ func (f *memFile) Sync() error {
 			zap.String("path", filePath),
 			zap.Int("size", len(data)))
 
-		fsErr := ops.WriteFile(ctx(), filePath, data)
+		wctx, wcancel := ctx()
+		fsErr := ops.WriteFile(wctx, filePath, data)
+		wcancel()
 		if fsErr != nil {
 			logging.Error("memFile.Sync WriteFile failed",
 				zap.String("path", filePath),
