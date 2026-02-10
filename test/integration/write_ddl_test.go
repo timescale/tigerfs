@@ -479,7 +479,8 @@ func TestWriteDDL_AbortClearsSession(t *testing.T) {
 		t.Fatalf("Failed to close .abort: %v", err)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	// Sleep longer than EntryTimeout (1s) so FUSE dcache expires
+	time.Sleep(1500 * time.Millisecond)
 
 	// Table should NOT exist (was never committed)
 	tablePath := filepath.Join(mountpoint, tableName)
