@@ -127,28 +127,35 @@ func TestLargeWrite_64KB(t *testing.T) {
 
 		dataPath := filepath.Join(mountpoint, tableName, "1", "data")
 
-		// Write via the mounted filesystem
-		f, err := os.Create(dataPath)
-		if err != nil {
-			t.Fatalf("Failed to create file: %v", err)
-		}
+		// Write with GC disabled to prevent deadlock (see withGCDisabled doc)
+		var writeErr error
+		withGCDisabled(func() {
+			var f *os.File
+			f, writeErr = os.Create(dataPath)
+			if writeErr != nil {
+				return
+			}
 
-		n, err := f.Write(content)
-		if err != nil {
-			f.Close()
-			t.Fatalf("Failed to write: %v", err)
-		}
-		if n != len(content) {
-			f.Close()
-			t.Fatalf("Short write: %d != %d", n, len(content))
-		}
+			var n int
+			n, writeErr = f.Write(content)
+			if writeErr != nil {
+				f.Close()
+				return
+			}
+			if n != len(content) {
+				f.Close()
+				writeErr = fmt.Errorf("short write: %d != %d", n, len(content))
+				return
+			}
 
-		// Force flush to server
-		if err := f.Sync(); err != nil {
-			t.Logf("Sync warning: %v", err)
-		}
-		if err := f.Close(); err != nil {
-			t.Fatalf("Failed to close: %v", err)
+			// Force flush to server
+			if err := f.Sync(); err != nil {
+				t.Logf("Sync warning: %v", err)
+			}
+			writeErr = f.Close()
+		})
+		if writeErr != nil {
+			t.Fatalf("Failed to write 64KB: %v", writeErr)
 		}
 
 		// Mitigation: brief delay for NFS caches to settle
@@ -608,13 +615,6 @@ func TestLargeWrite_JSON(t *testing.T) {
 	})
 
 	t.Run("WriteLargeJSON", func(t *testing.T) {
-		// TODO: Row-level JSON write via NFS returns "RPC struct is bad" — the NFS
-		// client can't resolve 1.json because it doesn't appear in directory listings
-		// as a physical file. Row-level format files (.json, .csv, .tsv) are virtual
-		// views that exist only when accessed directly. This is a pre-existing NFS
-		// limitation, not related to large write handling.
-		t.Skip("Row-level JSON writes not yet supported via NFS (RPC struct is bad)")
-
 		// Create JSON with large description field
 		largeDesc := strings.Repeat("This is a test description. ", 100) // ~2.9KB
 		jsonContent := fmt.Sprintf(`{"name": "UpdatedName", "description": "%s"}`, largeDesc)
