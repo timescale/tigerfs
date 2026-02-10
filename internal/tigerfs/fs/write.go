@@ -666,6 +666,13 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 	case PathDDL:
 		return o.mkdirDDL(ctx, parsed)
 
+	case PathTable, PathRoot, PathSchema, PathSchemaList, PathCapability,
+		PathInfo, PathExport, PathImport, PathViewList:
+		return &FSError{
+			Code:    ErrAlreadyExists,
+			Message: "directory already exists",
+		}
+
 	default:
 		return &FSError{
 			Code:    ErrInvalidPath,
