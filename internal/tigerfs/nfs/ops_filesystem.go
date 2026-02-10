@@ -508,7 +508,7 @@ func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	cached.mu.Unlock()
 
 	mf := &memFile{
-		name:     path.Base(filename),
+		name:     filename,
 		offset:   0,
 		writable: true,
 		fs:       f,
@@ -582,7 +582,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 				zap.Int("flag", flag))
 
 			return &memFile{
-				name:     path.Base(filename),
+				name:     filename,
 				offset:   0,
 				writable: isWrite,
 				fs:       f,
@@ -602,7 +602,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 			zap.Int("flag", flag))
 
 		return &memFile{
-			name:     path.Base(filename),
+			name:     filename,
 			offset:   0,
 			writable: isWrite,
 			fs:       f,
@@ -622,7 +622,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 			zap.String("filename", filename))
 
 		return &memFile{
-			name:     path.Base(filename),
+			name:     filename,
 			offset:   0,
 			writable: isWrite,
 			fs:       f,
@@ -644,7 +644,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 					zap.String("filename", filename))
 
 				return &memFile{
-					name:     path.Base(filename),
+					name:     filename,
 					offset:   0,
 					writable: isWrite,
 					fs:       f,
@@ -673,7 +673,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 			zap.Int("size", len(content.Data)))
 
 		return &memFile{
-			name:     path.Base(filename),
+			name:     filename,
 			offset:   0,
 			writable: true,
 			fs:       f,
@@ -687,7 +687,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 		zap.Int("size", len(content.Data)))
 
 	return &memFile{
-		name:     path.Base(filename),
+		name:     filename,
 		offset:   0,
 		writable: false,
 		fs:       f,
@@ -704,22 +704,27 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	filename = normalizePath(filename)
 	logging.Debug("OpsFilesystem.Stat", zap.String("filename", filename))
 
-	// Check for cached files with dirty (uncommitted) data.
+	// Check for cached files with dirty or newly-created (truncated) data.
 	// NFS calls Stat after Write but before Close, and the data may not be in
 	// the database yet. Return info from cache for these in-flight files.
-	// Clean (committed) cache entries are skipped — Stat falls through to DB
-	// to get the properly formatted size (e.g., with trailing newline).
+	// Also return cache info for truncated (newly-created) entries so that
+	// go-nfs's Apply() in the CREATE handler can Lstat the file after Close.
+	// Clean (committed, non-truncated) cache entries are skipped — Stat falls
+	// through to DB to get the properly formatted size.
 	cached := f.getCachedFile(filename)
 	if cached != nil {
 		cached.mu.RLock()
 		dirty := cached.dirty
+		truncated := cached.truncated
 		size := int64(len(cached.data))
 		cached.mu.RUnlock()
 
-		if dirty {
-			logging.Debug("OpsFilesystem.Stat: returning dirty cached file info",
+		if dirty || truncated {
+			logging.Debug("OpsFilesystem.Stat: returning cached file info",
 				zap.String("filename", filename),
-				zap.Int64("size", size))
+				zap.Int64("size", size),
+				zap.Bool("dirty", dirty),
+				zap.Bool("truncated", truncated))
 			return &inFlightFileInfo{
 				name:    path.Base(filename),
 				size:    size,
@@ -1146,7 +1151,7 @@ func isRowFile(filename string) bool {
 //   - Close in write mode: decrements cached.refCount, commits when refCount=0
 //   - Close in read-only mode: no-op (just discards private buffer)
 type memFile struct {
-	name     string         // basename for Name() method
+	name     string         // full normalized path for Name() method (required by go-nfs)
 	offset   int64          // per-handle read/write position
 	writable bool           // true if opened for writing
 	fs       *OpsFilesystem // parent filesystem for cache management
@@ -1421,6 +1426,20 @@ func (f *memFile) Close() error {
 	}
 
 	if dirty && ops != nil && filePath != "" {
+		// NFS SETATTR truncation: When NFS truncates a file before writing (the
+		// SETATTR→WRITE pattern), Close is called with empty data between the two
+		// RPCs. Committing empty data would either fail (row files need valid
+		// JSON/CSV) or corrupt data (column files set to empty string). Keep the
+		// cache entry alive and dirty so the subsequent WRITE RPC can fill it with
+		// actual data and commit successfully.
+		// DDL sql files are excluded because empty writes to DDL sql are meaningful
+		// (they clear the session state).
+		if len(data) == 0 && !isDDLSQL {
+			logging.Debug("memFile.Close: skipping empty commit (SETATTR truncation pattern)",
+				zap.String("path", filePath))
+			return nil
+		}
+
 		// WORKAROUND(go-nfs O(n²) writes): go-nfs calls Close() after every WRITE
 		// RPC, so we commit the full accumulated buffer each time. This produces
 		// O(n²) total DB write volume for multi-chunk writes. The proper fix is to
