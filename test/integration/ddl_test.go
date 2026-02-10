@@ -130,7 +130,8 @@ func TestDDL_TableCreateDeleteCycle(t *testing.T) {
 			t.Fatalf("Failed to touch .commit: %v", err)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		// Sleep longer than EntryTimeout (1s) so FUSE dcache expires
+		time.Sleep(1500 * time.Millisecond)
 
 		// Verify table was deleted
 		if _, err := os.Stat(tablePath); !os.IsNotExist(err) {
@@ -488,7 +489,8 @@ func TestDDL_ViewCreateDelete(t *testing.T) {
 			t.Fatalf("Failed to touch .commit: %v", err)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		// Sleep longer than EntryTimeout (1s) so FUSE dcache expires
+		time.Sleep(1500 * time.Millisecond)
 
 		// Verify view is gone
 		if _, err := os.Stat(viewPath); !os.IsNotExist(err) {
