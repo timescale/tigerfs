@@ -466,3 +466,27 @@ func TestParseDDLOpType(t *testing.T) {
 		})
 	}
 }
+
+// TestDDLManager_UpdatedAt tests that UpdatedAt is set and updated correctly.
+func TestDDLManager_UpdatedAt(t *testing.T) {
+	dm := NewDDLManager(nil)
+
+	// UpdatedAt is set on creation
+	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	session := dm.GetSession(id)
+	require.NotNil(t, session)
+	assert.False(t, session.UpdatedAt.IsZero(), "UpdatedAt should be set on creation")
+	assert.Equal(t, session.CreatedAt, session.UpdatedAt, "UpdatedAt should equal CreatedAt initially")
+
+	// UpdatedAt is stable across repeated reads
+	time.Sleep(time.Millisecond)
+	session2 := dm.GetSession(id)
+	assert.Equal(t, session.UpdatedAt, session2.UpdatedAt, "UpdatedAt should be stable without writes")
+
+	// UpdatedAt advances on WriteSQL
+	beforeWrite := session.UpdatedAt
+	time.Sleep(time.Millisecond)
+	dm.WriteSQL(id, "CREATE TABLE orders (id SERIAL PRIMARY KEY);")
+	session = dm.GetSession(id)
+	assert.True(t, session.UpdatedAt.After(beforeWrite), "UpdatedAt should advance after WriteSQL")
+}
