@@ -94,7 +94,7 @@ func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint stri
 
 		switch method {
 		case MountMethodFUSE:
-			fs, err = fuse.Mount(mountCtx, cfg, connStr, mountpoint)
+			fs, err = fuse.MountOps(mountCtx, cfg, connStr, mountpoint)
 		case MountMethodNFS:
 			fs, err = nfs.Mount(mountCtx, cfg, connStr, mountpoint)
 		default:
