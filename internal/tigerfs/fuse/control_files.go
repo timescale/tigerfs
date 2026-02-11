@@ -52,6 +52,11 @@ func (s *SchemaFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 	out.Nlink = 1
 	out.Size = uint64(len(content))
 
+	// Set stable mtime from staging tracker to avoid Emacs "file has changed" warnings
+	if updatedAt := s.staging.GetUpdatedAt(s.ctx.StagingPath); !updatedAt.IsZero() {
+		out.SetTimes(nil, &updatedAt, nil)
+	}
+
 	return 0
 }
 
@@ -342,6 +347,10 @@ func (t *TestFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.
 	out.Nlink = 1
 	out.Size = 0 // Trigger-only file, no readable content
 
+	if updatedAt := t.staging.GetUpdatedAt(t.ctx.StagingPath); !updatedAt.IsZero() {
+		out.SetTimes(nil, &updatedAt, nil)
+	}
+
 	return 0
 }
 
@@ -447,6 +456,10 @@ func (t *TestLogFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fu
 	out.Nlink = 1
 	out.Size = uint64(len(result))
 
+	if updatedAt := t.staging.GetUpdatedAt(t.ctx.StagingPath); !updatedAt.IsZero() {
+		out.SetTimes(nil, &updatedAt, nil)
+	}
+
 	return 0
 }
 
@@ -520,6 +533,10 @@ func (c *CommitFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fus
 	out.Mode = 0644 | syscall.S_IFREG
 	out.Nlink = 1
 	out.Size = 0
+
+	if updatedAt := c.staging.GetUpdatedAt(c.ctx.StagingPath); !updatedAt.IsZero() {
+		out.SetTimes(nil, &updatedAt, nil)
+	}
 
 	return 0
 }
@@ -636,6 +653,10 @@ func (a *AbortFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse
 	out.Mode = 0644 | syscall.S_IFREG
 	out.Nlink = 1
 	out.Size = 0
+
+	if updatedAt := a.staging.GetUpdatedAt(a.ctx.StagingPath); !updatedAt.IsZero() {
+		out.SetTimes(nil, &updatedAt, nil)
+	}
 
 	return 0
 }

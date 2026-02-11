@@ -717,6 +717,7 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 		dirty := cached.dirty
 		truncated := cached.truncated
 		size := int64(len(cached.data))
+		lastAct := cached.lastActivity
 		cached.mu.RUnlock()
 
 		if dirty || truncated {
@@ -729,7 +730,7 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 				name:    path.Base(filename),
 				size:    size,
 				mode:    0644,
-				modTime: time.Now(),
+				modTime: lastAct,
 				path:    filename,
 			}, nil
 		}
