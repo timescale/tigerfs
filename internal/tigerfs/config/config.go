@@ -58,6 +58,9 @@ type Config struct {
 	// Debug
 	Debug bool `mapstructure:"debug"`
 
+	// FUSE backend selection (Linux only)
+	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
+
 	// Config directory
 	ConfigDir string `mapstructure:"config_dir"`
 }
@@ -86,6 +89,7 @@ func Init() error {
 	viper.SetDefault("default_format", "tsv")
 	viper.SetDefault("binary_encoding", "raw")
 	viper.SetDefault("debug", false)
+	viper.SetDefault("legacy_fuse", false)
 	viper.SetDefault("config_dir", GetDefaultConfigDir())
 
 	// Setup config file
