@@ -343,6 +343,16 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 		}
 	}
 
+	// Check for context cancellation before proceeding
+	if ctx.Err() != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: fmt.Sprintf("DDL write aborted: context cancelled for %s/%s", parsed.DDLOp, parsed.DDLName),
+			Hint:    fmt.Sprintf("context error: %v", ctx.Err()),
+			Cause:   ctx.Err(),
+		}
+	}
+
 	// Ensure session exists (auto-create for table-level DDL)
 	if err := o.ensureDDLSession(parsed, op); err != nil {
 		return err
@@ -350,6 +360,13 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 
 	// Find session by name
 	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID == "" {
+		return &FSError{
+			Code:    ErrIO,
+			Message: fmt.Sprintf("DDL session vanished for %s/%s", parsed.DDLOp, parsed.DDLName),
+			Hint:    "session existed in ensureDDLSession but not in FindSessionByName — possible race condition",
+		}
+	}
 
 	// Handle the specific file
 	switch parsed.DDLFile {
@@ -383,7 +400,8 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 		if err != nil {
 			return &FSError{
 				Code:    ErrIO,
-				Message: "DDL commit failed",
+				Message: fmt.Sprintf("DDL commit failed for %s/%s", parsed.DDLOp, parsed.DDLName),
+				Hint:    fmt.Sprintf("session=%s error: %v", sessionID, err),
 				Cause:   err,
 			}
 		}
