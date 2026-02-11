@@ -48,6 +48,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var noFilenameExtensions bool
 	var queryTimeout time.Duration
 	var dirFilterLimit int
+	var legacyFuse bool
 	// TODO: allow-other support has inconsistent cross-platform behavior
 	// (works on Linux, limited on macOS, different model on Windows).
 	// Revisit in Phase 6 Task 6.2. For now, mounts are single-user only.
@@ -138,6 +139,11 @@ Examples:
 				cfg.DirFilterLimit = dirFilterLimit
 			}
 
+			// Apply --legacy-fuse flag if set (Linux only, uses specialized FUSE nodes)
+			if legacyFuse {
+				cfg.LegacyFuse = true
+			}
+
 			// Mount the filesystem using platform-specific backend
 			// (NFS on macOS, FUSE on Linux)
 			fs, err := mountFilesystem(ctx, cfg, connStr, absMountpoint)
@@ -194,6 +200,9 @@ Examples:
 	// Query safety flags
 	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
+
+	// Backend flags
+	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 
 	return cmd
 }
