@@ -932,16 +932,31 @@ func (f *OpsFilesystem) Chown(name string, uid, gid int) error {
 	return nil
 }
 
-// Chtimes is a no-op for database-backed filesystems.
+// Chtimes handles timestamp changes.
+// For DDL trigger files (.test, .commit, .abort), this fires the DDL operation.
+// NFS `touch` uses SETATTR to set timestamps, which maps to Chtimes — not OpenFile.
+// Without this, `touch .test` would be a no-op and DDL validation would never trigger.
 func (f *OpsFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) error {
 	name = normalizePath(name)
 	logging.Debug("OpsFilesystem.Chtimes", zap.String("name", name), zap.Time("atime", atime), zap.Time("mtime", mtime))
 
-	// DDL trigger files (.test, .commit, .abort) are triggered on OpenFile, not Chtimes.
-	// go-nfs may call Chtimes after file close to update timestamps, but by then the
-	// session might already be removed (for .abort/.commit). We just return success.
-	// Note: We used to trigger here for `touch` which uses Chtimes, but now OpenFile
-	// triggers on ANY open of trigger files, so Chtimes triggering is redundant.
+	// Check if this is a DDL trigger file
+	baseName := path.Base(name)
+	isTrigger := (baseName == ".test" || baseName == ".commit" || baseName == ".abort") && isDDLPath(name)
+
+	if isTrigger {
+		logging.Debug("OpsFilesystem.Chtimes: triggering DDL operation",
+			zap.String("name", name))
+		wctx, wcancel := ctx()
+		defer wcancel()
+		fsErr := f.ops.WriteFile(wctx, name, []byte{})
+		if fsErr != nil {
+			logging.Error("OpsFilesystem.Chtimes: DDL trigger failed",
+				zap.String("name", name),
+				zap.Error(fsErr.Cause))
+			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+		}
+	}
 
 	return nil
 }
