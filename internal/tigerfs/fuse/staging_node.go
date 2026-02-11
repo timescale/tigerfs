@@ -413,6 +413,13 @@ func (e *ExtraFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse
 	out.Mode = 0644 | syscall.S_IFREG
 	out.Nlink = 1
 	out.Size = uint64(len(content))
+
+	// Set mtime from staging entry to avoid 1970 epoch default
+	updatedAt := e.staging.GetUpdatedAt(e.stagingPath)
+	if !updatedAt.IsZero() {
+		out.SetTimes(nil, &updatedAt, nil)
+	}
+
 	return 0
 }
 
