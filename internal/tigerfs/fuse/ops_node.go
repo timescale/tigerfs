@@ -275,6 +275,7 @@ type OpsFileHandle struct {
 	// File type flags (same semantics as NFS cachedFile)
 	isTrigger bool // DDL trigger files (.test, .commit, .abort)
 	isDDLSQL  bool // DDL sql files
+	triggered bool // True after a DDL trigger has fired — prevents re-firing from dup2 close
 }
 
 // Compile-time interface checks for OpsFileHandle
@@ -366,6 +367,10 @@ func (fh *OpsFileHandle) Flush(ctx context.Context) syscall.Errno {
 	copy(data, fh.buf)
 	isTrigger := fh.isTrigger
 	isDDLSQL := fh.isDDLSQL
+	alreadyTriggered := fh.triggered
+	if isTrigger && !alreadyTriggered {
+		fh.triggered = true
+	}
 	fh.mu.Unlock()
 
 	logging.Debug("OpsFileHandle.Flush",
@@ -374,9 +379,14 @@ func (fh *OpsFileHandle) Flush(ctx context.Context) syscall.Errno {
 		zap.Int("size", len(data)),
 		zap.Bool("isTrigger", isTrigger))
 
-	// DDL trigger files always fire, regardless of dirty state
-	if isTrigger {
+	// DDL trigger files always fire, regardless of dirty state.
+	// The triggered flag prevents re-firing from multiple Flush calls
+	// (GNU coreutils touch uses dup2, causing close on both fds → 2 Flushes).
+	if isTrigger && !alreadyTriggered {
 		return fh.adapter.WriteFile(ctx, fh.path, []byte{})
+	}
+	if isTrigger {
+		return 0
 	}
 
 	if !dirty {
