@@ -96,6 +96,7 @@ type cachedFile struct {
 	isTrigger bool // DDL trigger files (.test, .commit, .abort) - always fire on close
 	isDDLSQL  bool // DDL sql files - empty writes must be persisted to clear session
 	isRowFile bool // Row files (JSON, CSV, TSV, YAML) - writes at offset 0 replace entire buffer
+	triggered bool // True after DDL trigger has fired — prevents re-firing from Chtimes
 }
 
 // NewOpsFilesystem creates a new OpsFilesystem that wraps fs.Operations.
@@ -945,6 +946,21 @@ func (f *OpsFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) e
 	isTrigger := (baseName == ".test" || baseName == ".commit" || baseName == ".abort") && isDDLPath(name)
 
 	if isTrigger {
+		// Check if the trigger was already fired by memFile.Close() (NFS touch
+		// causes both OpenFile+Close and Chtimes, both of which would fire).
+		cached := f.getCachedFile(name)
+		if cached != nil {
+			cached.mu.RLock()
+			alreadyTriggered := cached.triggered
+			cached.mu.RUnlock()
+			if alreadyTriggered {
+				logging.Debug("OpsFilesystem.Chtimes: skipping duplicate DDL trigger",
+					zap.String("name", name))
+				f.removeFromCache(name)
+				return nil
+			}
+		}
+
 		logging.Debug("OpsFilesystem.Chtimes: triggering DDL operation",
 			zap.String("name", name))
 		wctx, wcancel := ctx()
@@ -1424,9 +1440,16 @@ func (f *memFile) Close() error {
 
 	// For DDL trigger files, ALWAYS write to trigger the operation.
 	// The trigger happens regardless of whether the file was dirtied or has content.
+	// Mark as triggered so Chtimes can skip the duplicate fire (NFS touch causes
+	// both Close and Chtimes, and both would otherwise fire the trigger).
 	if isTrigger && ops != nil && filePath != "" {
 		logging.Debug("memFile.Close: DDL trigger file, triggering operation",
 			zap.String("path", filePath))
+
+		f.cached.mu.Lock()
+		f.cached.triggered = true
+		f.cached.mu.Unlock()
+
 		wctx, wcancel := ctx()
 		fsErr := ops.WriteFile(wctx, filePath, []byte{})
 		wcancel()
@@ -1437,7 +1460,8 @@ func (f *memFile) Close() error {
 			// Don't return error - let NFS operations complete normally.
 			// The DDL operation failure is logged but shouldn't cause NFS protocol errors.
 		}
-		f.fs.removeFromCache(filePath)
+		// Keep cache entry briefly so Chtimes can see the triggered flag.
+		// Reaper will clean it up.
 		return nil
 	}
 
