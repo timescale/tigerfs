@@ -55,6 +55,11 @@ type DDLStagingEntry struct {
 	// UpdatedAt is when the session content was last modified.
 	// Used to provide stable mtime for DDL files (avoids time.Now() per stat call).
 	UpdatedAt time.Time
+	// Completed is true after a successful commit or abort.
+	// The session is kept in memory briefly so filesystem close operations
+	// (stat, readdir) don't fail. Cleaned up by lazy reaper.
+	Completed   bool
+	CompletedAt time.Time
 	// ExtraFiles holds editor temp files (swap files, backups, etc.) stored in-memory.
 	// Editors like vim and emacs create temporary files alongside the file being edited;
 	// these must be stored so editors don't error out.
@@ -80,21 +85,28 @@ type ExtraFile struct {
 //  3. Test: Validate the DDL (BEGIN/ROLLBACK)
 //  4. Commit: Execute the DDL, or Abort: Cancel the session
 type DDLManager struct {
-	db       db.DDLExecutor
-	sessions map[string]*DDLStagingEntry
-	mu       sync.RWMutex
+	db          db.DDLExecutor
+	sessions    map[string]*DDLStagingEntry
+	mu          sync.RWMutex
+	gracePeriod time.Duration // How long completed sessions stay visible
 }
 
 // NewDDLManager creates a new DDL manager.
 //
 // Parameters:
 //   - dbClient: database client for executing DDL (can be nil for template-only use)
+//   - gracePeriod: how long completed sessions stay visible for post-close operations.
+//     If 0, defaults to 30 seconds.
 //
 // Returns a new DDLManager ready for use.
-func NewDDLManager(dbClient db.DDLExecutor) *DDLManager {
+func NewDDLManager(dbClient db.DDLExecutor, gracePeriod time.Duration) *DDLManager {
+	if gracePeriod == 0 {
+		gracePeriod = 30 * time.Second
+	}
 	return &DDLManager{
-		db:       dbClient,
-		sessions: make(map[string]*DDLStagingEntry),
+		db:          dbClient,
+		sessions:    make(map[string]*DDLStagingEntry),
+		gracePeriod: gracePeriod,
 	}
 }
 
@@ -310,9 +322,14 @@ func (m *DDLManager) Commit(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("DDL execution failed: %w", err)
 	}
 
-	// Remove session on success
+	// Mark session as completed (keep for grace period so post-close
+	// filesystem operations like stat/readdir don't fail)
 	m.mu.Lock()
-	delete(m.sessions, sessionID)
+	if session, exists := m.sessions[sessionID]; exists {
+		session.Completed = true
+		session.CompletedAt = time.Now()
+		session.UpdatedAt = time.Now()
+	}
 	m.mu.Unlock()
 
 	return nil
@@ -331,8 +348,20 @@ func (m *DDLManager) Abort(sessionID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.sessions, sessionID)
+	if session, exists := m.sessions[sessionID]; exists {
+		session.Completed = true
+		session.CompletedAt = time.Now()
+		session.UpdatedAt = time.Now()
+	}
 	return nil
+}
+
+// RemoveSession permanently deletes a session from the manager.
+// Used to clear completed sessions when creating a new session with the same name.
+func (m *DDLManager) RemoveSession(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.sessions, sessionID)
 }
 
 // ListSessions returns all sessions of a given operation type.
@@ -363,14 +392,21 @@ func (m *DDLManager) ListSessions(op DDLOpType) []string {
 //
 // Returns a slice of matching session entries (copies, not pointers).
 func (m *DDLManager) ListSessionEntries(op DDLOpType) []DDLStagingEntry {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock() // Write lock for lazy cleanup
+	defer m.mu.Unlock()
 
+	now := time.Now()
 	var entries []DDLStagingEntry
-	for _, session := range m.sessions {
-		if session.Operation == op {
-			entries = append(entries, *session)
+	for id, session := range m.sessions {
+		if session.Operation != op {
+			continue
 		}
+		// Reap expired completed sessions
+		if session.Completed && now.Sub(session.CompletedAt) > m.gracePeriod {
+			delete(m.sessions, id)
+			continue
+		}
+		entries = append(entries, *session)
 	}
 	return entries
 }
@@ -386,11 +422,16 @@ func (m *DDLManager) ListSessionEntries(op DDLOpType) []DDLStagingEntry {
 //
 // Returns the session ID if found, or empty string if not found.
 func (m *DDLManager) FindSessionByName(op DDLOpType, objectName string) string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock() // Write lock for lazy cleanup
+	defer m.mu.Unlock()
 
 	for id, session := range m.sessions {
 		if session.Operation == op && session.ObjectName == objectName {
+			// Reap expired completed session
+			if session.Completed && time.Since(session.CompletedAt) > m.gracePeriod {
+				delete(m.sessions, id)
+				return ""
+			}
 			return id
 		}
 	}

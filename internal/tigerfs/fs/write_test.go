@@ -452,9 +452,12 @@ func TestWriteDDLFile_Commit(t *testing.T) {
 	err = ops.WriteFile(context.Background(), "/.create/test_orders/.commit", []byte(""))
 	require.Nil(t, err)
 
-	// Verify session was removed
+	// Verify session was marked completed (not removed — kept for grace period)
 	sessionID := ops.ddl.FindSessionByName(DDLCreate, "test_orders")
-	assert.Empty(t, sessionID)
+	assert.NotEmpty(t, sessionID)
+	session := ops.ddl.GetSession(sessionID)
+	require.NotNil(t, session)
+	assert.True(t, session.Completed)
 	assert.True(t, mockDB.execCalled)
 }
 
@@ -473,9 +476,12 @@ func TestWriteDDLFile_Abort(t *testing.T) {
 	err = ops.WriteFile(context.Background(), "/.create/test_orders/.abort", []byte(""))
 	require.Nil(t, err)
 
-	// Verify session was removed
+	// Verify session was marked completed (not removed — kept for grace period)
 	sessionID := ops.ddl.FindSessionByName(DDLCreate, "test_orders")
-	assert.Empty(t, sessionID)
+	assert.NotEmpty(t, sessionID)
+	session := ops.ddl.GetSession(sessionID)
+	require.NotNil(t, session)
+	assert.True(t, session.Completed)
 }
 
 // TestWriteDDLFile_NoSession tests error when session doesn't exist.
