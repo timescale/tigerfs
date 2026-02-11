@@ -443,7 +443,7 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 
 ## Project Status
 
-🚧 **Active Development**
+🚧 **Active Development** — v0.2.0 brings full platform parity: macOS NFS now supports all write and DDL operations, matching Linux FUSE capabilities.
 
 **Completed:**
 - Virtual filesystem with full CRUD operations (read, write, create, delete)
