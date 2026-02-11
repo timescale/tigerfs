@@ -345,6 +345,18 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 		}
 	}
 
+	// Trigger files on completed sessions are no-ops. This handles re-firing
+	// after commit/abort (FUSE dup2 close, Setattr(fh=nil), NFS Chtimes).
+	if parsed.DDLFile == FileTest || parsed.DDLFile == FileCommit || parsed.DDLFile == FileAbort {
+		sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+		if sessionID == "" {
+			return nil // No session at all — no-op
+		}
+		if s := o.ddl.GetSession(sessionID); s != nil && s.Completed {
+			return nil // Already committed/aborted — no-op
+		}
+	}
+
 	// Check for context cancellation before proceeding
 	if ctx.Err() != nil {
 		return &FSError{
@@ -373,6 +385,14 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 	// Handle the specific file
 	switch parsed.DDLFile {
 	case FileSQL:
+		// Protect against writes to completed sessions
+		if session := o.ddl.GetSession(sessionID); session != nil && session.Completed {
+			return &FSError{
+				Code:    ErrInvalidOperation,
+				Message: "DDL session already completed",
+				Hint:    "create a new session with mkdir",
+			}
+		}
 		// Write DDL content
 		err := o.ddl.WriteSQL(sessionID, string(data))
 		if err != nil {
@@ -394,6 +414,8 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 				Cause:   err,
 			}
 		}
+		// Trim whitespace/newlines to prevent garbled JSON log output
+		result = strings.TrimSpace(result)
 		if strings.HasPrefix(result, "OK") {
 			logging.Info(result,
 				zap.String("object", parsed.DDLName),
@@ -878,11 +900,15 @@ func (o *Operations) mkdirDDL(ctx context.Context, parsed *ParsedPath) *FSError 
 	// Check if session already exists
 	existingID := o.ddl.FindSessionByName(op, parsed.DDLName)
 	if existingID != "" {
-		return &FSError{
-			Code:    ErrExists,
-			Message: fmt.Sprintf("DDL session already exists for %s", parsed.DDLName),
-			Hint:    "use the existing session or abort it first with touch /.create/<name>/.abort",
+		if s := o.ddl.GetSession(existingID); s != nil && !s.Completed {
+			return &FSError{
+				Code:    ErrExists,
+				Message: fmt.Sprintf("DDL session already exists for %s", parsed.DDLName),
+				Hint:    "use the existing session or abort it first with touch /.create/<name>/.abort",
+			}
 		}
+		// Completed session — remove it to make way for new one
+		o.ddl.RemoveSession(existingID)
 	}
 
 	// Determine object type - default to "table" if not specified

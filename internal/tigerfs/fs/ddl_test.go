@@ -11,14 +11,14 @@ import (
 
 // TestNewDDLManager tests the DDLManager constructor.
 func TestNewDDLManager(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 	require.NotNil(t, dm)
 	assert.NotNil(t, dm.sessions)
 }
 
 // TestDDLManager_CreateSession tests creating DDL staging sessions.
 func TestDDLManager_CreateSession(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	// Create a session
 	id, err := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
@@ -38,7 +38,7 @@ func TestDDLManager_CreateSession(t *testing.T) {
 
 // TestDDLManager_CreateSession_Index tests creating an index DDL session.
 func TestDDLManager_CreateSession_Index(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, err := dm.CreateSession(DDLCreate, "index", "public", "users_email_idx", "users")
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestDDLManager_CreateSession_Index(t *testing.T) {
 
 // TestDDLManager_WriteSQL tests writing SQL content to a session.
 func TestDDLManager_WriteSQL(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 
@@ -68,7 +68,7 @@ func TestDDLManager_WriteSQL(t *testing.T) {
 
 // TestDDLManager_WriteSQL_NonExistent tests writing to non-existent session.
 func TestDDLManager_WriteSQL_NonExistent(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	err := dm.WriteSQL("nonexistent", "CREATE TABLE foo;")
 	assert.Error(t, err)
@@ -76,7 +76,7 @@ func TestDDLManager_WriteSQL_NonExistent(t *testing.T) {
 
 // TestDDLManager_GetSQL tests reading SQL content.
 func TestDDLManager_GetSQL(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABLE orders;")
@@ -87,7 +87,7 @@ func TestDDLManager_GetSQL(t *testing.T) {
 
 // TestDDLManager_GetSQL_Template tests getting template when no SQL written.
 func TestDDLManager_GetSQL_Template(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 
@@ -101,7 +101,7 @@ func TestDDLManager_Test(t *testing.T) {
 	mockDB := &mockDBClient{
 		execInTxSuccess: true,
 	}
-	dm := NewDDLManager(mockDB)
+	dm := NewDDLManager(mockDB, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABLE orders (id SERIAL PRIMARY KEY);")
@@ -122,7 +122,7 @@ func TestDDLManager_Test_Failure(t *testing.T) {
 	mockDB := &mockDBClient{
 		execInTxError: assert.AnError,
 	}
-	dm := NewDDLManager(mockDB)
+	dm := NewDDLManager(mockDB, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABL orders;") // intentional typo
@@ -139,7 +139,7 @@ func TestDDLManager_Test_Failure(t *testing.T) {
 
 // TestDDLManager_Test_NoContent tests validation with no content.
 func TestDDLManager_Test_NoContent(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 
@@ -152,7 +152,7 @@ func TestDDLManager_Test_NoContent(t *testing.T) {
 
 // TestDDLManager_Test_OnlyComments tests validation with only comments.
 func TestDDLManager_Test_OnlyComments(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "-- This is just a comment\n/* Another comment */")
@@ -168,7 +168,7 @@ func TestDDLManager_Commit(t *testing.T) {
 	mockDB := &mockDBClient{
 		execSuccess: true,
 	}
-	dm := NewDDLManager(mockDB)
+	dm := NewDDLManager(mockDB, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABLE orders (id SERIAL PRIMARY KEY);")
@@ -177,9 +177,11 @@ func TestDDLManager_Commit(t *testing.T) {
 	err := dm.Commit(context.Background(), id)
 	require.NoError(t, err)
 
-	// Session should be removed after commit
+	// Session should be marked completed (not removed)
 	session := dm.GetSession(id)
-	assert.Nil(t, session)
+	require.NotNil(t, session)
+	assert.True(t, session.Completed)
+	assert.False(t, session.CompletedAt.IsZero())
 
 	// DB should have been called
 	assert.True(t, mockDB.execCalled)
@@ -190,7 +192,7 @@ func TestDDLManager_Commit_Failure(t *testing.T) {
 	mockDB := &mockDBClient{
 		execError: assert.AnError,
 	}
-	dm := NewDDLManager(mockDB)
+	dm := NewDDLManager(mockDB, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABLE orders;")
@@ -206,7 +208,7 @@ func TestDDLManager_Commit_Failure(t *testing.T) {
 
 // TestDDLManager_Commit_NoContent tests commit with no content.
 func TestDDLManager_Commit_NoContent(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 
@@ -217,7 +219,7 @@ func TestDDLManager_Commit_NoContent(t *testing.T) {
 
 // TestDDLManager_Abort tests aborting a DDL session.
 func TestDDLManager_Abort(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABLE orders;")
@@ -226,14 +228,16 @@ func TestDDLManager_Abort(t *testing.T) {
 	err := dm.Abort(id)
 	require.NoError(t, err)
 
-	// Session should be removed
+	// Session should be marked completed (not removed)
 	session := dm.GetSession(id)
-	assert.Nil(t, session)
+	require.NotNil(t, session)
+	assert.True(t, session.Completed)
+	assert.False(t, session.CompletedAt.IsZero())
 }
 
 // TestDDLManager_Abort_Idempotent tests that abort is idempotent.
 func TestDDLManager_Abort_Idempotent(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 
@@ -247,7 +251,7 @@ func TestDDLManager_Abort_Idempotent(t *testing.T) {
 
 // TestDDLManager_ListSessions tests listing sessions.
 func TestDDLManager_ListSessions(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	// Create sessions
 	dm.CreateSession(DDLCreate, "table", "public", "orders", "")
@@ -268,7 +272,7 @@ func TestDDLManager_GetTestLog(t *testing.T) {
 	mockDB := &mockDBClient{
 		execInTxSuccess: true,
 	}
-	dm := NewDDLManager(mockDB)
+	dm := NewDDLManager(mockDB, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	dm.WriteSQL(id, "CREATE TABLE orders;")
@@ -280,7 +284,7 @@ func TestDDLManager_GetTestLog(t *testing.T) {
 
 // TestDDLManager_GenerateTemplate_Table tests table template generation.
 func TestDDLManager_GenerateTemplate_Table(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
 	template := dm.GetSQL(id)
@@ -292,7 +296,7 @@ func TestDDLManager_GenerateTemplate_Table(t *testing.T) {
 
 // TestDDLManager_GenerateTemplate_Index tests index template generation.
 func TestDDLManager_GenerateTemplate_Index(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "index", "public", "users_email_idx", "users")
 	template := dm.GetSQL(id)
@@ -304,7 +308,7 @@ func TestDDLManager_GenerateTemplate_Index(t *testing.T) {
 
 // TestDDLManager_GenerateTemplate_Schema tests schema template generation.
 func TestDDLManager_GenerateTemplate_Schema(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "schema", "", "myschema", "")
 	template := dm.GetSQL(id)
@@ -315,7 +319,7 @@ func TestDDLManager_GenerateTemplate_Schema(t *testing.T) {
 
 // TestDDLManager_GenerateTemplate_View tests view template generation.
 func TestDDLManager_GenerateTemplate_View(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLCreate, "view", "public", "active_users", "")
 	template := dm.GetSQL(id)
@@ -326,7 +330,7 @@ func TestDDLManager_GenerateTemplate_View(t *testing.T) {
 
 // TestDDLManager_GenerateTemplate_Modify tests modify template generation.
 func TestDDLManager_GenerateTemplate_Modify(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLModify, "table", "public", "users", "")
 	template := dm.GetSQL(id)
@@ -337,7 +341,7 @@ func TestDDLManager_GenerateTemplate_Modify(t *testing.T) {
 
 // TestDDLManager_GenerateTemplate_Delete tests delete template generation.
 func TestDDLManager_GenerateTemplate_Delete(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	id, _ := dm.CreateSession(DDLDelete, "table", "public", "users", "")
 	template := dm.GetSQL(id)
@@ -415,7 +419,7 @@ func TestDDLStagingEntry(t *testing.T) {
 
 // TestDDLManager_FindSessionByName tests finding sessions by name.
 func TestDDLManager_FindSessionByName(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	// Create multiple sessions
 	id1, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
@@ -433,7 +437,7 @@ func TestDDLManager_FindSessionByName(t *testing.T) {
 
 // TestDDLManager_FindSessionByName_WrongOp tests that wrong operation type doesn't match.
 func TestDDLManager_FindSessionByName_WrongOp(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	// Create a DDLCreate session
 	dm.CreateSession(DDLCreate, "table", "public", "orders", "")
@@ -469,7 +473,7 @@ func TestParseDDLOpType(t *testing.T) {
 
 // TestDDLManager_UpdatedAt tests that UpdatedAt is set and updated correctly.
 func TestDDLManager_UpdatedAt(t *testing.T) {
-	dm := NewDDLManager(nil)
+	dm := NewDDLManager(nil, 0)
 
 	// UpdatedAt is set on creation
 	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
@@ -489,4 +493,128 @@ func TestDDLManager_UpdatedAt(t *testing.T) {
 	dm.WriteSQL(id, "CREATE TABLE orders (id SERIAL PRIMARY KEY);")
 	session = dm.GetSession(id)
 	assert.True(t, session.UpdatedAt.After(beforeWrite), "UpdatedAt should advance after WriteSQL")
+}
+
+// TestDDLManager_Commit_MarksCompleted tests that Commit marks session as completed.
+func TestDDLManager_Commit_MarksCompleted(t *testing.T) {
+	mockDB := &mockDBClient{execSuccess: true}
+	dm := NewDDLManager(mockDB, 0)
+
+	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.WriteSQL(id, "CREATE TABLE orders (id SERIAL PRIMARY KEY);")
+
+	err := dm.Commit(context.Background(), id)
+	require.NoError(t, err)
+
+	session := dm.GetSession(id)
+	require.NotNil(t, session, "session should still exist after commit")
+	assert.True(t, session.Completed)
+	assert.False(t, session.CompletedAt.IsZero())
+}
+
+// TestDDLManager_Abort_MarksCompleted tests that Abort marks session as completed.
+func TestDDLManager_Abort_MarksCompleted(t *testing.T) {
+	dm := NewDDLManager(nil, 0)
+
+	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.WriteSQL(id, "CREATE TABLE orders;")
+
+	err := dm.Abort(id)
+	require.NoError(t, err)
+
+	session := dm.GetSession(id)
+	require.NotNil(t, session, "session should still exist after abort")
+	assert.True(t, session.Completed)
+	assert.False(t, session.CompletedAt.IsZero())
+}
+
+// TestDDLManager_FindSessionByName_CompletedWithinGrace tests that completed sessions
+// are still found within the grace period.
+func TestDDLManager_FindSessionByName_CompletedWithinGrace(t *testing.T) {
+	dm := NewDDLManager(nil, 5*time.Second) // 5s grace period
+
+	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.Abort(id)
+
+	// Should still be found within grace period
+	found := dm.FindSessionByName(DDLCreate, "orders")
+	assert.Equal(t, id, found, "completed session should be found within grace period")
+}
+
+// TestDDLManager_FindSessionByName_ReapsExpired tests that FindSessionByName
+// reaps completed sessions past their grace period.
+func TestDDLManager_FindSessionByName_ReapsExpired(t *testing.T) {
+	dm := NewDDLManager(nil, 1*time.Millisecond) // 1ms grace period
+
+	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.Abort(id)
+
+	// Wait for grace period to expire
+	time.Sleep(5 * time.Millisecond)
+
+	// Should be reaped
+	found := dm.FindSessionByName(DDLCreate, "orders")
+	assert.Empty(t, found, "expired completed session should be reaped")
+
+	// Session should be gone
+	session := dm.GetSession(id)
+	assert.Nil(t, session, "reaped session should not exist")
+}
+
+// TestDDLManager_ListSessionEntries_CompletedWithinGrace tests that completed sessions
+// are included in listings within the grace period.
+func TestDDLManager_ListSessionEntries_CompletedWithinGrace(t *testing.T) {
+	dm := NewDDLManager(nil, 5*time.Second)
+
+	dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	id2, _ := dm.CreateSession(DDLCreate, "table", "public", "users", "")
+	dm.Abort(id2) // Mark users as completed
+
+	entries := dm.ListSessionEntries(DDLCreate)
+	assert.Len(t, entries, 2, "completed session within grace period should be listed")
+}
+
+// TestDDLManager_ListSessionEntries_ReapsExpired tests that ListSessionEntries
+// excludes completed sessions past their grace period.
+func TestDDLManager_ListSessionEntries_ReapsExpired(t *testing.T) {
+	dm := NewDDLManager(nil, 1*time.Millisecond)
+
+	dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	id2, _ := dm.CreateSession(DDLCreate, "table", "public", "users", "")
+	dm.Abort(id2) // Mark users as completed
+
+	time.Sleep(5 * time.Millisecond)
+
+	entries := dm.ListSessionEntries(DDLCreate)
+	assert.Len(t, entries, 1, "expired completed session should be reaped")
+	assert.Equal(t, "orders", entries[0].ObjectName)
+}
+
+// TestDDLManager_RemoveSession tests permanent session removal.
+func TestDDLManager_RemoveSession(t *testing.T) {
+	dm := NewDDLManager(nil, 0)
+
+	id, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.RemoveSession(id)
+
+	session := dm.GetSession(id)
+	assert.Nil(t, session, "removed session should not exist")
+}
+
+// TestDDLManager_CreateAfterRemove tests creating a new session with the same name
+// after removing the old one.
+func TestDDLManager_CreateAfterRemove(t *testing.T) {
+	dm := NewDDLManager(nil, 0)
+
+	id1, _ := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	dm.RemoveSession(id1)
+
+	id2, err := dm.CreateSession(DDLCreate, "table", "public", "orders", "")
+	require.NoError(t, err)
+	assert.NotEqual(t, id1, id2)
+
+	session := dm.GetSession(id2)
+	require.NotNil(t, session)
+	assert.Equal(t, "orders", session.ObjectName)
+	assert.False(t, session.Completed)
 }

@@ -37,7 +37,7 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 	return &Operations{
 		config: cfg,
 		db:     dbClient,
-		ddl:    NewDDLManager(dbClient),
+		ddl:    NewDDLManager(dbClient, cfg.DDLGracePeriod),
 	}
 }
 
@@ -785,7 +785,20 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 func (o *Operations) ensureDDLSession(parsed *ParsedPath, op DDLOpType) *FSError {
 	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
 	if sessionID != "" {
-		return nil // Session already exists
+		s := o.ddl.GetSession(sessionID)
+		if s != nil && !s.Completed {
+			return nil // Active session exists
+		}
+		// Completed session — for auto-created (table-level) DDL, replace with
+		// a fresh session. For root-level creates, keep the completed session
+		// so post-commit stat/readdir operations still succeed.
+		canAutoCreate := parsed.Context != nil || parsed.DDLObjectType == "schema" || parsed.DDLObjectType == "index" || parsed.DDLObjectType == "view"
+		if canAutoCreate {
+			o.ddl.RemoveSession(sessionID)
+			// Fall through to auto-creation below
+		} else {
+			return nil // Root-level create — completed session suffices
+		}
 	}
 
 	// Auto-create for table-level DDL where we have context (table exists)

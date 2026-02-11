@@ -46,6 +46,9 @@ type Config struct {
 	NFSCacheReaperInterval time.Duration `mapstructure:"nfs_cache_reaper_interval"` // How often reaper checks for stale entries (default: 30s)
 	NFSCacheIdleTimeout    time.Duration `mapstructure:"nfs_cache_idle_timeout"`    // Idle time before force-commit (default: 5m)
 
+	// DDL
+	DDLGracePeriod time.Duration `mapstructure:"ddl_grace_period"` // How long completed DDL sessions stay visible (default: 30s)
+
 	// Logging
 	LogLevel  string `mapstructure:"log_level"`
 	LogFile   string `mapstructure:"log_file"`
@@ -84,6 +87,7 @@ func Init() error {
 	viper.SetDefault("nfs_max_random_write_size", int64(100*1024*1024))
 	viper.SetDefault("nfs_cache_reaper_interval", 30*time.Second)
 	viper.SetDefault("nfs_cache_idle_timeout", 5*time.Minute)
+	viper.SetDefault("ddl_grace_period", 30*time.Second)
 	viper.SetDefault("log_level", "info")
 	viper.SetDefault("log_format", "text")
 	viper.SetDefault("default_format", "tsv")
