@@ -113,8 +113,12 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 		zap.Duration("query_timeout", cfg.QueryTimeout),
 	)
 
-	// Create connection pool
-	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	// Create connection pool.
+	// Use context.Background() for pool creation so the pool's background goroutines
+	// (idle connection creation, health checks) don't depend on the caller's context.
+	// The caller's ctx may have a short timeout (e.g., mount timeout) that would disrupt
+	// the pool's connection management after creation.
+	pool, err := pgxpool.NewWithConfig(context.Background(), poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
