@@ -130,8 +130,14 @@ func (a *FSAdapter) ErrorToErrno(err *tigerfs.FSError) syscall.Errno {
 		return 0
 	}
 
-	// Log the error with hint if available
-	if err.Hint != "" {
+	// Log the error with hint if available.
+	// ErrNotExist is a normal filesystem response (stat before mkdir, tab completion, etc.)
+	// and should not be logged at Error level to avoid spurious warnings.
+	if err.Code == tigerfs.ErrNotExist {
+		logging.Debug(err.Message,
+			zap.String("hint", err.Hint),
+			zap.Error(err.Cause))
+	} else if err.Hint != "" {
 		logging.Error(err.Message,
 			zap.String("hint", err.Hint),
 			zap.Error(err.Cause))

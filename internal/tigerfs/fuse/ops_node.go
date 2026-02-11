@@ -79,9 +79,10 @@ func (n *OpsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrO
 	return 0
 }
 
-// Setattr handles attribute changes (e.g., truncation).
-// For truncation to zero, this is a no-op since actual truncation
-// semantics are handled at the file handle level during writes.
+// Setattr handles attribute changes (truncation, timestamp updates).
+// For truncation to zero, delegates to the file handle.
+// For DDL trigger files (.test, .commit, .abort), a timestamp update (touch)
+// fires the DDL operation — FUSE `touch` uses utimensat → SETATTR, not Open.
 func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("OpsNode.Setattr", zap.String("path", n.path))
 
@@ -98,6 +99,22 @@ func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 					ofh.dirty = true
 				}
 				ofh.mu.Unlock()
+			}
+		}
+	}
+
+	// DDL trigger files: fire on touch (mtime update without open file handle).
+	// FUSE `touch` uses utimensat which sends SETATTR with ATIME/MTIME, not OPEN.
+	if fh == nil {
+		if _, ok := in.GetMTime(); ok {
+			baseName := path.Base(n.path)
+			isTrigger := (baseName == ".test" || baseName == ".commit" || baseName == ".abort") && isDDLOpsPath(n.path)
+			if isTrigger {
+				logging.Debug("OpsNode.Setattr: triggering DDL operation via touch",
+					zap.String("path", n.path))
+				if errno := n.adapter.WriteFile(ctx, n.path, []byte{}); errno != 0 {
+					return errno
+				}
 			}
 		}
 	}
