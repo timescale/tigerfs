@@ -16,6 +16,7 @@ type StagingEntry struct {
 	Content    string            // User-provided DDL content
 	TestResult string            // Last test result (success message or error)
 	CreatedAt  time.Time         // When the entry was created
+	UpdatedAt  time.Time         // When the content was last modified (used for stable mtime)
 	ExtraFiles map[string][]byte // Editor temp files (backups, swap files, etc.)
 }
 
@@ -49,8 +50,10 @@ func (t *StagingTracker) GetOrCreate(path string) *StagingEntry {
 		return entry
 	}
 
+	now := time.Now()
 	entry := &StagingEntry{
-		CreatedAt: time.Now(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	t.entries[path] = entry
 
@@ -74,15 +77,18 @@ func (t *StagingTracker) Set(path string, content string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	now := time.Now()
 	entry, exists := t.entries[path]
 	if !exists {
 		entry = &StagingEntry{
-			CreatedAt: time.Now(),
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 		t.entries[path] = entry
 	}
 
 	entry.Content = content
+	entry.UpdatedAt = now
 
 	logging.Debug("Set staging content",
 		zap.String("path", path),
@@ -96,6 +102,7 @@ func (t *StagingTracker) SetTestResult(path string, result string) {
 
 	if entry, exists := t.entries[path]; exists {
 		entry.TestResult = result
+		entry.UpdatedAt = time.Now()
 	}
 }
 
@@ -133,6 +140,18 @@ func (t *StagingTracker) GetContent(path string) string {
 		return entry.Content
 	}
 	return ""
+}
+
+// GetUpdatedAt returns the last modification time for a staging entry.
+// Returns the zero time if the entry doesn't exist.
+func (t *StagingTracker) GetUpdatedAt(path string) time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if entry, exists := t.entries[path]; exists {
+		return entry.UpdatedAt
+	}
+	return time.Time{}
 }
 
 // GetTestResult returns the test result of a staging entry, or empty string if not found.
@@ -173,10 +192,12 @@ func (t *StagingTracker) SetExtraFile(path string, filename string, content []by
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	now := time.Now()
 	entry, exists := t.entries[path]
 	if !exists {
 		entry = &StagingEntry{
-			CreatedAt:  time.Now(),
+			CreatedAt:  now,
+			UpdatedAt:  now,
 			ExtraFiles: make(map[string][]byte),
 		}
 		t.entries[path] = entry
