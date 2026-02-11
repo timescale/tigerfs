@@ -732,8 +732,9 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 
 	// Use session's UpdatedAt for stable mtime
 	modTime := time.Now() // fallback
-	if sid := o.ddl.FindSessionByName(op, parsed.DDLName); sid != "" {
-		if s := o.ddl.GetSession(sid); s != nil {
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID != "" {
+		if s := o.ddl.GetSession(sessionID); s != nil {
 			modTime = s.UpdatedAt
 		}
 	}
@@ -746,6 +747,34 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 		{Name: ".commit", IsDir: false, Mode: 0644, Size: 0, ModTime: modTime},
 		{Name: ".abort", IsDir: false, Mode: 0644, Size: 0, ModTime: modTime},
 	}
+
+	// Include test.log if a test has been run (matches FUSE StagingDirNode behavior)
+	if sessionID != "" {
+		if log := o.ddl.GetTestLog(sessionID); log != "" {
+			entries = append(entries, Entry{
+				Name:    FileTestLog,
+				IsDir:   false,
+				Mode:    0444,
+				Size:    int64(len(log)),
+				ModTime: modTime,
+			})
+		}
+
+		// Include editor temp files (swap files, backups, etc.)
+		for _, name := range o.ddl.ListExtraFiles(sessionID) {
+			ef := o.ddl.GetExtraFileInfo(sessionID, name)
+			if ef != nil {
+				entries = append(entries, Entry{
+					Name:    name,
+					IsDir:   false,
+					Mode:    0644,
+					Size:    int64(len(ef.Data)),
+					ModTime: ef.ModTime,
+				})
+			}
+		}
+	}
+
 	return entries, nil
 }
 
@@ -1234,6 +1263,20 @@ func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entr
 		}
 		size = int64(len(log))
 	default:
+		// Check for editor temp files (swap files, backups, etc.)
+		ef := o.ddl.GetExtraFileInfo(sessionID, parsed.DDLFile)
+		if ef != nil {
+			mode = 0644
+			size = int64(len(ef.Data))
+			// Return with the extra file's own mtime
+			return &Entry{
+				Name:    parsed.DDLFile,
+				IsDir:   false,
+				Mode:    mode,
+				Size:    size,
+				ModTime: ef.ModTime,
+			}, nil
+		}
 		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown DDL file: %s", parsed.DDLFile)}
 	}
 
@@ -1775,9 +1818,18 @@ func (o *Operations) readDDLFile(ctx context.Context, parsed *ParsedPath) (*File
 		}, nil
 
 	default:
+		// Check for editor temp files (swap files, backups, etc.)
+		if o.ddl.HasExtraFile(sessionID, parsed.DDLFile) {
+			data := o.ddl.GetExtraFile(sessionID, parsed.DDLFile)
+			return &FileContent{
+				Data: data,
+				Size: int64(len(data)),
+				Mode: 0644,
+			}, nil
+		}
 		return nil, &FSError{
-			Code:    ErrInvalidPath,
-			Message: fmt.Sprintf("cannot read DDL file: %s", parsed.DDLFile),
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("DDL file not found: %s", parsed.DDLFile),
 		}
 	}
 }

@@ -55,6 +55,18 @@ type DDLStagingEntry struct {
 	// UpdatedAt is when the session content was last modified.
 	// Used to provide stable mtime for DDL files (avoids time.Now() per stat call).
 	UpdatedAt time.Time
+	// ExtraFiles holds editor temp files (swap files, backups, etc.) stored in-memory.
+	// Editors like vim and emacs create temporary files alongside the file being edited;
+	// these must be stored so editors don't error out.
+	ExtraFiles map[string]*ExtraFile
+}
+
+// ExtraFile represents an in-memory editor temp file with metadata.
+// Tracks size, mtime, and permissions for NFS compliance.
+type ExtraFile struct {
+	Data      []byte
+	ModTime   time.Time
+	CreatedAt time.Time
 }
 
 // DDLManager handles DDL staging operations.
@@ -383,6 +395,106 @@ func (m *DDLManager) FindSessionByName(op DDLOpType, objectName string) string {
 		}
 	}
 	return ""
+}
+
+// SetExtraFile stores an editor temp file in a session.
+// Updates the file's ModTime on each write for NFS mtime compliance.
+func (m *DDLManager) SetExtraFile(sessionID, filename string, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists {
+		return
+	}
+
+	if session.ExtraFiles == nil {
+		session.ExtraFiles = make(map[string]*ExtraFile)
+	}
+
+	now := time.Now()
+	if ef, exists := session.ExtraFiles[filename]; exists {
+		ef.Data = data
+		ef.ModTime = now
+	} else {
+		session.ExtraFiles[filename] = &ExtraFile{
+			Data:      data,
+			ModTime:   now,
+			CreatedAt: now,
+		}
+	}
+}
+
+// GetExtraFile retrieves an editor temp file's data from a session.
+// Returns nil if not found.
+func (m *DDLManager) GetExtraFile(sessionID, filename string) []byte {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists || session.ExtraFiles == nil {
+		return nil
+	}
+	ef := session.ExtraFiles[filename]
+	if ef == nil {
+		return nil
+	}
+	return ef.Data
+}
+
+// GetExtraFileInfo retrieves an editor temp file's metadata from a session.
+// Returns nil if not found.
+func (m *DDLManager) GetExtraFileInfo(sessionID, filename string) *ExtraFile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists || session.ExtraFiles == nil {
+		return nil
+	}
+	return session.ExtraFiles[filename]
+}
+
+// DeleteExtraFile removes an editor temp file from a session.
+func (m *DDLManager) DeleteExtraFile(sessionID, filename string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists || session.ExtraFiles == nil {
+		return
+	}
+	delete(session.ExtraFiles, filename)
+}
+
+// HasExtraFile checks if an editor temp file exists in a session.
+func (m *DDLManager) HasExtraFile(sessionID, filename string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists || session.ExtraFiles == nil {
+		return false
+	}
+	_, has := session.ExtraFiles[filename]
+	return has
+}
+
+// ListExtraFiles returns names of all editor temp files in a session.
+func (m *DDLManager) ListExtraFiles(sessionID string) []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	session, exists := m.sessions[sessionID]
+	if !exists || session.ExtraFiles == nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(session.ExtraFiles))
+	for name := range session.ExtraFiles {
+		names = append(names, name)
+	}
+	return names
 }
 
 // ParseDDLOpType converts a string operation name to DDLOpType.

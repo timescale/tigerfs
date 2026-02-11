@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	"github.com/timescale/tigerfs/internal/tigerfs/logging"
+	"go.uber.org/zap"
 )
 
 // WriteFile writes content to a file path.
@@ -383,8 +385,8 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 		return nil
 
 	case FileTest:
-		// Trigger validation
-		_, err := o.ddl.Test(ctx, sessionID)
+		// Trigger validation — log result to stderr for user feedback
+		result, err := o.ddl.Test(ctx, sessionID)
 		if err != nil {
 			return &FSError{
 				Code:    ErrIO,
@@ -392,12 +394,24 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 				Cause:   err,
 			}
 		}
+		if strings.HasPrefix(result, "OK") {
+			logging.Info(result,
+				zap.String("object", parsed.DDLName),
+				zap.String("hint", "cat test.log for details"))
+		} else {
+			logging.Warn(result,
+				zap.String("object", parsed.DDLName),
+				zap.String("hint", "cat test.log for details"))
+		}
 		return nil
 
 	case FileCommit:
-		// Execute DDL
+		// Execute DDL — log result to stderr for user feedback
 		err := o.ddl.Commit(ctx, sessionID)
 		if err != nil {
+			logging.Error("DDL commit failed",
+				zap.String("object", parsed.DDLName),
+				zap.Error(err))
 			return &FSError{
 				Code:    ErrIO,
 				Message: fmt.Sprintf("DDL commit failed for %s/%s", parsed.DDLOp, parsed.DDLName),
@@ -405,10 +419,12 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 				Cause:   err,
 			}
 		}
+		logging.Info("DDL committed successfully",
+			zap.String("object", parsed.DDLName))
 		return nil
 
 	case FileAbort:
-		// Cancel staging session
+		// Cancel staging session — log result to stderr for user feedback
 		err := o.ddl.Abort(sessionID)
 		if err != nil {
 			return &FSError{
@@ -417,13 +433,14 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 				Cause:   err,
 			}
 		}
+		logging.Info("DDL session aborted",
+			zap.String("object", parsed.DDLName))
 		return nil
 
 	default:
-		return &FSError{
-			Code:    ErrInvalidPath,
-			Message: fmt.Sprintf("unknown DDL file: %s", parsed.DDLFile),
-		}
+		// Store as editor temp file (swap files, backups, etc.)
+		o.ddl.SetExtraFile(sessionID, parsed.DDLFile, data)
+		return nil
 	}
 }
 
@@ -458,12 +475,50 @@ func (o *Operations) deleteWithParsed(ctx context.Context, parsed *ParsedPath) *
 		return o.deleteRow(ctx, parsed)
 	case PathColumn:
 		return o.deleteColumn(ctx, parsed)
+	case PathDDL:
+		return o.deleteDDLFile(ctx, parsed)
 	default:
 		return &FSError{
 			Code:    ErrInvalidPath,
 			Message: fmt.Sprintf("cannot delete path type: %d", parsed.Type),
 		}
 	}
+}
+
+// deleteDDLFile removes an editor temp file from a DDL staging directory.
+// Control files (sql, .test, .commit, .abort, test.log) cannot be deleted.
+func (o *Operations) deleteDDLFile(ctx context.Context, parsed *ParsedPath) *FSError {
+	// Don't allow deleting control files
+	switch parsed.DDLFile {
+	case FileSQL, FileTest, FileTestLog, FileCommit, FileAbort:
+		return &FSError{
+			Code:    ErrPermission,
+			Message: fmt.Sprintf("cannot delete DDL control file: %s", parsed.DDLFile),
+		}
+	case "":
+		return &FSError{
+			Code:    ErrPermission,
+			Message: "cannot delete DDL staging directory via rm",
+			Hint:    "use touch .abort to cancel the DDL session",
+		}
+	}
+
+	op, valid := ParseDDLOpType(parsed.DDLOp)
+	if !valid {
+		return &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown DDL operation: %s", parsed.DDLOp)}
+	}
+
+	sessionID := o.ddl.FindSessionByName(op, parsed.DDLName)
+	if sessionID == "" {
+		return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("no DDL session for %s", parsed.DDLName)}
+	}
+
+	if !o.ddl.HasExtraFile(sessionID, parsed.DDLFile) {
+		return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found: %s", parsed.DDLFile)}
+	}
+
+	o.ddl.DeleteExtraFile(sessionID, parsed.DDLFile)
+	return nil
 }
 
 // deleteRow deletes a row from the database.
