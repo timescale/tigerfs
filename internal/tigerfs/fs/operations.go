@@ -699,8 +699,6 @@ func (o *Operations) readDirImport(ctx context.Context, parsed *ParsedPath) ([]E
 
 // readDirDDL lists DDL staging directory contents.
 func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
-	now := time.Now()
-
 	if parsed.DDLName == "" {
 		// List staging directories by querying DDLManager for sessions of this operation type
 		op, valid := ParseDDLOpType(parsed.DDLOp)
@@ -714,7 +712,7 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 				Name:    session.ObjectName,
 				IsDir:   true,
 				Mode:    os.ModeDir | 0755,
-				ModTime: session.CreatedAt,
+				ModTime: session.UpdatedAt,
 			}
 		}
 		return entries, nil
@@ -732,13 +730,21 @@ func (o *Operations) readDirDDL(ctx context.Context, parsed *ParsedPath) ([]Entr
 		return nil, err
 	}
 
+	// Use session's UpdatedAt for stable mtime
+	modTime := time.Now() // fallback
+	if sid := o.ddl.FindSessionByName(op, parsed.DDLName); sid != "" {
+		if s := o.ddl.GetSession(sid); s != nil {
+			modTime = s.UpdatedAt
+		}
+	}
+
 	// List control files for a specific staging operation
 	// Note: Mode and Size must match what statDDLFile returns for NFS consistency
 	entries := []Entry{
-		{Name: "sql", IsDir: false, Mode: 0600, ModTime: now},
-		{Name: ".test", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
-		{Name: ".commit", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
-		{Name: ".abort", IsDir: false, Mode: 0644, Size: 0, ModTime: now},
+		{Name: "sql", IsDir: false, Mode: 0600, ModTime: modTime},
+		{Name: ".test", IsDir: false, Mode: 0644, Size: 0, ModTime: modTime},
+		{Name: ".commit", IsDir: false, Mode: 0644, Size: 0, ModTime: modTime},
+		{Name: ".abort", IsDir: false, Mode: 0644, Size: 0, ModTime: modTime},
 	}
 	return entries, nil
 }
@@ -1183,12 +1189,20 @@ func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entr
 	// We use mode 0644 (instead of 0200 write-only) because some NFS clients have issues
 	// with write-only files. Size is 0 to match the actual empty content returned by read.
 	if parsed.DDLFile == FileTest || parsed.DDLFile == FileCommit || parsed.DDLFile == FileAbort {
+		// Use session's UpdatedAt for stable mtime. Fall back to epoch if session
+		// was already removed (post-commit/abort NFS compliance path).
+		modTime := time.Unix(0, 0)
+		if sid := o.ddl.FindSessionByName(op, parsed.DDLName); sid != "" {
+			if s := o.ddl.GetSession(sid); s != nil {
+				modTime = s.UpdatedAt
+			}
+		}
 		return &Entry{
 			Name:    parsed.DDLFile,
 			IsDir:   false,
 			Mode:    0644, // Read-write for NFS compatibility
 			Size:    0,    // Matches actual empty content
-			ModTime: time.Now(),
+			ModTime: modTime,
 		}, nil
 	}
 
@@ -1223,12 +1237,18 @@ func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entr
 		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown DDL file: %s", parsed.DDLFile)}
 	}
 
+	// Use session's UpdatedAt for stable mtime instead of time.Now()
+	modTime := time.Now() // fallback (should not happen since session was just found)
+	if s := o.ddl.GetSession(sessionID); s != nil {
+		modTime = s.UpdatedAt
+	}
+
 	return &Entry{
 		Name:    parsed.DDLFile,
 		IsDir:   false,
 		Mode:    mode,
 		Size:    size,
-		ModTime: time.Now(),
+		ModTime: modTime,
 	}, nil
 }
 

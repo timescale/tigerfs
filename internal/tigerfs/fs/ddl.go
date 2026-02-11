@@ -52,6 +52,9 @@ type DDLStagingEntry struct {
 	Validated bool
 	// CreatedAt is when the session was created.
 	CreatedAt time.Time
+	// UpdatedAt is when the session content was last modified.
+	// Used to provide stable mtime for DDL files (avoids time.Now() per stat call).
+	UpdatedAt time.Time
 }
 
 // DDLManager handles DDL staging operations.
@@ -98,6 +101,7 @@ func (m *DDLManager) CreateSession(op DDLOpType, objectType, schema, objectName,
 	defer m.mu.Unlock()
 
 	id := uuid.New().String()
+	now := time.Now()
 	entry := &DDLStagingEntry{
 		ID:          id,
 		Operation:   op,
@@ -105,7 +109,8 @@ func (m *DDLManager) CreateSession(op DDLOpType, objectType, schema, objectName,
 		ObjectName:  objectName,
 		Schema:      schema,
 		ParentTable: parentTable,
-		CreatedAt:   time.Now(),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	m.sessions[id] = entry
 
@@ -140,6 +145,7 @@ func (m *DDLManager) WriteSQL(sessionID, sql string) error {
 
 	session.SQL = sql
 	session.Validated = false // Reset validation when content changes
+	session.UpdatedAt = time.Now()
 
 	return nil
 }
@@ -196,6 +202,7 @@ func (m *DDLManager) Test(ctx context.Context, sessionID string) (string, error)
 		}
 		session.TestLog = result
 		session.Validated = false
+		session.UpdatedAt = time.Now()
 		m.mu.Unlock()
 		return result, nil
 	}
@@ -227,6 +234,7 @@ func (m *DDLManager) Test(ctx context.Context, sessionID string) (string, error)
 	if session, exists := m.sessions[sessionID]; exists {
 		session.TestLog = result
 		session.Validated = validated
+		session.UpdatedAt = time.Now()
 	}
 	m.mu.Unlock()
 

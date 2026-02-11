@@ -251,3 +251,48 @@ func TestExtractSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestStagingTracker_GetUpdatedAt(t *testing.T) {
+	tracker := NewStagingTracker()
+
+	// Non-existent path returns zero time
+	updatedAt := tracker.GetUpdatedAt("nonexistent")
+	if !updatedAt.IsZero() {
+		t.Error("Expected zero time for nonexistent path")
+	}
+
+	// Set creates entry with UpdatedAt
+	tracker.Set("test/path", "content1")
+	updatedAt1 := tracker.GetUpdatedAt("test/path")
+	if updatedAt1.IsZero() {
+		t.Fatal("Expected non-zero UpdatedAt after Set")
+	}
+
+	// Stable without changes
+	updatedAt1b := tracker.GetUpdatedAt("test/path")
+	if !updatedAt1.Equal(updatedAt1b) {
+		t.Error("Expected stable UpdatedAt without changes")
+	}
+
+	// Advances on Set with new content
+	time.Sleep(time.Millisecond)
+	tracker.Set("test/path", "content2")
+	updatedAt2 := tracker.GetUpdatedAt("test/path")
+	if !updatedAt2.After(updatedAt1) {
+		t.Error("Expected UpdatedAt to advance after Set")
+	}
+}
+
+func TestStagingTracker_UpdatedAt_SetTestResult(t *testing.T) {
+	tracker := NewStagingTracker()
+
+	tracker.Set("test/path", "CREATE TABLE foo;")
+	updatedAt1 := tracker.GetUpdatedAt("test/path")
+
+	time.Sleep(time.Millisecond)
+	tracker.SetTestResult("test/path", "OK")
+	updatedAt2 := tracker.GetUpdatedAt("test/path")
+	if !updatedAt2.After(updatedAt1) {
+		t.Error("Expected UpdatedAt to advance after SetTestResult")
+	}
+}
