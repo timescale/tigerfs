@@ -23,6 +23,9 @@ func TestGenerateMarkdownTableSQL(t *testing.T) {
 	if !strings.Contains(sql, "author TEXT") {
 		t.Errorf("should have author column, got:\n%s", sql)
 	}
+	if !strings.Contains(sql, "headers JSONB") {
+		t.Errorf("should have headers JSONB column, got:\n%s", sql)
+	}
 	if !strings.Contains(sql, "body TEXT") {
 		t.Errorf("should have body column, got:\n%s", sql)
 	}

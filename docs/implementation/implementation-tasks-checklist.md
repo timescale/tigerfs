@@ -128,6 +128,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ⬜ | 6.1.6 | Implement .format/ Handler (Markdown/PlainText) | ~4740 |
 | ⬜ | 6.1.7 | Implement SynthesizedViewNode (Markdown/PlainText) | ~4810 |
 | ⬜ | 6.1.8 | Integration Tests for Markdown/PlainText | ~4880 |
+| ⬜ | 6.1.9 | Add Extra Headers JSONB Column | ~4920 |
 
 ### 6.2: Tasks
 

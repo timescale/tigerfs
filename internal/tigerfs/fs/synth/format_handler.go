@@ -5,6 +5,10 @@ import (
 	"strings"
 )
 
+// TODO: When "reuse existing schema" is implemented, detect existing
+// JSONB columns that could serve as extra headers (check both name
+// conventions and column type).
+
 // GenerateSynthesizedViewSQL returns the SQL to create a synthesized view on
 // an existing table. The view selects all columns from the table and is
 // annotated with a TigerFS format comment.

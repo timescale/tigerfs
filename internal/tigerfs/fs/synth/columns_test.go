@@ -14,6 +14,7 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 		wantFront []string
 		wantModAt string
 		wantCreAt string
+		wantExtra string
 		wantErr   bool
 	}{
 		{
@@ -121,6 +122,35 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			pk:      "id",
 			wantErr: true,
 		},
+		{
+			name:      "headers column detected",
+			columns:   []string{"id", "filename", "title", "author", "headers", "body", "created_at", "modified_at"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: []string{"title", "author"},
+			wantExtra: "headers",
+			wantCreAt: "created_at",
+			wantModAt: "modified_at",
+		},
+		{
+			name:      "headers excluded from frontmatter",
+			columns:   []string{"id", "filename", "headers", "body"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: nil,
+			wantExtra: "headers",
+		},
+		{
+			name:      "no headers column",
+			columns:   []string{"id", "filename", "title", "body"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: []string{"title"},
+			wantExtra: "",
+		},
 	}
 
 	for _, tt := range tests {
@@ -149,6 +179,9 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			}
 			if roles.CreatedAt != tt.wantCreAt {
 				t.Errorf("CreatedAt = %q, want %q", roles.CreatedAt, tt.wantCreAt)
+			}
+			if roles.ExtraHeaders != tt.wantExtra {
+				t.Errorf("ExtraHeaders = %q, want %q", roles.ExtraHeaders, tt.wantExtra)
 			}
 			if len(roles.Frontmatter) != len(tt.wantFront) {
 				t.Fatalf("Frontmatter = %v, want %v", roles.Frontmatter, tt.wantFront)

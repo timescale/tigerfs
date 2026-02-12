@@ -448,6 +448,302 @@ func TestMapToColumns_NoFrontmatter(t *testing.T) {
 	}
 }
 
+// --- Extra headers tests (TestSynth_ prefix) ---
+
+func TestSynth_SynthesizeMarkdown_WithExtraHeaders(t *testing.T) {
+	columns := []string{"id", "filename", "title", "author", "headers", "body"}
+	values := []interface{}{
+		"uuid-1", "hello-world", "Hello World", "alice",
+		map[string]interface{}{"draft": false, "category": "blog", "tags": []interface{}{"sql", "beginner"}},
+		"# Hello\n",
+	}
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  []string{"title", "author"},
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	data, err := SynthesizeMarkdown(columns, values, roles)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content := string(data)
+
+	// Known columns first
+	if !strings.Contains(content, "title: Hello World") {
+		t.Errorf("should contain title, got:\n%s", content)
+	}
+	if !strings.Contains(content, "author: alice") {
+		t.Errorf("should contain author, got:\n%s", content)
+	}
+
+	// Extra headers in alphabetical order: category, draft, tags
+	if !strings.Contains(content, "category: blog") {
+		t.Errorf("should contain category extra header, got:\n%s", content)
+	}
+	if !strings.Contains(content, "draft: false") {
+		t.Errorf("should contain draft extra header, got:\n%s", content)
+	}
+	if !strings.Contains(content, "tags:") {
+		t.Errorf("should contain tags extra header, got:\n%s", content)
+	}
+
+	// Known columns should appear before extra headers
+	titleIdx := strings.Index(content, "title:")
+	categoryIdx := strings.Index(content, "category:")
+	if titleIdx > categoryIdx {
+		t.Errorf("known column 'title' should appear before extra header 'category'")
+	}
+}
+
+func TestSynth_SynthesizeMarkdown_ExtraHeadersEmpty(t *testing.T) {
+	columns := []string{"id", "filename", "title", "headers", "body"}
+	values := []interface{}{"uuid-1", "hello", "Hello", map[string]interface{}{}, "Body\n"}
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  []string{"title"},
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	data, err := SynthesizeMarkdown(columns, values, roles)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content := string(data)
+
+	// Should have title but no extra header keys
+	if !strings.Contains(content, "title: Hello") {
+		t.Errorf("should contain title, got:\n%s", content)
+	}
+	// Empty headers map should not add any extra lines
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "headers:") {
+			t.Errorf("empty headers should not appear in frontmatter, got:\n%s", content)
+		}
+	}
+}
+
+func TestSynth_SynthesizeMarkdown_ExtraHeadersNil(t *testing.T) {
+	columns := []string{"id", "filename", "title", "headers", "body"}
+	values := []interface{}{"uuid-1", "hello", "Hello", nil, "Body\n"}
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  []string{"title"},
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	data, err := SynthesizeMarkdown(columns, values, roles)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content := string(data)
+
+	// NULL headers column should behave like empty
+	if !strings.Contains(content, "title: Hello") {
+		t.Errorf("should contain title, got:\n%s", content)
+	}
+}
+
+func TestSynth_SynthesizeMarkdown_OnlyExtraHeaders(t *testing.T) {
+	columns := []string{"id", "filename", "headers", "body"}
+	values := []interface{}{
+		"uuid-1", "hello",
+		map[string]interface{}{"draft": true, "category": "notes"},
+		"Body\n",
+	}
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  nil, // no known frontmatter columns
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	data, err := SynthesizeMarkdown(columns, values, roles)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content := string(data)
+
+	// Should still have --- delimiters
+	if !strings.HasPrefix(content, "---\n") {
+		t.Errorf("should have frontmatter delimiters, got:\n%s", content)
+	}
+	if !strings.Contains(content, "category: notes") {
+		t.Errorf("should contain category, got:\n%s", content)
+	}
+	if !strings.Contains(content, "draft: true") {
+		t.Errorf("should contain draft, got:\n%s", content)
+	}
+}
+
+func TestSynth_MapToColumns_UnknownKeysIntoExtraHeaders(t *testing.T) {
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  []string{"title", "author"},
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	parsed := &ParsedMarkdown{
+		Frontmatter: map[string]interface{}{
+			"title":    "Hello",
+			"author":   "alice",
+			"category": "blog",
+			"draft":    false,
+		},
+		Body: "Content\n",
+	}
+
+	cols, err := MapToColumns(parsed, roles)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cols["title"] != "Hello" {
+		t.Errorf("title = %v, want %q", cols["title"], "Hello")
+	}
+	if cols["author"] != "alice" {
+		t.Errorf("author = %v, want %q", cols["author"], "alice")
+	}
+
+	headers, ok := cols["headers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("headers should be map[string]interface{}, got %T", cols["headers"])
+	}
+	if headers["category"] != "blog" {
+		t.Errorf("headers[category] = %v, want %q", headers["category"], "blog")
+	}
+	if headers["draft"] != false {
+		t.Errorf("headers[draft] = %v, want false", headers["draft"])
+	}
+}
+
+func TestSynth_MapToColumns_NoExtraHeaders_UnknownKeyRejected(t *testing.T) {
+	roles := &ColumnRoles{
+		Filename:    "filename",
+		Body:        "body",
+		Frontmatter: []string{"title"},
+		PrimaryKey:  "id",
+		// ExtraHeaders intentionally empty
+	}
+
+	parsed := &ParsedMarkdown{
+		Frontmatter: map[string]interface{}{
+			"title":   "Hello",
+			"unknown": "value",
+		},
+		Body: "Content\n",
+	}
+
+	_, err := MapToColumns(parsed, roles)
+	if err == nil {
+		t.Fatal("expected error for unknown frontmatter key without extra headers column")
+	}
+	if !strings.Contains(err.Error(), "unknown") {
+		t.Errorf("error should mention 'unknown', got: %v", err)
+	}
+}
+
+func TestSynth_MapToColumns_ExtraHeadersDeletion(t *testing.T) {
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  []string{"title"},
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	// User removed the "draft" key — only "title" remains in frontmatter
+	parsed := &ParsedMarkdown{
+		Frontmatter: map[string]interface{}{
+			"title": "Hello",
+		},
+		Body: "Content\n",
+	}
+
+	cols, err := MapToColumns(parsed, roles)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	headers, ok := cols["headers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("headers should be map[string]interface{}, got %T", cols["headers"])
+	}
+	// Extra headers should be empty (previously existing keys are removed)
+	if len(headers) != 0 {
+		t.Errorf("headers should be empty after removing extra keys, got: %v", headers)
+	}
+}
+
+func TestSynth_ExtraHeadersRoundTrip(t *testing.T) {
+	// Step 1: Synthesize markdown with extra headers
+	columns := []string{"id", "filename", "title", "headers", "body"}
+	values := []interface{}{
+		"uuid-1", "hello",
+		"Hello World",
+		map[string]interface{}{"draft": true, "category": "blog"},
+		"# Hello\n",
+	}
+	roles := &ColumnRoles{
+		Filename:     "filename",
+		Body:         "body",
+		Frontmatter:  []string{"title"},
+		PrimaryKey:   "id",
+		ExtraHeaders: "headers",
+	}
+
+	data, err := SynthesizeMarkdown(columns, values, roles)
+	if err != nil {
+		t.Fatalf("synthesize error: %v", err)
+	}
+
+	// Step 2: Parse the synthesized markdown
+	parsed, err := ParseMarkdown(data)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	// Step 3: Map back to columns
+	cols, err := MapToColumns(parsed, roles)
+	if err != nil {
+		t.Fatalf("map error: %v", err)
+	}
+
+	// Step 4: Verify known columns survived
+	if cols["title"] != "Hello World" {
+		t.Errorf("title = %v, want %q", cols["title"], "Hello World")
+	}
+	if cols["body"] != "# Hello\n" {
+		t.Errorf("body = %q, want %q", cols["body"], "# Hello\n")
+	}
+
+	// Step 5: Verify extra headers survived
+	headers, ok := cols["headers"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("headers should be map[string]interface{}, got %T", cols["headers"])
+	}
+	if headers["draft"] != true {
+		t.Errorf("headers[draft] = %v, want true", headers["draft"])
+	}
+	if headers["category"] != "blog" {
+		t.Errorf("headers[category] = %v, want %q", headers["category"], "blog")
+	}
+}
+
 func TestSynthesizeMarkdown_TrailingNewline(t *testing.T) {
 	columns := []string{"id", "filename", "body"}
 	values := []interface{}{"uuid-1", "hello", "No trailing newline"}

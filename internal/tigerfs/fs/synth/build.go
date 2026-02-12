@@ -9,6 +9,7 @@ import "fmt"
 //   - id: UUID primary key with auto-generation
 //   - filename: unique text for .md file naming
 //   - title, author: text frontmatter columns
+//   - headers: JSONB for user-defined frontmatter key-value pairs
 //   - body: text for markdown content
 //   - created_at: timestamptz with auto-default
 //   - modified_at: timestamptz with auto-default
@@ -18,6 +19,7 @@ func GenerateMarkdownTableSQL(schema, name string) string {
     filename TEXT UNIQUE NOT NULL,
     title TEXT,
     author TEXT,
+    headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now()

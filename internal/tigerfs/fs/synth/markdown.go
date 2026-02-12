@@ -2,6 +2,7 @@ package synth
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
@@ -37,9 +38,11 @@ func SynthesizeMarkdown(columns []string, values []interface{}, roles *ColumnRol
 
 	var sb strings.Builder
 
-	// Write frontmatter if there are frontmatter columns
-	if len(roles.Frontmatter) > 0 {
-		fm, err := buildFrontmatter(colMap, roles.Frontmatter)
+	// Write frontmatter if there are frontmatter columns or extra headers
+	hasFrontmatter := len(roles.Frontmatter) > 0
+	hasExtraHeaders := roles.ExtraHeaders != "" && colMap[roles.ExtraHeaders] != nil
+	if hasFrontmatter || hasExtraHeaders {
+		fm, err := buildFrontmatter(colMap, roles.Frontmatter, roles.ExtraHeaders)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build frontmatter: %w", err)
 		}
@@ -98,8 +101,10 @@ func GetMarkdownFilename(columns []string, values []interface{}, roles *ColumnRo
 
 // buildFrontmatter generates YAML frontmatter from the given columns.
 // Uses gopkg.in/yaml.v3 for proper YAML serialization.
-// Returns empty slice if all frontmatter values are nil.
-func buildFrontmatter(colMap map[string]interface{}, frontmatterCols []string) ([]byte, error) {
+// Known frontmatter columns are written first (in schema order), followed by
+// extra headers from the JSONB column (sorted alphabetically).
+// Returns empty slice if all values are nil/empty.
+func buildFrontmatter(colMap map[string]interface{}, frontmatterCols []string, extraHeadersCol string) ([]byte, error) {
 	// Build ordered map for YAML output (preserves column order)
 	// Use yaml.v3 Node API for ordered output
 	doc := &yaml.Node{
@@ -130,6 +135,35 @@ func buildFrontmatter(colMap map[string]interface{}, frontmatterCols []string) (
 		doc.Content = append(doc.Content, keyNode, valNode)
 	}
 
+	// Append extra headers from JSONB column (alphabetically sorted)
+	if extraHeadersCol != "" {
+		if extras, ok := colMap[extraHeadersCol].(map[string]interface{}); ok && len(extras) > 0 {
+			keys := make([]string, 0, len(extras))
+			for k := range extras {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+
+			for _, k := range keys {
+				v := extras[k]
+				if v == nil {
+					continue
+				}
+				hasContent = true
+
+				keyNode := &yaml.Node{
+					Kind:  yaml.ScalarNode,
+					Value: k,
+				}
+				valNode, err := valueToYAMLNode(v)
+				if err != nil {
+					return nil, fmt.Errorf("extra header %s: %w", k, err)
+				}
+				doc.Content = append(doc.Content, keyNode, valNode)
+			}
+		}
+	}
+
 	if !hasContent {
 		return nil, nil
 	}
@@ -144,6 +178,20 @@ func buildFrontmatter(colMap map[string]interface{}, frontmatterCols []string) (
 
 // valueToYAMLNode converts a database value to a yaml.Node.
 func valueToYAMLNode(val interface{}) (*yaml.Node, error) {
+	// Handle booleans directly — format.ConvertValueToText uses PostgreSQL
+	// convention (t/f) which doesn't round-trip through YAML correctly.
+	if b, ok := val.(bool); ok {
+		v := "false"
+		if b {
+			v = "true"
+		}
+		return &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Tag:   "!!bool",
+			Value: v,
+		}, nil
+	}
+
 	// Convert DB value to text first, then let YAML handle it
 	text, err := format.ConvertValueToText(val)
 	if err != nil {
@@ -270,7 +318,9 @@ func ParseMarkdown(content []byte) (*ParsedMarkdown, error) {
 
 // MapToColumns converts parsed markdown back to column values for database writes.
 // Frontmatter keys are mapped to column names; the body maps to the body column.
-// Returns an error if frontmatter contains keys that don't match any known column.
+// When ExtraHeaders is set, unknown frontmatter keys are collected into a map
+// stored in that column (overwrite semantics — missing keys are removed).
+// When ExtraHeaders is empty, unknown keys return an error.
 func MapToColumns(parsed *ParsedMarkdown, roles *ColumnRoles) (map[string]interface{}, error) {
 	result := make(map[string]interface{})
 
@@ -285,13 +335,25 @@ func MapToColumns(parsed *ParsedMarkdown, roles *ColumnRoles) (map[string]interf
 			knownCols[strings.ToLower(col)] = true
 		}
 
+		extraHeaders := make(map[string]interface{})
 		for key, val := range parsed.Frontmatter {
-			if !knownCols[strings.ToLower(key)] {
+			if knownCols[strings.ToLower(key)] {
+				result[key] = val
+			} else if roles.ExtraHeaders != "" {
+				extraHeaders[key] = val
+			} else {
 				return nil, fmt.Errorf("unknown frontmatter key %q (valid keys: %s)",
 					key, strings.Join(roles.Frontmatter, ", "))
 			}
-			result[key] = val
 		}
+
+		// Always set extra headers (overwrite semantics: removed keys disappear)
+		if roles.ExtraHeaders != "" {
+			result[roles.ExtraHeaders] = extraHeaders
+		}
+	} else if roles.ExtraHeaders != "" {
+		// No frontmatter at all → empty extra headers
+		result[roles.ExtraHeaders] = map[string]interface{}{}
 	}
 
 	return result, nil
