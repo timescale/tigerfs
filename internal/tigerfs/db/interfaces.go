@@ -41,6 +41,14 @@ type SchemaReader interface {
 
 	// GetTablePermissions returns the current user's permissions on a table.
 	GetTablePermissions(ctx context.Context, schema, table string) (*TablePermissions, error)
+
+	// GetViewComment returns the raw comment string for a view, or empty if none.
+	// Used by synthesized apps to detect format markers (e.g., "tigerfs:md").
+	GetViewComment(ctx context.Context, schema, view string) (string, error)
+
+	// GetViewCommentsBatch returns comments for all views in a schema.
+	// Returns a map of view name to comment string (views without comments are omitted).
+	GetViewCommentsBatch(ctx context.Context, schema string) (map[string]string, error)
 }
 
 // RowReader provides row-level read operations.

@@ -30,6 +30,10 @@ type Operations struct {
 	schemaOnce   sync.Once
 	cachedSchema string
 	schemaErr    error
+
+	// synthState caches detected synth views per schema.
+	// Lazily loaded, invalidated on .build/ or .format/ writes.
+	synthState synthCacheState
 }
 
 // NewOperations creates a new Operations instance.
@@ -135,6 +139,10 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirImport(ctx, parsed)
 	case PathDDL:
 		return o.readDirDDL(ctx, parsed)
+	case PathBuild:
+		return o.readDirBuild(ctx, parsed)
+	case PathFormat:
+		return o.readDirFormat(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
@@ -187,6 +195,7 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 	// Note: .delete is NOT at root level - it's inside tables (/{table}/.delete/)
 	// .views only contains .create (views themselves appear at root like tables)
 	entries = append(entries,
+		Entry{Name: ".build", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
@@ -262,10 +271,13 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 	}
 
 	now := time.Now()
-	entries := make([]Entry, 0, len(tables)+len(views)+1)
+	entries := make([]Entry, 0, len(tables)+len(views)+2)
 
-	// Add .delete for schema deletion DDL
-	entries = append(entries, Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	// Add special directories for schema
+	entries = append(entries,
+		Entry{Name: ".build", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+	)
 
 	for _, t := range tables {
 		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
@@ -281,6 +293,7 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 // readDirTable lists contents of a table directory.
 // Shows rows (by primary key) plus capability directories.
 // Respects pipeline context (filters, order, limits) when present.
+// For synthesized views, lists synthesized filenames as file entries instead.
 func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -288,6 +301,11 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 			Code:    ErrInvalidPath,
 			Message: "missing context for table path",
 		}
+	}
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return o.readDirSynthView(ctx, parsed, info)
 	}
 
 	// Get primary key
@@ -358,7 +376,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		// Show all capabilities for raw table access
 		capabilities := []string{
 			DirAll, DirBy, DirDelete, DirExport, DirFilter, DirFirst,
-			DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
+			DirFormat, DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
 		}
 		for _, cap := range capabilities {
 			entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
@@ -967,6 +985,12 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 	case PathImport:
 		return o.statImport(ctx, parsed)
 
+	case PathBuild:
+		return o.statBuild(ctx, parsed)
+
+	case PathFormat:
+		return o.statFormat(ctx, parsed)
+
 	case PathDDL:
 		if parsed.DDLFile != "" {
 			return o.statDDLFile(ctx, parsed)
@@ -998,6 +1022,7 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 // statRow returns metadata for a row path.
 // Without a format extension (e.g., /users/1), returns a directory.
 // With a format extension (e.g., /users/1.json), returns a file.
+// For synthesized views, always returns a file stat.
 func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -1005,6 +1030,11 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Check if this is a synthesized view — synth files are always files, not directories
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return o.statSynthFile(ctx, parsed, info)
 	}
 
 	now := time.Now()
@@ -1443,6 +1473,7 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 }
 
 // readRowFile reads a row file in the specified format.
+// For synthesized views, returns the synthesized content (markdown/plaintext).
 func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -1450,6 +1481,15 @@ func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*File
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		data, fsErr := o.readFileSynthView(ctx, parsed, info)
+		if fsErr != nil {
+			return nil, fsErr
+		}
+		return &FileContent{Data: data}, nil
 	}
 
 	// Get primary key

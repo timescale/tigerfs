@@ -10,7 +10,7 @@ func TestPathType(t *testing.T) {
 	types := []PathType{
 		PathRoot, PathSchemaList, PathSchema, PathTable,
 		PathCapability, PathRow, PathColumn, PathInfo,
-		PathExport, PathImport, PathDDL,
+		PathExport, PathImport, PathDDL, PathViewList, PathBuild, PathFormat,
 	}
 	seen := make(map[PathType]bool)
 	for _, pt := range types {
@@ -916,6 +916,166 @@ func TestParsePathPipelineColumn(t *testing.T) {
 			}
 			if result.Column != tt.column {
 				t.Errorf("Column = %q, want %q", result.Column, tt.column)
+			}
+		})
+	}
+}
+
+// TestParsePathBuild verifies /.build/ path parsing.
+func TestParsePathBuild(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		wantType  PathType
+		wantBuild string
+		wantErr   bool
+	}{
+		{
+			name:     "build directory",
+			path:     "/.build",
+			wantType: PathBuild,
+		},
+		{
+			name:     "build directory with trailing slash",
+			path:     "/.build/",
+			wantType: PathBuild,
+		},
+		{
+			name:      "build with app name",
+			path:      "/.build/posts",
+			wantType:  PathBuild,
+			wantBuild: "posts",
+		},
+		{
+			name:      "build with app name trailing slash",
+			path:      "/.build/notes/",
+			wantType:  PathBuild,
+			wantBuild: "notes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.BuildName != tt.wantBuild {
+				t.Errorf("BuildName = %q, want %q", result.BuildName, tt.wantBuild)
+			}
+		})
+	}
+}
+
+// TestParsePathBuildInSchema verifies /.schemas/<schema>/.build/ path parsing.
+func TestParsePathBuildInSchema(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantType   PathType
+		wantBuild  string
+		wantSchema string
+	}{
+		{
+			name:       "schema build directory",
+			path:       "/.schemas/myschema/.build",
+			wantType:   PathBuild,
+			wantSchema: "myschema",
+		},
+		{
+			name:       "schema build with name",
+			path:       "/.schemas/myschema/.build/posts",
+			wantType:   PathBuild,
+			wantBuild:  "posts",
+			wantSchema: "myschema",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.BuildName != tt.wantBuild {
+				t.Errorf("BuildName = %q, want %q", result.BuildName, tt.wantBuild)
+			}
+			if result.Context == nil {
+				t.Fatal("Context should not be nil for schema-level build")
+			}
+			if result.Context.Schema != tt.wantSchema {
+				t.Errorf("Schema = %q, want %q", result.Context.Schema, tt.wantSchema)
+			}
+		})
+	}
+}
+
+// TestParsePathFormat verifies /{table}/.format/ path parsing.
+func TestParsePathFormat(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantType   PathType
+		wantTable  string
+		wantTarget string
+	}{
+		{
+			name:      "format directory",
+			path:      "/posts/.format",
+			wantType:  PathFormat,
+			wantTable: "posts",
+		},
+		{
+			name:      "format directory trailing slash",
+			path:      "/posts/.format/",
+			wantType:  PathFormat,
+			wantTable: "posts",
+		},
+		{
+			name:       "format with target",
+			path:       "/posts/.format/markdown",
+			wantType:   PathFormat,
+			wantTable:  "posts",
+			wantTarget: "markdown",
+		},
+		{
+			name:       "format with txt target",
+			path:       "/notes/.format/txt",
+			wantType:   PathFormat,
+			wantTable:  "notes",
+			wantTarget: "txt",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.Context == nil {
+				t.Fatal("Context should not be nil")
+			}
+			if result.Context.TableName != tt.wantTable {
+				t.Errorf("TableName = %q, want %q", result.Context.TableName, tt.wantTable)
+			}
+			if result.FormatTarget != tt.wantTarget {
+				t.Errorf("FormatTarget = %q, want %q", result.FormatTarget, tt.wantTarget)
 			}
 		})
 	}

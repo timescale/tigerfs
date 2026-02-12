@@ -57,6 +57,13 @@ const (
 	DirDelete  = ".delete"  // Staging for DROP operations
 )
 
+// Synthesized app capabilities
+// Directories for creating and configuring synthesized apps.
+const (
+	DirBuild  = ".build"  // Create synthesized app (table + view) in one step
+	DirFormat = ".format" // Configure synthesized view format on existing table
+)
+
 // Control files (DDL staging)
 // Content files are visible (no dot prefix), trigger files are hidden (dot prefix).
 const (
