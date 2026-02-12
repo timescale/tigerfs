@@ -1,7 +1,7 @@
 # ADR-006: Bulk Data Capabilities (`.export/` and `.import/`)
 
 **Date:** 2026-01-28
-**Status:** Proposed
+**Status:** Accepted
 **Deciders:** Mike Freedman
 
 ## Context

@@ -4927,7 +4927,7 @@ The markdown synthesized app has fixed frontmatter columns (title, author). User
 2. Add `headers JSONB DEFAULT '{}'::jsonb` column to `GenerateMarkdownTableSQL` in `.build/`
 3. Merge extra headers into YAML frontmatter during synthesis (after known columns, alphabetically sorted)
 4. Collect unknown frontmatter keys into extra headers during parsing (overwrite semantics)
-5. Update demo data (`examples/docker-demo/init.sql`) with headers column and sample data
+5. Update demo data (`scripts/docker-demo/init.sql`) with headers column and sample data
 6. Unit tests for all new behavior
 
 **Files to Modify:**
@@ -4935,7 +4935,7 @@ The markdown synthesized app has fixed frontmatter columns (title, author). User
 - `internal/tigerfs/fs/synth/build.go`
 - `internal/tigerfs/fs/synth/markdown.go`
 - `internal/tigerfs/fs/synth/format_handler.go` (TODO for reuse existing schema)
-- `examples/docker-demo/init.sql`
+- `scripts/docker-demo/init.sql`
 
 **Files to Modify (tests):**
 - `internal/tigerfs/fs/synth/columns_test.go`
@@ -6139,19 +6139,19 @@ go test ./test/integration/... -v -run TestDDL
    - Document template formats
    - Document error handling
 
-3. Add examples to `examples/` directory:
-   - `examples/ddl/create-table.sh`
-   - `examples/ddl/modify-table.sh`
-   - `examples/ddl/delete-table.sh`
+3. Add examples to `scripts/ddl/` directory:
+   - `scripts/ddl/create-table.sh`
+   - `scripts/ddl/modify-table.sh`
+   - `scripts/ddl/delete-table.sh`
 
 **Files to Modify:**
 - `README.md`
 - `docs/spec.md`
 
 **Files to Create:**
-- `examples/ddl/create-table.sh`
-- `examples/ddl/modify-table.sh`
-- `examples/ddl/delete-table.sh`
+- `scripts/ddl/create-table.sh`
+- `scripts/ddl/modify-table.sh`
+- `scripts/ddl/delete-table.sh`
 
 **Completion Criteria:**
 - README shows DDL examples

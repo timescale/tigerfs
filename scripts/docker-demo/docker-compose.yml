@@ -16,7 +16,7 @@ services:
   tigerfs:
     build:
       context: ../..
-      dockerfile: examples/docker-demo/Dockerfile
+      dockerfile: scripts/docker-demo/Dockerfile
     privileged: true
     depends_on:
       postgres:

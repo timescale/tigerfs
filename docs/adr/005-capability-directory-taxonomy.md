@@ -1,7 +1,7 @@
 # ADR-005: Capability-based Directory Taxonomy
 
 **Date:** 2026-01-28
-**Status:** Proposed
+**Status:** Accepted
 **Deciders:** Mike Freedman
 
 ## Context

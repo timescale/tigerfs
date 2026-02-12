@@ -41,7 +41,7 @@ If you prefer manual control:
 
 ```bash
 # From this directory
-cd examples/docker-demo
+cd scripts/docker-demo
 
 # Optional: set API key if you want to use Claude Code inside the container
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -71,7 +71,7 @@ Connect to your Tiger Cloud database using headless authentication.
 
 ```bash
 # From this directory
-cd examples/docker-demo
+cd scripts/docker-demo
 
 # Build and start (only the tigerfs container needed)
 docker compose up -d --build tigerfs
