@@ -19,6 +19,10 @@ var (
 
 	// createdAtConventions lists column names recognized as the creation timestamp.
 	createdAtConventions = []string{"created_at"}
+
+	// extraHeadersConventions lists column names recognized as the JSONB store
+	// for user-defined frontmatter key-value pairs.
+	extraHeadersConventions = []string{"headers"}
 )
 
 // ColumnRoles maps database columns to their roles in synthesized file rendering.
@@ -46,6 +50,11 @@ type ColumnRoles struct {
 	// CreatedAt is the column used for file creation time (e.g., "created_at").
 	// Empty if no matching column found.
 	CreatedAt string
+
+	// ExtraHeaders is the JSONB column for user-defined frontmatter pairs.
+	// Merged into YAML frontmatter after known columns during synthesis.
+	// Empty if no matching column found. Only used by FormatMarkdown.
+	ExtraHeaders string
 }
 
 // DetectColumnRoles identifies which columns serve which roles for a given format.
@@ -86,8 +95,11 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 	roles.ModifiedAt = findMatchingColumn(columnNames, modifiedAtConventions)
 	roles.CreatedAt = findMatchingColumn(columnNames, createdAtConventions)
 
+	// Detect optional extra headers JSONB column
+	roles.ExtraHeaders = findMatchingColumn(columnNames, extraHeadersConventions)
+
 	// Remaining columns become frontmatter (markdown only), preserving schema order.
-	// Exclude: filename, body, primary key, and timestamp columns.
+	// Exclude: filename, body, primary key, timestamp, and extra headers columns.
 	if format == FormatMarkdown {
 		excluded := map[string]bool{
 			strings.ToLower(roles.Filename):   true,
@@ -99,6 +111,9 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 		}
 		if roles.CreatedAt != "" {
 			excluded[strings.ToLower(roles.CreatedAt)] = true
+		}
+		if roles.ExtraHeaders != "" {
+			excluded[strings.ToLower(roles.ExtraHeaders)] = true
 		}
 		for _, col := range columnNames {
 			if !excluded[strings.ToLower(col)] {

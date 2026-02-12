@@ -173,6 +173,14 @@ Integration tests that mount the filesystem work with **both** FUSE (Linux) and 
 
 **Do not** prefix tests with a mount method name unless they are truly specific to that method.
 
+#### Synth Test Naming
+
+All synth-related unit tests (in `internal/tigerfs/fs/synth/` and `internal/tigerfs/fs/`) use the `TestSynth_` prefix. This enables running all synth tests across packages with a single filter:
+
+```bash
+go test -run "^TestSynth_" ./internal/tigerfs/fs/... ./test/integration/...
+```
+
 ## Code Documentation Standards
 
 ### Comment Levels
