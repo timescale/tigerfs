@@ -21,6 +21,10 @@ go test ./...                    # All tests
 go test -race ./...              # With race detection
 go test -run TestName ./path     # Specific test
 
+# Synth app tests
+go test ./internal/tigerfs/fs/synth/...                                      # Unit (synth package)
+go test -run "^TestSynth_" ./internal/tigerfs/fs/... ./test/integration/...  # Unit (synth_ops) + integration
+
 # Before committing (required)
 go fmt ./... && go vet ./... && go test ./... && go mod tidy
 ```
