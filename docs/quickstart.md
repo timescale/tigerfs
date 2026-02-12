@@ -21,7 +21,7 @@ The Docker demo runs both TigerFS and PostgreSQL in containers with sample data 
 
 ```bash
 # From the TigerFS repository root
-cd examples/docker-demo
+cd scripts/docker-demo
 
 # Start the demo (builds containers, starts PostgreSQL, mounts TigerFS)
 ./demo.sh start
@@ -76,7 +76,7 @@ The macOS demo runs TigerFS natively using the NFS backend, with only PostgreSQL
 
 ```bash
 # From the TigerFS repository root
-cd examples/mac-demo
+cd scripts/mac-demo
 
 # Start the demo (starts PostgreSQL, builds TigerFS, mounts at /tmp/tigerfs-demo)
 ./demo.sh start
@@ -173,16 +173,16 @@ ls /mnt/db
 ls -la /mnt/db/users
 
 # View table schema (CREATE TABLE statement)
-cat /mnt/db/users/.schema
+cat /mnt/db/users/.info/schema
 
 # List columns
-cat /mnt/db/users/.columns
+cat /mnt/db/users/.info/columns
 
 # Check row count
-cat /mnt/db/users/.count
+cat /mnt/db/users/.info/count
 
 # View indexes
-cat /mnt/db/users/.indexes
+cat /mnt/db/users/.info/indexes
 ```
 
 ### Expected Output
@@ -195,18 +195,15 @@ $ ls -la /mnt/db/users
 total 0
 drwxr-xr-x  1 root root    0 Jan 26 12:00 .
 drwxr-xr-x  1 root root    0 Jan 26 12:00 ..
--r--r--r--  1 root root  512 Jan 26 12:00 .columns
--r--r--r--  1 root root    4 Jan 26 12:00 .count
-drwxr-xr-x  1 root root    0 Jan 26 12:00 .email
+drwxr-xr-x  1 root root    0 Jan 26 12:00 .by
 drwxr-xr-x  1 root root    0 Jan 26 12:00 .first
--r--r--r--  1 root root 1024 Jan 26 12:00 .indexes
+drwxr-xr-x  1 root root    0 Jan 26 12:00 .info
 drwxr-xr-x  1 root root    0 Jan 26 12:00 .sample
--r--r--r--  1 root root  256 Jan 26 12:00 .schema
 -rw-r--r--  1 root root   64 Jan 26 12:00 1
 -rw-r--r--  1 root root   64 Jan 26 12:00 2
 ...
 
-$ cat /mnt/db/users/.schema
+$ cat /mnt/db/users/.info/schema
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -217,7 +214,7 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
-$ cat /mnt/db/users/.columns
+$ cat /mnt/db/users/.info/columns
 id
 name
 email
@@ -226,24 +223,24 @@ active
 bio
 created_at
 
-$ cat /mnt/db/users/.count
+$ cat /mnt/db/users/.info/count
 1000
 
-$ cat /mnt/db/users/.indexes
+$ cat /mnt/db/users/.info/indexes
 PRIMARY KEY: id
 UNIQUE: email
 ```
 
 ### Explanation
 
-TigerFS exposes database metadata as dotfiles (hidden files starting with `.`):
+TigerFS exposes database metadata under the `.info/` directory:
 
-- **`.schema`** - The complete CREATE TABLE statement
-- **`.columns`** - Simple list of column names in schema order
-- **`.count`** - Total number of rows (runs `SELECT COUNT(*)`)
-- **`.indexes`** - Available indexes for efficient lookups
+- **`.info/schema`** - The complete CREATE TABLE statement
+- **`.info/columns`** - Simple list of column names in schema order
+- **`.info/count`** - Total number of rows (runs `SELECT COUNT(*)`)
+- **`.info/indexes`** - Available indexes for efficient lookups
 
-Dotfiles are hidden by default with `ls` but visible with `ls -a` or `ls -la`. This keeps the view clean while making metadata accessible.
+Dot-directories are hidden by default with `ls` but visible with `ls -a` or `ls -la`. This keeps the view clean while making metadata accessible.
 
 ---
 
@@ -550,11 +547,11 @@ tigerfs unmount /mnt/db
 | `/mnt/db/users/123` | Row as TSV |
 | `/mnt/db/users/123.json` | Row as JSON |
 | `/mnt/db/users/123/email` | Single column |
-| `/mnt/db/users/.schema` | Table DDL |
-| `/mnt/db/users/.count` | Row count |
+| `/mnt/db/users/.info/schema` | Table DDL |
+| `/mnt/db/users/.info/count` | Row count |
 | `/mnt/db/users/.first/100/` | First 100 rows |
 | `/mnt/db/users/.sample/50/` | Random 50 rows |
-| `/mnt/db/users/.email/foo@x.com/` | Index lookup |
+| `/mnt/db/users/.by/email/foo@x.com/` | Index lookup |
 
 ### Format Selection
 

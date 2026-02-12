@@ -1,5 +1,7 @@
 # Tasks App
 
+> **Status: Not Yet Implemented** — This documents the planned Tasks synthesized app (Phase 6.2). The feature is designed but not yet built.
+
 Manage ordered task lists with status tracking in PostgreSQL.
 
 ## What It Does

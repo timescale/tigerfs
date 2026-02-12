@@ -59,7 +59,7 @@ echo "markdown" > /mnt/db/posts/.format/markdown
 ls /mnt/db/posts_md/
 ```
 
-See [Markdown App](docs/markdown/README.md) for full documentation.
+See [Markdown App](docs/markdown-app.md) for full documentation.
 
 ## Architecture
 
@@ -123,7 +123,7 @@ Self-contained demos with sample data (1,000 users, 200 products, 8,000 orders):
 Runs both TigerFS and PostgreSQL in Docker containers:
 
 ```bash
-cd examples/docker-demo
+cd scripts/docker-demo
 ./demo.sh start
 ./demo.sh shell
 # Now explore: ls, cat users/1.json, etc.
@@ -135,7 +135,7 @@ cd examples/docker-demo
 Runs TigerFS natively on macOS with PostgreSQL in Docker:
 
 ```bash
-cd examples/mac-demo
+cd scripts/mac-demo
 ./demo.sh start
 ls -al /tmp/tigerfs-demo
 cat /tmp/tigerfs-demo/users/1.json

@@ -1,5 +1,7 @@
 # Plan: Shared Core Library for FUSE/NFS Feature Parity
 
+> **Status: Complete** — This plan was fully implemented in Phase 9. Kept as architectural reference.
+
 ## Summary
 
 Create a new `internal/tigerfs/fs/` package as the shared core library that both FUSE and NFS backends use. This achieves **full feature parity** - NFS gets all capabilities that FUSE has, including writes and DDL operations.
