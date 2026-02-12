@@ -55,6 +55,7 @@ func TestReadDir_Root(t *testing.T) {
 	assert.Contains(t, names, "tasks")
 	assert.Contains(t, names, ".schemas")
 	assert.Contains(t, names, ".create")
+	assert.Contains(t, names, ".build")
 }
 
 // TestReadDir_Table tests reading a table directory.
@@ -92,6 +93,7 @@ func TestReadDir_Table(t *testing.T) {
 	assert.Contains(t, names, ".info")
 	assert.Contains(t, names, ".by")
 	assert.Contains(t, names, ".filter")
+	assert.Contains(t, names, ".format")
 	assert.Contains(t, names, ".order")
 	assert.Contains(t, names, ".first")
 	assert.Contains(t, names, ".last")
@@ -1045,6 +1047,10 @@ type mockDBClient struct {
 	// View updatability
 	viewUpdatable map[string]bool
 
+	// Synth view data
+	viewComments map[string]map[string]string // schema → viewName → comment
+	allRowsData  map[string]*mockAllRows      // "schema.table" → columns + rows
+
 	// Pipeline query results (for QueryRowsPipeline and QueryRowsWithDataPipeline)
 	pipelineResultRows []string
 	pipelineRows       [][]interface{}
@@ -1088,6 +1094,11 @@ type mockIndex struct {
 	name    string
 	columns []string
 	unique  bool
+}
+
+type mockAllRows struct {
+	columns []string
+	rows    [][]interface{}
 }
 
 // Implement db.SchemaReader
@@ -1158,6 +1169,19 @@ func (m *mockDBClient) GetPrimaryKey(ctx context.Context, schema, table string) 
 
 func (m *mockDBClient) GetTablePermissions(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
 	return &db.TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}, nil
+}
+
+func (m *mockDBClient) GetViewComment(ctx context.Context, schema, view string) (string, error) {
+	return "", nil
+}
+
+func (m *mockDBClient) GetViewCommentsBatch(ctx context.Context, schema string) (map[string]string, error) {
+	if m.viewComments != nil {
+		if comments, ok := m.viewComments[schema]; ok {
+			return comments, nil
+		}
+	}
+	return make(map[string]string), nil
 }
 
 // Implement db.RowReader
@@ -1364,6 +1388,14 @@ func (m *mockDBClient) GetLastNRowsOrdered(ctx context.Context, schema, table, p
 // Implement db.ExportReader
 
 func (m *mockDBClient) GetAllRows(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error) {
+	key := schema + "." + table
+	if data, ok := m.allRowsData[key]; ok {
+		rows := data.rows
+		if limit > 0 && limit < len(rows) {
+			rows = rows[:limit]
+		}
+		return data.columns, rows, nil
+	}
 	return nil, nil, nil
 }
 
@@ -1915,4 +1947,285 @@ func TestReadFile_PipelineExport_ReturnsJSONData(t *testing.T) {
 	jsonErr := json.Unmarshal(content.Data, &jsonData)
 	require.NoError(t, jsonErr, "data should be valid JSON")
 	assert.Len(t, jsonData, 3, "should have 3 rows")
+}
+
+// ============================================================================
+// Tests for synthesized view rendering (6.1.7)
+// ============================================================================
+
+// newSynthMockDB creates a mock DB configured with a synth markdown view "posts"
+// backed by columns [id, filename, title, author, body] with sample data.
+func newSynthMockDB() *mockDBClient {
+	return &mockDBClient{
+		tables: map[string][]string{
+			"public": {"_posts"},
+		},
+		views: map[string][]string{
+			"public": {"posts"},
+		},
+		viewComments: map[string]map[string]string{
+			"public": {"posts": "tigerfs:md"},
+		},
+		columns: map[string][]mockColumn{
+			"public.posts": {
+				{name: "id", dataType: "integer"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "author", dataType: "text"},
+				{name: "body", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._posts": {column: "id"},
+			"public.posts":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.posts": {
+				columns: []string{"id", "filename", "title", "author", "body"},
+				rows: [][]interface{}{
+					{1, "hello-world", "Hello World", "alice", "# Hello\n\nFirst post.\n"},
+					{2, "second-post", "Second Post", "bob", "# Second\n\nAnother post.\n"},
+				},
+			},
+		},
+	}
+}
+
+// TestReadDir_SynthView verifies that a synth view lists .md filenames instead of row IDs.
+func TestReadDir_SynthView(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+	entries, err := ops.ReadDir(context.Background(), "/posts")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+
+	// Should list .md files, not row IDs
+	assert.Contains(t, names, "hello-world.md")
+	assert.Contains(t, names, "second-post.md")
+
+	// Files should NOT be directories
+	for _, e := range entries {
+		if e.Name == "hello-world.md" || e.Name == "second-post.md" {
+			assert.False(t, e.IsDir, "%s should be a file, not a directory", e.Name)
+			assert.Equal(t, os.FileMode(0644), e.Mode)
+		}
+	}
+
+	// Should NOT have capability directories (synth views skip them)
+	assert.NotContains(t, names, ".by")
+	assert.NotContains(t, names, ".filter")
+}
+
+// TestStat_SynthFile verifies stat on a synth file returns file metadata with correct size.
+func TestStat_SynthFile(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+	entry, err := ops.Stat(context.Background(), "/posts/hello-world.md")
+
+	require.Nil(t, err)
+	require.NotNil(t, entry)
+	assert.False(t, entry.IsDir, "synth file should not be a directory")
+	assert.Equal(t, "hello-world.md", entry.Name)
+	assert.True(t, entry.Size > 0, "synth file should have non-zero size")
+	assert.Equal(t, os.FileMode(0644), entry.Mode)
+}
+
+// TestStat_SynthFile_NotFound verifies stat on a non-existent synth file returns ErrNotExist.
+func TestStat_SynthFile_NotFound(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+	_, err := ops.Stat(context.Background(), "/posts/nonexistent.md")
+
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
+}
+
+// TestReadFile_SynthView verifies reading a synth file returns synthesized markdown content.
+func TestReadFile_SynthView(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+	content, err := ops.ReadFile(context.Background(), "/posts/hello-world.md")
+
+	require.Nil(t, err)
+	require.NotNil(t, content)
+
+	text := string(content.Data)
+
+	// Should have YAML frontmatter with title and author
+	assert.Contains(t, text, "---\n")
+	assert.Contains(t, text, "title: Hello World")
+	assert.Contains(t, text, "author: alice")
+
+	// Should have the body content
+	assert.Contains(t, text, "# Hello")
+	assert.Contains(t, text, "First post.")
+}
+
+// TestWriteFile_SynthView_Insert verifies creating a new synth file performs INSERT.
+func TestWriteFile_SynthView_Insert(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Write a new markdown file
+	newContent := []byte("---\ntitle: New Post\nauthor: charlie\n---\n\n# New Post\n\nHello there.\n")
+	err := ops.WriteFile(context.Background(), "/posts/new-post.md", newContent)
+
+	require.Nil(t, err)
+	assert.True(t, mockDB.insertCalled, "should have called InsertRow for new file")
+	assert.False(t, mockDB.updateCalled, "should not have called UpdateRow for new file")
+}
+
+// TestWriteFile_SynthView_Update verifies updating an existing synth file performs UPDATE.
+func TestWriteFile_SynthView_Update(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Overwrite an existing markdown file
+	updatedContent := []byte("---\ntitle: Hello World Updated\nauthor: alice\n---\n\n# Updated\n\nEdited post.\n")
+	err := ops.WriteFile(context.Background(), "/posts/hello-world.md", updatedContent)
+
+	require.Nil(t, err)
+	assert.True(t, mockDB.updateCalled, "should have called UpdateRow for existing file")
+}
+
+// TestDeleteFile_SynthView verifies deleting a synth file performs DELETE.
+func TestDeleteFile_SynthView(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+	// Add the row to rowData so DeleteRow doesn't error
+	mockDB.rowData = map[string]*mockRow{
+		"public.posts.1": {
+			columns: []string{"id", "filename", "title", "author", "body"},
+			values:  []interface{}{1, "hello-world", "Hello World", "alice", "# Hello\n\nFirst post.\n"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	err := ops.Delete(context.Background(), "/posts/hello-world.md")
+
+	require.Nil(t, err)
+	assert.True(t, mockDB.deleteCalled, "should have called DeleteRow")
+	assert.Equal(t, "1", mockDB.lastDeletePK, "should delete by PK value")
+}
+
+// TestReadDir_SynthView_PlainText verifies plain text synth views list .txt files.
+func TestReadDir_SynthView_PlainText(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"_snippets"},
+		},
+		views: map[string][]string{
+			"public": {"snippets"},
+		},
+		viewComments: map[string]map[string]string{
+			"public": {"snippets": "tigerfs:txt"},
+		},
+		columns: map[string][]mockColumn{
+			"public.snippets": {
+				{name: "id", dataType: "integer"},
+				{name: "filename", dataType: "text"},
+				{name: "body", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.snippets": {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.snippets": {
+				columns: []string{"id", "filename", "body"},
+				rows: [][]interface{}{
+					{1, "hello", "Hello, world!\n"},
+					{2, "goodbye", "Goodbye, world!\n"},
+				},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	entries, err := ops.ReadDir(context.Background(), "/snippets")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+
+	assert.Contains(t, names, "hello.txt")
+	assert.Contains(t, names, "goodbye.txt")
+}
+
+// TestReadFile_SynthView_PlainText verifies reading a plain text synth file.
+func TestReadFile_SynthView_PlainText(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"_snippets"},
+		},
+		views: map[string][]string{
+			"public": {"snippets"},
+		},
+		viewComments: map[string]map[string]string{
+			"public": {"snippets": "tigerfs:txt"},
+		},
+		columns: map[string][]mockColumn{
+			"public.snippets": {
+				{name: "id", dataType: "integer"},
+				{name: "filename", dataType: "text"},
+				{name: "body", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.snippets": {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.snippets": {
+				columns: []string{"id", "filename", "body"},
+				rows: [][]interface{}{
+					{1, "hello", "Hello, world!\n"},
+				},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	content, err := ops.ReadFile(context.Background(), "/snippets/hello.txt")
+
+	require.Nil(t, err)
+	require.NotNil(t, content)
+	assert.Equal(t, "Hello, world!\n", string(content.Data))
+}
+
+// TestStat_SynthView_IsDirectory verifies that stat on a synth view path returns a directory.
+func TestStat_SynthView_IsDirectory(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDB()
+
+	ops := NewOperations(cfg, mockDB)
+	entry, err := ops.Stat(context.Background(), "/posts")
+
+	require.Nil(t, err)
+	require.NotNil(t, entry)
+	assert.True(t, entry.IsDir, "synth view should appear as a directory")
+	assert.Equal(t, "posts", entry.Name)
 }

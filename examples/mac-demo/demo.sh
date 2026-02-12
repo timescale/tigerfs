@@ -85,6 +85,10 @@ start_demo() {
     echo "  cat users/1.json"
     echo "  cat products/1.json"
     echo "  cat categories/.export/tsv"
+    echo "  ls blog/                    # List blog posts"
+    echo "  cat blog/hello-world.md     # Read a markdown post"
+    echo "  ls docs/                    # List documentation"
+    echo "  cat snippets/todo.txt       # Read a plain text snippet"
     echo ""
     echo "Stop the demo with: ./demo.sh stop"
 }

@@ -29,14 +29,16 @@ func (m *MockDDLExecutor) ExecInTransaction(ctx context.Context, sql string, arg
 
 // MockSchemaReader is a mock implementation of SchemaReader for testing.
 type MockSchemaReader struct {
-	GetCurrentSchemaFunc    func(ctx context.Context) (string, error)
-	GetSchemasFunc          func(ctx context.Context) ([]string, error)
-	GetTablesFunc           func(ctx context.Context, schema string) ([]string, error)
-	GetViewsFunc            func(ctx context.Context, schema string) ([]string, error)
-	IsViewUpdatableFunc     func(ctx context.Context, schema, view string) (bool, error)
-	GetColumnsFunc          func(ctx context.Context, schema, table string) ([]Column, error)
-	GetPrimaryKeyFunc       func(ctx context.Context, schema, table string) (*PrimaryKey, error)
-	GetTablePermissionsFunc func(ctx context.Context, schema, table string) (*TablePermissions, error)
+	GetCurrentSchemaFunc     func(ctx context.Context) (string, error)
+	GetSchemasFunc           func(ctx context.Context) ([]string, error)
+	GetTablesFunc            func(ctx context.Context, schema string) ([]string, error)
+	GetViewsFunc             func(ctx context.Context, schema string) ([]string, error)
+	IsViewUpdatableFunc      func(ctx context.Context, schema, view string) (bool, error)
+	GetColumnsFunc           func(ctx context.Context, schema, table string) ([]Column, error)
+	GetPrimaryKeyFunc        func(ctx context.Context, schema, table string) (*PrimaryKey, error)
+	GetTablePermissionsFunc  func(ctx context.Context, schema, table string) (*TablePermissions, error)
+	GetViewCommentFunc       func(ctx context.Context, schema, view string) (string, error)
+	GetViewCommentsBatchFunc func(ctx context.Context, schema string) (map[string]string, error)
 }
 
 var _ SchemaReader = (*MockSchemaReader)(nil)
@@ -95,6 +97,20 @@ func (m *MockSchemaReader) GetTablePermissions(ctx context.Context, schema, tabl
 		return m.GetTablePermissionsFunc(ctx, schema, table)
 	}
 	return &TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}, nil
+}
+
+func (m *MockSchemaReader) GetViewComment(ctx context.Context, schema, view string) (string, error) {
+	if m.GetViewCommentFunc != nil {
+		return m.GetViewCommentFunc(ctx, schema, view)
+	}
+	return "", nil
+}
+
+func (m *MockSchemaReader) GetViewCommentsBatch(ctx context.Context, schema string) (map[string]string, error) {
+	if m.GetViewCommentsBatchFunc != nil {
+		return m.GetViewCommentsBatchFunc(ctx, schema)
+	}
+	return make(map[string]string), nil
 }
 
 // MockRowReader is a mock implementation of RowReader for testing.

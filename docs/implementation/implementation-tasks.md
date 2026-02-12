@@ -4915,6 +4915,48 @@ go test ./test/integration/... -v -run TestSynthesizedMarkdown
 
 ---
 
+### Task 6.1.9: Add Extra Headers JSONB Column for User-Defined Frontmatter
+
+**Objective:** Allow users to add arbitrary key-value pairs to markdown frontmatter that are stored in a `headers` JSONB column
+
+**Background:**
+The markdown synthesized app has fixed frontmatter columns (title, author). Users need the ability to add custom key-value pairs (tags, draft status, categories, etc.) without altering the database schema. A `headers JSONB` column stores these extra pairs, merged into YAML frontmatter during synthesis and collected from unknown keys during parsing.
+
+**Steps:**
+1. Add `ExtraHeaders` field to `ColumnRoles` with `extraHeadersConventions = []string{"headers"}` convention
+2. Add `headers JSONB DEFAULT '{}'::jsonb` column to `GenerateMarkdownTableSQL` in `.build/`
+3. Merge extra headers into YAML frontmatter during synthesis (after known columns, alphabetically sorted)
+4. Collect unknown frontmatter keys into extra headers during parsing (overwrite semantics)
+5. Update demo data (`examples/docker-demo/init.sql`) with headers column and sample data
+6. Unit tests for all new behavior
+
+**Files to Modify:**
+- `internal/tigerfs/fs/synth/columns.go`
+- `internal/tigerfs/fs/synth/build.go`
+- `internal/tigerfs/fs/synth/markdown.go`
+- `internal/tigerfs/fs/synth/format_handler.go` (TODO for reuse existing schema)
+- `examples/docker-demo/init.sql`
+
+**Files to Modify (tests):**
+- `internal/tigerfs/fs/synth/columns_test.go`
+- `internal/tigerfs/fs/synth/build_test.go`
+- `internal/tigerfs/fs/synth/markdown_test.go`
+
+**Verification:**
+```bash
+go test -v -run "^TestSynth_" ./internal/tigerfs/fs/synth/... ./internal/tigerfs/fs/...
+go test ./...
+```
+
+**Completion Criteria:**
+- `headers JSONB` column created by `.build/` for markdown apps
+- Extra frontmatter keys round-trip through synthesis and parsing
+- Overwrite semantics: removing a key from frontmatter removes it from the DB
+- Tables without `headers` column preserve original behavior (reject unknown keys)
+- All new tests use `TestSynth_` prefix
+
+---
+
 ## 6.2: Tasks
 
 ### Overview

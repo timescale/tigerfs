@@ -21,6 +21,10 @@ go test ./...                    # All tests
 go test -race ./...              # With race detection
 go test -run TestName ./path     # Specific test
 
+# Synth app tests
+go test ./internal/tigerfs/fs/synth/...                                      # Unit (synth package)
+go test -run "^TestSynth_" ./internal/tigerfs/fs/... ./test/integration/...  # Unit (synth_ops) + integration
+
 # Before committing (required)
 go fmt ./... && go vet ./... && go test ./... && go mod tidy
 ```
@@ -168,6 +172,14 @@ Integration tests that mount the filesystem work with **both** FUSE (Linux) and 
 | `TestFUSE_` | FUSE-only — skipped on NFS/macOS | Only if the test exercises FUSE-specific behavior that cannot work with NFS |
 
 **Do not** prefix tests with a mount method name unless they are truly specific to that method.
+
+#### Synth Test Naming
+
+All synth-related unit tests (in `internal/tigerfs/fs/synth/` and `internal/tigerfs/fs/`) use the `TestSynth_` prefix. This enables running all synth tests across packages with a single filter:
+
+```bash
+go test -run "^TestSynth_" ./internal/tigerfs/fs/... ./test/integration/...
+```
 
 ## Code Documentation Standards
 

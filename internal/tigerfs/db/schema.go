@@ -1069,6 +1069,94 @@ func (c *Client) GetSchemaTableCount(ctx context.Context, schema string) (int, e
 	return GetSchemaTableCount(ctx, c.pool, schema)
 }
 
+// GetViewComment returns the raw comment string for a view.
+// Returns empty string if the view has no comment.
+// Used to detect synthesized format markers (e.g., "tigerfs:md").
+func GetViewComment(ctx context.Context, pool *pgxpool.Pool, schema, view string) (string, error) {
+	logging.Debug("Getting view comment",
+		zap.String("schema", schema),
+		zap.String("view", view))
+
+	query := `
+		SELECT COALESCE(obj_description(c.oid, 'pg_class'), '')
+		FROM pg_class c
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		WHERE n.nspname = $1
+		AND c.relname = $2
+		AND c.relkind = 'v'
+	`
+
+	var comment string
+	err := pool.QueryRow(ctx, query, schema, view).Scan(&comment)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get view comment: %w", err)
+	}
+
+	return comment, nil
+}
+
+// GetViewComment is a convenience wrapper for Client.
+func (c *Client) GetViewComment(ctx context.Context, schema, view string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	return GetViewComment(ctx, c.pool, schema, view)
+}
+
+// GetViewCommentsBatch returns comments for all views in a schema.
+// Returns a map of view name to comment string. Views without comments are omitted.
+func GetViewCommentsBatch(ctx context.Context, pool *pgxpool.Pool, schema string) (map[string]string, error) {
+	logging.Debug("Getting view comments batch",
+		zap.String("schema", schema))
+
+	query := `
+		SELECT c.relname, obj_description(c.oid, 'pg_class')
+		FROM pg_class c
+		JOIN pg_namespace n ON c.relnamespace = n.oid
+		WHERE n.nspname = $1
+		AND c.relkind = 'v'
+		AND obj_description(c.oid, 'pg_class') IS NOT NULL
+	`
+
+	rows, err := pool.Query(ctx, query, schema)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query view comments: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]string)
+	for rows.Next() {
+		var viewName, comment string
+		if err := rows.Scan(&viewName, &comment); err != nil {
+			return nil, fmt.Errorf("failed to scan view comment: %w", err)
+		}
+		if comment != "" {
+			result[viewName] = comment
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating view comments: %w", err)
+	}
+
+	logging.Debug("Got view comments",
+		zap.String("schema", schema),
+		zap.Int("count", len(result)))
+
+	return result, nil
+}
+
+// GetViewCommentsBatch is a convenience wrapper for Client.
+func (c *Client) GetViewCommentsBatch(ctx context.Context, schema string) (map[string]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetViewCommentsBatch(ctx, c.pool, schema)
+}
+
 // GetViewDefinition returns the SQL definition of a view.
 func GetViewDefinition(ctx context.Context, pool *pgxpool.Pool, schema, view string) (string, error) {
 	logging.Debug("Getting view definition",

@@ -47,6 +47,14 @@ const (
 
 	// PathViewList is the /.views/ directory (only lists .create for view creation).
 	PathViewList
+
+	// PathBuild is the /.build/ directory for creating synthesized apps.
+	// Writing a format name to /.build/<name> creates a backing table + view.
+	PathBuild
+
+	// PathFormat is the /{table}/.format/ directory for configuring synthesized views.
+	// Writing a format name creates a synthesized view on the existing table.
+	PathFormat
 )
 
 // ParsedPath holds the result of parsing a filesystem path.
@@ -101,6 +109,12 @@ type ParsedPath struct {
 
 	// ExportWithHeaders is set when exporting with headers (.export/.with-headers/).
 	ExportWithHeaders bool
+
+	// BuildName is the target app name when Type is PathBuild (e.g., "posts").
+	BuildName string
+
+	// FormatTarget is the target format name when Type is PathFormat (e.g., "markdown").
+	FormatTarget string
 }
 
 // knownFormats maps format extensions to format names.
@@ -165,6 +179,8 @@ func ParsePath(path string) (*ParsedPath, *FSError) {
 		return parseDDLPath(segments)
 	case ".views":
 		return parseViewPath(segments)
+	case ".build":
+		return parseBuildPath(segments)
 	}
 
 	// Otherwise, it's a table path (possibly with schema prefix)
@@ -189,6 +205,7 @@ func splitPath(path string) []string {
 //   - /.schemas/.create/{name}/ → create schema DDL
 //   - /.schemas/<schema> → list tables in schema
 //   - /.schemas/<schema>/.delete/ → delete schema DDL
+//   - /.schemas/<schema>/.build/{name} → create synthesized app in schema
 //   - /.schemas/<schema>/<table> → table path
 //   - /.schemas/<schema>/<table>/<row> → row path
 func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
@@ -235,6 +252,20 @@ func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 		}
 		if len(segments) >= 4 {
 			result.DDLFile = segments[3]
+		}
+		return result, nil
+	}
+
+	// Handle /.schemas/{schema}/.build/{name}
+	if segments[2] == ".build" {
+		result := &ParsedPath{
+			Type: PathBuild,
+			Context: &FSContext{
+				Schema: schema,
+			},
+		}
+		if len(segments) >= 4 {
+			result.BuildName = segments[3]
 		}
 		return result, nil
 	}
@@ -319,6 +350,20 @@ func parseViewPath(segments []string) (*ParsedPath, *FSError) {
 	}
 }
 
+// parseBuildPath handles /.build/ paths for creating synthesized apps.
+// Supports:
+//   - /.build/ → list nothing (write-only directory)
+//   - /.build/<name> → writable file; writing a format name creates the app
+func parseBuildPath(segments []string) (*ParsedPath, *FSError) {
+	result := &ParsedPath{Type: PathBuild}
+
+	if len(segments) >= 2 {
+		result.BuildName = segments[1]
+	}
+
+	return result, nil
+}
+
 // parseTablePath handles table paths and capability chains.
 // Root-level paths always use public schema: /table or /table/row.
 // For explicit schema access, use /.schemas/schemaname/table.
@@ -398,6 +443,8 @@ func processCapability(result *ParsedPath, cap string, remaining []string) (int,
 		return processTableDDL(result, remaining, "delete")
 	case DirIndexes:
 		return processIndexes(result, remaining)
+	case DirFormat:
+		return processFormat(result, remaining)
 	default:
 		return 0, &FSError{
 			Code:    ErrInvalidPath,
@@ -731,6 +778,27 @@ func processIndexes(result *ParsedPath, remaining []string) (int, *FSError) {
 	result.CapabilityDir = DirIndexes
 	result.CapabilityArg = indexName
 	return 2, nil
+}
+
+// processFormat handles /{table}/.format/ paths.
+// Supports:
+//   - /{table}/.format/ → list available formats
+//   - /{table}/.format/<format> → writable file to create synthesized view
+func processFormat(result *ParsedPath, remaining []string) (int, *FSError) {
+	fsCtx := result.Context
+	if fsCtx == nil {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: ".format/ requires a table context",
+		}
+	}
+
+	result.Type = PathFormat
+	if len(remaining) >= 2 {
+		result.FormatTarget = remaining[1]
+		return 2, nil
+	}
+	return 1, nil
 }
 
 // processTableDDL handles table-level DDL paths (/{table}/.modify/ and /{table}/.delete/).
