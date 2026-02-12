@@ -12,6 +12,8 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 		wantFile  string
 		wantBody  string
 		wantFront []string
+		wantModAt string
+		wantCreAt string
 		wantErr   bool
 	}{
 		{
@@ -20,7 +22,8 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			pk:        "id",
 			wantFile:  "filename",
 			wantBody:  "body",
-			wantFront: []string{"title", "author", "created_at"},
+			wantFront: []string{"title", "author"},
+			wantCreAt: "created_at",
 		},
 		{
 			name:      "slug and content conventions",
@@ -71,6 +74,42 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			wantFront: nil, // no frontmatter columns remain
 		},
 		{
+			name:      "modified_at detected and excluded from frontmatter",
+			columns:   []string{"id", "filename", "body", "modified_at", "author"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: []string{"author"},
+			wantModAt: "modified_at",
+		},
+		{
+			name:      "updated_at detected as modified_at convention",
+			columns:   []string{"id", "filename", "body", "updated_at"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: nil,
+			wantModAt: "updated_at",
+		},
+		{
+			name:      "both modified_at and created_at detected",
+			columns:   []string{"id", "filename", "body", "modified_at", "created_at", "author"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: []string{"author"},
+			wantModAt: "modified_at",
+			wantCreAt: "created_at",
+		},
+		{
+			name:      "no timestamp columns",
+			columns:   []string{"id", "filename", "body", "author"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: []string{"author"},
+		},
+		{
 			name:    "no filename column",
 			columns: []string{"id", "data", "body"},
 			pk:      "id",
@@ -104,6 +143,12 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			}
 			if roles.PrimaryKey != tt.pk {
 				t.Errorf("PrimaryKey = %q, want %q", roles.PrimaryKey, tt.pk)
+			}
+			if roles.ModifiedAt != tt.wantModAt {
+				t.Errorf("ModifiedAt = %q, want %q", roles.ModifiedAt, tt.wantModAt)
+			}
+			if roles.CreatedAt != tt.wantCreAt {
+				t.Errorf("CreatedAt = %q, want %q", roles.CreatedAt, tt.wantCreAt)
 			}
 			if len(roles.Frontmatter) != len(tt.wantFront) {
 				t.Fatalf("Frontmatter = %v, want %v", roles.Frontmatter, tt.wantFront)
