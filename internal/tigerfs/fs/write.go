@@ -476,6 +476,104 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 	}
 }
 
+// Rename moves a file from oldPath to newPath.
+//
+// Supported scenarios:
+//   - Synth view files: UPDATE the filename column (e.g., mv post-a.md post-b.md)
+//   - Native table rows: UPDATE the primary key value (e.g., mv 3.json 99.json)
+//
+// Both paths must resolve to PathRow in the same schema and table.
+// Cross-table renames are not supported.
+//
+// Parameters:
+//   - ctx: context for database operations and cancellation
+//   - oldPath: current filesystem path of the file
+//   - newPath: desired new filesystem path
+//
+// Returns nil on success, or an FSError describing the failure.
+// Common errors:
+//   - ErrNotExist: source file doesn't exist
+//   - ErrInvalidPath: paths are not both row files in the same table
+//   - ErrIO: database operation failed (type mismatch, duplicate PK, etc.)
+func (o *Operations) Rename(ctx context.Context, oldPath, newPath string) *FSError {
+	oldParsed, err := o.parsePath(ctx, oldPath)
+	if err != nil {
+		return err
+	}
+	newParsed, err := o.parsePath(ctx, newPath)
+	if err != nil {
+		return err
+	}
+
+	// Both must be PathRow
+	if oldParsed.Type != PathRow || newParsed.Type != PathRow {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "rename only supported for row files",
+		}
+	}
+
+	// Both must be in the same schema and table
+	oldCtx := oldParsed.Context
+	newCtx := newParsed.Context
+	if oldCtx == nil || newCtx == nil {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "missing context for rename paths",
+		}
+	}
+	if oldCtx.Schema != newCtx.Schema || oldCtx.TableName != newCtx.TableName {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "cross-table rename not supported",
+			Hint:    "both paths must be in the same table",
+		}
+	}
+
+	schema := oldCtx.Schema
+	table := oldCtx.TableName
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, schema, table); info != nil {
+		return o.renameSynthFile(ctx, schema, table, info, oldParsed.PrimaryKey, newParsed.PrimaryKey)
+	}
+
+	// Native table: rename = update the primary key value
+	if fsErr := o.checkWritePermission(ctx, schema, table); fsErr != nil {
+		return fsErr
+	}
+
+	pk, dbErr := o.db.GetPrimaryKey(ctx, schema, table)
+	if dbErr != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to get primary key",
+			Cause:   dbErr,
+		}
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Update the PK column from old value to new value
+	dbErr = o.db.UpdateColumn(ctx, schema, table, pkColumn, oldParsed.PrimaryKey, pkColumn, newParsed.PrimaryKey)
+	if dbErr != nil {
+		if strings.Contains(dbErr.Error(), "not found") {
+			return &FSError{
+				Code:    ErrNotExist,
+				Message: "source row not found",
+				Cause:   dbErr,
+			}
+		}
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to rename row",
+			Cause:   dbErr,
+		}
+	}
+
+	return nil
+}
+
 // Delete removes a file or directory.
 //
 // Supported path types and behaviors:

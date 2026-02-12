@@ -427,6 +427,39 @@ func (o *Operations) synthesizeContent(columns []string, row []interface{}, info
 	}
 }
 
+// renameSynthFile renames a synthesized file by updating the filename column.
+// Both old and new filenames are normalized (ensuring proper extension),
+// then the filename column is updated via db.UpdateColumn.
+func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, info *synth.ViewInfo, oldFilename, newFilename string) *FSError {
+	// Normalize both filenames to include synth extension
+	oldFilename = normalizeSynthFilename(oldFilename, info)
+	newFilename = normalizeSynthFilename(newFilename, info)
+
+	// Look up the DB primary key for the old filename
+	pkValue, fsErr := o.getSynthRowPK(ctx, schema, table, info, oldFilename)
+	if fsErr != nil {
+		return fsErr
+	}
+
+	// Strip extension from newFilename to get raw value for the filename column
+	rawNewFilename := newFilename
+	if ext := info.Format.Extension(); ext != "" && strings.HasSuffix(rawNewFilename, ext) {
+		rawNewFilename = strings.TrimSuffix(rawNewFilename, ext)
+	}
+
+	// Update the filename column
+	err := o.db.UpdateColumn(ctx, schema, table, info.Roles.PrimaryKey, pkValue, info.Roles.Filename, rawNewFilename)
+	if err != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to rename synth file",
+			Cause:   err,
+		}
+	}
+
+	return nil
+}
+
 // parseSynthContent parses file content back into column values.
 func (o *Operations) parseSynthContent(data []byte, info *synth.ViewInfo) (map[string]interface{}, error) {
 	switch info.Format {
