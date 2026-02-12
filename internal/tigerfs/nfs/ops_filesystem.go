@@ -773,9 +773,43 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	return fi, nil
 }
 
-// Rename is not supported.
+// Rename moves a file from oldpath to newpath.
+//
+// For synth views, this updates the filename column. For native tables,
+// this updates the primary key value. If the old path has a cache entry,
+// it is removed (the renamed file will have a different path).
 func (f *OpsFilesystem) Rename(oldpath, newpath string) error {
-	return fmt.Errorf("rename not supported")
+	oldpath = normalizePath(oldpath)
+	newpath = normalizePath(newpath)
+	logging.Debug("OpsFilesystem.Rename", zap.String("oldpath", oldpath), zap.String("newpath", newpath))
+
+	rctx, rcancel := ctx()
+	defer rcancel()
+	fsErr := f.ops.Rename(rctx, oldpath, newpath)
+	if fsErr != nil {
+		logging.Debug("OpsFilesystem.Rename error",
+			zap.String("oldpath", oldpath),
+			zap.String("newpath", newpath),
+			zap.Int("code", int(fsErr.Code)),
+			zap.String("message", fsErr.Message))
+		switch fsErr.Code {
+		case fs.ErrNotExist:
+			return os.ErrNotExist
+		case fs.ErrPermission:
+			return os.ErrPermission
+		case fs.ErrInvalidPath:
+			return os.ErrInvalid
+		default:
+			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+		}
+	}
+
+	// Invalidate cache for the old path (the file now lives at newpath)
+	f.cacheMu.Lock()
+	delete(f.fileCache, oldpath)
+	f.cacheMu.Unlock()
+
+	return nil
 }
 
 // Remove removes a file.

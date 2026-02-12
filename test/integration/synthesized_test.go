@@ -448,6 +448,129 @@ func TestSynth_MultipleFiles(t *testing.T) {
 	}
 }
 
+// TestSynth_RenameMarkdownFile tests renaming a synthesized markdown file.
+// mv posts/hello-world.md posts/renamed-post.md → UPDATE filename column
+func TestSynth_RenameMarkdownFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build app and insert test data
+	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+		('hello-world', 'Hello World', 'alice', '# Hello World
+
+This is my first post.
+')`
+	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
+
+	// Verify file exists at old path
+	content, fsErr := ops.ReadFile(ctx, "/posts/hello-world.md")
+	require.Nil(t, fsErr, "ReadFile should succeed before rename")
+	assert.Contains(t, string(content.Data), "title: Hello World")
+
+	// Rename the file
+	fsErr = ops.Rename(ctx, "/posts/hello-world.md", "/posts/renamed-post.md")
+	require.Nil(t, fsErr, "Rename should succeed")
+
+	// Old path should no longer exist
+	_, fsErr = ops.ReadFile(ctx, "/posts/hello-world.md")
+	require.NotNil(t, fsErr, "ReadFile should fail at old path after rename")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should be not-exist error")
+
+	// New path should be readable with correct content
+	content, fsErr = ops.ReadFile(ctx, "/posts/renamed-post.md")
+	require.Nil(t, fsErr, "ReadFile should succeed at new path")
+
+	text := string(content.Data)
+	assert.Contains(t, text, "title: Hello World", "frontmatter should be preserved")
+	assert.Contains(t, text, "author: alice", "frontmatter should be preserved")
+	assert.Contains(t, text, "This is my first post.", "body should be preserved")
+
+	// Directory listing should show renamed file
+	entries, fsErr := ops.ReadDir(ctx, "/posts")
+	require.Nil(t, fsErr, "ReadDir should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "renamed-post.md", "should list renamed-post.md")
+	assert.NotContains(t, names, "hello-world.md", "should NOT list hello-world.md")
+}
+
+// TestSynth_RenamePlainTextFile tests renaming a synthesized plain text file.
+func TestSynth_RenamePlainTextFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build plain text app
+	fsErr := ops.WriteFile(ctx, "/.build/snippets", []byte("txt\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	insertSQL := `INSERT INTO _snippets (filename, body) VALUES ('scratch', 'Some scratch notes.
+')`
+	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
+
+	// Rename
+	fsErr = ops.Rename(ctx, "/snippets/scratch.txt", "/snippets/ideas.txt")
+	require.Nil(t, fsErr, "Rename should succeed")
+
+	// Old path gone
+	_, fsErr = ops.ReadFile(ctx, "/snippets/scratch.txt")
+	require.NotNil(t, fsErr, "old path should not exist")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+
+	// New path works
+	content, fsErr := ops.ReadFile(ctx, "/snippets/ideas.txt")
+	require.Nil(t, fsErr, "new path should be readable")
+	assert.Equal(t, "Some scratch notes.\n", string(content.Data))
+}
+
+// TestSynth_RenameWithoutExtension tests renaming using paths without extension.
+// mv posts/hello-world posts/new-name → normalization handles missing extension
+func TestSynth_RenameWithoutExtension(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build app and insert test data
+	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+		('hello-world', 'Hello World', 'alice', 'Body content.
+')`
+	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
+
+	// Rename without extensions
+	fsErr = ops.Rename(ctx, "/posts/hello-world", "/posts/new-name")
+	require.Nil(t, fsErr, "Rename without extension should succeed")
+
+	// Old path gone (with or without extension)
+	_, fsErr = ops.ReadFile(ctx, "/posts/hello-world.md")
+	require.NotNil(t, fsErr, "old path should not exist after rename")
+
+	// New path works (with extension)
+	content, fsErr := ops.ReadFile(ctx, "/posts/new-name.md")
+	require.Nil(t, fsErr, "new path should be readable")
+	assert.Contains(t, string(content.Data), "title: Hello World")
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
