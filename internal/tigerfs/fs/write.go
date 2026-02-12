@@ -49,6 +49,10 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 		return o.writeImportFile(ctx, parsed, data)
 	case PathDDL:
 		return o.writeDDLFile(ctx, parsed, data)
+	case PathBuild:
+		return o.writeBuildFile(ctx, parsed, data)
+	case PathFormat:
+		return o.writeFormatFile(ctx, parsed, data)
 	default:
 		return &FSError{
 			Code:    ErrInvalidPath,
@@ -58,6 +62,7 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 }
 
 // writeRowFile writes a row file (UPDATE or INSERT).
+// For synthesized views, parses the content and writes to the synth view.
 func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -65,6 +70,11 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return o.writeSynthFile(ctx, parsed, info, data)
 	}
 
 	// Check if this is a view and if it's updatable
@@ -544,6 +554,7 @@ func (o *Operations) deleteDDLFile(ctx context.Context, parsed *ParsedPath) *FSE
 }
 
 // deleteRow deletes a row from the database.
+// For synthesized views, deletes by filename instead of primary key.
 func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -551,6 +562,11 @@ func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return o.deleteSynthFile(ctx, parsed, info)
 	}
 
 	// Check write permission
@@ -762,7 +778,7 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 		return o.mkdirDDL(ctx, parsed)
 
 	case PathTable, PathRoot, PathSchema, PathSchemaList, PathCapability,
-		PathInfo, PathExport, PathImport, PathViewList:
+		PathInfo, PathExport, PathImport, PathViewList, PathBuild, PathFormat:
 		return &FSError{
 			Code:    ErrAlreadyExists,
 			Message: "directory already exists",
