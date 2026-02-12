@@ -47,3 +47,6 @@ docs/.plans/
 
 # Git worktrees
 .worktrees/
+
+# Untracked work-in-progress
+untracked/
