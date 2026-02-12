@@ -1,6 +1,9 @@
 package synth
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // ViewInfo holds the synthesized format configuration for a view.
 type ViewInfo struct {
@@ -9,6 +12,12 @@ type ViewInfo struct {
 
 	// Roles maps columns to their roles (filename, body, frontmatter).
 	Roles *ColumnRoles
+
+	// CachedMountTime is a stable timestamp captured when the synth cache was loaded.
+	// Used as the fallback file mtime for views that lack a modified_at or created_at
+	// column, avoiding the instability of time.Now() on every stat call (which causes
+	// editors to falsely warn "file changed since visited").
+	CachedMountTime time.Time
 }
 
 // StripExtension removes the synthesized format extension from a filename.

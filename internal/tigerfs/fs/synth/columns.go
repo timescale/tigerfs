@@ -13,6 +13,12 @@ var (
 
 	// bodyConventions lists column names recognized as the body content source.
 	bodyConventions = []string{"body", "content", "description", "text"}
+
+	// modifiedAtConventions lists column names recognized as the modification timestamp.
+	modifiedAtConventions = []string{"modified_at", "updated_at"}
+
+	// createdAtConventions lists column names recognized as the creation timestamp.
+	createdAtConventions = []string{"created_at"}
 )
 
 // ColumnRoles maps database columns to their roles in synthesized file rendering.
@@ -32,6 +38,14 @@ type ColumnRoles struct {
 	// PrimaryKey is the primary key column name, used for disambiguation
 	// when multiple rows share the same filename.
 	PrimaryKey string
+
+	// ModifiedAt is the column used for file mtime (e.g., "modified_at", "updated_at").
+	// Empty if no matching column found.
+	ModifiedAt string
+
+	// CreatedAt is the column used for file creation time (e.g., "created_at").
+	// Empty if no matching column found.
+	CreatedAt string
 }
 
 // DetectColumnRoles identifies which columns serve which roles for a given format.
@@ -68,13 +82,23 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 			strings.Join(bodyConventions, ", "))
 	}
 
+	// Detect optional timestamp columns (empty string if not found)
+	roles.ModifiedAt = findMatchingColumn(columnNames, modifiedAtConventions)
+	roles.CreatedAt = findMatchingColumn(columnNames, createdAtConventions)
+
 	// Remaining columns become frontmatter (markdown only), preserving schema order.
-	// Exclude: filename, body, and primary key columns.
+	// Exclude: filename, body, primary key, and timestamp columns.
 	if format == FormatMarkdown {
 		excluded := map[string]bool{
 			strings.ToLower(roles.Filename):   true,
 			strings.ToLower(roles.Body):       true,
 			strings.ToLower(roles.PrimaryKey): true,
+		}
+		if roles.ModifiedAt != "" {
+			excluded[strings.ToLower(roles.ModifiedAt)] = true
+		}
+		if roles.CreatedAt != "" {
+			excluded[strings.ToLower(roles.CreatedAt)] = true
 		}
 		for _, col := range columnNames {
 			if !excluded[strings.ToLower(col)] {

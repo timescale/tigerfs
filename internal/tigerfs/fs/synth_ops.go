@@ -57,6 +57,10 @@ func (o *Operations) invalidateSynthCache() {
 
 // loadSynthCache queries the database to detect all synth views in a schema.
 func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[string]*synth.ViewInfo, error) {
+	// Capture a stable timestamp for all views in this schema.
+	// Used as fallback mtime when no timestamp column is available.
+	mountTime := time.Now()
+
 	// Get all views
 	views, err := o.db.GetViews(ctx, schema)
 	if err != nil {
@@ -120,12 +124,32 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 		}
 
 		cache[viewName] = &synth.ViewInfo{
-			Format: format,
-			Roles:  roles,
+			Format:          format,
+			Roles:           roles,
+			CachedMountTime: mountTime,
 		}
 	}
 
 	return cache, nil
+}
+
+// extractModTime returns the best available modification time for a synth row.
+// It checks the ModifiedAt column first, then CreatedAt, falling back to
+// ViewInfo.CachedMountTime (a stable timestamp captured when the cache was loaded).
+func extractModTime(columns []string, values []interface{}, info *synth.ViewInfo) time.Time {
+	for _, target := range []string{info.Roles.ModifiedAt, info.Roles.CreatedAt} {
+		if target == "" {
+			continue
+		}
+		for i, col := range columns {
+			if col == target {
+				if t, ok := values[i].(time.Time); ok {
+					return t
+				}
+			}
+		}
+	}
+	return info.CachedMountTime
 }
 
 // readDirSynthView lists synthesized filenames as file entries.
@@ -147,7 +171,6 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 		}
 	}
 
-	now := time.Now()
 	entries := make([]Entry, 0, len(rows))
 
 	for _, row := range rows {
@@ -161,11 +184,12 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 			continue
 		}
 
+		modTime := extractModTime(columns, row, info)
 		entries = append(entries, Entry{
 			Name:    filename,
 			IsDir:   false,
 			Mode:    0644,
-			ModTime: now,
+			ModTime: modTime,
 		})
 	}
 
@@ -174,8 +198,6 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 
 // statSynthFile returns metadata for a synthesized file.
 func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) (*Entry, *FSError) {
-	now := time.Now()
-
 	// The PrimaryKey field contains the filename (e.g., "hello-world.md")
 	filename := parsed.PrimaryKey
 
@@ -195,12 +217,18 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 		}
 	}
 
+	modTime := extractModTime(columns, row, info)
+
+	// Use the canonical synthesized filename (with extension) for the entry name,
+	// even if the caller requested without extension (e.g., "foo" → "foo.txt").
+	synthName := normalizeSynthFilename(filename, info)
+
 	return &Entry{
-		Name:    filename,
+		Name:    synthName,
 		IsDir:   false,
 		Mode:    0644,
 		Size:    int64(len(content)),
-		ModTime: now,
+		ModTime: modTime,
 	}, nil
 }
 
@@ -314,9 +342,23 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 	return nil
 }
 
+// normalizeSynthFilename ensures a filename has the expected synth extension.
+// For example, "foo" in a PlainText view becomes "foo.txt".
+// If the filename already has the extension, it's returned unchanged.
+func normalizeSynthFilename(filename string, info *synth.ViewInfo) string {
+	ext := info.Format.Extension()
+	if ext != "" && !strings.HasSuffix(filename, ext) {
+		return filename + ext
+	}
+	return filename
+}
+
 // getSynthRow looks up a row in a synth view by the synthesized filename.
 // Returns the column names and row values, or an error if not found.
 func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, filename string) ([]string, []interface{}, *FSError) {
+	// Normalize filename to include synth extension (e.g., "foo" → "foo.txt")
+	filename = normalizeSynthFilename(filename, info)
+
 	// Get all rows and find the one matching the filename
 	// TODO: optimize with a direct query on the filename column
 	limit := o.config.DirListingLimit
