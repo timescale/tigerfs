@@ -1,21 +1,24 @@
 # Markdown App
 
-Store and access markdown files with metadata in PostgreSQL.
+Store markdown files in PostgreSQL — edit them as plain files, share them across tools, and get transactional writes for free.
 
 ## What It Does
 
-The Markdown App presents database rows as `.md` files with YAML frontmatter. Instead of navigating row directories and column files, you work with actual markdown files that feel natural to edit.
+Write and organize `.md` files the way you normally would — with any text editor, shell script, or AI agent. The Markdown App stores each file as a database row with YAML frontmatter mapped to columns, so your content is:
 
-**Database row:**
-```
-id: 1, slug: "hello-world", author: "alice", date: "2024-01-15", content: "# Hello\n\nWelcome..."
-```
+- **Shareable** — multiple users, editors, and agents access the same files simultaneously
+- **Transactionally safe** — every write is an atomic database operation; no partial saves or corrupted files
+- **Searchable** — use `grep` across all files, or query metadata via SQL on the underlying table
+- **Metadata-rich** — frontmatter fields (author, tags, etc.) are real columns you can index and query
 
-**Becomes a file** `hello-world.md`:
+Under the hood, each markdown file is stored as a database row — frontmatter fields map to columns and the body maps to a text column:
+
+**`hello-world.md`:**
 ```markdown
 ---
+title: Hello
 author: alice
-date: 2024-01-15
+draft: false
 ---
 
 # Hello
@@ -23,13 +26,10 @@ date: 2024-01-15
 Welcome...
 ```
 
-## Why Use It
-
-- **Natural editing** - Use your favorite editor, not SQL
-- **Git-friendly** - Track changes to content with version control
-- **Agent-compatible** - AI agents can read/write content as files
-- **Metadata included** - Frontmatter keeps author, date, tags with content
-- **Full-text search** - Use `grep` to find content across all posts
+**Stored as:**
+```
+id: 1, filename: "hello-world", title: "Hello", author: "alice", headers: {"draft": false}, body: "# Hello\n\nWelcome..."
+```
 
 ## Quick Start
 
@@ -139,37 +139,83 @@ rm /mnt/db/notes/unwanted-post.md
 
 ### Automatic Detection
 
-TigerFS automatically detects columns by convention:
+TigerFS automatically detects column roles by naming convention (first match wins):
 
-| Role | Detected From |
-|------|---------------|
-| Filename | `name`, `filename`, `title`, `slug` |
-| Body | `body`, `content`, `description`, `text` |
-| Frontmatter | All other columns |
+| Role | Detected From (priority order) | Required |
+|------|-------------------------------|----------|
+| Filename | `filename`, `name`, `title`, `slug` | Yes |
+| Body | `body`, `content`, `description`, `text` | Yes |
+| Timestamps | `modified_at`, `updated_at` (modification time); `created_at` (creation time) | No |
+| Extra Headers | `headers` (JSONB, merged into frontmatter) | No |
+| Frontmatter | All remaining columns (excluding primary key) | — |
 
-### Explicit Mapping
+Timestamp columns are used for file modification/creation times (visible in `ls -l`), but are **not** rendered as frontmatter fields.
 
-If your columns don't match conventions:
+### Explicit Mapping (Planned)
+
+Currently, column roles are always auto-detected by naming convention. A future release will allow explicit mapping for tables whose column names don't match the conventions:
 
 ```bash
+# Planned — not yet implemented
 echo '{filename:post_slug,body:post_content}' > /mnt/db/posts/.format/markdown
 ```
 
-## Checking Configuration
+### Checking Configuration (Planned)
+
+A future release will allow reading the current column mapping by reading the `.format/markdown` control file:
 
 ```bash
+# Planned — not yet implemented
 cat /mnt/db/posts/.format/markdown
 ```
 
-Returns:
-```json
-{
-  "format": "markdown",
-  "view": "posts_md",
-  "columns": {"filename": "slug", "body": "content"},
-  "frontmatter": ["author", "date", "tags"]
-}
+## Custom Frontmatter (Extra Headers)
+
+Tables created with `.build/` include a `headers JSONB` column for storing arbitrary frontmatter keys beyond the fixed schema columns.
+
+**How it works:**
+
+- On **read**, entries from the `headers` column are merged into YAML frontmatter after the known columns, sorted alphabetically by key.
+- On **write**, any frontmatter keys that don't match a known column are collected into the `headers` JSONB value.
+- **Overwrite semantics** — the entire `headers` value is replaced on each write. If you remove a key from the frontmatter, it's removed from the database.
+
+**Example:**
+
+```bash
+cat > /mnt/db/blog/welcome.md << 'EOF'
+---
+title: Welcome to My Blog
+author: alice
+tags: [intro, welcome]
+draft: false
+---
+
+# Welcome
+
+Thanks for visiting...
+EOF
 ```
+
+Here `title` and `author` are stored in their own columns. `tags` and `draft` — which don't have dedicated columns — are stored together in the `headers` JSONB column.
+
+Reading the file back:
+
+```markdown
+---
+title: Welcome to My Blog
+author: alice
+draft: false
+tags:
+  - intro
+  - welcome
+---
+
+# Welcome
+
+Thanks for visiting...
+```
+
+Known columns (`title`, `author`) appear first in schema order, then extra headers (`draft`, `tags`) appear alphabetically.
 
 ## Use Cases
 
@@ -194,7 +240,7 @@ draft: false
 Thanks for visiting...
 EOF
 
-# Find all drafts
+# Find all drafts (draft and tags are stored in the headers JSONB column)
 grep -l "draft: true" /mnt/db/blog/*.md
 ```
 
@@ -287,7 +333,7 @@ ls /mnt/db/notes/          # Synthesized markdown
 
 ## Tips
 
-1. **Frontmatter is automatic** - All columns except filename/body become frontmatter
-2. **Control frontmatter** - Adjust the view's SELECT to include/exclude columns
-3. **Timestamps work** - `created_at`, `modified_at` appear in frontmatter if in view
-4. **Arrays supported** - `tags: [a, b, c]` works with PostgreSQL array columns
+1. **Frontmatter is automatic** — All columns except filename, body, timestamps, and primary key become frontmatter
+2. **Extra headers** — Add a `headers JSONB` column to store arbitrary frontmatter keys beyond the fixed schema
+3. **Timestamps are file times** — `modified_at` and `created_at` set file mtime/ctime (visible in `ls -l`), not rendered as frontmatter
+4. **Arrays supported** — `tags: [a, b, c]` works with PostgreSQL array columns
