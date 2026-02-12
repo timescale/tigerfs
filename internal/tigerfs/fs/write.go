@@ -49,6 +49,10 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 		return o.writeImportFile(ctx, parsed, data)
 	case PathDDL:
 		return o.writeDDLFile(ctx, parsed, data)
+	case PathBuild:
+		return o.writeBuildFile(ctx, parsed, data)
+	case PathFormat:
+		return o.writeFormatFile(ctx, parsed, data)
 	default:
 		return &FSError{
 			Code:    ErrInvalidPath,
@@ -58,6 +62,7 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 }
 
 // writeRowFile writes a row file (UPDATE or INSERT).
+// For synthesized views, parses the content and writes to the synth view.
 func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -65,6 +70,11 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return o.writeSynthFile(ctx, parsed, info, data)
 	}
 
 	// Check if this is a view and if it's updatable
@@ -466,6 +476,104 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 	}
 }
 
+// Rename moves a file from oldPath to newPath.
+//
+// Supported scenarios:
+//   - Synth view files: UPDATE the filename column (e.g., mv post-a.md post-b.md)
+//   - Native table rows: UPDATE the primary key value (e.g., mv 3.json 99.json)
+//
+// Both paths must resolve to PathRow in the same schema and table.
+// Cross-table renames are not supported.
+//
+// Parameters:
+//   - ctx: context for database operations and cancellation
+//   - oldPath: current filesystem path of the file
+//   - newPath: desired new filesystem path
+//
+// Returns nil on success, or an FSError describing the failure.
+// Common errors:
+//   - ErrNotExist: source file doesn't exist
+//   - ErrInvalidPath: paths are not both row files in the same table
+//   - ErrIO: database operation failed (type mismatch, duplicate PK, etc.)
+func (o *Operations) Rename(ctx context.Context, oldPath, newPath string) *FSError {
+	oldParsed, err := o.parsePath(ctx, oldPath)
+	if err != nil {
+		return err
+	}
+	newParsed, err := o.parsePath(ctx, newPath)
+	if err != nil {
+		return err
+	}
+
+	// Both must be PathRow
+	if oldParsed.Type != PathRow || newParsed.Type != PathRow {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "rename only supported for row files",
+		}
+	}
+
+	// Both must be in the same schema and table
+	oldCtx := oldParsed.Context
+	newCtx := newParsed.Context
+	if oldCtx == nil || newCtx == nil {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "missing context for rename paths",
+		}
+	}
+	if oldCtx.Schema != newCtx.Schema || oldCtx.TableName != newCtx.TableName {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: "cross-table rename not supported",
+			Hint:    "both paths must be in the same table",
+		}
+	}
+
+	schema := oldCtx.Schema
+	table := oldCtx.TableName
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, schema, table); info != nil {
+		return o.renameSynthFile(ctx, schema, table, info, oldParsed.PrimaryKey, newParsed.PrimaryKey)
+	}
+
+	// Native table: rename = update the primary key value
+	if fsErr := o.checkWritePermission(ctx, schema, table); fsErr != nil {
+		return fsErr
+	}
+
+	pk, dbErr := o.db.GetPrimaryKey(ctx, schema, table)
+	if dbErr != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to get primary key",
+			Cause:   dbErr,
+		}
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Update the PK column from old value to new value
+	dbErr = o.db.UpdateColumn(ctx, schema, table, pkColumn, oldParsed.PrimaryKey, pkColumn, newParsed.PrimaryKey)
+	if dbErr != nil {
+		if strings.Contains(dbErr.Error(), "not found") {
+			return &FSError{
+				Code:    ErrNotExist,
+				Message: "source row not found",
+				Cause:   dbErr,
+			}
+		}
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to rename row",
+			Cause:   dbErr,
+		}
+	}
+
+	return nil
+}
+
 // Delete removes a file or directory.
 //
 // Supported path types and behaviors:
@@ -544,6 +652,7 @@ func (o *Operations) deleteDDLFile(ctx context.Context, parsed *ParsedPath) *FSE
 }
 
 // deleteRow deletes a row from the database.
+// For synthesized views, deletes by filename instead of primary key.
 func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -551,6 +660,11 @@ func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Check if this is a synthesized view
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return o.deleteSynthFile(ctx, parsed, info)
 	}
 
 	// Check write permission
@@ -762,7 +876,7 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 		return o.mkdirDDL(ctx, parsed)
 
 	case PathTable, PathRoot, PathSchema, PathSchemaList, PathCapability,
-		PathInfo, PathExport, PathImport, PathViewList:
+		PathInfo, PathExport, PathImport, PathViewList, PathBuild, PathFormat:
 		return &FSError{
 			Code:    ErrAlreadyExists,
 			Message: "directory already exists",

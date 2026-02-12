@@ -727,3 +727,118 @@ func TestFSOperations_ColumnExtensions(t *testing.T) {
 		assert.True(t, foundId, "INTEGER column 'id' should be listed without extension")
 	})
 }
+
+// TestFSOperations_Rename_Row tests renaming a native row (updating the primary key).
+func TestFSOperations_Rename_Row(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Read row 3 to save original data for comparison
+	origContent, fsErr := ops.ReadFile(ctx, tablePath+"/3.json")
+	require.Nil(t, fsErr, "ReadFile should succeed for row 3")
+	origData := string(origContent.Data)
+
+	// Rename row 3 → row 99
+	fsErr = ops.Rename(ctx, tablePath+"/3.json", tablePath+"/99.json")
+	require.Nil(t, fsErr, "Rename should succeed")
+
+	// Old PK should not exist
+	_, fsErr = ops.ReadFile(ctx, tablePath+"/3.json")
+	require.NotNil(t, fsErr, "ReadFile should fail for old PK 3")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should be not-exist error")
+
+	// New PK should be readable
+	newContent, fsErr := ops.ReadFile(ctx, tablePath+"/99.json")
+	require.Nil(t, fsErr, "ReadFile should succeed for new PK 99")
+
+	// The row data should have the same non-PK content
+	// (PK value will differ since it was renamed)
+	newData := string(newContent.Data)
+	t.Logf("Original data: %s", origData)
+	t.Logf("New data: %s", newData)
+
+	// Check the name column is preserved by reading it directly
+	nameContent, fsErr := ops.ReadFile(ctx, tablePath+"/99/name")
+	require.Nil(t, fsErr, "ReadFile column should succeed for renamed row")
+	assert.NotEmpty(t, nameContent.Data, "name column should have content")
+}
+
+// TestFSOperations_Rename_Row_TypeMismatch tests renaming to a non-numeric PK on an integer PK table.
+func TestFSOperations_Rename_Row_TypeMismatch(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Try to rename to non-numeric PK on integer PK table
+	fsErr := ops.Rename(ctx, tablePath+"/3.json", tablePath+"/not-a-number.json")
+	require.NotNil(t, fsErr, "Rename should fail for type mismatch")
+	assert.Equal(t, fs.ErrIO, fsErr.Code, "should be IO error for type mismatch")
+
+	// Original row 3 should still exist unchanged
+	_, fsErr = ops.ReadFile(ctx, tablePath+"/3.json")
+	require.Nil(t, fsErr, "Original row 3 should still exist")
+}
+
+// TestFSOperations_Rename_Row_DuplicatePK tests renaming to an already existing PK value.
+func TestFSOperations_Rename_Row_DuplicatePK(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	tablePath := findTablePath(t, ops)
+
+	// Try to rename row 3 → row 1 (which already exists)
+	fsErr := ops.Rename(ctx, tablePath+"/3.json", tablePath+"/1.json")
+	require.NotNil(t, fsErr, "Rename should fail for duplicate PK")
+
+	// Original row 3 should still exist
+	_, fsErr = ops.ReadFile(ctx, tablePath+"/3.json")
+	require.Nil(t, fsErr, "Original row 3 should still exist after failed rename")
+
+	// Row 1 should be unchanged
+	_, fsErr = ops.ReadFile(ctx, tablePath+"/1.json")
+	require.Nil(t, fsErr, "Row 1 should still exist unchanged")
+}
+
+// TestFSOperations_Rename_CrossTable tests that cross-table rename is rejected.
+func TestFSOperations_Rename_CrossTable(t *testing.T) {
+	result := GetTestDB(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Find users table path
+	tablePath := findTablePath(t, ops)
+
+	// Try renaming across tables (users → products)
+	// The products table may be at a different path depending on schema
+	productsPath := strings.Replace(tablePath, "users", "products", 1)
+
+	fsErr := ops.Rename(ctx, tablePath+"/1.json", productsPath+"/1.json")
+	require.NotNil(t, fsErr, "Cross-table rename should fail")
+	assert.Equal(t, fs.ErrInvalidPath, fsErr.Code, "should be invalid path error")
+}
