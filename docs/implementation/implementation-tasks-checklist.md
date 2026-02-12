@@ -120,15 +120,15 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 6.1.1 | Implement Format Detection | ~4455 |
-| ⬜ | 6.1.2 | Implement Markdown Synthesis | ~4530 |
-| ⬜ | 6.1.3 | Implement Markdown Parsing (Write Support) | ~4585 |
-| ⬜ | 6.1.4 | Implement Plain Text Format | ~4635 |
-| ⬜ | 6.1.5 | Implement .build/ Scaffolding Handler (Markdown/PlainText) | ~4670 |
-| ⬜ | 6.1.6 | Implement .format/ Handler (Markdown/PlainText) | ~4740 |
-| ⬜ | 6.1.7 | Implement SynthesizedViewNode (Markdown/PlainText) | ~4810 |
-| ⬜ | 6.1.8 | Integration Tests for Markdown/PlainText | ~4880 |
-| ⬜ | 6.1.9 | Add Extra Headers JSONB Column | ~4920 |
+| ✅ | 6.1.1 | Implement Format Detection | ~4455 |
+| ✅ | 6.1.2 | Implement Markdown Synthesis | ~4530 |
+| ✅ | 6.1.3 | Implement Markdown Parsing (Write Support) | ~4585 |
+| ✅ | 6.1.4 | Implement Plain Text Format | ~4635 |
+| ✅ | 6.1.5 | Implement .build/ Scaffolding Handler (Markdown/PlainText) | ~4670 |
+| ✅ | 6.1.6 | Implement .format/ Handler (Markdown/PlainText) | ~4740 |
+| ✅ | 6.1.7 | Implement SynthesizedViewNode (Markdown/PlainText) | ~4810 |
+| ✅ | 6.1.8 | Integration Tests for Markdown/PlainText | ~4880 |
+| ✅ | 6.1.9 | Add Extra Headers JSONB Column | ~4920 |
 
 ### 6.2: Tasks
 
@@ -227,11 +227,11 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
 | Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
-| Phase 6: Synthesized Apps | 0 | 14 | 0% |
-|   6.1: Markdown & Plain Text | 0 | 8 | 0% |
+| Phase 6: Synthesized Apps | 9 | 15 | 60% |
+|   6.1: Markdown & Plain Text | 9 | 9 | 100% |
 |   6.2: Tasks | 0 | 6 | 0% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
-| **Total** | **86** | **111** | **77%** |
+| **Total** | **95** | **112** | **85%** |
