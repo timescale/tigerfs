@@ -23,6 +23,44 @@ The filesystem interface is simple and predictable. The database handles durabil
 - Multi-user access, across local dev, containers, and in the cloud
 - Cross-platform support (Linux, macOS; Windows pending)
 
+## Synthesized Apps
+
+Beyond raw table access, TigerFS can synthesize higher-level file formats on top of database tables. A synthesized app maps rows to domain-specific files — so instead of navigating row directories and column files, you work with files that feel native to their domain.
+
+### Markdown
+
+The first synthesized app presents database rows as `.md` files with YAML frontmatter. Create a markdown app with a single command:
+
+```bash
+# Create a markdown app
+echo "markdown" > /mnt/db/.build/blog
+
+# Write a post — frontmatter becomes columns, body becomes text
+cat > /mnt/db/blog/hello-world.md << 'EOF'
+---
+title: Hello World
+author: alice
+tags: [intro]
+---
+
+# Hello World
+
+Welcome to my blog...
+EOF
+
+# Search, edit, and manage content with standard tools
+grep -l "author: alice" /mnt/db/blog/*.md
+```
+
+Or add a markdown view to an existing table:
+
+```bash
+echo "markdown" > /mnt/db/posts/.format/markdown
+ls /mnt/db/posts_md/
+```
+
+See [Markdown App](docs/markdown/README.md) for full documentation.
+
 ## Architecture
 
 ```
@@ -466,11 +504,12 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - PostgreSQL connection pooling (pgx/v5)
 - Permission mapping (PostgreSQL grants → file permissions)
 - Comprehensive test coverage
+- Synthesized apps: markdown (`.build/` and `.format/markdown`)
 
 **Planned:**
 - Tables without primary keys (read-only via ctid)
 - TimescaleDB hypertables (time-based navigation)
-- Synthesized apps (markdown views, task management)
+- Synthesized apps: task management, kanban boards
 - Distribution (install scripts, GoReleaser, daemon mode)
 - Windows support
 
