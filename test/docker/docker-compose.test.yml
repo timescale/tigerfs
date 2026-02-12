@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: testdb
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  test:
+    build:
+      context: ../..
+      dockerfile: test/docker/Dockerfile.test
+    privileged: true
+    devices:
+      - /dev/fuse
+    environment:
+      TEST_DATABASE_URL: "postgres://testuser:testpass@postgres:5432/testdb?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
