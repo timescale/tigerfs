@@ -7,7 +7,7 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
-func TestNormalizeSynthFilename(t *testing.T) {
+func TestSynth_NormalizeSynthFilename(t *testing.T) {
 	tests := []struct {
 		name     string
 		filename string
@@ -57,7 +57,7 @@ func TestNormalizeSynthFilename(t *testing.T) {
 	}
 }
 
-func TestExtractModTime(t *testing.T) {
+func TestSynth_ExtractModTime(t *testing.T) {
 	fixedTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	mountTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
