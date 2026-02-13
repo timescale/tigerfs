@@ -2,8 +2,11 @@ package integration
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -569,6 +572,58 @@ func TestSynth_RenameWithoutExtension(t *testing.T) {
 	content, fsErr := ops.ReadFile(ctx, "/posts/new-name.md")
 	require.Nil(t, fsErr, "new path should be readable")
 	assert.Contains(t, string(content.Data), "title: Hello World")
+}
+
+// TestMount_BuildMarkdownViaNFS exercises the .build/ write through the actual
+// NFS mount (os.WriteFile through the mount point), reproducing the user's
+// `echo "markdown" > .build/memory` flow end-to-end.
+//
+// Prior to this test, .build/ writes were only tested via ops.WriteFile() which
+// bypasses the NFS layer entirely. This catches EBADRPC and other NFS-level errors.
+func TestMount_BuildMarkdownViaNFS(t *testing.T) {
+	checkMountCapability(t)
+
+	dbResult := GetTestDBEmpty(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	buildPath := filepath.Join(mountpoint, ".build", "testapp")
+
+	// Write "markdown\n" to .build/testapp — mimics: echo "markdown" > .build/testapp
+	var writeErr error
+	withGCDisabled(func() {
+		writeErr = os.WriteFile(buildPath, []byte("markdown\n"), 0644)
+	})
+	require.NoError(t, writeErr, "os.WriteFile to .build/testapp should succeed")
+
+	// Give NFS a moment to propagate
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify the app was created by reading through the mount
+	entries, err := os.ReadDir(mountpoint)
+	require.NoError(t, err, "ReadDir mount root should succeed")
+
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	t.Logf("Mount root entries: %v", names)
+
+	assert.Contains(t, names, "testapp", "root should contain synth view 'testapp'")
+	assert.Contains(t, names, "_testapp", "root should contain backing table '_testapp'")
 }
 
 // ============================================================================

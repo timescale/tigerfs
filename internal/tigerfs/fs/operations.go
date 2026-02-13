@@ -1464,6 +1464,11 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return &FileContent{Data: []byte{}}, nil
 	case PathDDL:
 		return o.readDDLFile(ctx, parsed)
+	case PathBuild, PathFormat:
+		// Write-only virtual files. Return empty content so that NFS SETATTR
+		// (which calls OpenFile→ReadFile during Apply's truncate path) succeeds
+		// instead of returning ErrInvalidPath that becomes EBADRPC.
+		return &FileContent{Data: []byte{}}, nil
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
