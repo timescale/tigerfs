@@ -207,9 +207,13 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 
-	// Add views
+	// Add views — synth views get 0755 (writable), others get 0555
 	for _, v := range views {
-		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now})
+		mode := os.FileMode(0555)
+		if info := o.getSynthViewInfo(ctx, currentSchema, v); info != nil {
+			mode = 0755
+		}
+		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | mode, ModTime: now})
 	}
 
 	return entries, nil
@@ -285,7 +289,11 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 	}
 
 	for _, v := range views {
-		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now})
+		mode := os.FileMode(0555)
+		if info := o.getSynthViewInfo(ctx, schema, v); info != nil {
+			mode = 0755
+		}
+		entries = append(entries, Entry{Name: v, IsDir: true, Mode: os.ModeDir | mode, ModTime: now})
 	}
 
 	return entries, nil
