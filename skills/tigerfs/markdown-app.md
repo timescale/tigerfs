@@ -149,6 +149,49 @@ rm mount/notes/unwanted-post.md
 
 Deletes the corresponding row from the database. Permanent — no undo.
 
+## Directories
+
+Synth apps support subdirectories for organizing files:
+
+### Create a Directory
+
+```bash
+Bash "mkdir mount/notes/tutorials"
+```
+
+### Write Files in Subdirectories
+
+```
+Write "mount/notes/tutorials/intro.md" with content:
+---
+title: Introduction
+---
+
+Getting started with...
+```
+
+Parent directories are auto-created: writing `mount/notes/a/b/file.md` auto-creates `a/` and `a/b/`.
+
+### List Files in a Directory
+
+```
+Glob "mount/notes/tutorials/*.md"
+```
+
+### List All Files Recursively
+
+```
+Glob "mount/notes/**/*.md"
+```
+
+### Rename a Directory
+
+```bash
+Bash "mv mount/notes/tutorials mount/notes/guides"
+```
+
+Atomically renames the directory and all files within it.
+
 ## Native Table Access
 
 The underlying table is always accessible alongside the synthesized view:
@@ -183,18 +226,21 @@ Tables created via `.build/` have this schema:
 ```sql
 CREATE TABLE _notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
+    headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
-    headers JSONB DEFAULT '{}',
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    modified_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
 );
 ```
 
 Key columns:
-- `filename` — the `.md` filename (without extension), used for addressing
+- `filename` — the `.md` filename (without extension), used for addressing; may contain `/` for subdirectory paths
+- `filetype` — `'file'` or `'directory'`; enables subdirectory support
 - `title`, `author` — standard frontmatter columns
 - `body` — the markdown content below the frontmatter
 - `headers` — JSONB for arbitrary extra frontmatter keys
