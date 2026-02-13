@@ -192,8 +192,9 @@ JOIN categories c ON p.category = c.slug;
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- App 1: blog (markdown, 5 posts)
--- Appears as: /mountpoint/blog/hello-world.md, etc.
+-- App 1: blog (markdown, 5 posts in 2 subdirectories)
+-- Appears as: /mountpoint/blog/hello-world.md,
+--             /mountpoint/blog/tutorials/getting-started-with-sql.md, etc.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE "_blog" (
@@ -224,6 +225,12 @@ CREATE TRIGGER "trg__blog_modified_at"
     BEFORE UPDATE ON "_blog"
     FOR EACH ROW EXECUTE FUNCTION "set__blog_modified_at"();
 
+-- Directory rows (no title/body — just structural containers)
+INSERT INTO "_blog" (filename, filetype) VALUES
+('tutorials', 'directory'),
+('deep-dives', 'directory');
+
+-- File rows
 INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modified_at) VALUES
 (
     'hello-world.md',
@@ -235,7 +242,7 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
     '2025-01-15 09:00:00+00'
 ),
 (
-    'getting-started-with-sql.md',
+    'tutorials/getting-started-with-sql.md',
     'Getting Started with SQL',
     'Bob',
     '{"tags": ["sql", "beginner"], "draft": false}'::jsonb,
@@ -244,7 +251,7 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
     '2025-01-20 14:30:00+00'
 ),
 (
-    'markdown-tips.md',
+    'tutorials/markdown-tips.md',
     'Markdown Tips and Tricks',
     'Alice',
     '{}'::jsonb,
@@ -253,7 +260,7 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
     '2025-02-01 10:00:00+00'
 ),
 (
-    'why-postgres.md',
+    'deep-dives/why-postgres.md',
     'Why PostgreSQL?',
     'Charlie',
     '{"tags": ["postgresql", "database"], "category": "deep-dive"}'::jsonb,
@@ -262,7 +269,7 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
     '2025-02-10 16:45:00+00'
 ),
 (
-    'working-with-views.md',
+    'deep-dives/working-with-views.md',
     'Working with Views',
     'Bob',
     '{"tags": ["postgresql", "views"], "draft": false}'::jsonb,
@@ -272,8 +279,9 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
 );
 
 -- ---------------------------------------------------------------------------
--- App 2: docs (markdown, 4 pages)
--- Appears as: /mountpoint/docs/installation.md, etc.
+-- App 2: docs (markdown, 4 pages in 2 subdirectories)
+-- Appears as: /mountpoint/docs/getting-started/installation.md,
+--             /mountpoint/docs/reference/configuration.md, etc.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE "_docs" (
@@ -304,9 +312,15 @@ CREATE TRIGGER "trg__docs_modified_at"
     BEFORE UPDATE ON "_docs"
     FOR EACH ROW EXECUTE FUNCTION "set__docs_modified_at"();
 
+-- Directory rows
+INSERT INTO "_docs" (filename, filetype) VALUES
+('getting-started', 'directory'),
+('reference', 'directory');
+
+-- File rows
 INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modified_at) VALUES
 (
-    'installation.md',
+    'getting-started/installation.md',
     'Installation Guide',
     'TigerFS Team',
     '{"section": "getting-started"}'::jsonb,
@@ -315,7 +329,7 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
     '2025-01-10 08:00:00+00'
 ),
 (
-    'configuration.md',
+    'reference/configuration.md',
     'Configuration Reference',
     'TigerFS Team',
     '{"section": "reference"}'::jsonb,
@@ -324,7 +338,7 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
     '2025-01-10 08:30:00+00'
 ),
 (
-    'quick-start.md',
+    'getting-started/quick-start.md',
     'Quick Start',
     'TigerFS Team',
     '{"section": "getting-started"}'::jsonb,
@@ -333,7 +347,7 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
     '2025-01-10 09:00:00+00'
 ),
 (
-    'api-reference.md',
+    'reference/api-reference.md',
     'API Reference',
     'TigerFS Team',
     '{"section": "reference"}'::jsonb,
@@ -343,8 +357,9 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
 );
 
 -- ---------------------------------------------------------------------------
--- App 3: snippets (plain text, 3 files)
--- Appears as: /mountpoint/snippets/todo.txt, etc.
+-- App 3: snippets (plain text, 3 files with 1 subdirectory)
+-- Appears as: /mountpoint/snippets/todo.txt,
+--             /mountpoint/snippets/meetings/meeting-notes.txt, etc.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE "_snippets" (
@@ -372,6 +387,11 @@ CREATE TRIGGER "trg__snippets_modified_at"
     BEFORE UPDATE ON "_snippets"
     FOR EACH ROW EXECUTE FUNCTION "set__snippets_modified_at"();
 
+-- Directory rows
+INSERT INTO "_snippets" (filename, filetype) VALUES
+('meetings', 'directory');
+
+-- File rows
 INSERT INTO "_snippets" (filename, body, created_at, modified_at) VALUES
 (
     'todo.txt',
@@ -380,7 +400,7 @@ INSERT INTO "_snippets" (filename, body, created_at, modified_at) VALUES
     '2025-02-01 08:00:00+00'
 ),
 (
-    'meeting-notes.txt',
+    'meetings/meeting-notes.txt',
     E'Team Sync — 2025-02-10\n======================\n\nAttendees: Alice, Bob, Charlie\n\nAgenda:\n  1. Sprint review\n  2. Demo prep\n  3. Release timeline\n\nNotes:\n  - Sprint went well, all planned features complete\n  - Demo data needs markdown app examples\n  - Targeting v0.3.0 release by end of month\n  - Bob will handle the docker-demo updates\n  - Charlie to review documentation\n\nAction Items:\n  - Alice: finalize synthesized app feature\n  - Bob: update demo scripts\n  - Charlie: review and edit docs/',
     '2025-02-10 15:00:00+00',
     '2025-02-10 15:00:00+00'
