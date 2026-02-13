@@ -299,3 +299,19 @@ func (a *FSAdapter) Mkdir(ctx context.Context, path string) syscall.Errno {
 	fsErr := a.ops.Mkdir(ctx, path)
 	return a.ErrorToErrno(fsErr)
 }
+
+// Rename moves or renames a file or directory.
+//
+// This method delegates to fs.Operations.Rename for primary key updates
+// (native tables) and file moves/renames (synth views).
+//
+// Parameters:
+//   - ctx: context for cancellation and timeout
+//   - oldPath: current filesystem path
+//   - newPath: target filesystem path
+//
+// Returns errno (0 on success).
+func (a *FSAdapter) Rename(ctx context.Context, oldPath, newPath string) syscall.Errno {
+	fsErr := a.ops.Rename(ctx, oldPath, newPath)
+	return a.ErrorToErrno(fsErr)
+}

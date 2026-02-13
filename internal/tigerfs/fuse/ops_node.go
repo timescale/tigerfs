@@ -36,6 +36,7 @@ var _ fs.NodeCreater = (*OpsNode)(nil)
 var _ fs.NodeMkdirer = (*OpsNode)(nil)
 var _ fs.NodeUnlinker = (*OpsNode)(nil)
 var _ fs.NodeRmdirer = (*OpsNode)(nil)
+var _ fs.NodeRenamer = (*OpsNode)(nil)
 
 // OpsNode is a single generic FUSE node type that delegates all operations
 // to FSAdapter. Every directory and file in the tree is represented by an
@@ -208,6 +209,20 @@ func (n *OpsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	childPath := n.childPath(name)
 	logging.Debug("OpsNode.Rmdir", zap.String("path", childPath))
 	return n.adapter.Delete(ctx, childPath)
+}
+
+// Rename moves or renames a child entry to a new parent directory.
+func (n *OpsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	oldPath := n.childPath(name)
+
+	newDir, ok := newParent.(*OpsNode)
+	if !ok {
+		return syscall.EINVAL
+	}
+	newPath := newDir.childPath(newName)
+
+	logging.Debug("OpsNode.Rename", zap.String("oldPath", oldPath), zap.String("newPath", newPath))
+	return n.adapter.Rename(ctx, oldPath, newPath)
 }
 
 // Open opens a file and returns a file handle.
