@@ -232,6 +232,19 @@ type PipelineReader interface {
 	QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error)
 }
 
+// HierarchyWriter provides operations for hierarchical directory management.
+// Used by synth views with filetype column for directory rename, child checks, etc.
+type HierarchyWriter interface {
+	// RenameByPrefix atomically renames all rows where column starts with oldPrefix.
+	RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
+
+	// HasChildrenWithPrefix checks if any rows have column values starting with prefix + "/".
+	HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error)
+
+	// InsertIfNotExists inserts a row only if no conflict (ON CONFLICT DO NOTHING).
+	InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+}
+
 // DBClient is the composite interface combining all database capabilities.
 // FUSE nodes that need multiple capabilities can accept this interface.
 // *db.Client satisfies this interface automatically.
@@ -247,6 +260,7 @@ type DBClient interface {
 	ExportReader
 	ImportWriter
 	PipelineReader
+	HierarchyWriter
 }
 
 // Compile-time verification that *Client implements DBClient

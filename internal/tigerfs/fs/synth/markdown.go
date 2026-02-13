@@ -360,11 +360,12 @@ func MapToColumns(parsed *ParsedMarkdown, roles *ColumnRoles) (map[string]interf
 }
 
 // sanitizeFilename replaces characters invalid in filenames.
+// Slashes are preserved to support hierarchical directory paths in synth views.
 func sanitizeFilename(name string) string {
 	var sb strings.Builder
 	for _, r := range name {
 		switch r {
-		case '/', '\\', '\x00', ':':
+		case '\\', '\x00', ':':
 			sb.WriteRune('-')
 		default:
 			sb.WriteRune(r)

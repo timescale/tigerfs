@@ -16,13 +16,15 @@ import "fmt"
 func GenerateMarkdownTableSQL(schema, name string) string {
 	return fmt.Sprintf(`CREATE TABLE %s.%s (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    modified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
 )`, quoteIdent(schema), quoteIdent("_"+name))
 }
 
@@ -38,10 +40,12 @@ func GenerateMarkdownTableSQL(schema, name string) string {
 func GeneratePlainTextTableSQL(schema, name string) string {
 	return fmt.Sprintf(`CREATE TABLE %s.%s (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    modified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
 )`, quoteIdent(schema), quoteIdent("_"+name))
 }
 

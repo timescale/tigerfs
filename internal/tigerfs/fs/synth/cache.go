@@ -18,6 +18,10 @@ type ViewInfo struct {
 	// column, avoiding the instability of time.Now() on every stat call (which causes
 	// editors to falsely warn "file changed since visited").
 	CachedMountTime time.Time
+
+	// SupportsHierarchy is true when the view has a filetype column, enabling
+	// hierarchical directory structure with slashes in the filename column.
+	SupportsHierarchy bool
 }
 
 // StripExtension removes the synthesized format extension from a filename.

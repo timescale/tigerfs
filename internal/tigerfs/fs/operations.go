@@ -95,6 +95,7 @@ func (o *Operations) ReadDir(ctx context.Context, path string) ([]Entry, *FSErro
 	if err != nil {
 		return nil, err
 	}
+	o.resolveSynthHierarchy(ctx, parsed)
 
 	return o.readDirWithParsed(ctx, parsed)
 }
@@ -392,6 +393,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 }
 
 // readDirRow lists columns in a row directory.
+// For synth views with hierarchy, lists hierarchical subdirectory children instead.
 func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	if fsCtx == nil {
@@ -399,6 +401,11 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 			Code:    ErrInvalidPath,
 			Message: "missing context for row path",
 		}
+	}
+
+	// Synth hierarchy: list subdirectory children instead of columns
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil && info.SupportsHierarchy {
+		return o.readDirSynthHierarchical(ctx, parsed, info)
 	}
 
 	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
@@ -860,6 +867,7 @@ func (o *Operations) Stat(ctx context.Context, path string) (*Entry, *FSError) {
 	if err != nil {
 		return nil, err
 	}
+	o.resolveSynthHierarchy(ctx, parsed)
 
 	return o.statWithParsed(ctx, parsed, path)
 }
@@ -1435,6 +1443,7 @@ func (o *Operations) ReadFile(ctx context.Context, path string) (*FileContent, *
 	if err != nil {
 		return nil, err
 	}
+	o.resolveSynthHierarchy(ctx, parsed)
 
 	return o.readFileWithParsed(ctx, parsed)
 }

@@ -537,6 +537,34 @@ func (m *MockPipelineReader) QueryRowsWithDataPipeline(ctx context.Context, para
 
 // MockDBClient is a composite mock implementing DBClient for full FUSE node testing.
 // Embeds individual mocks for each interface.
+// MockHierarchyWriter is a mock for HierarchyWriter.
+type MockHierarchyWriter struct {
+	RenameByPrefixFn        func(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
+	HasChildrenWithPrefixFn func(ctx context.Context, schema, table, column, prefix string) (bool, error)
+	InsertIfNotExistsFn     func(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+}
+
+func (m *MockHierarchyWriter) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
+	if m.RenameByPrefixFn != nil {
+		return m.RenameByPrefixFn(ctx, schema, table, column, oldPrefix, newPrefix)
+	}
+	return 0, nil
+}
+
+func (m *MockHierarchyWriter) HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error) {
+	if m.HasChildrenWithPrefixFn != nil {
+		return m.HasChildrenWithPrefixFn(ctx, schema, table, column, prefix)
+	}
+	return false, nil
+}
+
+func (m *MockHierarchyWriter) InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error {
+	if m.InsertIfNotExistsFn != nil {
+		return m.InsertIfNotExistsFn(ctx, schema, table, columns, values)
+	}
+	return nil
+}
+
 type MockDBClient struct {
 	*MockDDLExecutor
 	*MockSchemaReader
@@ -549,6 +577,7 @@ type MockDBClient struct {
 	*MockExportReader
 	*MockImportWriter
 	*MockPipelineReader
+	*MockHierarchyWriter
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -567,5 +596,6 @@ func NewMockDBClient() *MockDBClient {
 		MockExportReader:     &MockExportReader{},
 		MockImportWriter:     &MockImportWriter{},
 		MockPipelineReader:   &MockPipelineReader{},
+		MockHierarchyWriter:  &MockHierarchyWriter{},
 	}
 }

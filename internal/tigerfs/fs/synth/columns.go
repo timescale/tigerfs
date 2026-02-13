@@ -55,6 +55,11 @@ type ColumnRoles struct {
 	// Merged into YAML frontmatter after known columns during synthesis.
 	// Empty if no matching column found. Only used by FormatMarkdown.
 	ExtraHeaders string
+
+	// Filetype is the column that distinguishes files from directories.
+	// When present, the view supports hierarchical directory structure.
+	// Expected values: "file", "directory". Empty if no matching column found.
+	Filetype string
 }
 
 // DetectColumnRoles identifies which columns serve which roles for a given format.
@@ -98,8 +103,11 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 	// Detect optional extra headers JSONB column
 	roles.ExtraHeaders = findMatchingColumn(columnNames, extraHeadersConventions)
 
+	// Detect optional filetype column (for hierarchical directory support)
+	roles.Filetype = findMatchingColumn(columnNames, []string{"filetype"})
+
 	// Remaining columns become frontmatter (markdown only), preserving schema order.
-	// Exclude: filename, body, primary key, timestamp, and extra headers columns.
+	// Exclude: filename, body, primary key, timestamp, extra headers, and filetype columns.
 	if format == FormatMarkdown {
 		excluded := map[string]bool{
 			strings.ToLower(roles.Filename):   true,
@@ -114,6 +122,9 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 		}
 		if roles.ExtraHeaders != "" {
 			excluded[strings.ToLower(roles.ExtraHeaders)] = true
+		}
+		if roles.Filetype != "" {
+			excluded[strings.ToLower(roles.Filetype)] = true
 		}
 		for _, col := range columnNames {
 			if !excluded[strings.ToLower(col)] {

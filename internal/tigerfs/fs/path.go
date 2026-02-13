@@ -115,6 +115,11 @@ type ParsedPath struct {
 
 	// FormatTarget is the target format name when Type is PathFormat (e.g., "markdown").
 	FormatTarget string
+
+	// RawSubPath captures all path segments after the table, before any PK/Column
+	// processing. Used by synth hierarchy to reconstruct multi-segment filenames.
+	// For example, /memory/projects/web/todo.md → ["projects", "web", "todo.md"].
+	RawSubPath []string
 }
 
 // knownFormats maps format extensions to format names.
@@ -834,6 +839,10 @@ func processRowOrColumn(result *ParsedPath, remaining []string) (*ParsedPath, *F
 	if len(remaining) == 0 {
 		return result, nil
 	}
+
+	// Capture all remaining segments for synth hierarchy reconstruction.
+	// This preserves the full sub-path before PK/Column logic discards segments.
+	result.RawSubPath = append([]string{}, remaining...)
 
 	// First segment is the primary key
 	pk := remaining[0]

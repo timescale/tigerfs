@@ -34,6 +34,7 @@ func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *F
 	if err != nil {
 		return err
 	}
+	o.resolveSynthHierarchy(ctx, parsed)
 
 	return o.writeFileWithParsed(ctx, parsed, data)
 }
@@ -504,6 +505,8 @@ func (o *Operations) Rename(ctx context.Context, oldPath, newPath string) *FSErr
 	if err != nil {
 		return err
 	}
+	o.resolveSynthHierarchy(ctx, oldParsed)
+	o.resolveSynthHierarchy(ctx, newParsed)
 
 	// Both must be PathRow
 	if oldParsed.Type != PathRow || newParsed.Type != PathRow {
@@ -594,6 +597,7 @@ func (o *Operations) Delete(ctx context.Context, path string) *FSError {
 	if err != nil {
 		return err
 	}
+	o.resolveSynthHierarchy(ctx, parsed)
 
 	return o.deleteWithParsed(ctx, parsed)
 }
@@ -827,6 +831,7 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 	if err != nil {
 		return err
 	}
+	o.resolveSynthHierarchy(ctx, parsed)
 
 	switch parsed.Type {
 	case PathRow:
@@ -837,6 +842,11 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 				Code:    ErrInvalidPath,
 				Message: "missing context for row path",
 			}
+		}
+
+		// Synth hierarchy: create a directory row instead of staging
+		if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil && info.SupportsHierarchy {
+			return o.mkdirSynth(ctx, parsed, info)
 		}
 
 		// Check write permission
