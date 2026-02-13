@@ -250,11 +250,11 @@ func TestGetMarkdownFilename(t *testing.T) {
 			expected: "42.md",
 		},
 		{
-			name:     "slash in filename sanitized",
+			name:     "slash in filename preserved",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "path/to/file", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "path-to-file.md",
+			expected: "path/to/file.md",
 		},
 		{
 			name:     "colon in filename sanitized",

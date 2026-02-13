@@ -14,8 +14,14 @@ func TestGenerateMarkdownTableSQL(t *testing.T) {
 	if !strings.Contains(sql, "id UUID PRIMARY KEY") {
 		t.Errorf("should have UUID primary key, got:\n%s", sql)
 	}
-	if !strings.Contains(sql, "filename TEXT UNIQUE NOT NULL") {
+	if !strings.Contains(sql, "filename TEXT NOT NULL") {
 		t.Errorf("should have filename column, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "filetype TEXT NOT NULL DEFAULT 'file'") {
+		t.Errorf("should have filetype column, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "UNIQUE(filename, filetype)") {
+		t.Errorf("should have compound UNIQUE constraint, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "title TEXT") {
 		t.Errorf("should have title column, got:\n%s", sql)
@@ -43,8 +49,14 @@ func TestGeneratePlainTextTableSQL(t *testing.T) {
 	if !strings.Contains(sql, `"public"."_snippets"`) {
 		t.Errorf("should reference _snippets table, got:\n%s", sql)
 	}
-	if !strings.Contains(sql, "filename TEXT UNIQUE NOT NULL") {
+	if !strings.Contains(sql, "filename TEXT NOT NULL") {
 		t.Errorf("should have filename column, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "filetype TEXT NOT NULL DEFAULT 'file'") {
+		t.Errorf("should have filetype column, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "UNIQUE(filename, filetype)") {
+		t.Errorf("should have compound UNIQUE constraint, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "body TEXT") {
 		t.Errorf("should have body column, got:\n%s", sql)
