@@ -135,6 +135,42 @@ mv /mnt/db/notes/old-name.md /mnt/db/notes/new-name.md
 rm /mnt/db/notes/unwanted-post.md
 ```
 
+### Organizing with Directories
+
+Synthesized apps support subdirectories. Create directories with `mkdir` and organize files into them:
+
+```bash
+# Create a directory
+mkdir /mnt/db/notes/tutorials
+
+# Create a file in the directory
+cat > /mnt/db/notes/tutorials/getting-started.md << 'EOF'
+---
+title: Getting Started
+author: alice
+---
+
+# Getting Started
+
+Follow these steps...
+EOF
+
+# List files in the directory
+ls /mnt/db/notes/tutorials/
+# getting-started.md
+```
+
+**Auto-creation:** Writing a file with a path automatically creates parent directories. Writing to `notes/a/b/c.md` auto-creates the `a/` and `a/b/` directories.
+
+**Directory rename:** Renaming a directory atomically renames all files within it:
+
+```bash
+mv /mnt/db/notes/tutorials /mnt/db/notes/guides
+# All files under tutorials/ are now under guides/
+```
+
+**`.format/` views:** Directory support also works with `.format/` views, as long as the underlying table has a `filetype` column.
+
 ## Column Mapping
 
 ### Automatic Detection
@@ -250,11 +286,13 @@ grep -l "draft: true" /mnt/db/blog/*.md
 # Create knowledge base
 echo "markdown" > /mnt/db/.build/kb
 
-# Organize with categories in frontmatter
-cat > /mnt/db/kb/setup-guide.md << 'EOF'
+# Organize into directories
+mkdir /mnt/db/kb/getting-started
+mkdir /mnt/db/kb/reference
+
+cat > /mnt/db/kb/getting-started/setup-guide.md << 'EOF'
 ---
 title: Setup Guide
-category: getting-started
 last_updated: 2024-01-20
 ---
 
@@ -263,8 +301,22 @@ last_updated: 2024-01-20
 Follow these steps...
 EOF
 
-# Find all getting-started articles
-grep -l "category: getting-started" /mnt/db/kb/*.md
+cat > /mnt/db/kb/reference/api.md << 'EOF'
+---
+title: API Reference
+---
+
+# API Reference
+
+Endpoints and usage...
+EOF
+
+# List a section
+ls /mnt/db/kb/getting-started/
+# setup-guide.md
+
+# Search across all sections
+grep -r "TODO" /mnt/db/kb/
 ```
 
 ### Meeting Notes

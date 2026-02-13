@@ -154,7 +154,14 @@ Read "mount/notes/hello.md"        # Read with frontmatter
 Write "mount/notes/hello.md" with updated content
 ```
 
-See [markdown-app.md](markdown-app.md) for full details on frontmatter, creation, and column mapping.
+Synth apps can contain subdirectories. Use recursive globs to list all files:
+
+```
+Glob "mount/notes/**/*.md"         # List all .md files, including subdirectories
+Bash "mkdir mount/notes/tutorials" # Create a subdirectory
+```
+
+See [markdown-app.md](markdown-app.md) for full details on frontmatter, creation, directories, and column mapping.
 
 ## Quick Reference
 
@@ -177,6 +184,7 @@ See [markdown-app.md](markdown-app.md) for full details on frontmatter, creation
 | Insert row | `Write "mount/t/new.json"` with JSON |
 | Delete row | `Bash "rm mount/t/pk"` |
 | List markdown files | `Glob "mount/dir/*.md"` |
+| List markdown (recursive) | `Glob "mount/dir/**/*.md"` |
 | Read markdown | `Read "mount/dir/file.md"` |
 | Write markdown | `Write "mount/dir/file.md"` with content |
 

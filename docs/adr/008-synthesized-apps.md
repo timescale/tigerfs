@@ -26,7 +26,10 @@ Users want to store content like markdown files, notes, or task lists in a datab
 /mnt/db/public/posts_md/
 ├── hello-world.md
 ├── my-first-post.md
-└── announcement.md
+├── announcement.md
+└── tutorials/
+    ├── getting-started.md
+    └── advanced-topics.md
 ```
 
 Where each `.md` file contains YAML frontmatter synthesized from column values plus the body content.
@@ -232,12 +235,15 @@ PostgreSQL auto-updatable views handle writes for simple views (single table, no
 ```sql
 CREATE TABLE _posts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  filename TEXT UNIQUE NOT NULL,
+  filename TEXT NOT NULL,
+  filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
   title TEXT,
   author TEXT,
+  headers JSONB DEFAULT '{}'::jsonb,
   body TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  modified_at TIMESTAMPTZ DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(filename, filetype)
 );
 ```
 
@@ -361,3 +367,5 @@ rm -r /mnt/db/_notes/.delete/_notes  # CASCADE drops view
 3. **`rm .format/markdown`:** Filesystem-based view deletion
 4. **Auto-regeneration:** Views with `tigerfs:md,auto` comment regenerate on DDL changes
 5. **Additional formats:** HTML, JSON, CSV synthesis
+
+**Note:** Directory hierarchy support (subdirectories within synth apps) is described in [ADR-011: Directory Hierarchies](011-directory-hierarchies.md).
