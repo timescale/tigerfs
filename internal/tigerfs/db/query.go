@@ -707,3 +707,79 @@ func (c *Client) GetLastNRowsOrdered(ctx context.Context, schema, table, pkColum
 	}
 	return GetLastNRowsOrdered(ctx, c.pool, schema, table, pkColumn, orderColumn, limit)
 }
+
+// RenameByPrefix atomically renames all rows where the given column value starts
+// with oldPrefix to use newPrefix instead. Used for directory renames in synth views.
+// Returns the number of rows affected.
+func (c *Client) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
+	if c.pool == nil {
+		return 0, fmt.Errorf("database connection not initialized")
+	}
+
+	// UPDATE "schema"."table" SET "column" = $1 || substr("column", length($2) + 1)
+	// WHERE "column" = $2 OR "column" LIKE $2 || '/%'
+	query := fmt.Sprintf(
+		`UPDATE "%s"."%s" SET "%s" = $1 || substr("%s", length($2) + 1) WHERE "%s" = $2 OR "%s" LIKE $2 || '/%%'`,
+		schema, table, column, column, column, column,
+	)
+
+	cmdTag, err := c.pool.Exec(ctx, query, newPrefix, oldPrefix)
+	if err != nil {
+		return 0, fmt.Errorf("failed to rename by prefix: %w", err)
+	}
+
+	return cmdTag.RowsAffected(), nil
+}
+
+// HasChildrenWithPrefix checks if any rows exist where the given column value
+// starts with prefix + "/". Used to check if a directory has children before rmdir.
+func (c *Client) HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error) {
+	if c.pool == nil {
+		return false, fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT EXISTS(SELECT 1 FROM "%s"."%s" WHERE "%s" LIKE $1 || '/%%')`,
+		schema, table, column,
+	)
+
+	var exists bool
+	err := c.pool.QueryRow(ctx, query, prefix).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check children: %w", err)
+	}
+
+	return exists, nil
+}
+
+// InsertIfNotExists inserts a row only if it doesn't already exist (ON CONFLICT DO NOTHING).
+// Used for auto-creating parent directory rows in synth views.
+func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error {
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	if len(columns) == 0 || len(columns) != len(values) {
+		return fmt.Errorf("column/value count mismatch: %d columns, %d values", len(columns), len(values))
+	}
+
+	// Build column list and parameter placeholders
+	quotedCols := make([]string, len(columns))
+	placeholders := make([]string, len(columns))
+	for i, col := range columns {
+		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+
+	query := fmt.Sprintf(
+		`INSERT INTO "%s"."%s" (%s) VALUES (%s) ON CONFLICT DO NOTHING`,
+		schema, table, strings.Join(quotedCols, ", "), strings.Join(placeholders, ", "),
+	)
+
+	_, err := c.pool.Exec(ctx, query, values...)
+	if err != nil {
+		return fmt.Errorf("failed to insert if not exists: %w", err)
+	}
+
+	return nil
+}

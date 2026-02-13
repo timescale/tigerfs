@@ -124,13 +124,35 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 		}
 
 		cache[viewName] = &synth.ViewInfo{
-			Format:          format,
-			Roles:           roles,
-			CachedMountTime: mountTime,
+			Format:            format,
+			Roles:             roles,
+			CachedMountTime:   mountTime,
+			SupportsHierarchy: roles.Filetype != "",
 		}
 	}
 
 	return cache, nil
+}
+
+// resolveSynthHierarchy converts PathColumn → PathRow for synth views with hierarchy.
+// For deep paths like /memory/projects/web/todo.md, the parser produces
+// PathColumn(PK=projects, Column=web, RawSubPath=[projects,web,todo.md]).
+// This method detects synth views with hierarchy support and converts to
+// PathRow(PK="projects/web/todo.md") so existing synth hooks handle the rest.
+// No-op for non-synth views, views without hierarchy, or non-PathColumn paths.
+func (o *Operations) resolveSynthHierarchy(ctx context.Context, parsed *ParsedPath) {
+	if parsed.Context == nil || parsed.Type != PathColumn {
+		return
+	}
+	info := o.getSynthViewInfo(ctx, parsed.Context.Schema, parsed.Context.TableName)
+	if info == nil || !info.SupportsHierarchy {
+		return
+	}
+	// Convert PathColumn → PathRow with full hierarchical filename
+	parsed.Type = PathRow
+	parsed.PrimaryKey = strings.Join(parsed.RawSubPath, "/")
+	parsed.Column = ""
+	parsed.Format = ""
 }
 
 // extractModTime returns the best available modification time for a synth row.
@@ -153,6 +175,7 @@ func extractModTime(columns []string, values []interface{}, info *synth.ViewInfo
 }
 
 // readDirSynthView lists synthesized filenames as file entries.
+// For views with hierarchy support, shows only root-level entries (files and directories).
 func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 
@@ -169,6 +192,11 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 			Message: "failed to list synth view rows",
 			Cause:   err,
 		}
+	}
+
+	// For hierarchical views, filter to root-level entries only
+	if info.SupportsHierarchy {
+		return o.filterHierarchicalChildren(columns, rows, "", info), nil
 	}
 
 	entries := make([]Entry, 0, len(rows))
@@ -197,9 +225,31 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 }
 
 // statSynthFile returns metadata for a synthesized file.
+// For views with hierarchy, also handles directory stat (filetype='directory').
 func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) (*Entry, *FSError) {
 	// The PrimaryKey field contains the filename (e.g., "hello-world.md")
 	filename := parsed.PrimaryKey
+
+	// For hierarchical views, check for directory first (directory takes priority)
+	if info.SupportsHierarchy {
+		dirPath := filename
+		if ext := info.Format.Extension(); ext != "" {
+			dirPath = strings.TrimSuffix(dirPath, ext)
+		}
+
+		exists, fsErr := o.synthRowExists(ctx, parsed.Context.Schema, parsed.Context.TableName, info, dirPath, "directory")
+		if fsErr != nil {
+			return nil, fsErr
+		}
+		if exists {
+			return &Entry{
+				Name:    dirPath,
+				IsDir:   true,
+				Mode:    0755,
+				ModTime: info.CachedMountTime,
+			}, nil
+		}
+	}
 
 	// Look up the row by filename to verify it exists and get content size
 	columns, row, fsErr := o.getSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
@@ -254,6 +304,7 @@ func (o *Operations) readFileSynthView(ctx context.Context, parsed *ParsedPath, 
 }
 
 // writeSynthFile handles writes to synthesized view files (create or update).
+// For views with hierarchy, auto-creates parent directory rows on insert.
 func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo, data []byte) *FSError {
 	fsCtx := parsed.Context
 	filename := parsed.PrimaryKey
@@ -275,6 +326,11 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		rawFilename = strings.TrimSuffix(rawFilename, ext)
 	}
 	colValues[info.Roles.Filename] = rawFilename
+
+	// For hierarchical views, set filetype='file' explicitly
+	if info.SupportsHierarchy {
+		colValues[info.Roles.Filetype] = "file"
+	}
 
 	// Convert map to columns/values slices
 	columns := make([]string, 0, len(colValues))
@@ -305,6 +361,13 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 			}
 		}
 	} else {
+		// For hierarchical views, auto-create parent directories before inserting
+		if info.SupportsHierarchy {
+			if fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, rawFilename); fsErr != nil {
+				return fsErr
+			}
+		}
+
 		// INSERT new row
 		_, err = o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 		if err != nil {
@@ -319,12 +382,58 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 	return nil
 }
 
-// deleteSynthFile deletes a synthesized file (DELETE by filename).
+// deleteSynthFile deletes a synthesized file or directory.
+// For directories in hierarchical views, checks for children and returns ENOTEMPTY.
 func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) *FSError {
 	fsCtx := parsed.Context
 	filename := parsed.PrimaryKey
 
-	// Find the PK value for this filename
+	// For hierarchical views, check if this is a directory
+	if info.SupportsHierarchy {
+		dirPath := filename
+		if ext := info.Format.Extension(); ext != "" {
+			dirPath = strings.TrimSuffix(dirPath, ext)
+		}
+
+		exists, fsErr := o.synthRowExists(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
+		if fsErr != nil {
+			return fsErr
+		}
+		if exists {
+			// It's a directory — check for children
+			hasChildren, err := o.db.HasChildrenWithPrefix(ctx, fsCtx.Schema, fsCtx.TableName, info.Roles.Filename, dirPath)
+			if err != nil {
+				return &FSError{
+					Code:    ErrIO,
+					Message: "failed to check directory children",
+					Cause:   err,
+				}
+			}
+			if hasChildren {
+				return &FSError{
+					Code:    ErrNotEmpty,
+					Message: "directory not empty",
+				}
+			}
+
+			// Delete the directory row by looking up its PK
+			pkValue, lookupErr := o.getSynthRowPKByFiletype(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
+			if lookupErr != nil {
+				return lookupErr
+			}
+			err = o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, info.Roles.PrimaryKey, pkValue)
+			if err != nil {
+				return &FSError{
+					Code:    ErrIO,
+					Message: "failed to delete directory",
+					Cause:   err,
+				}
+			}
+			return nil
+		}
+	}
+
+	// Regular file delete
 	pkValue, fsErr := o.getSynthRowPK(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
 	if fsErr != nil {
 		return fsErr
@@ -342,6 +451,58 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 	return nil
 }
 
+// getSynthRowPKByFiletype looks up the primary key for a row with a specific filetype.
+func (o *Operations) getSynthRowPKByFiletype(ctx context.Context, schema, table string, info *synth.ViewInfo, filename, filetype string) (string, *FSError) {
+	limit := o.config.DirListingLimit
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	columns, rows, err := o.db.GetAllRows(ctx, schema, table, limit)
+	if err != nil {
+		return "", &FSError{
+			Code:    ErrIO,
+			Message: "failed to query synth view",
+			Cause:   err,
+		}
+	}
+
+	filenameIdx := -1
+	filetypeIdx := -1
+	pkIdx := -1
+	for i, col := range columns {
+		if col == info.Roles.Filename {
+			filenameIdx = i
+		}
+		if col == info.Roles.Filetype {
+			filetypeIdx = i
+		}
+		if col == info.Roles.PrimaryKey {
+			pkIdx = i
+		}
+	}
+
+	if filenameIdx < 0 || filetypeIdx < 0 || pkIdx < 0 {
+		return "", &FSError{
+			Code:    ErrIO,
+			Message: "required columns not found in view",
+		}
+	}
+
+	for _, row := range rows {
+		fn := synth.ValueToString(row[filenameIdx])
+		ft := synth.ValueToString(row[filetypeIdx])
+		if fn == filename && ft == filetype {
+			return synth.ValueToString(row[pkIdx]), nil
+		}
+	}
+
+	return "", &FSError{
+		Code:    ErrNotExist,
+		Message: fmt.Sprintf("row not found: %s (filetype=%s)", filename, filetype),
+	}
+}
+
 // normalizeSynthFilename ensures a filename has the expected synth extension.
 // For example, "foo" in a PlainText view becomes "foo.txt".
 // If the filename already has the extension, it's returned unchanged.
@@ -355,6 +516,7 @@ func normalizeSynthFilename(filename string, info *synth.ViewInfo) string {
 
 // getSynthRow looks up a row in a synth view by the synthesized filename.
 // Returns the column names and row values, or an error if not found.
+// For hierarchical views, only matches file rows (skips directory rows).
 func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, filename string) ([]string, []interface{}, *FSError) {
 	// Normalize filename to include synth extension (e.g., "foo" → "foo.txt")
 	filename = normalizeSynthFilename(filename, info)
@@ -375,7 +537,25 @@ func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info
 		}
 	}
 
+	// Find filetype column index for hierarchical filtering
+	filetypeIdx := -1
+	if info.SupportsHierarchy {
+		for i, col := range columns {
+			if col == info.Roles.Filetype {
+				filetypeIdx = i
+				break
+			}
+		}
+	}
+
 	for _, row := range rows {
+		// For hierarchical views, skip directory rows
+		if filetypeIdx >= 0 {
+			if synth.ValueToString(row[filetypeIdx]) == "directory" {
+				continue
+			}
+		}
+
 		var rowFilename string
 		switch info.Format {
 		case synth.FormatMarkdown:
@@ -427,10 +607,40 @@ func (o *Operations) synthesizeContent(columns []string, row []interface{}, info
 	}
 }
 
-// renameSynthFile renames a synthesized file by updating the filename column.
-// Both old and new filenames are normalized (ensuring proper extension),
-// then the filename column is updated via db.UpdateColumn.
+// renameSynthFile renames a synthesized file or directory.
+// For directories in hierarchical views, performs an atomic prefix rename
+// that updates the directory row and all its descendants.
 func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, info *synth.ViewInfo, oldFilename, newFilename string) *FSError {
+	// For hierarchical views, check if old path is a directory
+	if info.SupportsHierarchy {
+		oldDirPath := oldFilename
+		if ext := info.Format.Extension(); ext != "" {
+			oldDirPath = strings.TrimSuffix(oldDirPath, ext)
+		}
+		newDirPath := newFilename
+		if ext := info.Format.Extension(); ext != "" {
+			newDirPath = strings.TrimSuffix(newDirPath, ext)
+		}
+
+		exists, fsErr := o.synthRowExists(ctx, schema, table, info, oldDirPath, "directory")
+		if fsErr != nil {
+			return fsErr
+		}
+		if exists {
+			// Directory rename — atomic prefix swap
+			_, err := o.db.RenameByPrefix(ctx, schema, table, info.Roles.Filename, oldDirPath, newDirPath)
+			if err != nil {
+				return &FSError{
+					Code:    ErrIO,
+					Message: "failed to rename directory",
+					Cause:   err,
+				}
+			}
+			return nil
+		}
+	}
+
+	// Regular file rename
 	// Normalize both filenames to include synth extension
 	oldFilename = normalizeSynthFilename(oldFilename, info)
 	newFilename = normalizeSynthFilename(newFilename, info)
@@ -458,6 +668,229 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 	}
 
 	return nil
+}
+
+// readDirSynthHierarchical lists children of a hierarchical directory in a synth view.
+// Called when PathRow resolves to a directory in a view with SupportsHierarchy.
+// The parsed.PrimaryKey contains the directory path (e.g., "projects/web").
+func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
+	fsCtx := parsed.Context
+	prefix := parsed.PrimaryKey
+
+	// Strip synth extension if present (e.g., "projects.md" → "projects")
+	if ext := info.Format.Extension(); ext != "" {
+		prefix = strings.TrimSuffix(prefix, ext)
+	}
+
+	// Get all rows from the view
+	limit := o.config.DirListingLimit
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	columns, rows, err := o.db.GetAllRows(ctx, fsCtx.Schema, fsCtx.TableName, limit)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to query synth view for hierarchy",
+			Cause:   err,
+		}
+	}
+
+	return o.filterHierarchicalChildren(columns, rows, prefix, info), nil
+}
+
+// filterHierarchicalChildren filters rows to immediate children of a prefix.
+// For prefix "projects/web", returns entries like "todo.md" (file) and "docs" (dir).
+// For prefix "" (root), returns top-level files and directories.
+func (o *Operations) filterHierarchicalChildren(columns []string, rows [][]interface{}, prefix string, info *synth.ViewInfo) []Entry {
+	// Find column indexes
+	filenameIdx := -1
+	filetypeIdx := -1
+	for i, col := range columns {
+		if col == info.Roles.Filename {
+			filenameIdx = i
+		}
+		if col == info.Roles.Filetype {
+			filetypeIdx = i
+		}
+	}
+	if filenameIdx < 0 || filetypeIdx < 0 {
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var entries []Entry
+
+	for _, row := range rows {
+		rawFilename := synth.ValueToString(row[filenameIdx])
+		filetype := synth.ValueToString(row[filetypeIdx])
+
+		// Check if this row is a direct child of the prefix
+		var childName string
+		if prefix == "" {
+			// Root level: no slash in filename means top-level
+			if !strings.Contains(rawFilename, "/") {
+				childName = rawFilename
+			} else {
+				continue
+			}
+		} else {
+			// Subdirectory: must start with prefix + "/"
+			pfx := prefix + "/"
+			if !strings.HasPrefix(rawFilename, pfx) {
+				continue
+			}
+			rest := rawFilename[len(pfx):]
+			// Must be immediate child (no more slashes)
+			if strings.Contains(rest, "/") {
+				continue
+			}
+			childName = rest
+		}
+
+		if childName == "" || seen[childName] {
+			continue
+		}
+
+		isDir := filetype == "directory"
+		modTime := extractModTime(columns, row, info)
+
+		if isDir {
+			seen[childName] = true
+			entries = append(entries, Entry{
+				Name:    childName,
+				IsDir:   true,
+				Mode:    0755,
+				ModTime: modTime,
+			})
+		} else {
+			// Add synth extension for files
+			displayName := childName
+			if ext := info.Format.Extension(); ext != "" && !strings.HasSuffix(displayName, ext) {
+				displayName += ext
+			}
+			seen[displayName] = true
+			entries = append(entries, Entry{
+				Name:    displayName,
+				IsDir:   false,
+				Mode:    0644,
+				ModTime: modTime,
+			})
+		}
+	}
+
+	return entries
+}
+
+// mkdirSynth creates a directory row in a hierarchical synth view.
+// Inserts a row with filetype='directory' and auto-creates parent directories.
+func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) *FSError {
+	fsCtx := parsed.Context
+	dirPath := parsed.PrimaryKey
+
+	// Strip synth extension if present
+	if ext := info.Format.Extension(); ext != "" {
+		dirPath = strings.TrimSuffix(dirPath, ext)
+	}
+
+	// Check if directory already exists
+	exists, err := o.synthRowExists(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
+	if err != nil {
+		return err
+	}
+	if exists {
+		return &FSError{
+			Code:    ErrExists,
+			Message: "directory already exists",
+		}
+	}
+
+	// Auto-create parent directories
+	if fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath); fsErr != nil {
+		return fsErr
+	}
+
+	// Insert the directory row
+	columns := []string{info.Roles.Filename, info.Roles.Filetype}
+	values := []interface{}{dirPath, "directory"}
+	_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+	if dbErr != nil {
+		return &FSError{
+			Code:    ErrIO,
+			Message: "failed to create directory",
+			Cause:   dbErr,
+		}
+	}
+
+	return nil
+}
+
+// ensureSynthParentDirs auto-creates parent directory rows for a given path.
+// For "projects/web/todo", creates "projects" and "projects/web" directory rows.
+func (o *Operations) ensureSynthParentDirs(ctx context.Context, schema, table string, info *synth.ViewInfo, path string) *FSError {
+	parts := strings.Split(path, "/")
+	if len(parts) <= 1 {
+		return nil // No parents to create
+	}
+
+	// Create each ancestor directory
+	for i := 1; i < len(parts); i++ {
+		parentPath := strings.Join(parts[:i], "/")
+		columns := []string{info.Roles.Filename, info.Roles.Filetype}
+		values := []interface{}{parentPath, "directory"}
+		err := o.db.InsertIfNotExists(ctx, schema, table, columns, values)
+		if err != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: "failed to create parent directory",
+				Cause:   err,
+			}
+		}
+	}
+
+	return nil
+}
+
+// synthRowExists checks if a row exists in a synth view with the given filename and filetype.
+func (o *Operations) synthRowExists(ctx context.Context, schema, table string, info *synth.ViewInfo, filename, filetype string) (bool, *FSError) {
+	limit := o.config.DirListingLimit
+	if limit <= 0 {
+		limit = 10000
+	}
+
+	columns, rows, err := o.db.GetAllRows(ctx, schema, table, limit)
+	if err != nil {
+		return false, &FSError{
+			Code:    ErrIO,
+			Message: "failed to query synth view",
+			Cause:   err,
+		}
+	}
+
+	filenameIdx := -1
+	filetypeIdx := -1
+	for i, col := range columns {
+		if col == info.Roles.Filename {
+			filenameIdx = i
+		}
+		if col == info.Roles.Filetype {
+			filetypeIdx = i
+		}
+	}
+	if filenameIdx < 0 || filetypeIdx < 0 {
+		return false, nil
+	}
+
+	for _, row := range rows {
+		fn := synth.ValueToString(row[filenameIdx])
+		ft := synth.ValueToString(row[filetypeIdx])
+		if fn == filename && ft == filetype {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // parseSynthContent parses file content back into column values.
