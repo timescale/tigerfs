@@ -844,9 +844,16 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 			}
 		}
 
-		// Synth hierarchy: create a directory row instead of staging
-		if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil && info.SupportsHierarchy {
-			return o.mkdirSynth(ctx, parsed, info)
+		// Synth views: hierarchy-enabled views create directory rows,
+		// non-hierarchy views reject mkdir (directories not supported without filetype column)
+		if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+			if info.SupportsHierarchy {
+				return o.mkdirSynth(ctx, parsed, info)
+			}
+			return &FSError{
+				Code:    ErrPermission,
+				Message: "mkdir not supported: view lacks filetype column — recreate with .build/ to enable directories",
+			}
 		}
 
 		// Check write permission

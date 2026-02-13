@@ -198,13 +198,15 @@ JOIN categories c ON p.category = c.slug;
 
 CREATE TABLE "_blog" (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    modified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
 );
 
 CREATE VIEW "blog" AS SELECT * FROM "_blog";
@@ -276,13 +278,15 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
 
 CREATE TABLE "_docs" (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    modified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
 );
 
 CREATE VIEW "docs" AS SELECT * FROM "_docs";
@@ -345,10 +349,12 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
 
 CREATE TABLE "_snippets" (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     body TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    modified_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
 );
 
 CREATE VIEW "snippets" AS SELECT * FROM "_snippets";
