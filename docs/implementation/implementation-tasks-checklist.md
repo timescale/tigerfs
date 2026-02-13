@@ -141,6 +141,26 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ⬜ | 6.2.5 | Implement .add File Handler | ~5340 |
 | ⬜ | 6.2.6 | Integration Tests for Tasks | ~5410 |
 
+### 6.3: Directory Hierarchies
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ✅ | 6.3.1 | Add RawSubPath to ParsedPath | ~5520 |
+| ✅ | 6.3.2 | Detect filetype Column in Synth Column Roles | ~5540 |
+| ✅ | 6.3.3 | Allow Slashes in sanitizeFilename | ~5560 |
+| ✅ | 6.3.4 | Update .build/ SQL Generation for filetype | ~5575 |
+| ✅ | 6.3.5 | Implement resolveSynthHierarchy + Core Dispatch Hooks | ~5590 |
+| ✅ | 6.3.6 | Implement readDirSynthHierarchical | ~5620 |
+| ✅ | 6.3.7 | Extend statSynthFile for Directories | ~5640 |
+| ✅ | 6.3.8 | Extend writeSynthFile with Auto-Create Parent Dirs | ~5660 |
+| ✅ | 6.3.9 | Implement mkdirSynth | ~5680 |
+| ✅ | 6.3.10 | Implement rmdirSynth (via deleteSynthFile) | ~5700 |
+| ✅ | 6.3.11 | Extend renameSynthFile for Directory Rename | ~5720 |
+| ✅ | 6.3.12 | Add Generic DB Helper Methods | ~5740 |
+| ✅ | 6.3.13 | Unit Tests for Hierarchy | ~5760 |
+| ✅ | 6.3.14 | Integration Tests for Hierarchy | ~5790 |
+| ✅ | 6.3.15 | Update ADR-011 | ~5820 |
+
 ---
 
 ## Phase 7: DDL Operations via Filesystem
@@ -227,9 +247,10 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
 | Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
-| Phase 6: Synthesized Apps | 9 | 15 | 60% |
+| Phase 6: Synthesized Apps | 24 | 30 | 80% |
 |   6.1: Markdown & Plain Text | 9 | 9 | 100% |
 |   6.2: Tasks | 0 | 6 | 0% |
+|   6.3: Directory Hierarchies | 15 | 15 | 100% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
