@@ -213,10 +213,16 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 		}
 
 		modTime := extractModTime(columns, row, info)
+		// Synthesize content to get accurate size (CPU-only, no DB query)
+		var size int64
+		if content, err := o.synthesizeContent(columns, row, info); err == nil {
+			size = int64(len(content))
+		}
 		entries = append(entries, Entry{
 			Name:    filename,
 			IsDir:   false,
 			Mode:    0644,
+			Size:    size,
 			ModTime: modTime,
 		})
 	}
@@ -770,11 +776,17 @@ func (o *Operations) filterHierarchicalChildren(columns []string, rows [][]inter
 			if ext := info.Format.Extension(); ext != "" && !strings.HasSuffix(displayName, ext) {
 				displayName += ext
 			}
+			// Synthesize content to get accurate size (CPU-only, no DB query)
+			var size int64
+			if content, err := o.synthesizeContent(columns, row, info); err == nil {
+				size = int64(len(content))
+			}
 			seen[displayName] = true
 			entries = append(entries, Entry{
 				Name:    displayName,
 				IsDir:   false,
 				Mode:    0644,
+				Size:    size,
 				ModTime: modTime,
 			})
 		}
