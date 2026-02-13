@@ -99,11 +99,11 @@ func TestGetPlainTextFilename(t *testing.T) {
 			expected: "42.txt",
 		},
 		{
-			name:     "sanitizes slashes",
+			name:     "preserves slashes",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "path/to/file", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "path-to-file.txt",
+			expected: "path/to/file.txt",
 		},
 	}
 

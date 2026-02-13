@@ -627,6 +627,511 @@ func TestMount_BuildMarkdownViaNFS(t *testing.T) {
 }
 
 // ============================================================================
+// Tests for hierarchical directories in synthesized apps (6.3)
+// ============================================================================
+
+// TestSynth_HierarchicalMkdir tests creating directories in a hierarchical synth view.
+func TestSynth_HierarchicalMkdir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build a markdown app (now includes filetype column)
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed: %v", fsErr)
+
+	// Create a directory
+	fsErr = ops.Mkdir(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "Mkdir should succeed: %v", fsErr)
+
+	// Verify it appears in listing
+	entries, fsErr := ops.ReadDir(ctx, "/memory")
+	require.Nil(t, fsErr, "ReadDir should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "projects", "root should show projects directory")
+
+	// Verify it's a directory
+	entry, fsErr := ops.Stat(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "Stat should succeed")
+	assert.True(t, entry.IsDir, "projects should be a directory")
+}
+
+// TestSynth_HierarchicalMkdirNested tests creating nested directories with auto-created parents.
+func TestSynth_HierarchicalMkdirNested(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a nested directory — should auto-create parent
+	fsErr = ops.Mkdir(ctx, "/memory/projects/web")
+	require.Nil(t, fsErr, "Mkdir nested should succeed: %v", fsErr)
+
+	// Verify parent was auto-created
+	entry, fsErr := ops.Stat(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "Stat parent should succeed")
+	assert.True(t, entry.IsDir, "parent should be a directory")
+
+	// Verify nested dir exists
+	entry, fsErr = ops.Stat(ctx, "/memory/projects/web")
+	require.Nil(t, fsErr, "Stat nested should succeed")
+	assert.True(t, entry.IsDir, "nested should be a directory")
+
+	// ReadDir on parent should show child
+	entries, fsErr := ops.ReadDir(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "ReadDir parent should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "web", "projects/ should contain web")
+}
+
+// TestSynth_HierarchicalWriteFile tests writing files in subdirectories with auto-created parents.
+func TestSynth_HierarchicalWriteFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Write a file in a subdirectory — should auto-create parent dirs
+	content := "---\ntitle: Todo\nauthor: alice\n---\n\n# Todo\n\nFix bugs.\n"
+	fsErr = ops.WriteFile(ctx, "/memory/projects/web/todo.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFile nested should succeed: %v", fsErr)
+
+	// Verify parent directories were auto-created
+	entry, fsErr := ops.Stat(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "parent dir should exist")
+	assert.True(t, entry.IsDir)
+
+	entry, fsErr = ops.Stat(ctx, "/memory/projects/web")
+	require.Nil(t, fsErr, "parent dir should exist")
+	assert.True(t, entry.IsDir)
+
+	// Verify the file exists and is readable
+	readContent, fsErr := ops.ReadFile(ctx, "/memory/projects/web/todo.md")
+	require.Nil(t, fsErr, "ReadFile should succeed")
+	assert.Contains(t, string(readContent.Data), "title: Todo")
+	assert.Contains(t, string(readContent.Data), "# Todo")
+}
+
+// TestSynth_HierarchicalReadDir tests listing directories at different levels.
+func TestSynth_HierarchicalReadDir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create structure: projects/web/todo.md, projects/web/notes.md, readme.md
+	fsErr = ops.Mkdir(ctx, "/memory/projects/web")
+	require.Nil(t, fsErr, "Mkdir should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/memory/projects/web/todo.md",
+		[]byte("---\ntitle: Todo\n---\n\nContent.\n"))
+	require.Nil(t, fsErr, "WriteFile todo should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/memory/projects/web/notes.md",
+		[]byte("---\ntitle: Notes\n---\n\nNotes content.\n"))
+	require.Nil(t, fsErr, "WriteFile notes should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/memory/readme.md",
+		[]byte("---\ntitle: Readme\n---\n\nWelcome.\n"))
+	require.Nil(t, fsErr, "WriteFile readme should succeed")
+
+	// Root level: should show "projects" dir and "readme.md" file
+	entries, fsErr := ops.ReadDir(ctx, "/memory")
+	require.Nil(t, fsErr, "ReadDir root should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "projects")
+	assert.Contains(t, names, "readme.md")
+	assert.NotContains(t, names, "todo.md", "nested files should not appear at root")
+
+	// projects/ should show "web" dir
+	entries, fsErr = ops.ReadDir(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "ReadDir projects should succeed")
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, "web")
+
+	// projects/web/ should show todo.md and notes.md
+	entries, fsErr = ops.ReadDir(ctx, "/memory/projects/web")
+	require.Nil(t, fsErr, "ReadDir projects/web should succeed")
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, "todo.md")
+	assert.Contains(t, names, "notes.md")
+}
+
+// TestSynth_HierarchicalStatFile tests stat on nested files and directories.
+func TestSynth_HierarchicalStatFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Write a nested file
+	content := "---\ntitle: Deep File\n---\n\nDeep content.\n"
+	fsErr = ops.WriteFile(ctx, "/memory/deep/nested/file.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFile should succeed")
+
+	// Stat the file
+	entry, fsErr := ops.Stat(ctx, "/memory/deep/nested/file.md")
+	require.Nil(t, fsErr, "Stat file should succeed")
+	assert.False(t, entry.IsDir, "should be a file")
+	assert.True(t, entry.Size > 0, "file should have content")
+
+	// Stat the directory
+	entry, fsErr = ops.Stat(ctx, "/memory/deep/nested")
+	require.Nil(t, fsErr, "Stat dir should succeed")
+	assert.True(t, entry.IsDir, "should be a directory")
+
+	// Stat the parent directory
+	entry, fsErr = ops.Stat(ctx, "/memory/deep")
+	require.Nil(t, fsErr, "Stat parent dir should succeed")
+	assert.True(t, entry.IsDir, "should be a directory")
+}
+
+// TestSynth_HierarchicalDeleteFile tests deleting a file in a subdirectory.
+func TestSynth_HierarchicalDeleteFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a file in a directory
+	fsErr = ops.WriteFile(ctx, "/memory/docs/readme.md",
+		[]byte("---\ntitle: Readme\n---\n\nContent.\n"))
+	require.Nil(t, fsErr, "WriteFile should succeed")
+
+	// Delete the file
+	fsErr = ops.Delete(ctx, "/memory/docs/readme.md")
+	require.Nil(t, fsErr, "Delete should succeed")
+
+	// File should be gone
+	_, fsErr = ops.ReadFile(ctx, "/memory/docs/readme.md")
+	require.NotNil(t, fsErr, "ReadFile should fail after delete")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+
+	// Parent directory should still exist
+	entry, fsErr := ops.Stat(ctx, "/memory/docs")
+	require.Nil(t, fsErr, "parent dir should still exist")
+	assert.True(t, entry.IsDir)
+}
+
+// TestSynth_HierarchicalRmdir tests deleting an empty directory.
+func TestSynth_HierarchicalRmdir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create an empty directory
+	fsErr = ops.Mkdir(ctx, "/memory/empty-dir")
+	require.Nil(t, fsErr, "Mkdir should succeed")
+
+	// Delete the empty directory
+	fsErr = ops.Delete(ctx, "/memory/empty-dir")
+	require.Nil(t, fsErr, "Delete empty dir should succeed")
+
+	// Directory should be gone
+	_, fsErr = ops.Stat(ctx, "/memory/empty-dir")
+	require.NotNil(t, fsErr, "Stat should fail after delete")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+}
+
+// TestSynth_HierarchicalRmdirNonEmpty tests that deleting a non-empty directory fails.
+func TestSynth_HierarchicalRmdirNonEmpty(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a directory with a file in it
+	fsErr = ops.WriteFile(ctx, "/memory/docs/readme.md",
+		[]byte("---\ntitle: Readme\n---\n\nContent.\n"))
+	require.Nil(t, fsErr, "WriteFile should succeed")
+
+	// Attempt to delete non-empty directory should fail
+	fsErr = ops.Delete(ctx, "/memory/docs")
+	require.NotNil(t, fsErr, "Delete non-empty dir should fail")
+	assert.Equal(t, fs.ErrNotEmpty, fsErr.Code, "should be ENOTEMPTY error")
+}
+
+// TestSynth_HierarchicalRenameFile tests renaming a file within a hierarchical view.
+func TestSynth_HierarchicalRenameFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a file in a directory
+	fsErr = ops.WriteFile(ctx, "/memory/docs/old-name.md",
+		[]byte("---\ntitle: My Doc\n---\n\nContent here.\n"))
+	require.Nil(t, fsErr, "WriteFile should succeed")
+
+	// Rename the file
+	fsErr = ops.Rename(ctx, "/memory/docs/old-name.md", "/memory/docs/new-name.md")
+	require.Nil(t, fsErr, "Rename should succeed")
+
+	// Old path should not exist
+	_, fsErr = ops.ReadFile(ctx, "/memory/docs/old-name.md")
+	require.NotNil(t, fsErr, "old path should not exist")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+
+	// New path should be readable
+	content, fsErr := ops.ReadFile(ctx, "/memory/docs/new-name.md")
+	require.Nil(t, fsErr, "new path should be readable")
+	assert.Contains(t, string(content.Data), "title: My Doc")
+}
+
+// TestSynth_HierarchicalRenameDir tests renaming a directory (atomic prefix swap).
+func TestSynth_HierarchicalRenameDir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a directory with files
+	fsErr = ops.WriteFile(ctx, "/memory/old-dir/file1.md",
+		[]byte("---\ntitle: File One\n---\n\nContent 1.\n"))
+	require.Nil(t, fsErr, "WriteFile file1 should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/memory/old-dir/file2.md",
+		[]byte("---\ntitle: File Two\n---\n\nContent 2.\n"))
+	require.Nil(t, fsErr, "WriteFile file2 should succeed")
+
+	// Rename the directory
+	fsErr = ops.Rename(ctx, "/memory/old-dir", "/memory/new-dir")
+	require.Nil(t, fsErr, "Rename dir should succeed: %v", fsErr)
+
+	// Old path should not exist
+	_, fsErr = ops.Stat(ctx, "/memory/old-dir")
+	require.NotNil(t, fsErr, "old dir should not exist")
+
+	// New path should be a directory
+	entry, fsErr := ops.Stat(ctx, "/memory/new-dir")
+	require.Nil(t, fsErr, "new dir should exist")
+	assert.True(t, entry.IsDir)
+
+	// Files should be accessible under new path
+	content, fsErr := ops.ReadFile(ctx, "/memory/new-dir/file1.md")
+	require.Nil(t, fsErr, "file1 should be readable under new dir")
+	assert.Contains(t, string(content.Data), "title: File One")
+
+	content, fsErr = ops.ReadFile(ctx, "/memory/new-dir/file2.md")
+	require.Nil(t, fsErr, "file2 should be readable under new dir")
+	assert.Contains(t, string(content.Data), "title: File Two")
+}
+
+// TestSynth_DeeplyNested tests 4+ level deep paths.
+func TestSynth_DeeplyNested(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Write a deeply nested file — auto-creates all parent directories
+	content := "---\ntitle: Deep File\n---\n\nVery deep content.\n"
+	fsErr = ops.WriteFile(ctx, "/memory/a/b/c/d/deep.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFile deeply nested should succeed: %v", fsErr)
+
+	// Verify all intermediate directories exist
+	for _, dir := range []string{"/memory/a", "/memory/a/b", "/memory/a/b/c", "/memory/a/b/c/d"} {
+		entry, fsErr := ops.Stat(ctx, dir)
+		require.Nil(t, fsErr, "Stat %s should succeed", dir)
+		assert.True(t, entry.IsDir, "%s should be a directory", dir)
+	}
+
+	// Verify the file is readable
+	readContent, fsErr := ops.ReadFile(ctx, "/memory/a/b/c/d/deep.md")
+	require.Nil(t, fsErr, "ReadFile deeply nested should succeed")
+	assert.Contains(t, string(readContent.Data), "title: Deep File")
+
+	// ReadDir at each level should show correct children
+	entries, fsErr := ops.ReadDir(ctx, "/memory/a")
+	require.Nil(t, fsErr)
+	assert.Equal(t, 1, len(entries), "a/ should have 1 entry")
+	assert.Equal(t, "b", entries[0].Name)
+
+	entries, fsErr = ops.ReadDir(ctx, "/memory/a/b/c/d")
+	require.Nil(t, fsErr)
+	assert.Equal(t, 1, len(entries), "d/ should have 1 entry")
+	assert.Equal(t, "deep.md", entries[0].Name)
+}
+
+// TestSynth_MixedFlatAndHierarchical tests that root level has both flat files and directories.
+func TestSynth_MixedFlatAndHierarchical(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a flat file
+	fsErr = ops.WriteFile(ctx, "/memory/flat-file.md",
+		[]byte("---\ntitle: Flat\n---\n\nFlat content.\n"))
+	require.Nil(t, fsErr, "WriteFile flat should succeed")
+
+	// Create a nested file (creates directory)
+	fsErr = ops.WriteFile(ctx, "/memory/subdir/nested.md",
+		[]byte("---\ntitle: Nested\n---\n\nNested content.\n"))
+	require.Nil(t, fsErr, "WriteFile nested should succeed")
+
+	// Root should show both flat file and directory
+	entries, fsErr := ops.ReadDir(ctx, "/memory")
+	require.Nil(t, fsErr, "ReadDir should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "flat-file.md", "should have flat file")
+	assert.Contains(t, names, "subdir", "should have subdir directory")
+
+	// Verify types
+	for _, e := range entries {
+		if e.Name == "flat-file.md" {
+			assert.False(t, e.IsDir, "flat-file.md should be a file")
+		}
+		if e.Name == "subdir" {
+			assert.True(t, e.IsDir, "subdir should be a directory")
+		}
+	}
+}
+
+// TestSynth_HierarchicalPlainText tests hierarchy with plain text format.
+func TestSynth_HierarchicalPlainText(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build a plain text app
+	fsErr := ops.WriteFile(ctx, "/.build/notes", []byte("txt\n"))
+	require.Nil(t, fsErr, "build should succeed: %v", fsErr)
+
+	// Create a nested file
+	fsErr = ops.WriteFile(ctx, "/notes/work/meeting.txt", []byte("Discuss quarterly goals.\n"))
+	require.Nil(t, fsErr, "WriteFile nested txt should succeed: %v", fsErr)
+
+	// Verify parent directory was auto-created
+	entry, fsErr := ops.Stat(ctx, "/notes/work")
+	require.Nil(t, fsErr, "Stat parent dir should succeed")
+	assert.True(t, entry.IsDir)
+
+	// Verify the file is readable
+	content, fsErr := ops.ReadFile(ctx, "/notes/work/meeting.txt")
+	require.Nil(t, fsErr, "ReadFile should succeed")
+	assert.Equal(t, "Discuss quarterly goals.\n", string(content.Data))
+
+	// ReadDir should show the file
+	entries, fsErr := ops.ReadDir(ctx, "/notes/work")
+	require.Nil(t, fsErr, "ReadDir should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "meeting.txt")
+}
+
+// TestSynth_MkdirAlreadyExists tests that creating an existing directory fails.
+func TestSynth_MkdirAlreadyExists(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Create a directory
+	fsErr = ops.Mkdir(ctx, "/memory/projects")
+	require.Nil(t, fsErr, "first Mkdir should succeed")
+
+	// Creating the same directory again should fail
+	fsErr = ops.Mkdir(ctx, "/memory/projects")
+	require.NotNil(t, fsErr, "second Mkdir should fail")
+	assert.Equal(t, fs.ErrExists, fsErr.Code, "should be EEXIST error")
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 

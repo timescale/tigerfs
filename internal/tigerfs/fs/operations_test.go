@@ -1502,6 +1502,20 @@ func (m *mockDBClient) SetPipelineResults(rows []string, dataRows [][]interface{
 	m.pipelineRows = dataRows
 }
 
+// HierarchyWriter mock methods
+
+func (m *mockDBClient) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
+	return 0, nil
+}
+
+func (m *mockDBClient) HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockDBClient) InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error {
+	return nil
+}
+
 // ============================================================================
 // Tests for bug fixes - prevent regressions
 // ============================================================================

@@ -1080,3 +1080,64 @@ func TestParsePathFormat(t *testing.T) {
 		})
 	}
 }
+
+// TestSynth_ParsePathRawSubPath verifies that RawSubPath captures all segments after the table.
+func TestSynth_ParsePathRawSubPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		wantSub  []string
+		wantType PathType
+	}{
+		{
+			name:     "single segment (PathRow)",
+			path:     "/memory/hello.md",
+			wantSub:  []string{"hello.md"},
+			wantType: PathRow,
+		},
+		{
+			name:     "two segments (PathColumn)",
+			path:     "/memory/projects/web",
+			wantSub:  []string{"projects", "web"},
+			wantType: PathColumn,
+		},
+		{
+			name:     "three segments (PathColumn)",
+			path:     "/memory/projects/web/todo.md",
+			wantSub:  []string{"projects", "web", "todo.md"},
+			wantType: PathColumn,
+		},
+		{
+			name:     "four segments (PathColumn)",
+			path:     "/memory/a/b/c/d.md",
+			wantSub:  []string{"a", "b", "c", "d.md"},
+			wantType: PathColumn,
+		},
+		{
+			name:     "table only (no segments)",
+			path:     "/memory",
+			wantSub:  nil,
+			wantType: PathTable,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if len(result.RawSubPath) != len(tt.wantSub) {
+				t.Fatalf("RawSubPath len = %d, want %d: got %v", len(result.RawSubPath), len(tt.wantSub), result.RawSubPath)
+			}
+			for i, want := range tt.wantSub {
+				if result.RawSubPath[i] != want {
+					t.Errorf("RawSubPath[%d] = %q, want %q", i, result.RawSubPath[i], want)
+				}
+			}
+		})
+	}
+}
