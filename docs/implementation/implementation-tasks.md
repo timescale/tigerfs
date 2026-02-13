@@ -5505,6 +5505,315 @@ go test ./test/integration/... -v -run TestSynthesizedTasks
 
 ---
 
+## 6.3: Directory Hierarchies
+
+### Overview
+
+Add subdirectory support within synthesized views using filename-based hierarchy with a `filetype` column. See ADR-011 for full design rationale.
+
+**Key idea:** Slashes in the filename column create directory structure. Every directory has an explicit row with `filetype='directory'`. A `resolveSynthHierarchy` method converts multi-segment paths from `PathColumn` to `PathRow`, so all existing synth hooks handle the rest.
+
+---
+
+### Task 6.3.1: Add RawSubPath to ParsedPath
+
+**Objective:** Capture all path segments after the table name for hierarchy reconstruction.
+
+**Steps:**
+1. Add `RawSubPath []string` field to `ParsedPath` struct in `internal/tigerfs/fs/path.go`
+2. In `processRowOrColumn`, set `result.RawSubPath = append([]string{}, remaining...)` before existing PK/Column logic
+
+**Files Modified:**
+- `internal/tigerfs/fs/path.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestParsePath
+```
+
+---
+
+### Task 6.3.2: Detect filetype Column in Synth Column Roles
+
+**Objective:** Detect the `filetype` column and flag views that support hierarchy.
+
+**Steps:**
+1. Add `Filetype string` to `ColumnRoles` in `internal/tigerfs/fs/synth/columns.go`
+2. Detect `"filetype"` column in `DetectColumnRoles`
+3. Add `SupportsHierarchy bool` to `ViewInfo` in `internal/tigerfs/fs/synth/cache.go`
+4. Set `SupportsHierarchy = true` when `Filetype` column exists
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth/columns.go`
+- `internal/tigerfs/fs/synth/cache.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/synth/... -run TestColumnRoles
+```
+
+---
+
+### Task 6.3.3: Allow Slashes in sanitizeFilename
+
+**Objective:** Allow `/` characters in synth filenames for hierarchy paths.
+
+**Steps:**
+1. Remove `/` from the character replacement in `sanitizeFilename` in `internal/tigerfs/fs/synth/markdown.go`
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth/markdown.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/synth/... -run TestSanitize
+```
+
+---
+
+### Task 6.3.4: Update .build/ SQL Generation for filetype Column
+
+**Objective:** Generated CREATE TABLE includes `filetype` column and compound UNIQUE constraint.
+
+**Steps:**
+1. Add `filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory'))` to generated CREATE TABLE in `internal/tigerfs/fs/build.go`
+2. Change `UNIQUE(filename)` to `UNIQUE(filename, filetype)`
+
+**Files Modified:**
+- `internal/tigerfs/fs/build.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestBuild
+```
+
+---
+
+### Task 6.3.5: Implement resolveSynthHierarchy + Core Dispatch Hooks
+
+**Objective:** Add the core path rewriting method and minimal dispatch hooks in operations/write.
+
+**Steps:**
+1. Add `resolveSynthHierarchy` method to `internal/tigerfs/fs/synth_ops.go` — converts `PathColumn` to `PathRow` with full subpath as `PrimaryKey` for views with `SupportsHierarchy`
+2. Add one-liner `resolveSynthHierarchy` call after `parsePath` in: ReadDir, Stat, ReadFile, WriteFile, Delete, Mkdir, Rename (×2) in `operations.go` and `write.go`
+3. Add dispatch hook in `readDirRow` for hierarchical synth views
+4. Add dispatch hook in `Mkdir` PathRow case for hierarchical synth views
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go` (hierarchy logic)
+- `internal/tigerfs/fs/operations.go` (one-liner hooks)
+- `internal/tigerfs/fs/write.go` (one-liner hooks)
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/...
+```
+
+---
+
+### Task 6.3.6: Implement readDirSynthHierarchical
+
+**Objective:** List directory contents for hierarchical synth views.
+
+**Steps:**
+1. Add `readDirSynthHierarchical` method to `synth_ops.go` — queries rows with filename prefix, filters to immediate children, returns entries with correct types (directory vs file with synth extension)
+2. Extend `readDirSynthView` to show directories at root level when hierarchy is supported
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.7: Extend statSynthFile for Directories
+
+**Objective:** Return correct stat info for directory and file entries in hierarchical views.
+
+**Steps:**
+1. When `SupportsHierarchy`: check for directory row (`filetype='directory'`) first, then file row
+2. Directory takes priority over file when same base name exists
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.8: Extend writeSynthFile with Auto-Create Parent Dirs
+
+**Objective:** Automatically create parent directory rows when writing nested files.
+
+**Steps:**
+1. When writing a nested path (e.g., `projects/web/todo`), INSERT directory rows for all ancestors with `ON CONFLICT DO NOTHING`
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.9: Implement mkdirSynth
+
+**Objective:** Create directory rows via `mkdir`.
+
+**Steps:**
+1. INSERT directory row with `filetype='directory'`
+2. Auto-create parent directories
+3. Return `ErrExists` (EEXIST) if directory already exists
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.10: Implement rmdirSynth (via deleteSynthFile)
+
+**Objective:** Handle directory deletion with non-empty check.
+
+**Steps:**
+1. When deleting a path matching a directory row, check for children (`filename LIKE $1 || '/%'`)
+2. If children exist → return `ENOTEMPTY`
+3. If empty → DELETE the directory row
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.11: Extend renameSynthFile for Directory Rename
+
+**Objective:** Atomic directory rename that updates all descendants.
+
+**Steps:**
+1. Check if old path is a directory → directory rename
+2. Single atomic SQL: `UPDATE SET filename = newPrefix || substr(filename, length(oldPrefix) + 1) WHERE filename = old OR filename LIKE old || '/%'`
+
+**Files Modified:**
+- `internal/tigerfs/fs/synth_ops.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.12: Add Generic DB Helper Methods
+
+**Objective:** Add reusable database methods for hierarchy operations.
+
+**Steps:**
+1. `RenameByPrefix(ctx, schema, table, col, oldPrefix, newPrefix)` — batch UPDATE
+2. `HasChildrenWithPrefix(ctx, schema, table, col, prefix)` — EXISTS check
+3. `InsertIfNotExists(ctx, schema, table, cols, vals)` — ON CONFLICT DO NOTHING
+
+**Files Modified:**
+- `internal/tigerfs/db/query.go`
+- `internal/tigerfs/db/interfaces.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/db/...
+```
+
+---
+
+### Task 6.3.13: Unit Tests for Hierarchy
+
+**Objective:** Unit tests for all hierarchy logic.
+
+**Tests:**
+- `TestSynth_ParsePathRawSubPath` — RawSubPath capture at 1, 2, 3, 4+ depths
+- `TestSynth_ResolveSynthHierarchy` — PathColumn→PathRow transformation
+- `TestSynth_ReadDirHierarchical_Root` — root listing with dirs + flat files
+- `TestSynth_ReadDirHierarchical_Subdir` — subdirectory listings
+- `TestSynth_StatDirectory` — directory stat returns IsDir=true
+- `TestSynth_ReadFileHierarchical` — reading nested file content
+- `TestSynth_NonHierarchicalViewUnchanged` — flat views unaffected
+
+**Files Modified:**
+- `internal/tigerfs/fs/path_test.go`
+- `internal/tigerfs/fs/synth_ops_test.go`
+
+**Verification:**
+```bash
+go test ./internal/tigerfs/fs/... -run TestSynth
+```
+
+---
+
+### Task 6.3.14: Integration Tests for Hierarchy
+
+**Objective:** End-to-end tests for hierarchy operations via mounted filesystem.
+
+**Tests:**
+- `TestSynth_HierarchicalMkdir` — mkdir creates directory row
+- `TestSynth_HierarchicalMkdirNested` — mkdir creates intermediate dirs
+- `TestSynth_HierarchicalWriteFile` — write creates file + parent dirs
+- `TestSynth_HierarchicalReadDir` — ls shows correct children at each level
+- `TestSynth_HierarchicalStatFile` — stat nested file
+- `TestSynth_HierarchicalDeleteFile` — rm file, parent persists
+- `TestSynth_HierarchicalRmdir` — rmdir empty dir
+- `TestSynth_HierarchicalRmdirNonEmpty` — rmdir non-empty fails ENOTEMPTY
+- `TestSynth_HierarchicalRenameFile` — mv file between subdirs
+- `TestSynth_HierarchicalRenameDir` — mv dir renames all descendants
+- `TestSynth_DeeplyNested` — 4+ level deep paths
+- `TestSynth_MixedFlatAndHierarchical` — root has both flat files and dirs
+- `TestSynth_HierarchicalPlainText` — hierarchy works for plaintext
+- `TestSynth_MkdirAlreadyExists` — mkdir on existing dir fails EEXIST
+
+**Files Modified:**
+- `test/integration/synthesized_test.go`
+
+**Verification:**
+```bash
+go test -v -timeout 300s ./test/integration/... -run "TestSynth_Hierarchical|TestSynth_Deeply|TestSynth_Mixed|TestSynth_MkdirAlready"
+```
+
+---
+
+### Task 6.3.15: Update ADR-011
+
+**Objective:** Update ADR-011 from "Deferred" to "Accepted" with implementation details.
+
+**Steps:**
+1. Change status to "Accepted"
+2. Update Decision section with Approach B + filetype column details
+3. Document database model, key design points, consequences
+
+**Files Modified:**
+- `docs/adr/011-directory-hierarchies.md`
+
+**Verification:** Review document.
+
+**Completion Criteria:**
+- ADR-011 reflects the chosen approach and implementation
+- All Phase 6.3 tasks documented in implementation-tasks-checklist.md
+
+---
+
 ## Phase 7: DDL Operations via Filesystem
 
 ### Overview
