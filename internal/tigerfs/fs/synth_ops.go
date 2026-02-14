@@ -633,13 +633,21 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 			return fsErr
 		}
 		if exists {
-			// Directory rename — atomic prefix swap
-			_, err := o.db.RenameByPrefix(ctx, schema, table, info.Roles.Filename, oldDirPath, newDirPath)
+			// Directory rename — atomic prefix swap.
+			// RenameByPrefix WHERE matches old value, so concurrent renames
+			// are safe: the loser gets rowsAffected=0.
+			rowsAffected, err := o.db.RenameByPrefix(ctx, schema, table, info.Roles.Filename, oldDirPath, newDirPath)
 			if err != nil {
 				return &FSError{
 					Code:    ErrIO,
 					Message: "failed to rename directory",
 					Cause:   err,
+				}
+			}
+			if rowsAffected == 0 {
+				return &FSError{
+					Code:    ErrNotExist,
+					Message: "directory already moved by another process",
 				}
 			}
 			return nil
@@ -651,21 +659,61 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 	oldFilename = normalizeSynthFilename(oldFilename, info)
 	newFilename = normalizeSynthFilename(newFilename, info)
 
-	// Look up the DB primary key for the old filename
-	pkValue, fsErr := o.getSynthRowPK(ctx, schema, table, info, oldFilename)
+	// Look up the full DB row to get the actual raw filename value.
+	// We need the real DB value for the CAS WHERE clause because the
+	// synthesized filename may differ (e.g., DB stores "hello.md" but
+	// stripping the extension would give "hello", not "hello.md").
+	columns, row, fsErr := o.getSynthRow(ctx, schema, table, info, oldFilename)
 	if fsErr != nil {
 		return fsErr
 	}
 
-	// Strip extension from newFilename to get raw value for the filename column
-	rawNewFilename := newFilename
-	if ext := info.Format.Extension(); ext != "" && strings.HasSuffix(rawNewFilename, ext) {
-		rawNewFilename = strings.TrimSuffix(rawNewFilename, ext)
+	// Extract PK and raw filename from the actual DB row
+	var pkValue, rawOldFilename string
+	for i, col := range columns {
+		switch col {
+		case info.Roles.PrimaryKey:
+			pkValue = synth.ValueToString(row[i])
+		case info.Roles.Filename:
+			rawOldFilename = synth.ValueToString(row[i])
+		}
+	}
+	if pkValue == "" {
+		return &FSError{
+			Code:    ErrIO,
+			Message: fmt.Sprintf("primary key column %q not found in view", info.Roles.PrimaryKey),
+		}
 	}
 
-	// Update the filename column
-	err := o.db.UpdateColumn(ctx, schema, table, info.Roles.PrimaryKey, pkValue, info.Roles.Filename, rawNewFilename)
+	// Compute new raw filename preserving the DB's extension convention.
+	// If the DB stores "hello-world.md" (with extension), the new name
+	// should also include the extension. If the DB stores "hello-world"
+	// (without), strip the extension from the new synthesized name.
+	rawNewFilename := newFilename
+	if ext := info.Format.Extension(); ext != "" {
+		if strings.HasSuffix(rawOldFilename, ext) {
+			// DB includes extension — ensure new name has it too
+			if !strings.HasSuffix(rawNewFilename, ext) {
+				rawNewFilename += ext
+			}
+		} else {
+			// DB omits extension — strip it from new name
+			rawNewFilename = strings.TrimSuffix(rawNewFilename, ext)
+		}
+	}
+
+	// Atomic rename: UPDATE SET filename = new WHERE pk = X AND filename = old.
+	// If another process already renamed this file, the WHERE won't match
+	// and we get "row not found" — exactly one concurrent rename wins.
+	err := o.db.UpdateColumnCAS(ctx, schema, table, info.Roles.PrimaryKey, pkValue, info.Roles.Filename, rawNewFilename, info.Roles.Filename, rawOldFilename)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return &FSError{
+				Code:    ErrNotExist,
+				Message: "file already moved by another process",
+				Cause:   err,
+			}
+		}
 		return &FSError{
 			Code:    ErrIO,
 			Message: "failed to rename synth file",

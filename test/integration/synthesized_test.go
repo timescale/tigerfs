@@ -505,6 +505,59 @@ This is my first post.
 	assert.NotContains(t, names, "hello-world.md", "should NOT list hello-world.md")
 }
 
+// TestSynth_RenameFilenameWithExtension tests renaming when the DB stores
+// filenames with the .md extension (like the blog demo app does).
+// This is a regression test: the CAS WHERE clause must use the actual DB
+// value, not a stripped version.
+func TestSynth_RenameFilenameWithExtension(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build app
+	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Insert data WITH .md extension in filename — matching real blog app convention
+	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+		('hello-world.md', 'Hello World', 'alice', '# Hello
+
+This is a post.
+')`
+	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
+
+	// Verify file exists (GetMarkdownFilename sees "hello-world.md",
+	// recognizes it already has .md, returns "hello-world.md")
+	content, fsErr := ops.ReadFile(ctx, "/posts/hello-world.md")
+	require.Nil(t, fsErr, "ReadFile should succeed")
+	assert.Contains(t, string(content.Data), "title: Hello World")
+
+	// Rename — CAS must use "hello-world.md" (the DB value), not "hello-world"
+	fsErr = ops.Rename(ctx, "/posts/hello-world.md", "/posts/renamed.md")
+	require.Nil(t, fsErr, "Rename should succeed when DB stores filename with .md")
+
+	// Old path gone
+	_, fsErr = ops.ReadFile(ctx, "/posts/hello-world.md")
+	require.NotNil(t, fsErr, "old path should not exist")
+
+	// New path readable
+	content, fsErr = ops.ReadFile(ctx, "/posts/renamed.md")
+	require.Nil(t, fsErr, "ReadFile at new path should succeed")
+	assert.Contains(t, string(content.Data), "title: Hello World")
+
+	// Directory listing
+	entries, fsErr := ops.ReadDir(ctx, "/posts")
+	require.Nil(t, fsErr)
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "renamed.md")
+	assert.NotContains(t, names, "hello-world.md")
+}
+
 // TestSynth_RenamePlainTextFile tests renaming a synthesized plain text file.
 func TestSynth_RenamePlainTextFile(t *testing.T) {
 	result := GetTestDBEmpty(t)

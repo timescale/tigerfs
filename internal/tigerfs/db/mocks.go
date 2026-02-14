@@ -153,10 +153,11 @@ func (m *MockRowReader) ListAllRows(ctx context.Context, schema, table, pkColumn
 
 // MockRowWriter is a mock implementation of RowWriter for testing.
 type MockRowWriter struct {
-	InsertRowFunc    func(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error)
-	UpdateRowFunc    func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error
-	UpdateColumnFunc func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error
-	DeleteRowFunc    func(ctx context.Context, schema, table, pkColumn, pkValue string) error
+	InsertRowFunc       func(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error)
+	UpdateRowFunc       func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error
+	UpdateColumnFunc    func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error
+	UpdateColumnCASFunc func(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error
+	DeleteRowFunc       func(ctx context.Context, schema, table, pkColumn, pkValue string) error
 }
 
 var _ RowWriter = (*MockRowWriter)(nil)
@@ -178,6 +179,13 @@ func (m *MockRowWriter) UpdateRow(ctx context.Context, schema, table, pkColumn, 
 func (m *MockRowWriter) UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
 	if m.UpdateColumnFunc != nil {
 		return m.UpdateColumnFunc(ctx, schema, table, pkColumn, pkValue, columnName, newValue)
+	}
+	return nil
+}
+
+func (m *MockRowWriter) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error {
+	if m.UpdateColumnCASFunc != nil {
+		return m.UpdateColumnCASFunc(ctx, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue)
 	}
 	return nil
 }
