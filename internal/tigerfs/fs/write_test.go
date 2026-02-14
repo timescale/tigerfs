@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -574,6 +575,161 @@ func TestReadDDLFile_TestLogBeforeTest(t *testing.T) {
 	_, fsErr := ops.ReadFile(context.Background(), "/.create/test_orders/test.log")
 	require.NotNil(t, fsErr)
 	assert.Equal(t, ErrNotExist, fsErr.Code)
+}
+
+// TestSynth_Rename_AtomicCAS tests that synth file rename uses compare-and-swap
+// so that concurrent renames of the same file have exactly one winner.
+// The loser's UpdateColumnCAS should return "row not found" → ErrNotExist.
+func TestSynth_Rename_AtomicCAS(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"notes"},
+		},
+		views: map[string][]string{
+			"public": {"notes"},
+		},
+		viewUpdatable: map[string]bool{
+			"public.notes": true,
+		},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "integer"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.notes": {column: "id", columns: []string{"id"}},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "title", "body"},
+				rows: [][]interface{}{
+					{1, "task1", "content"},
+				},
+			},
+		},
+	}
+
+	// Simulate the second concurrent rename: UpdateColumnCAS returns "row not found"
+	// because the first rename already changed the filename.
+	mockDB.updateColumnCASError = fmt.Errorf("row not found")
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Flat synth rename: task1.md → task2.md
+	err := ops.Rename(context.Background(), "/notes/task1.md", "/notes/task2.md")
+
+	require.NotNil(t, err, "expected error but got nil")
+	assert.Equal(t, ErrNotExist, err.Code)
+	assert.True(t, mockDB.updateColumnCASCalled, "should use UpdateColumnCAS, not UpdateColumn")
+}
+
+// TestSynth_Rename_DirAtomicCheck tests that synth directory rename returns
+// ErrNotExist when RenameByPrefix affects 0 rows (concurrent loser).
+func TestSynth_Rename_DirAtomicCheck(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"notes"},
+		},
+		views: map[string][]string{
+			"public": {"notes"},
+		},
+		viewUpdatable: map[string]bool{
+			"public.notes": true,
+		},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md:filetype"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "integer"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "filetype", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.notes": {column: "id", columns: []string{"id"}},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "title", "body", "filetype"},
+				rows: [][]interface{}{
+					{1, "todo", "", "directory"},
+					{2, "todo/task1", "content", "file"},
+				},
+			},
+		},
+		// RenameByPrefix returns 0 rows affected — another agent already moved it
+		renameByPrefixRows: 0,
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	err := ops.Rename(context.Background(), "/notes/todo", "/notes/doing")
+
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
+}
+
+// TestSynth_Rename_FilenameWithExtensionInDB tests that CAS rename works when
+// the DB stores filenames WITH the .md extension (e.g., "hello-world.md"),
+// as the blog demo app does. The WHERE clause must use the actual DB value,
+// not the extension-stripped version.
+func TestSynth_Rename_FilenameWithExtensionInDB(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"blog"},
+		},
+		views: map[string][]string{
+			"public": {"blog"},
+		},
+		viewUpdatable: map[string]bool{
+			"public.blog": true,
+		},
+		viewComments: map[string]map[string]string{
+			"public": {"blog": "tigerfs:md"},
+		},
+		columns: map[string][]mockColumn{
+			"public.blog": {
+				{name: "id", dataType: "uuid"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.blog": {column: "id", columns: []string{"id"}},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.blog": {
+				// DB stores "hello-world.md" WITH the .md extension
+				columns: []string{"id", "title", "body"},
+				rows: [][]interface{}{
+					{"abc-123", "hello-world.md", "content"},
+				},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	err := ops.Rename(context.Background(), "/blog/hello-world.md", "/blog/hello.md")
+
+	require.Nil(t, err, "rename should succeed")
+	assert.True(t, mockDB.updateColumnCASCalled)
+	// CAS WHERE value must be the actual DB value "hello-world.md", not "hello-world"
+	assert.Equal(t, "hello-world.md", mockDB.updateColumnCASWhereVal,
+		"CAS should use actual DB value (with .md), not stripped version")
+	// New value should also preserve the .md extension since the DB convention includes it
+	assert.Equal(t, "hello.md", mockDB.updateColumnCASNewVal,
+		"new filename should preserve DB extension convention")
 }
 
 // TestReadDDLFile_NoSession tests reading DDL file without session.

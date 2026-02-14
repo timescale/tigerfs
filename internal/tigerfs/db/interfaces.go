@@ -80,6 +80,13 @@ type RowWriter interface {
 	// UpdateColumn updates a single column value for a row by primary key.
 	UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error
 
+	// UpdateColumnCAS performs a compare-and-swap update on a column.
+	// Only updates if the current value of whereColumn matches whereValue.
+	// Returns "row not found" error if no row matches (either PK doesn't exist
+	// or the current value has already changed). This enables atomic rename:
+	// two concurrent renames of the same file will have exactly one succeed.
+	UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error
+
 	// DeleteRow deletes a row by primary key.
 	DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error
 }

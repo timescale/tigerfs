@@ -183,6 +183,40 @@ func (c *Client) UpdateColumn(ctx context.Context, schema, table, pkColumn, pkVa
 	return UpdateColumn(ctx, c.pool, schema, table, pkColumn, pkValue, columnName, newValue)
 }
 
+// UpdateColumnCAS performs a compare-and-swap update on a column.
+// Only updates the row if whereColumn still has whereValue (atomic check).
+// Returns "row not found" if no row matches, enabling safe concurrent renames.
+func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error {
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	logging.Debug("CAS updating column",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.String("pk_column", pkColumn),
+		zap.String("pk_value", pkValue),
+		zap.String("set_column", setColumn),
+		zap.String("where_column", whereColumn))
+
+	// UPDATE "schema"."table" SET "setColumn" = $1 WHERE "pkColumn" = $2 AND "whereColumn" = $3
+	query := fmt.Sprintf(
+		`UPDATE "%s"."%s" SET "%s" = $1 WHERE "%s" = $2 AND "%s" = $3`,
+		schema, table, setColumn, pkColumn, whereColumn,
+	)
+
+	cmdTag, err := c.pool.Exec(ctx, query, newValue, pkValue, whereValue)
+	if err != nil {
+		return fmt.Errorf("failed to update column: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		return fmt.Errorf("row not found")
+	}
+
+	return nil
+}
+
 // InsertRow inserts a new row with the given column values
 // Returns the inserted primary key value (useful for auto-generated PKs)
 func InsertRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, columns []string, values []interface{}) (string, error) {

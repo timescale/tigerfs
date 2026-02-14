@@ -1066,6 +1066,13 @@ type mockDBClient struct {
 	lastColumnValue    string
 	lastDeletePK       string
 
+	// Atomic rename tracking
+	updateColumnCASCalled   bool
+	updateColumnCASError    error
+	updateColumnCASWhereVal string
+	updateColumnCASNewVal   string
+	renameByPrefixRows      int64
+
 	// DDL execution tracking
 	execCalled      bool
 	execSuccess     bool
@@ -1444,6 +1451,16 @@ func (m *mockDBClient) UpdateColumn(ctx context.Context, schema, table, pkColumn
 	return nil
 }
 
+func (m *mockDBClient) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error {
+	m.updateColumnCASCalled = true
+	m.updateColumnCASWhereVal = whereValue
+	m.updateColumnCASNewVal = newValue
+	if m.updateColumnCASError != nil {
+		return m.updateColumnCASError
+	}
+	return nil
+}
+
 func (m *mockDBClient) DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error {
 	m.deleteCalled = true
 	m.lastDeletePK = pkValue
@@ -1505,7 +1522,7 @@ func (m *mockDBClient) SetPipelineResults(rows []string, dataRows [][]interface{
 // HierarchyWriter mock methods
 
 func (m *mockDBClient) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
-	return 0, nil
+	return m.renameByPrefixRows, nil
 }
 
 func (m *mockDBClient) HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error) {
