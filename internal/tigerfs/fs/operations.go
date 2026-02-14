@@ -144,6 +144,8 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirBuild(ctx, parsed)
 	case PathFormat:
 		return o.readDirFormat(ctx, parsed)
+	case PathHistory:
+		return o.readDirHistoryDispatch(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
@@ -1007,6 +1009,9 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 	case PathFormat:
 		return o.statFormat(ctx, parsed)
 
+	case PathHistory:
+		return o.statHistoryDispatch(ctx, parsed)
+
 	case PathDDL:
 		if parsed.DDLFile != "" {
 			return o.statDDLFile(ctx, parsed)
@@ -1486,6 +1491,8 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		// (which calls OpenFile→ReadFile during Apply's truncate path) succeeds
 		// instead of returning ErrInvalidPath that becomes EBADRPC.
 		return &FileContent{Data: []byte{}}, nil
+	case PathHistory:
+		return o.readHistoryFileDispatch(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,

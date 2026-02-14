@@ -60,8 +60,9 @@ const (
 // Synthesized app capabilities
 // Directories for creating and configuring synthesized apps.
 const (
-	DirBuild  = ".build"  // Create synthesized app (table + view) in one step
-	DirFormat = ".format" // Configure synthesized view format on existing table
+	DirBuild   = ".build"   // Create synthesized app (table + view) in one step
+	DirFormat  = ".format"  // Configure synthesized view format on existing table
+	DirHistory = ".history" // Read-only versioned history of synth app files
 )
 
 // Control files (DDL staging)

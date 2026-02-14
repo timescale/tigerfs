@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -78,8 +79,11 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 	for _, viewName := range views {
 		// Try comment-based detection first (most reliable)
 		var format synth.SynthFormat
+		var hasHistory bool
 		if comment, ok := comments[viewName]; ok && comment != "" {
-			format = synth.DetectFormatFromComment(comment)
+			features := synth.DetectFeaturesFromComment(comment)
+			format = features.Format
+			hasHistory = features.History
 		}
 
 		// Fall back to suffix + column detection
@@ -123,11 +127,21 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 			continue
 		}
 
+		// Fallback history detection: check if companion _<view>_history table exists
+		if !hasHistory {
+			historyTable := "_" + viewName + "_history"
+			exists, tblErr := o.db.TableExists(ctx, schema, historyTable)
+			if tblErr == nil && exists {
+				hasHistory = true
+			}
+		}
+
 		cache[viewName] = &synth.ViewInfo{
 			Format:            format,
 			Roles:             roles,
 			CachedMountTime:   mountTime,
 			SupportsHierarchy: roles.Filetype != "",
+			HasHistory:        hasHistory,
 		}
 	}
 
@@ -196,10 +210,19 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 
 	// For hierarchical views, filter to root-level entries only
 	if info.SupportsHierarchy {
-		return o.filterHierarchicalChildren(columns, rows, "", info), nil
+		children := o.filterHierarchicalChildren(columns, rows, "", info)
+		if info.HasHistory {
+			children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
+		}
+		return children, nil
 	}
 
-	entries := make([]Entry, 0, len(rows))
+	entries := make([]Entry, 0, len(rows)+1)
+
+	// Add .history/ if versioned history is enabled
+	if info.HasHistory {
+		entries = append(entries, Entry{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime})
+	}
 
 	for _, row := range rows {
 		var filename string

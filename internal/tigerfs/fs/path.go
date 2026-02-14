@@ -55,6 +55,10 @@ const (
 	// PathFormat is the /{table}/.format/ directory for configuring synthesized views.
 	// Writing a format name creates a synthesized view on the existing table.
 	PathFormat
+
+	// PathHistory is the /{table}/.history/ read-only directory for versioned history.
+	// Shows past versions of synth app files captured by PostgreSQL triggers.
+	PathHistory
 )
 
 // ParsedPath holds the result of parsing a filesystem path.
@@ -115,6 +119,18 @@ type ParsedPath struct {
 
 	// FormatTarget is the target format name when Type is PathFormat (e.g., "markdown").
 	FormatTarget string
+
+	// HistoryFile is the filename within .history/ (e.g., "foo.md" in .history/foo.md/).
+	HistoryFile string
+
+	// HistoryVersionID is the version ID (timestamp) for a specific history entry.
+	HistoryVersionID string
+
+	// HistoryByID indicates we're navigating via .history/.by/<uuid>/ path.
+	HistoryByID bool
+
+	// HistoryRowID is the row UUID when navigating via .history/.by/<uuid>/.
+	HistoryRowID string
 
 	// RawSubPath captures all path segments after the table, before any PK/Column
 	// processing. Used by synth hierarchy to reconstruct multi-segment filenames.
@@ -450,6 +466,8 @@ func processCapability(result *ParsedPath, cap string, remaining []string) (int,
 		return processIndexes(result, remaining)
 	case DirFormat:
 		return processFormat(result, remaining)
+	case DirHistory:
+		return processHistory(result, remaining)
 	default:
 		return 0, &FSError{
 			Code:    ErrInvalidPath,
@@ -804,6 +822,66 @@ func processFormat(result *ParsedPath, remaining []string) (int, *FSError) {
 		return 2, nil
 	}
 	return 1, nil
+}
+
+// processHistory handles /{table}/.history/ paths for versioned history.
+// Supports two navigation modes:
+//
+// By filename:
+//   - /{table}/.history/ → list filenames with history
+//   - /{table}/.history/foo.md/ → list versions + .id file
+//   - /{table}/.history/foo.md/.id → read row UUID
+//   - /{table}/.history/foo.md/<versionID> → read past version
+//
+// By row UUID (.by/):
+//   - /{table}/.history/.by/ → list all row UUIDs
+//   - /{table}/.history/.by/<uuid>/ → list versions for UUID
+//   - /{table}/.history/.by/<uuid>/<versionID> → read past version
+func processHistory(result *ParsedPath, remaining []string) (int, *FSError) {
+	fsCtx := result.Context
+	if fsCtx == nil {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: ".history/ requires a table context",
+		}
+	}
+
+	result.Type = PathHistory
+
+	if len(remaining) == 1 {
+		// /{table}/.history/
+		return 1, nil
+	}
+
+	next := remaining[1]
+
+	// Check for .by/ navigation mode
+	if next == ".by" {
+		result.HistoryByID = true
+		if len(remaining) == 2 {
+			// /{table}/.history/.by/
+			return 2, nil
+		}
+		// /{table}/.history/.by/<uuid>/
+		result.HistoryRowID = remaining[2]
+		if len(remaining) == 3 {
+			return 3, nil
+		}
+		// /{table}/.history/.by/<uuid>/<versionID>
+		result.HistoryVersionID = remaining[3]
+		return 4, nil
+	}
+
+	// By-filename navigation
+	result.HistoryFile = next
+	if len(remaining) == 2 {
+		// /{table}/.history/foo.md/
+		return 2, nil
+	}
+
+	// /{table}/.history/foo.md/.id or /{table}/.history/foo.md/<versionID>
+	result.HistoryVersionID = remaining[2]
+	return 3, nil
 }
 
 // processTableDDL handles table-level DDL paths (/{table}/.modify/ and /{table}/.delete/).
