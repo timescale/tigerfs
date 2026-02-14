@@ -40,8 +40,12 @@ func (o *Operations) statBuild(ctx context.Context, parsed *ParsedPath) (*Entry,
 }
 
 // writeBuildFile handles writes to /.build/<name>.
-// The written content is a format name (e.g., "markdown" or "txt").
-// This creates the backing table, view, view comment, and modified_at trigger.
+// The written content is a format name or comma-separated features.
+//
+// Supported inputs:
+//   - "markdown" → create new markdown app
+//   - "markdown,history" → create new markdown app with versioned history
+//   - "history" → add versioned history to an existing app
 func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	if parsed.BuildName == "" {
 		return &FSError{
@@ -51,16 +55,9 @@ func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, dat
 		}
 	}
 
-	// Parse format from written content
-	formatStr := strings.TrimSpace(string(data))
-	format := synth.ParseFormatName(formatStr)
-	if format == synth.FormatNative || format == synth.FormatTasks {
-		return &FSError{
-			Code:    ErrInvalidPath,
-			Message: fmt.Sprintf("unsupported format: %q", formatStr),
-			Hint:    "supported formats: markdown, txt",
-		}
-	}
+	// Parse features from written content
+	featureStr := strings.TrimSpace(string(data))
+	features := synth.ParseFeatureString(featureStr)
 
 	// Determine schema — use context schema if set (schema-level .build),
 	// otherwise resolve the default schema
@@ -79,8 +76,37 @@ func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, dat
 
 	appName := parsed.BuildName
 
-	// Generate the SQL statements
-	statements, err := synth.GenerateBuildSQL(schema, appName, format)
+	// Check if history is requested — requires TimescaleDB
+	if features.History {
+		hasTS, err := o.db.HasExtension(ctx, "timescaledb")
+		if err != nil {
+			return &FSError{Code: ErrIO, Message: "failed to check TimescaleDB extension", Cause: err}
+		}
+		if !hasTS {
+			return &FSError{
+				Code:    ErrInvalidPath,
+				Message: "history requires TimescaleDB extension",
+				Hint:    "install TimescaleDB or use a TimescaleDB-enabled PostgreSQL image",
+			}
+		}
+	}
+
+	// Check if this is "add history to existing app" path
+	if features.Format == synth.FormatNative && features.History {
+		return o.writeBuildAddHistory(ctx, schema, appName)
+	}
+
+	// Validate format for new app creation
+	if features.Format == synth.FormatNative || features.Format == synth.FormatTasks {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("unsupported format: %q", featureStr),
+			Hint:    "supported formats: markdown, txt (optionally with ,history)",
+		}
+	}
+
+	// Generate the SQL statements for new app (with optional history)
+	statements, err := synth.GenerateBuildSQLWithFeatures(schema, appName, features)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -108,12 +134,69 @@ func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, dat
 	// Invalidate synth cache so the new view is detected
 	o.invalidateSynthCache()
 
+	historyStr := ""
+	if features.History {
+		historyStr = "+history"
+	}
 	logging.Info("synthesized app created",
 		zap.String("app", appName),
 		zap.String("schema", schema),
-		zap.String("format", format.String()),
+		zap.String("format", features.Format.String()+historyStr),
 		zap.String("table", "_"+appName),
 		zap.String("view", appName))
+
+	return nil
+}
+
+// writeBuildAddHistory adds versioned history to an existing synth app.
+// Called when the .build/ content is just "history" (no format).
+func (o *Operations) writeBuildAddHistory(ctx context.Context, schema, appName string) *FSError {
+	// Check that the app (backing table) exists
+	tableName := "_" + appName
+	exists, err := o.db.TableExists(ctx, schema, tableName)
+	if err != nil {
+		return &FSError{Code: ErrIO, Message: "failed to check table existence", Cause: err}
+	}
+	if !exists {
+		return &FSError{
+			Code:    ErrInvalidPath,
+			Message: fmt.Sprintf("app %q does not exist", appName),
+			Hint:    "create the app first with a format (e.g., 'markdown,history')",
+		}
+	}
+
+	// Detect existing features from view comment
+	info := o.getSynthViewInfo(ctx, schema, appName)
+	existingFeatures := synth.FeatureSet{}
+	if info != nil {
+		existingFeatures.Format = info.Format
+	}
+
+	// Generate history-only SQL (comment update + history infrastructure)
+	statements := synth.GenerateHistoryOnlySQL(schema, appName, existingFeatures)
+
+	for _, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if execErr := o.db.Exec(ctx, stmt); execErr != nil {
+			return &FSError{
+				Code:    ErrIO,
+				Message: fmt.Sprintf("failed to add history to %q", appName),
+				Hint:    fmt.Sprintf("statement failed: %s", truncateSQL(stmt)),
+				Cause:   execErr,
+			}
+		}
+	}
+
+	// Invalidate synth cache
+	o.invalidateSynthCache()
+
+	logging.Info("versioned history added",
+		zap.String("app", appName),
+		zap.String("schema", schema),
+		zap.String("history_table", tableName+"_history"))
 
 	return nil
 }

@@ -239,6 +239,31 @@ type PipelineReader interface {
 	QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error)
 }
 
+// HistoryReader provides operations for versioned history queries.
+// Used by .history/ virtual directory for reading past versions of synth app files.
+type HistoryReader interface {
+	// HasExtension checks if a PostgreSQL extension is installed in the database.
+	HasExtension(ctx context.Context, extName string) (bool, error)
+
+	// TableExists checks if a table exists in the given schema.
+	TableExists(ctx context.Context, schema, table string) (bool, error)
+
+	// QueryHistoryByFilename queries the history table for versions of a file by filename.
+	QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
+
+	// QueryHistoryByID queries the history table for versions of a row by its UUID.
+	QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
+
+	// QueryHistoryDistinctFilenames returns distinct filenames from the history table.
+	QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+
+	// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
+	QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+
+	// QueryHistoryVersionByTime finds a history row matching a version ID timestamp.
+	QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+}
+
 // HierarchyWriter provides operations for hierarchical directory management.
 // Used by synth views with filetype column for directory rename, child checks, etc.
 type HierarchyWriter interface {
@@ -268,6 +293,7 @@ type DBClient interface {
 	ImportWriter
 	PipelineReader
 	HierarchyWriter
+	HistoryReader
 }
 
 // Compile-time verification that *Client implements DBClient

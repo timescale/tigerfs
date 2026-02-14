@@ -573,6 +573,66 @@ func (m *MockHierarchyWriter) InsertIfNotExists(ctx context.Context, schema, tab
 	return nil
 }
 
+// MockHistoryReader is a mock for HistoryReader.
+type MockHistoryReader struct {
+	HasExtensionFn                  func(ctx context.Context, extName string) (bool, error)
+	TableExistsFn                   func(ctx context.Context, schema, table string) (bool, error)
+	QueryHistoryByFilenameFn        func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryByIDFn              func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryDistinctFilenamesFn func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryDistinctIDsFn       func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryVersionByTimeFn     func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+}
+
+func (m *MockHistoryReader) HasExtension(ctx context.Context, extName string) (bool, error) {
+	if m.HasExtensionFn != nil {
+		return m.HasExtensionFn(ctx, extName)
+	}
+	return false, nil
+}
+
+func (m *MockHistoryReader) TableExists(ctx context.Context, schema, table string) (bool, error) {
+	if m.TableExistsFn != nil {
+		return m.TableExistsFn(ctx, schema, table)
+	}
+	return false, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
+	if m.QueryHistoryByFilenameFn != nil {
+		return m.QueryHistoryByFilenameFn(ctx, schema, historyTable, filename, limit)
+	}
+	return nil, nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
+	if m.QueryHistoryByIDFn != nil {
+		return m.QueryHistoryByIDFn(ctx, schema, historyTable, rowID, limit)
+	}
+	return nil, nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+	if m.QueryHistoryDistinctFilenamesFn != nil {
+		return m.QueryHistoryDistinctFilenamesFn(ctx, schema, historyTable, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+	if m.QueryHistoryDistinctIDsFn != nil {
+		return m.QueryHistoryDistinctIDsFn(ctx, schema, historyTable, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
+	if m.QueryHistoryVersionByTimeFn != nil {
+		return m.QueryHistoryVersionByTimeFn(ctx, schema, historyTable, filterColumn, filterValue, targetTime, limit)
+	}
+	return nil, nil, nil
+}
+
 type MockDBClient struct {
 	*MockDDLExecutor
 	*MockSchemaReader
@@ -586,6 +646,7 @@ type MockDBClient struct {
 	*MockImportWriter
 	*MockPipelineReader
 	*MockHierarchyWriter
+	*MockHistoryReader
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -605,5 +666,6 @@ func NewMockDBClient() *MockDBClient {
 		MockImportWriter:     &MockImportWriter{},
 		MockPipelineReader:   &MockPipelineReader{},
 		MockHierarchyWriter:  &MockHierarchyWriter{},
+		MockHistoryReader:    &MockHistoryReader{},
 	}
 }

@@ -1,6 +1,11 @@
 package synth
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+)
 
 func TestSynthFormat_String(t *testing.T) {
 	tests := []struct {
@@ -221,5 +226,128 @@ func TestFormatComment(t *testing.T) {
 		if got := FormatComment(tt.format); got != tt.want {
 			t.Errorf("FormatComment(%v) = %q, want %q", tt.format, got, tt.want)
 		}
+	}
+}
+
+func TestSynth_ParseFeatureString(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		format  SynthFormat
+		history bool
+	}{
+		{"markdown only", "markdown", FormatMarkdown, false},
+		{"markdown with history", "markdown,history", FormatMarkdown, true},
+		{"history only", "history", FormatNative, true},
+		{"txt with history", "txt,history", FormatPlainText, true},
+		{"whitespace handling", "  markdown , history  ", FormatMarkdown, true},
+		{"md alias", "md,history", FormatMarkdown, true},
+		{"txt only", "txt", FormatPlainText, false},
+		{"empty string", "", FormatNative, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := ParseFeatureString(tt.input)
+			if fs.Format != tt.format {
+				t.Errorf("ParseFeatureString(%q).Format = %v, want %v", tt.input, fs.Format, tt.format)
+			}
+			if fs.History != tt.history {
+				t.Errorf("ParseFeatureString(%q).History = %v, want %v", tt.input, fs.History, tt.history)
+			}
+		})
+	}
+}
+
+func TestSynth_FeatureComment(t *testing.T) {
+	tests := []struct {
+		name string
+		fs   FeatureSet
+		want string
+	}{
+		{"markdown", FeatureSet{Format: FormatMarkdown}, "tigerfs:md"},
+		{"markdown+history", FeatureSet{Format: FormatMarkdown, History: true}, "tigerfs:md,history"},
+		{"txt+history", FeatureSet{Format: FormatPlainText, History: true}, "tigerfs:txt,history"},
+		{"history only", FeatureSet{History: true}, "tigerfs:history"},
+		{"native no history", FeatureSet{}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FeatureComment(tt.fs); got != tt.want {
+				t.Errorf("FeatureComment(%+v) = %q, want %q", tt.fs, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSynth_DetectFeaturesFromComment(t *testing.T) {
+	tests := []struct {
+		name    string
+		comment string
+		format  SynthFormat
+		history bool
+	}{
+		{"md only", "tigerfs:md", FormatMarkdown, false},
+		{"md+history", "tigerfs:md,history", FormatMarkdown, true},
+		{"txt+history", "tigerfs:txt,history", FormatPlainText, true},
+		{"tasks", "tigerfs:tasks", FormatTasks, false},
+		{"unknown", "some comment", FormatNative, false},
+		{"empty", "", FormatNative, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := DetectFeaturesFromComment(tt.comment)
+			if fs.Format != tt.format {
+				t.Errorf("DetectFeaturesFromComment(%q).Format = %v, want %v", tt.comment, fs.Format, tt.format)
+			}
+			if fs.History != tt.history {
+				t.Errorf("DetectFeaturesFromComment(%q).History = %v, want %v", tt.comment, fs.History, tt.history)
+			}
+		})
+	}
+}
+
+func TestSynth_FeatureCommentRoundTrip(t *testing.T) {
+	// Verify that encoding and decoding a FeatureSet is lossless
+	sets := []FeatureSet{
+		{Format: FormatMarkdown},
+		{Format: FormatMarkdown, History: true},
+		{Format: FormatPlainText, History: true},
+	}
+	for _, fs := range sets {
+		comment := FeatureComment(fs)
+		decoded := DetectFeaturesFromComment(comment)
+		if decoded.Format != fs.Format || decoded.History != fs.History {
+			t.Errorf("round-trip failed: %+v → %q → %+v", fs, comment, decoded)
+		}
+	}
+}
+
+func TestSynth_UUIDv7ToVersionID(t *testing.T) {
+	// Create a UUIDv7 from a known time
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	versionID := UUIDv7ToVersionID(id)
+
+	// Verify it parses back
+	ts, err := VersionIDToTimestamp(versionID)
+	if err != nil {
+		t.Fatalf("VersionIDToTimestamp(%q) failed: %v", versionID, err)
+	}
+
+	// The extracted time should be within 1 second of now (UUIDv7 has ms precision,
+	// but version ID has second precision)
+	diff := time.Since(ts)
+	if diff < 0 || diff > 2*time.Second {
+		t.Errorf("UUIDv7 time extraction off by %v", diff)
+	}
+}
+
+func TestSynth_VersionIDToTimestamp_Invalid(t *testing.T) {
+	_, err := VersionIDToTimestamp("not-a-timestamp")
+	if err == nil {
+		t.Error("expected error for invalid version ID")
 	}
 }

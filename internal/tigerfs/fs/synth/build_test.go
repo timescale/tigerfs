@@ -180,6 +180,105 @@ func TestGenerateBuildSQL_UnsupportedFormat(t *testing.T) {
 	}
 }
 
+func TestSynth_GenerateHistorySQL(t *testing.T) {
+	stmts := GenerateHistorySQL("public", "memory")
+	allSQL := strings.Join(stmts, "\n")
+
+	// History table
+	if !strings.Contains(allSQL, `"public"."_memory_history"`) {
+		t.Errorf("should reference _memory_history table, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "_history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
+		t.Errorf("should have _history_id column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "_operation TEXT NOT NULL") {
+		t.Errorf("should have _operation column, got:\n%s", allSQL)
+	}
+
+	// Indexes
+	if !strings.Contains(allSQL, "idx__memory_history_by_filename") {
+		t.Errorf("should create filename index, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "idx__memory_history_by_id") {
+		t.Errorf("should create id index, got:\n%s", allSQL)
+	}
+
+	// Trigger
+	if !strings.Contains(allSQL, "BEFORE UPDATE OR DELETE") {
+		t.Errorf("should create BEFORE UPDATE OR DELETE trigger, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "TG_OP::text") {
+		t.Errorf("should record TG_OP as _operation, got:\n%s", allSQL)
+	}
+
+	// Hypertable
+	if !strings.Contains(allSQL, "create_hypertable") {
+		t.Errorf("should create hypertable, got:\n%s", allSQL)
+	}
+
+	// Compression
+	if !strings.Contains(allSQL, "timescaledb.compress") {
+		t.Errorf("should enable compression, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "add_compression_policy") {
+		t.Errorf("should add compression policy, got:\n%s", allSQL)
+	}
+
+	// Should be 8 statements: table, 2 indexes, func, trigger, hypertable, compression, policy
+	if len(stmts) != 8 {
+		t.Errorf("expected 8 statements, got %d", len(stmts))
+	}
+}
+
+func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
+	features := FeatureSet{Format: FormatMarkdown, History: true}
+	stmts, err := GenerateBuildSQLWithFeatures("public", "memory", features)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	allSQL := strings.Join(stmts, "\n")
+
+	// Should have base (5) + history (8) = 13 statements
+	if len(stmts) != 13 {
+		t.Errorf("expected 13 statements, got %d", len(stmts))
+	}
+
+	// View comment should include history
+	if !strings.Contains(allSQL, "tigerfs:md,history") {
+		t.Errorf("comment should include history flag, got:\n%s", allSQL)
+	}
+
+	// History table should exist
+	if !strings.Contains(allSQL, "_memory_history") {
+		t.Errorf("should create history table, got:\n%s", allSQL)
+	}
+}
+
+func TestSynth_GenerateHistoryOnlySQL(t *testing.T) {
+	existing := FeatureSet{Format: FormatMarkdown}
+	stmts := GenerateHistoryOnlySQL("public", "memory", existing)
+	allSQL := strings.Join(stmts, "\n")
+
+	// Should start with comment update
+	if !strings.Contains(stmts[0], "COMMENT ON VIEW") {
+		t.Errorf("first statement should update comment, got: %s", stmts[0])
+	}
+	if !strings.Contains(stmts[0], "tigerfs:md,history") {
+		t.Errorf("comment should include history, got: %s", stmts[0])
+	}
+
+	// Should have 1 (comment) + 8 (history) = 9 statements
+	if len(stmts) != 9 {
+		t.Errorf("expected 9 statements, got %d", len(stmts))
+	}
+
+	// History infrastructure
+	if !strings.Contains(allSQL, "_memory_history") {
+		t.Errorf("should create history table, got:\n%s", allSQL)
+	}
+}
+
 func TestQuoteIdent(t *testing.T) {
 	tests := []struct {
 		input    string

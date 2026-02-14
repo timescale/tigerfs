@@ -2,6 +2,9 @@
 -- ~1,000 users, 10 categories, ~200 products, ~8,000 orders
 -- Demonstrates mixed PK types: SERIAL (users, products), TEXT (categories), UUIDv7 (orders)
 
+-- Enable TimescaleDB extension (required for history hypertable support)
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
