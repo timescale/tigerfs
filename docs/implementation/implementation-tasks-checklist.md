@@ -161,6 +161,20 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 6.3.14 | Integration Tests for Hierarchy | ~5790 |
 | ✅ | 6.3.15 | Update ADR-011 | ~5820 |
 
+### 6.4: Versioned History
+
+| Status | Task | Description |
+|--------|------|-------------|
+| ✅ | 6.4.0 | Switch Test Infrastructure to TimescaleDB |
+| ✅ | 6.4.1 | Implement Feature Flag Parsing |
+| ✅ | 6.4.2 | Implement History SQL Generation |
+| ✅ | 6.4.3 | Update Build Handler for History |
+| ✅ | 6.4.4 | Extend ViewInfo and Cache Loading |
+| ✅ | 6.4.5 | Add .history/ Path Parsing |
+| ✅ | 6.4.6 | Implement .history/ Read Operations |
+| ✅ | 6.4.7 | Integration Tests for History |
+| ✅ | 6.4.8 | Documentation (ADR-012) |
+
 ---
 
 ## Phase 7: DDL Operations via Filesystem
@@ -247,12 +261,13 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 3: CLI Commands | 7 | 7 | 100% |
 | Phase 4: Advanced Features | 26 | 30 | 87% |
 | Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
-| Phase 6: Synthesized Apps | 24 | 30 | 80% |
+| Phase 6: Synthesized Apps | 33 | 39 | 85% |
 |   6.1: Markdown & Plain Text | 9 | 9 | 100% |
 |   6.2: Tasks | 0 | 6 | 0% |
 |   6.3: Directory Hierarchies | 15 | 15 | 100% |
+|   6.4: Versioned History | 9 | 9 | 100% |
 | Phase 7: DDL Operations | 10 | 10 | 100% |
 | Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
-| **Total** | **95** | **112** | **85%** |
+| **Total** | **104** | **121** | **86%** |
