@@ -748,11 +748,16 @@ func logEntries(t *testing.T, entries []os.DirEntry) {
 }
 
 func extractSchemaName(connStr string) string {
-	// Extract schema name from search_path parameter
+	// Extract schema name from search_path parameter.
+	// search_path may be comma-separated (e.g., "myschema,public") — return only the first.
 	if idx := strings.Index(connStr, "search_path="); idx != -1 {
 		rest := connStr[idx+len("search_path="):]
 		if endIdx := strings.Index(rest, "&"); endIdx != -1 {
-			return rest[:endIdx]
+			rest = rest[:endIdx]
+		}
+		// Handle comma-separated search_path (e.g., "myschema,public")
+		if commaIdx := strings.Index(rest, ","); commaIdx != -1 {
+			return rest[:commaIdx]
 		}
 		return rest
 	}

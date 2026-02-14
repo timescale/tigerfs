@@ -1150,11 +1150,13 @@ func TestSynth_ParsePathHistory(t *testing.T) {
 		path            string
 		wantType        PathType
 		wantTable       string
+		wantPK          string
 		wantHistoryFile string
 		wantVersionID   string
 		wantByID        bool
 		wantRowID       string
 	}{
+		// Root-level .history/ (no directory prefix)
 		{
 			name:      "history root",
 			path:      "/memory/.history",
@@ -1208,6 +1210,58 @@ func TestSynth_ParsePathHistory(t *testing.T) {
 			wantRowID:     "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 			wantVersionID: "2026-02-12T013000Z",
 		},
+
+		// Per-directory .history/ (capability after directory segments)
+		{
+			name:      "subdirectory history root",
+			path:      "/docs/getting-started/.history",
+			wantType:  PathHistory,
+			wantTable: "docs",
+			wantPK:    "getting-started",
+		},
+		{
+			name:            "subdirectory history filename",
+			path:            "/docs/getting-started/.history/installation.md",
+			wantType:        PathHistory,
+			wantTable:       "docs",
+			wantPK:          "getting-started",
+			wantHistoryFile: "installation.md",
+		},
+		{
+			name:            "subdirectory history version",
+			path:            "/docs/getting-started/.history/installation.md/2026-02-12T013000Z",
+			wantType:        PathHistory,
+			wantTable:       "docs",
+			wantPK:          "getting-started",
+			wantHistoryFile: "installation.md",
+			wantVersionID:   "2026-02-12T013000Z",
+		},
+		{
+			name:            "subdirectory history .id",
+			path:            "/docs/getting-started/.history/installation.md/.id",
+			wantType:        PathHistory,
+			wantTable:       "docs",
+			wantPK:          "getting-started",
+			wantHistoryFile: "installation.md",
+			wantVersionID:   ".id",
+		},
+		{
+			name:            "deep subdirectory history",
+			path:            "/docs/a/b/.history/c.md",
+			wantType:        PathHistory,
+			wantTable:       "docs",
+			wantPK:          "a/b",
+			wantHistoryFile: "c.md",
+		},
+		{
+			name:            "deep subdirectory history version",
+			path:            "/docs/a/b/.history/c.md/2026-02-12T013000Z",
+			wantType:        PathHistory,
+			wantTable:       "docs",
+			wantPK:          "a/b",
+			wantHistoryFile: "c.md",
+			wantVersionID:   "2026-02-12T013000Z",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1226,6 +1280,9 @@ func TestSynth_ParsePathHistory(t *testing.T) {
 				}
 				t.Errorf("TableName = %q, want %q", tableName, tt.wantTable)
 			}
+			if result.PrimaryKey != tt.wantPK {
+				t.Errorf("PrimaryKey = %q, want %q", result.PrimaryKey, tt.wantPK)
+			}
 			if result.HistoryFile != tt.wantHistoryFile {
 				t.Errorf("HistoryFile = %q, want %q", result.HistoryFile, tt.wantHistoryFile)
 			}
@@ -1237,6 +1294,146 @@ func TestSynth_ParsePathHistory(t *testing.T) {
 			}
 			if result.HistoryRowID != tt.wantRowID {
 				t.Errorf("HistoryRowID = %q, want %q", result.HistoryRowID, tt.wantRowID)
+			}
+		})
+	}
+}
+
+// TestSynth_ParsePathCapabilityAfterDirSegments verifies that capabilities are found
+// after non-dot directory segments (scan-ahead in processSegments).
+func TestSynth_ParsePathCapabilityAfterDirSegments(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		wantType  PathType
+		wantPK    string
+		wantTable string
+	}{
+		{
+			name:      "single dir before .info",
+			path:      "/table/subdir/.info",
+			wantType:  PathInfo,
+			wantPK:    "subdir",
+			wantTable: "table",
+		},
+		{
+			name:      "single dir before .history",
+			path:      "/docs/getting-started/.history",
+			wantType:  PathHistory,
+			wantPK:    "getting-started",
+			wantTable: "docs",
+		},
+		{
+			name:      "two dirs before .history",
+			path:      "/docs/a/b/.history",
+			wantType:  PathHistory,
+			wantPK:    "a/b",
+			wantTable: "docs",
+		},
+		{
+			name:      "no dir before capability (existing behavior)",
+			path:      "/users/.by",
+			wantType:  PathCapability,
+			wantPK:    "",
+			wantTable: "users",
+		},
+		{
+			name:      "no capability (existing behavior)",
+			path:      "/users/123",
+			wantType:  PathRow,
+			wantPK:    "123",
+			wantTable: "users",
+		},
+		{
+			name:      "no capability two segments (existing behavior)",
+			path:      "/users/123/name",
+			wantType:  PathColumn,
+			wantPK:    "123",
+			wantTable: "users",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.PrimaryKey != tt.wantPK {
+				t.Errorf("PrimaryKey = %q, want %q", result.PrimaryKey, tt.wantPK)
+			}
+			if result.Context == nil || result.Context.TableName != tt.wantTable {
+				tableName := ""
+				if result.Context != nil {
+					tableName = result.Context.TableName
+				}
+				t.Errorf("TableName = %q, want %q", tableName, tt.wantTable)
+			}
+		})
+	}
+}
+
+// TestSynth_IsVersionID verifies version ID format detection.
+func TestSynth_IsVersionID(t *testing.T) {
+	tests := []struct {
+		seg  string
+		want bool
+	}{
+		{"2026-02-12T013000Z", true},
+		{"2025-01-01T000000Z", true},
+		{"foo.md", false},
+		{".id", false},
+		{"", false},
+		{"2026-02-12", false},          // too short
+		{"2026-02-12T013000Zx", false}, // too long
+		{"xxxx-xx-xxTxxxxxxZ", true},   // structural match (length + separators)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.seg, func(t *testing.T) {
+			got := isVersionID(tt.seg)
+			if got != tt.want {
+				t.Errorf("isVersionID(%q) = %v, want %v", tt.seg, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSynth_IsKnownCapability verifies known capability detection.
+func TestSynth_IsKnownCapability(t *testing.T) {
+	tests := []struct {
+		seg  string
+		want bool
+	}{
+		{".history", true},
+		{".info", true},
+		{".by", true},
+		{".filter", true},
+		{".format", true},
+		{".export", true},
+		{".import", true},
+		{".delete", true},
+		{".modify", true},
+		{".indexes", true},
+		{".order", true},
+		{".first", true},
+		{".last", true},
+		{".sample", true},
+		{".all", true},
+		{".unknown", false},
+		{".id", false},
+		{".DS_Store", false},
+		{"history", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.seg, func(t *testing.T) {
+			got := isKnownCapability(tt.seg)
+			if got != tt.want {
+				t.Errorf("isKnownCapability(%q) = %v, want %v", tt.seg, got, tt.want)
 			}
 		})
 	}

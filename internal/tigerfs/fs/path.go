@@ -411,6 +411,8 @@ func parseTablePath(segments []string) (*ParsedPath, *FSError) {
 }
 
 // processSegments processes path segments after table identification.
+// Supports capability directories appearing after non-dot directory segments,
+// enabling paths like /docs/getting-started/.history/ in hierarchical synth views.
 func processSegments(result *ParsedPath, segments []string) (*ParsedPath, *FSError) {
 	i := 0
 	for i < len(segments) {
@@ -426,11 +428,46 @@ func processSegments(result *ParsedPath, segments []string) (*ParsedPath, *FSErr
 			continue
 		}
 
-		// Not a capability - must be row PK or column
+		// Scan ahead: is there a known capability later in the path?
+		// This handles hierarchical paths like getting-started/.history/foo.md
+		// where non-dot segments precede a capability directory.
+		capIdx := -1
+		for j := i + 1; j < len(segments); j++ {
+			if strings.HasPrefix(segments[j], ".") && isKnownCapability(segments[j]) {
+				capIdx = j
+				break
+			}
+		}
+
+		if capIdx >= 0 {
+			// Consume all segments before capability as directory path
+			dirParts := segments[i:capIdx]
+			result.PrimaryKey = strings.Join(dirParts, "/")
+			result.Type = PathRow
+			result.RawSubPath = append(result.RawSubPath, dirParts...)
+			i = capIdx
+			continue
+		}
+
+		// No capability ahead — terminal: process as row/column (existing behavior)
 		return processRowOrColumn(result, segments[i:])
 	}
 
 	return result, nil
+}
+
+// isKnownCapability returns true if a dot-prefixed segment is a known capability
+// directory handled by processCapability. Used by scan-ahead to distinguish
+// capability segments from unknown dot-files.
+func isKnownCapability(seg string) bool {
+	switch seg {
+	case DirInfo, DirBy, DirFilter, DirOrder, DirFirst, DirLast, DirSample,
+		DirExport, DirImport, DirAll, DirModify, DirDelete, DirIndexes,
+		DirFormat, DirHistory:
+		return true
+	default:
+		return false
+	}
 }
 
 // processCapability handles capability directories (.by/, .filter/, etc.)
@@ -827,7 +864,7 @@ func processFormat(result *ParsedPath, remaining []string) (int, *FSError) {
 // processHistory handles /{table}/.history/ paths for versioned history.
 // Supports two navigation modes:
 //
-// By filename:
+// By filename (single or multi-segment):
 //   - /{table}/.history/ → list filenames with history
 //   - /{table}/.history/foo.md/ → list versions + .id file
 //   - /{table}/.history/foo.md/.id → read row UUID
@@ -872,16 +909,34 @@ func processHistory(result *ParsedPath, remaining []string) (int, *FSError) {
 		return 4, nil
 	}
 
-	// By-filename navigation
-	result.HistoryFile = next
-	if len(remaining) == 2 {
-		// /{table}/.history/foo.md/
-		return 2, nil
+	// By-filename navigation — greedily consume segments until .id or version ID.
+	// This handles both single-segment filenames (per-directory model: "foo.md")
+	// and multi-segment filenames (root .history/ with paths like "subdir/foo.md").
+	var filenameParts []string
+	consumed := 1 // .history itself
+	for i := 1; i < len(remaining); i++ {
+		seg := remaining[i]
+		if seg == ".id" || isVersionID(seg) {
+			result.HistoryVersionID = seg
+			consumed = i + 1
+			break
+		}
+		filenameParts = append(filenameParts, seg)
+		consumed = i + 1
 	}
+	result.HistoryFile = strings.Join(filenameParts, "/")
+	return consumed, nil
+}
 
-	// /{table}/.history/foo.md/.id or /{table}/.history/foo.md/<versionID>
-	result.HistoryVersionID = remaining[2]
-	return 3, nil
+// isVersionID returns true if a segment looks like a history version ID timestamp.
+// Version IDs have the format "2006-01-02T150405Z" (e.g., "2026-02-12T013000Z").
+func isVersionID(seg string) bool {
+	// Quick length check: "2006-01-02T150405Z" = 18 chars
+	if len(seg) != 18 {
+		return false
+	}
+	// Must end with Z and contain T at position 10
+	return seg[17] == 'Z' && seg[10] == 'T' && seg[4] == '-' && seg[7] == '-'
 }
 
 // processTableDDL handles table-level DDL paths (/{table}/.modify/ and /{table}/.delete/).
