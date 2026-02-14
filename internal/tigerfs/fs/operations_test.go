@@ -1533,6 +1533,36 @@ func (m *mockDBClient) InsertIfNotExists(ctx context.Context, schema, table stri
 	return nil
 }
 
+// Implement db.HistoryReader
+
+func (m *mockDBClient) HasExtension(ctx context.Context, extName string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockDBClient) TableExists(ctx context.Context, schema, table string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockDBClient) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
+	return nil, nil, nil
+}
+
+func (m *mockDBClient) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
+	return nil, nil, nil
+}
+
+func (m *mockDBClient) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockDBClient) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockDBClient) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
+	return nil, nil, nil
+}
+
 // ============================================================================
 // Tests for bug fixes - prevent regressions
 // ============================================================================

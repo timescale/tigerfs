@@ -22,6 +22,10 @@ type ViewInfo struct {
 	// SupportsHierarchy is true when the view has a filetype column, enabling
 	// hierarchical directory structure with slashes in the filename column.
 	SupportsHierarchy bool
+
+	// HasHistory is true when this view has versioned history enabled.
+	// Detected from view comment (tigerfs:md,history) or companion _<name>_history table.
+	HasHistory bool
 }
 
 // StripExtension removes the synthesized format extension from a filename.

@@ -817,3 +817,135 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 
 	return nil
 }
+
+// HasExtension checks if a PostgreSQL extension is installed in the database.
+func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
+	var exists bool
+	err := c.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = $1)`,
+		extName,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check extension %q: %w", extName, err)
+	}
+	return exists, nil
+}
+
+// TableExists checks if a table exists in the given schema.
+func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, error) {
+	var exists bool
+	err := c.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = $1 AND table_name = $2
+		)`,
+		schema, table,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check table %q.%q: %w", schema, table, err)
+	}
+	return exists, nil
+}
+
+// QueryHistoryByFilename queries the history table for versions of a file by filename.
+// Returns columns and rows ordered by _history_id DESC (most recent first).
+func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
+	query := fmt.Sprintf(
+		`SELECT * FROM "%s"."%s" WHERE "filename" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		schema, historyTable, limit,
+	)
+	return c.queryRows(ctx, query, filename)
+}
+
+// QueryHistoryByID queries the history table for versions of a row by its UUID.
+// Returns columns and rows ordered by _history_id DESC (most recent first).
+func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
+	query := fmt.Sprintf(
+		`SELECT * FROM "%s"."%s" WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		schema, historyTable, limit,
+	)
+	return c.queryRows(ctx, query, rowID)
+}
+
+// QueryHistoryDistinctFilenames returns distinct filenames from the history table.
+func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+	query := fmt.Sprintf(
+		`SELECT DISTINCT "filename" FROM "%s"."%s" ORDER BY "filename" LIMIT %d`,
+		schema, historyTable, limit,
+	)
+	rows, err := c.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct filenames: %w", err)
+	}
+	defer rows.Close()
+
+	var filenames []string
+	for rows.Next() {
+		var fn string
+		if err := rows.Scan(&fn); err != nil {
+			return nil, fmt.Errorf("failed to scan filename: %w", err)
+		}
+		filenames = append(filenames, fn)
+	}
+	return filenames, nil
+}
+
+// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
+func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+	query := fmt.Sprintf(
+		`SELECT DISTINCT "id"::text FROM "%s"."%s" ORDER BY "id" LIMIT %d`,
+		schema, historyTable, limit,
+	)
+	rows, err := c.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// QueryHistoryVersionByTime finds a history row matching a version ID timestamp.
+// Version IDs have second precision; UUIDv7 has millisecond precision. This queries
+// with a 1-second window around the target timestamp plus filename or id filter.
+func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
+	query := fmt.Sprintf(
+		`SELECT * FROM "%s"."%s" WHERE "%s" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		schema, historyTable, filterColumn, limit,
+	)
+	return c.queryRows(ctx, query, filterValue)
+}
+
+// queryRows executes a query and returns columns and row data.
+func (c *Client) queryRows(ctx context.Context, query string, args ...interface{}) ([]string, [][]interface{}, error) {
+	rows, err := c.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	fieldDescriptions := rows.FieldDescriptions()
+	columns := make([]string, len(fieldDescriptions))
+	for i, fd := range fieldDescriptions {
+		columns[i] = string(fd.Name)
+	}
+
+	var result [][]interface{}
+	for rows.Next() {
+		values, err := rows.Values()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		result = append(result, values)
+	}
+
+	return columns, result, nil
+}

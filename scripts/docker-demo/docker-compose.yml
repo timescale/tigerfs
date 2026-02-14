@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    image: timescale/timescaledb-ha:pg18
     environment:
       POSTGRES_USER: demo
       POSTGRES_PASSWORD: demo

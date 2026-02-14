@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 // Each test gets isolation via unique schemas (created by setupLocalTestDB/setupLocalTestDBEmpty).
 func startSharedContainer(ctx context.Context) (string, func(), error) {
 	pgContainer, err := postgres.Run(ctx,
-		"postgres:17-alpine",
+		"timescale/timescaledb-ha:pg18",
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("testuser"),
 		postgres.WithPassword("testpass"),
