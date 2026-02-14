@@ -122,6 +122,37 @@ The local PostgreSQL demo includes ~9,200 rows across four tables demonstrating 
 - Single-column: `email`, `category`, `user_id`, `created_at`
 - Composite: `last_name.first_name`, `status.created_at`
 
+**Synthesized Apps** (directories of .md and .txt files)
+
+| App | Format | Files | History |
+|-----|--------|-------|---------|
+| `blog/` | Markdown | 5 posts in 2 subdirectories | No |
+| `docs/` | Markdown | 4 pages in 2 subdirectories | Yes |
+| `snippets/` | Plain text | 3 files in 1 subdirectory | No |
+
+The `docs/` app has **versioned history** enabled — every edit is captured in a `.history/` directory:
+
+```bash
+# Browse current docs
+cat /mnt/db/docs/getting-started/installation.md
+
+# See past versions of a file
+ls /mnt/db/docs/.history/getting-started/installation.md/
+
+# Read an old version
+cat /mnt/db/docs/.history/getting-started/installation.md/<timestamp>
+
+# Compare current vs history
+diff /mnt/db/docs/.history/getting-started/installation.md/<timestamp> \
+     /mnt/db/docs/getting-started/installation.md
+
+# Discover the row UUID
+cat /mnt/db/docs/.history/getting-started/installation.md/.id
+
+# Browse history by row UUID (tracks across renames)
+ls /mnt/db/docs/.history/.by/<uuid>/
+```
+
 ## Example Commands
 
 ```bash

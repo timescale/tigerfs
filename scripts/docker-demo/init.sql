@@ -301,7 +301,7 @@ CREATE TABLE "_docs" (
 );
 
 CREATE VIEW "docs" AS SELECT * FROM "_docs";
-COMMENT ON VIEW "docs" IS 'tigerfs:md';
+COMMENT ON VIEW "docs" IS 'tigerfs:md,history';
 
 CREATE OR REPLACE FUNCTION "set__docs_modified_at"()
 RETURNS TRIGGER AS $$
@@ -358,6 +358,73 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
     '2025-01-10 09:30:00+00',
     '2025-01-10 09:30:00+00'
 );
+
+-- History table for docs — captures every UPDATE and DELETE
+CREATE TABLE "_docs_history" (
+    id UUID,
+    filename TEXT NOT NULL,
+    filetype TEXT,
+    title TEXT,
+    author TEXT,
+    headers JSONB,
+    body TEXT,
+    created_at TIMESTAMPTZ,
+    modified_at TIMESTAMPTZ,
+    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    _operation TEXT NOT NULL
+);
+
+CREATE INDEX idx__docs_history_by_filename
+    ON "_docs_history" (filename, _history_id DESC);
+
+CREATE INDEX idx__docs_history_by_id
+    ON "_docs_history" (id, _history_id DESC);
+
+CREATE OR REPLACE FUNCTION "archive__docs_history"() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO "_docs_history"
+        (id, filename, filetype, title, author, headers, body, created_at, modified_at,
+         _history_id, _operation)
+    VALUES
+        (OLD.id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers, OLD.body,
+         OLD.created_at, OLD.modified_at,
+         uuidv7(), TG_OP::text);
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "trg__docs_history_archive"
+    BEFORE UPDATE OR DELETE ON "_docs"
+    FOR EACH ROW EXECUTE FUNCTION "archive__docs_history"();
+
+-- Convert to TimescaleDB hypertable for time-partitioned storage
+SELECT create_hypertable('_docs_history', '_history_id',
+    chunk_time_interval => INTERVAL '1 month');
+
+ALTER TABLE "_docs_history" SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'filename',
+    timescaledb.compress_orderby = '_history_id DESC'
+);
+
+SELECT add_compression_policy('_docs_history',
+    compress_after => INTERVAL '1 day');
+
+-- Seed some history entries by updating docs — simulates real editing
+-- Update the installation guide to capture the original as a history entry
+UPDATE "_docs"
+SET body = E'# Installation\n\nTigerFS runs on macOS and Linux. Choose your platform below.\n\n## macOS (Homebrew)\n\n```bash\nbrew install tigerfs\n```\n\nTigerFS uses NFS on macOS — no kernel extensions required.\n\n## Linux\n\nDownload the latest release from GitHub:\n\n```bash\ncurl -L https://github.com/timescale/tigerfs/releases/latest/download/tigerfs_linux_amd64.tar.gz | tar xz\nsudo mv tigerfs /usr/local/bin/\n```\n\nEnsure FUSE is available:\n\n```bash\nsudo apt install fuse3   # Debian/Ubuntu\nsudo dnf install fuse3   # Fedora\n```\n\n## Verify Installation\n\n```bash\ntigerfs version\n```\n\n## Upgrading\n\nTo upgrade an existing installation:\n\n```bash\nbrew upgrade tigerfs     # macOS\n# or re-download the latest release for Linux\n```',
+    title = 'Installation Guide'
+WHERE filename = 'getting-started/installation.md';
+
+-- Update the quick start guide to capture the original
+UPDATE "_docs"
+SET body = E'# Quick Start\n\nGet up and running with TigerFS in under 5 minutes.\n\n## 1. Start a Database\n\nIf you don''t have a PostgreSQL instance, start one with Docker:\n\n```bash\ndocker run -d --name pg -p 5432:5432 \\\n  -e POSTGRES_PASSWORD=secret postgres:18\n```\n\n## 2. Mount the Database\n\n```bash\nmkdir -p /tmp/mydb\ntigerfs mount postgres://postgres:secret@localhost/postgres /tmp/mydb\n```\n\n## 3. Browse Your Data\n\n```bash\nls /tmp/mydb/              # List tables\nls /tmp/mydb/users/        # List rows\ncat /tmp/mydb/users/1.json # Read a row\n```\n\n## 4. Make Changes\n\n```bash\n# Edit a row (opens in $EDITOR)\nvim /tmp/mydb/users/1.json\n\n# Delete a row\nrm /tmp/mydb/users/42.json\n```\n\n## 5. Synthesized Apps\n\nCreate markdown-backed directories:\n\n```bash\necho "markdown" > /tmp/mydb/.build/notes\necho "---\ntitle: Hello\n---\nContent" > /tmp/mydb/notes/hello.md\n```\n\n## Next Steps\n\nSee the [Configuration](configuration.md) guide for customization options.',
+    title = 'Quick Start'
+WHERE filename = 'getting-started/quick-start.md';
 
 -- ---------------------------------------------------------------------------
 -- App 3: snippets (plain text, 3 files with 1 subdirectory)

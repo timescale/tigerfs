@@ -3,7 +3,7 @@
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: timescale/timescaledb-ha:pg18
     container_name: tigerfs-demo-postgres
     ports:
       - "5432:5432"
