@@ -774,7 +774,11 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 		}
 	}
 
-	return o.filterHierarchicalChildren(columns, rows, prefix, info), nil
+	children := o.filterHierarchicalChildren(columns, rows, prefix, info)
+	if info.HasHistory {
+		children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
+	}
+	return children, nil
 }
 
 // filterHierarchicalChildren filters rows to immediate children of a prefix.

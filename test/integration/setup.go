@@ -211,8 +211,8 @@ func setupLocalTestDB(t *testing.T, connStr string) *TestDBResult {
 	// Enable TimescaleDB extension (required for history hypertable tests)
 	_, _ = pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS timescaledb")
 
-	// Set search path to our test schema
-	schemaConnStr := connStr + fmt.Sprintf("&search_path=%s", schemaName)
+	// Set search path to our test schema (include public for TimescaleDB functions)
+	schemaConnStr := connStr + fmt.Sprintf("&search_path=%s,public", schemaName)
 
 	// Seed test data in the new schema
 	if err := seedTestDataInSchema(ctx, connStr, schemaName); err != nil {
@@ -356,8 +356,8 @@ func setupLocalTestDBEmpty(t *testing.T, connStr string) *TestDBResult {
 	// Enable TimescaleDB extension (required for history hypertable tests)
 	_, _ = pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS timescaledb")
 
-	// Set search path to our test schema
-	schemaConnStr := connStr + fmt.Sprintf("&search_path=%s", schemaName)
+	// Set search path to our test schema (include public for TimescaleDB functions)
+	schemaConnStr := connStr + fmt.Sprintf("&search_path=%s,public", schemaName)
 
 	pool.Close()
 

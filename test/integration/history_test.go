@@ -437,3 +437,157 @@ func TestSynth_HistoryDiff(t *testing.T) {
 	assert.Contains(t, string(current.Data), "Revised draft.")
 	assert.NotContains(t, string(current.Data), "First draft.")
 }
+
+// TestSynth_HistoryPerDirectory tests that .history/ appears in subdirectory listings
+// and shows only files at that directory level (not all filenames).
+func TestSynth_HistoryPerDirectory(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build a hierarchical markdown app with history
+	fsErr := ops.WriteFile(ctx, "/.build/docs", []byte("markdown,history\n"))
+	require.Nil(t, fsErr, "build should succeed: %v", fsErr)
+
+	// Create directory structure and files
+	fsErr = ops.Mkdir(ctx, "/docs/getting-started")
+	require.Nil(t, fsErr, "Mkdir getting-started should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/docs/getting-started/installation.md",
+		[]byte("---\ntitle: Installation\n---\n\nInstall v1.\n"))
+	require.Nil(t, fsErr, "WriteFile installation v1 should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/docs/getting-started/quickstart.md",
+		[]byte("---\ntitle: Quickstart\n---\n\nQuickstart v1.\n"))
+	require.Nil(t, fsErr, "WriteFile quickstart v1 should succeed")
+
+	// Create a root-level file
+	fsErr = ops.WriteFile(ctx, "/docs/readme.md",
+		[]byte("---\ntitle: README\n---\n\nReadme v1.\n"))
+	require.Nil(t, fsErr, "WriteFile readme v1 should succeed")
+
+	// Update files to create history entries
+	time.Sleep(1100 * time.Millisecond)
+
+	fsErr = ops.WriteFile(ctx, "/docs/getting-started/installation.md",
+		[]byte("---\ntitle: Installation\n---\n\nInstall v2.\n"))
+	require.Nil(t, fsErr, "WriteFile installation v2 should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/docs/getting-started/quickstart.md",
+		[]byte("---\ntitle: Quickstart\n---\n\nQuickstart v2.\n"))
+	require.Nil(t, fsErr, "WriteFile quickstart v2 should succeed")
+
+	fsErr = ops.WriteFile(ctx, "/docs/readme.md",
+		[]byte("---\ntitle: README\n---\n\nReadme v2.\n"))
+	require.Nil(t, fsErr, "WriteFile readme v2 should succeed")
+
+	// 1. Subdirectory listing should include .history/
+	entries, fsErr := ops.ReadDir(ctx, "/docs/getting-started")
+	require.Nil(t, fsErr, "ReadDir getting-started should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, ".history", "subdirectory should contain .history")
+
+	// 2. Subdirectory .history/ should show only local files (not root files)
+	entries, fsErr = ops.ReadDir(ctx, "/docs/getting-started/.history")
+	require.Nil(t, fsErr, "ReadDir getting-started/.history should succeed")
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, "installation.md", "should list installation.md")
+	assert.Contains(t, names, "quickstart.md", "should list quickstart.md")
+	assert.NotContains(t, names, "readme.md", "should NOT list root-level readme.md")
+	assert.NotContains(t, names, ".by", "subdirectory .history should NOT have .by")
+
+	// 3. Root .history/ should show only root-level files + .by/
+	entries, fsErr = ops.ReadDir(ctx, "/docs/.history")
+	require.Nil(t, fsErr, "ReadDir root .history should succeed")
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, ".by", "root .history should have .by")
+	assert.Contains(t, names, "readme.md", "root .history should list readme.md")
+	assert.NotContains(t, names, "installation.md", "root .history should NOT list subdirectory files")
+	assert.NotContains(t, names, "quickstart.md", "root .history should NOT list subdirectory files")
+
+	// 4. Can stat subdirectory .history/
+	entry, fsErr := ops.Stat(ctx, "/docs/getting-started/.history")
+	require.Nil(t, fsErr, "Stat getting-started/.history should succeed")
+	assert.True(t, entry.IsDir, ".history should be a directory")
+
+	// 5. Can list versions of a file in subdirectory .history/
+	entries, fsErr = ops.ReadDir(ctx, "/docs/getting-started/.history/installation.md")
+	require.Nil(t, fsErr, "ReadDir getting-started/.history/installation.md should succeed")
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, ".id", "should have .id file")
+	assert.GreaterOrEqual(t, len(entries), 2, "should have .id + at least 1 version")
+
+	// 6. Can read a historical version from subdirectory .history/
+	var versionID string
+	for _, e := range entries {
+		if e.Name != ".id" {
+			versionID = e.Name
+			break
+		}
+	}
+	require.NotEmpty(t, versionID, "should find a version entry")
+
+	histContent, fsErr := ops.ReadFile(ctx, "/docs/getting-started/.history/installation.md/"+versionID)
+	require.Nil(t, fsErr, "ReadFile subdirectory history version should succeed")
+	assert.Contains(t, string(histContent.Data), "Install v1.",
+		"historical version should contain v1 content")
+
+	// 7. Can read .id from subdirectory .history/
+	idContent, fsErr := ops.ReadFile(ctx, "/docs/getting-started/.history/installation.md/.id")
+	require.Nil(t, fsErr, "ReadFile .id from subdirectory should succeed")
+	idStr := strings.TrimSpace(string(idContent.Data))
+	assert.Equal(t, 36, len(idStr), ".id should be a 36-char UUID, got %q", idStr)
+}
+
+// TestSynth_HistoryPerDirectoryStatVersion tests that stat works for older versions
+// in subdirectory .history/ (regression for limit 1 bug).
+func TestSynth_HistoryPerDirectoryStatVersion(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Build hierarchical markdown app with history
+	fsErr := ops.WriteFile(ctx, "/.build/docs", []byte("markdown,history\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	fsErr = ops.Mkdir(ctx, "/docs/guide")
+	require.Nil(t, fsErr, "Mkdir should succeed")
+
+	// Create and update file 3 times to get multiple history entries
+	fsErr = ops.WriteFile(ctx, "/docs/guide/intro.md",
+		[]byte("---\ntitle: Intro\n---\n\nVersion 1.\n"))
+	require.Nil(t, fsErr, "WriteFile v1 should succeed")
+
+	for i := 2; i <= 3; i++ {
+		time.Sleep(1100 * time.Millisecond)
+		body := strings.Replace("---\ntitle: Intro\n---\n\nVersion N.\n", "N",
+			strings.Repeat("I", i), 1)
+		fsErr = ops.WriteFile(ctx, "/docs/guide/intro.md", []byte(body))
+		require.Nil(t, fsErr, "WriteFile v%d should succeed", i)
+	}
+
+	// List all versions
+	entries, fsErr := ops.ReadDir(ctx, "/docs/guide/.history/intro.md")
+	require.Nil(t, fsErr, "ReadDir should succeed")
+
+	// Stat every version — all should succeed (tests fix for limit 1 bug)
+	for _, e := range entries {
+		if e.Name == ".id" {
+			continue
+		}
+		entry, fsErr := ops.Stat(ctx, "/docs/guide/.history/intro.md/"+e.Name)
+		require.Nil(t, fsErr, "Stat version %s should succeed", e.Name)
+		assert.False(t, entry.IsDir, "version file should not be a directory")
+		assert.Greater(t, entry.Size, int64(0), "version file should have content")
+	}
+}
