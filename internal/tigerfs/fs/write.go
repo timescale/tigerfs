@@ -54,6 +54,12 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 		return o.writeBuildFile(ctx, parsed, data)
 	case PathFormat:
 		return o.writeFormatFile(ctx, parsed, data)
+	case PathHistory:
+		return &FSError{
+			Code:    ErrPermission,
+			Message: ".history/ is read-only",
+			Hint:    "history files are archived versions and cannot be modified",
+		}
 	default:
 		return &FSError{
 			Code:    ErrInvalidPath,
@@ -891,6 +897,13 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 
 	case PathDDL:
 		return o.mkdirDDL(ctx, parsed)
+
+	case PathHistory:
+		return &FSError{
+			Code:    ErrPermission,
+			Message: ".history/ is read-only",
+			Hint:    "history files are archived versions and cannot be modified",
+		}
 
 	case PathTable, PathRoot, PathSchema, PathSchemaList, PathCapability,
 		PathInfo, PathExport, PathImport, PathViewList, PathBuild, PathFormat:

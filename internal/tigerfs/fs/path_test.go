@@ -11,6 +11,7 @@ func TestPathType(t *testing.T) {
 		PathRoot, PathSchemaList, PathSchema, PathTable,
 		PathCapability, PathRow, PathColumn, PathInfo,
 		PathExport, PathImport, PathDDL, PathViewList, PathBuild, PathFormat,
+		PathHistory,
 	}
 	seen := make(map[PathType]bool)
 	for _, pt := range types {
@@ -1137,6 +1138,105 @@ func TestSynth_ParsePathRawSubPath(t *testing.T) {
 				if result.RawSubPath[i] != want {
 					t.Errorf("RawSubPath[%d] = %q, want %q", i, result.RawSubPath[i], want)
 				}
+			}
+		})
+	}
+}
+
+// TestSynth_ParsePathHistory verifies .history/ path parsing at all levels.
+func TestSynth_ParsePathHistory(t *testing.T) {
+	tests := []struct {
+		name            string
+		path            string
+		wantType        PathType
+		wantTable       string
+		wantHistoryFile string
+		wantVersionID   string
+		wantByID        bool
+		wantRowID       string
+	}{
+		{
+			name:      "history root",
+			path:      "/memory/.history",
+			wantType:  PathHistory,
+			wantTable: "memory",
+		},
+		{
+			name:            "history filename dir",
+			path:            "/memory/.history/foo.md",
+			wantType:        PathHistory,
+			wantTable:       "memory",
+			wantHistoryFile: "foo.md",
+		},
+		{
+			name:            "history filename version",
+			path:            "/memory/.history/foo.md/2026-02-12T013000Z",
+			wantType:        PathHistory,
+			wantTable:       "memory",
+			wantHistoryFile: "foo.md",
+			wantVersionID:   "2026-02-12T013000Z",
+		},
+		{
+			name:            "history filename .id",
+			path:            "/memory/.history/foo.md/.id",
+			wantType:        PathHistory,
+			wantTable:       "memory",
+			wantHistoryFile: "foo.md",
+			wantVersionID:   ".id",
+		},
+		{
+			name:      "history .by root",
+			path:      "/memory/.history/.by",
+			wantType:  PathHistory,
+			wantTable: "memory",
+			wantByID:  true,
+		},
+		{
+			name:      "history .by uuid dir",
+			path:      "/memory/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			wantType:  PathHistory,
+			wantTable: "memory",
+			wantByID:  true,
+			wantRowID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		},
+		{
+			name:          "history .by uuid version",
+			path:          "/memory/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890/2026-02-12T013000Z",
+			wantType:      PathHistory,
+			wantTable:     "memory",
+			wantByID:      true,
+			wantRowID:     "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+			wantVersionID: "2026-02-12T013000Z",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) error: %v", tt.path, err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.Context == nil || result.Context.TableName != tt.wantTable {
+				tableName := ""
+				if result.Context != nil {
+					tableName = result.Context.TableName
+				}
+				t.Errorf("TableName = %q, want %q", tableName, tt.wantTable)
+			}
+			if result.HistoryFile != tt.wantHistoryFile {
+				t.Errorf("HistoryFile = %q, want %q", result.HistoryFile, tt.wantHistoryFile)
+			}
+			if result.HistoryVersionID != tt.wantVersionID {
+				t.Errorf("HistoryVersionID = %q, want %q", result.HistoryVersionID, tt.wantVersionID)
+			}
+			if result.HistoryByID != tt.wantByID {
+				t.Errorf("HistoryByID = %v, want %v", result.HistoryByID, tt.wantByID)
+			}
+			if result.HistoryRowID != tt.wantRowID {
+				t.Errorf("HistoryRowID = %q, want %q", result.HistoryRowID, tt.wantRowID)
 			}
 		})
 	}
