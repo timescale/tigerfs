@@ -132,7 +132,7 @@ func TestSynth_ReadMarkdownFile(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('hello-world', 'Hello World', 'alice', '# Hello World
+		('hello-world.md', 'Hello World', 'alice', '# Hello World
 
 This is my first post.
 ')`
@@ -223,7 +223,7 @@ func TestSynth_EditMarkdownFile(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('hello-world', 'Hello World', 'alice', '# Hello
+		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 First version.
 ')`
@@ -278,7 +278,7 @@ func TestSynth_DeleteMarkdownFile(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('hello-world', 'Hello World', 'alice', '# Hello
+		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 Content here.
 ')`
@@ -326,7 +326,7 @@ func TestSynth_ReadPlainTextFile(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _snippets (filename, body) VALUES
-		('hello', 'Hello, world!
+		('hello.txt', 'Hello, world!
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
 
@@ -360,7 +360,7 @@ func TestSynth_NativeAccessStillWorks(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('hello-world', 'Hello World', 'alice', '# Hello
+		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 Content here.
 ')`
@@ -411,11 +411,11 @@ func TestSynth_MultipleFiles(t *testing.T) {
 
 	// Insert multiple rows
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('first-post', 'First Post', 'alice', 'Body of first post.
+		('first-post.md', 'First Post', 'alice', 'Body of first post.
 '),
-		('second-post', 'Second Post', 'bob', 'Body of second post.
+		('second-post.md', 'Second Post', 'bob', 'Body of second post.
 '),
-		('third-post', 'Third Post', 'charlie', 'Body of third post.
+		('third-post.md', 'Third Post', 'charlie', 'Body of third post.
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
 
@@ -468,7 +468,7 @@ func TestSynth_RenameMarkdownFile(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('hello-world', 'Hello World', 'alice', '# Hello World
+		('hello-world.md', 'Hello World', 'alice', '# Hello World
 
 This is my first post.
 ')`
@@ -573,7 +573,7 @@ func TestSynth_RenamePlainTextFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/snippets", []byte("txt\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _snippets (filename, body) VALUES ('scratch', 'Some scratch notes.
+	insertSQL := `INSERT INTO _snippets (filename, body) VALUES ('scratch.txt', 'Some scratch notes.
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
 
@@ -592,9 +592,9 @@ func TestSynth_RenamePlainTextFile(t *testing.T) {
 	assert.Equal(t, "Some scratch notes.\n", string(content.Data))
 }
 
-// TestSynth_RenameWithoutExtension tests renaming using paths without extension.
-// mv posts/hello-world posts/new-name → normalization handles missing extension
-func TestSynth_RenameWithoutExtension(t *testing.T) {
+// TestSynth_RenamePreservesFilename tests that rename stores exactly the
+// new filename in the DB (FS name == DB name, no extension manipulation).
+func TestSynth_RenamePreservesFilename(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {
 		return
@@ -609,19 +609,19 @@ func TestSynth_RenameWithoutExtension(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
-		('hello-world', 'Hello World', 'alice', 'Body content.
+		('hello-world.md', 'Hello World', 'alice', 'Body content.
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
 
-	// Rename without extensions
-	fsErr = ops.Rename(ctx, "/posts/hello-world", "/posts/new-name")
-	require.Nil(t, fsErr, "Rename without extension should succeed")
+	// Rename with extensions
+	fsErr = ops.Rename(ctx, "/posts/hello-world.md", "/posts/new-name.md")
+	require.Nil(t, fsErr, "Rename should succeed")
 
-	// Old path gone (with or without extension)
+	// Old path gone
 	_, fsErr = ops.ReadFile(ctx, "/posts/hello-world.md")
 	require.NotNil(t, fsErr, "old path should not exist after rename")
 
-	// New path works (with extension)
+	// New path works
 	content, fsErr := ops.ReadFile(ctx, "/posts/new-name.md")
 	require.Nil(t, fsErr, "new path should be readable")
 	assert.Contains(t, string(content.Data), "title: Hello World")

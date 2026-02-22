@@ -598,6 +598,7 @@ func TestSynth_Rename_AtomicCAS(t *testing.T) {
 		columns: map[string][]mockColumn{
 			"public.notes": {
 				{name: "id", dataType: "integer"},
+				{name: "filename", dataType: "text"},
 				{name: "title", dataType: "text"},
 				{name: "body", dataType: "text"},
 			},
@@ -607,9 +608,9 @@ func TestSynth_Rename_AtomicCAS(t *testing.T) {
 		},
 		allRowsData: map[string]*mockAllRows{
 			"public.notes": {
-				columns: []string{"id", "title", "body"},
+				columns: []string{"id", "filename", "title", "body"},
 				rows: [][]interface{}{
-					{1, "task1", "content"},
+					{1, "task1.md", "task1", "content"},
 				},
 			},
 		},

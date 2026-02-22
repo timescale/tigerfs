@@ -70,9 +70,9 @@ func SynthesizeMarkdown(columns []string, values []interface{}, roles *ColumnRol
 	return []byte(sb.String()), nil
 }
 
-// GetMarkdownFilename generates the .md filename for a row.
+// GetMarkdownFilename generates the display filename for a row in a markdown view.
 // Uses the filename column value, falling back to the primary key if NULL/empty.
-// Ensures the result has a .md extension (avoids double .md).
+// Returns the filename as-is — no extension is auto-appended.
 func GetMarkdownFilename(columns []string, values []interface{}, roles *ColumnRoles) string {
 	colMap := make(map[string]interface{}, len(columns))
 	for i, col := range columns {
@@ -90,11 +90,6 @@ func GetMarkdownFilename(columns []string, values []interface{}, roles *ColumnRo
 
 	// Sanitize for filesystem
 	name = sanitizeFilename(name)
-
-	// Add .md extension (avoid double)
-	if !strings.HasSuffix(strings.ToLower(name), ".md") {
-		name += ".md"
-	}
 
 	return name
 }

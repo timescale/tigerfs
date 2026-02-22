@@ -78,14 +78,14 @@ func TestGetPlainTextFilename(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "basic filename",
+			name:     "basic filename without extension",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "hello", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "hello.txt",
+			expected: "hello",
 		},
 		{
-			name:     "already has .txt",
+			name:     "filename with .txt extension preserved",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "hello.txt", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
@@ -96,14 +96,14 @@ func TestGetPlainTextFilename(t *testing.T) {
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"42", nil, "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "42.txt",
+			expected: "42",
 		},
 		{
 			name:     "preserves slashes",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "path/to/file", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "path/to/file.txt",
+			expected: "path/to/file",
 		},
 	}
 

@@ -4536,8 +4536,7 @@ When reading a markdown-format view, TigerFS synthesizes a `.md` file with YAML 
      - Append body content
      - Handle empty frontmatter (no delimiters)
    - Implement `GetMarkdownFilename(row map[string]any, roles *ColumnRoles, pk string) string`:
-     - Return filename from column value
-     - Add `.md` extension
+     - Return filename from column value (used as-is; no extension auto-appended)
      - Handle duplicates with PK suffix
 
 2. Add YAML dependency to `go.mod`:
@@ -4551,7 +4550,6 @@ When reading a markdown-format view, TigerFS synthesizes a `.md` file with YAML 
 
 4. Handle edge cases:
    - NULL filename → hide row or show as `<null>-{pk}.md`
-   - Filename contains `.md` → strip to avoid `hello.md.md`
    - Invalid filesystem characters → replace with `-`
 
 **Files to Create:**

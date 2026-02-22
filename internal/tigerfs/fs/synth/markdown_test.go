@@ -222,14 +222,14 @@ func TestGetMarkdownFilename(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "basic filename",
+			name:     "basic filename without extension",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"uuid-1", "hello-world", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "hello-world.md",
+			expected: "hello-world",
 		},
 		{
-			name:     "filename already has .md",
+			name:     "filename with .md extension preserved",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"uuid-1", "hello.md", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
@@ -240,28 +240,28 @@ func TestGetMarkdownFilename(t *testing.T) {
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"42", nil, "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "42.md",
+			expected: "42",
 		},
 		{
 			name:     "empty filename falls back to PK",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"42", "", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "42.md",
+			expected: "42",
 		},
 		{
 			name:     "slash in filename preserved",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "path/to/file", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "path/to/file.md",
+			expected: "path/to/file",
 		},
 		{
 			name:     "colon in filename sanitized",
 			columns:  []string{"id", "filename", "body"},
 			values:   []interface{}{"1", "file:name", "content"},
 			roles:    &ColumnRoles{Filename: "filename", Body: "body", PrimaryKey: "id"},
-			expected: "file-name.md",
+			expected: "file-name",
 		},
 	}
 

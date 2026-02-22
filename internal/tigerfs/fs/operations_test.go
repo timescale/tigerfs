@@ -2044,8 +2044,8 @@ func newSynthMockDB() *mockDBClient {
 			"public.posts": {
 				columns: []string{"id", "filename", "title", "author", "body"},
 				rows: [][]interface{}{
-					{1, "hello-world", "Hello World", "alice", "# Hello\n\nFirst post.\n"},
-					{2, "second-post", "Second Post", "bob", "# Second\n\nAnother post.\n"},
+					{1, "hello-world.md", "Hello World", "alice", "# Hello\n\nFirst post.\n"},
+					{2, "second-post.md", "Second Post", "bob", "# Second\n\nAnother post.\n"},
 				},
 			},
 		},
@@ -2214,8 +2214,8 @@ func TestReadDir_SynthView_PlainText(t *testing.T) {
 			"public.snippets": {
 				columns: []string{"id", "filename", "body"},
 				rows: [][]interface{}{
-					{1, "hello", "Hello, world!\n"},
-					{2, "goodbye", "Goodbye, world!\n"},
+					{1, "hello.txt", "Hello, world!\n"},
+					{2, "goodbye.txt", "Goodbye, world!\n"},
 				},
 			},
 		},
@@ -2263,7 +2263,7 @@ func TestReadFile_SynthView_PlainText(t *testing.T) {
 			"public.snippets": {
 				columns: []string{"id", "filename", "body"},
 				rows: [][]interface{}{
-					{1, "hello", "Hello, world!\n"},
+					{1, "hello.txt", "Hello, world!\n"},
 				},
 			},
 		},

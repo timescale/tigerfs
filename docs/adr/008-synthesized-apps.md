@@ -44,6 +44,8 @@ Implement **Synthesized Apps** that present database tables as synthesized files
 |--------|-----------|-----------|----------|
 | Markdown | `.md` | filename + YAML frontmatter + body | Blog posts, docs, notes with metadata |
 | Plain Text | `.txt` | filename + body (no frontmatter) | Simple notes, logs, snippets |
+
+**Note:** File extensions are user-controlled. TigerFS does not auto-append extensions; files appear exactly as stored in the `filename` column. Users who want `.md` include it in their filename; users who don't, don't.
 | Tasks | `.md` | `{number}-{name}-{status}.md` | Ordered task lists with status tracking |
 
 ### Two Creation Methods
@@ -122,7 +124,7 @@ This is the content from the body column...
 ```
 
 **Column mapping:**
-- `filename` column → becomes the `.md` filename
+- `filename` column → the displayed filename (include `.md` if desired)
 - `body` column → becomes markdown content after frontmatter
 - All other columns → become YAML frontmatter key-value pairs
 

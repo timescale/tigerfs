@@ -23,8 +23,9 @@ func ParsePlainText(content []byte) string {
 	return string(content)
 }
 
-// GetPlainTextFilename generates the .txt filename for a row.
+// GetPlainTextFilename generates the display filename for a row in a plain text view.
 // Uses the filename column value, falling back to the primary key if NULL/empty.
+// Returns the filename as-is — no extension is auto-appended.
 func GetPlainTextFilename(columns []string, values []interface{}, roles *ColumnRoles) string {
 	colMap := make(map[string]interface{}, len(columns))
 	for i, col := range columns {
@@ -40,10 +41,6 @@ func GetPlainTextFilename(columns []string, values []interface{}, roles *ColumnR
 	}
 
 	name = sanitizeFilename(name)
-
-	if !strings.HasSuffix(strings.ToLower(name), ".txt") {
-		name += ".txt"
-	}
 
 	return name
 }
