@@ -83,7 +83,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, histo
 		}
 
 		dirPrefix := parsed.PrimaryKey
-		filtered := filterHistoryAtLevel(filenames, dirPrefix, info)
+		filtered := filterHistoryAtLevel(filenames, dirPrefix)
 
 		entries := make([]Entry, 0, len(filtered)+1)
 		// Add .by/ entry only at root level (dirPrefix == "")
@@ -96,7 +96,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, histo
 
 	// /{table}/.history/foo.md/ — list versions for filename + .id file
 	// Build full DB filename from directory prefix + local filename
-	rawFilename := buildHistoryFilename(parsed.PrimaryKey, stripSynthExtension(parsed.HistoryFile, info))
+	rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
 
 	columns, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, limit)
 	if err != nil {
@@ -210,7 +210,7 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 
 	// .history/foo.md/ — filename directory
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID == "" {
-		rawFilename := buildHistoryFilename(parsed.PrimaryKey, stripSynthExtension(parsed.HistoryFile, info))
+		rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
 		_, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to check history by filename", Cause: err}
@@ -228,7 +228,7 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 
 	// .history/foo.md/<versionID> — version file by filename
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID != "" {
-		rawFilename := buildHistoryFilename(parsed.PrimaryKey, stripSynthExtension(parsed.HistoryFile, info))
+		rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
 		return o.statHistoryVersion(ctx, schema, historyTable, "filename", rawFilename, parsed.HistoryVersionID, info, now)
 	}
 
@@ -264,7 +264,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 
 	// .id file: return the row UUID for this filename
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID == ".id" {
-		rawFilename := buildHistoryFilename(parsed.PrimaryKey, stripSynthExtension(parsed.HistoryFile, info))
+		rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
 		columns, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to query history for .id", Cause: err}
@@ -287,7 +287,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 		filterValue = parsed.HistoryRowID
 	} else {
 		filterColumn = "filename"
-		filterValue = buildHistoryFilename(parsed.PrimaryKey, stripSynthExtension(parsed.HistoryFile, info))
+		filterValue = buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
 	}
 
 	columns, rows, err := o.db.QueryHistoryVersionByTime(ctx, schema, historyTable, filterColumn, filterValue, parsed.HistoryVersionID, 100)
@@ -382,16 +382,6 @@ func parseUUID(s string) ([16]byte, error) {
 	return id, nil
 }
 
-// stripSynthExtension removes the synth format extension from a filename.
-// e.g., "foo.md" → "foo" for a markdown view.
-func stripSynthExtension(filename string, info *synth.ViewInfo) string {
-	ext := info.Format.Extension()
-	if ext != "" && len(filename) > len(ext) && filename[len(filename)-len(ext):] == ext {
-		return filename[:len(filename)-len(ext)]
-	}
-	return filename
-}
-
 // buildHistoryFilename constructs the full DB filename from a directory prefix and local name.
 // At root level (dirPrefix=""), returns just the localName.
 // In subdirectories, returns "dirPrefix/localName".
@@ -403,11 +393,11 @@ func buildHistoryFilename(dirPrefix, localName string) string {
 }
 
 // filterHistoryAtLevel filters history filenames to those at exactly one level
-// below dirPrefix, returning directory entries with synth extension.
+// below dirPrefix, returning directory entries for each unique filename at that level.
 // For dirPrefix="" (root): returns filenames with no "/" (top-level only).
 // For dirPrefix="getting-started": returns basenames of filenames like
 // "getting-started/installation" (i.e., files in that subdirectory).
-func filterHistoryAtLevel(filenames []string, dirPrefix string, info *synth.ViewInfo) []Entry {
+func filterHistoryAtLevel(filenames []string, dirPrefix string) []Entry {
 	now := time.Now()
 	seen := make(map[string]bool)
 	var entries []Entry
@@ -439,13 +429,8 @@ func filterHistoryAtLevel(filenames []string, dirPrefix string, info *synth.View
 		}
 		seen[localName] = true
 
-		// Add synth extension for display
-		displayName := localName
-		if ext := info.Format.Extension(); ext != "" {
-			displayName = localName + ext
-		}
 		entries = append(entries, Entry{
-			Name:    displayName,
+			Name:    localName,
 			IsDir:   true,
 			Mode:    os.ModeDir | 0555,
 			ModTime: now,

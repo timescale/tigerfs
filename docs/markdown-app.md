@@ -28,7 +28,7 @@ Welcome...
 
 **Stored as:**
 ```
-id: 1, filename: "hello-world", title: "Hello", author: "alice", headers: {"draft": false}, body: "# Hello\n\nWelcome..."
+id: 1, filename: "hello-world.md", title: "Hello", author: "alice", headers: {"draft": false}, body: "# Hello\n\nWelcome..."
 ```
 
 ## Quick Start

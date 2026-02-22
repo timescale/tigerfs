@@ -11,56 +11,6 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
-func TestSynth_NormalizeSynthFilename(t *testing.T) {
-	tests := []struct {
-		name     string
-		filename string
-		format   synth.SynthFormat
-		want     string
-	}{
-		{
-			name:     "plain text without extension",
-			filename: "foo",
-			format:   synth.FormatPlainText,
-			want:     "foo.txt",
-		},
-		{
-			name:     "plain text already has extension",
-			filename: "foo.txt",
-			format:   synth.FormatPlainText,
-			want:     "foo.txt",
-		},
-		{
-			name:     "markdown without extension",
-			filename: "post",
-			format:   synth.FormatMarkdown,
-			want:     "post.md",
-		},
-		{
-			name:     "markdown already has extension",
-			filename: "post.md",
-			format:   synth.FormatMarkdown,
-			want:     "post.md",
-		},
-		{
-			name:     "native format unchanged (no extension)",
-			filename: "data",
-			format:   synth.FormatNative,
-			want:     "data",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			info := &synth.ViewInfo{Format: tt.format}
-			got := normalizeSynthFilename(tt.filename, info)
-			if got != tt.want {
-				t.Errorf("normalizeSynthFilename(%q) = %q, want %q", tt.filename, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestSynth_ExtractModTime(t *testing.T) {
 	fixedTime := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
 	mountTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -196,9 +146,9 @@ func newSynthHierarchicalMockDB() *mockDBClient {
 				rows: [][]interface{}{
 					{"uuid-1", "projects", "directory", nil, nil, nil},
 					{"uuid-2", "projects/web", "directory", nil, nil, nil},
-					{"uuid-3", "projects/web/todo", "file", "Todo List", "alice", "# Todo\n\nFix bugs.\n"},
-					{"uuid-4", "projects/web/notes", "file", "Notes", "bob", "# Notes\n\nMeeting notes.\n"},
-					{"uuid-5", "readme", "file", "Readme", "admin", "# Readme\n\nWelcome.\n"},
+					{"uuid-3", "projects/web/todo.md", "file", "Todo List", "alice", "# Todo\n\nFix bugs.\n"},
+					{"uuid-4", "projects/web/notes.md", "file", "Notes", "bob", "# Notes\n\nMeeting notes.\n"},
+					{"uuid-5", "readme.md", "file", "Readme", "admin", "# Readme\n\nWelcome.\n"},
 				},
 			},
 		},

@@ -262,9 +262,6 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 	// For hierarchical views, check for directory first (directory takes priority)
 	if info.SupportsHierarchy {
 		dirPath := filename
-		if ext := info.Format.Extension(); ext != "" {
-			dirPath = strings.TrimSuffix(dirPath, ext)
-		}
 
 		exists, fsErr := o.synthRowExists(ctx, parsed.Context.Schema, parsed.Context.TableName, info, dirPath, "directory")
 		if fsErr != nil {
@@ -298,12 +295,8 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 
 	modTime := extractModTime(columns, row, info)
 
-	// Use the canonical synthesized filename (with extension) for the entry name,
-	// even if the caller requested without extension (e.g., "foo" → "foo.txt").
-	synthName := normalizeSynthFilename(filename, info)
-
 	return &Entry{
-		Name:    synthName,
+		Name:    filename,
 		IsDir:   false,
 		Mode:    0644,
 		Size:    int64(len(content)),
@@ -348,13 +341,8 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		}
 	}
 
-	// Set the filename column from the path
-	// Strip extension to get the raw filename value
-	rawFilename := filename
-	if ext := info.Format.Extension(); ext != "" && strings.HasSuffix(rawFilename, ext) {
-		rawFilename = strings.TrimSuffix(rawFilename, ext)
-	}
-	colValues[info.Roles.Filename] = rawFilename
+	// Set the filename column from the path (FS name == DB name)
+	colValues[info.Roles.Filename] = filename
 
 	// For hierarchical views, set filetype='file' explicitly
 	if info.SupportsHierarchy {
@@ -392,7 +380,7 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 	} else {
 		// For hierarchical views, auto-create parent directories before inserting
 		if info.SupportsHierarchy {
-			if fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, rawFilename); fsErr != nil {
+			if fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, filename); fsErr != nil {
 				return fsErr
 			}
 		}
@@ -420,9 +408,6 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 	// For hierarchical views, check if this is a directory
 	if info.SupportsHierarchy {
 		dirPath := filename
-		if ext := info.Format.Extension(); ext != "" {
-			dirPath = strings.TrimSuffix(dirPath, ext)
-		}
 
 		exists, fsErr := o.synthRowExists(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
 		if fsErr != nil {
@@ -532,24 +517,10 @@ func (o *Operations) getSynthRowPKByFiletype(ctx context.Context, schema, table 
 	}
 }
 
-// normalizeSynthFilename ensures a filename has the expected synth extension.
-// For example, "foo" in a PlainText view becomes "foo.txt".
-// If the filename already has the extension, it's returned unchanged.
-func normalizeSynthFilename(filename string, info *synth.ViewInfo) string {
-	ext := info.Format.Extension()
-	if ext != "" && !strings.HasSuffix(filename, ext) {
-		return filename + ext
-	}
-	return filename
-}
-
 // getSynthRow looks up a row in a synth view by the synthesized filename.
 // Returns the column names and row values, or an error if not found.
 // For hierarchical views, only matches file rows (skips directory rows).
 func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, filename string) ([]string, []interface{}, *FSError) {
-	// Normalize filename to include synth extension (e.g., "foo" → "foo.txt")
-	filename = normalizeSynthFilename(filename, info)
-
 	// Get all rows and find the one matching the filename
 	// TODO: optimize with a direct query on the filename column
 	limit := o.config.DirListingLimit
@@ -643,13 +614,7 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 	// For hierarchical views, check if old path is a directory
 	if info.SupportsHierarchy {
 		oldDirPath := oldFilename
-		if ext := info.Format.Extension(); ext != "" {
-			oldDirPath = strings.TrimSuffix(oldDirPath, ext)
-		}
 		newDirPath := newFilename
-		if ext := info.Format.Extension(); ext != "" {
-			newDirPath = strings.TrimSuffix(newDirPath, ext)
-		}
 
 		exists, fsErr := o.synthRowExists(ctx, schema, table, info, oldDirPath, "directory")
 		if fsErr != nil {
@@ -677,15 +642,7 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 		}
 	}
 
-	// Regular file rename
-	// Normalize both filenames to include synth extension
-	oldFilename = normalizeSynthFilename(oldFilename, info)
-	newFilename = normalizeSynthFilename(newFilename, info)
-
-	// Look up the full DB row to get the actual raw filename value.
-	// We need the real DB value for the CAS WHERE clause because the
-	// synthesized filename may differ (e.g., DB stores "hello.md" but
-	// stripping the extension would give "hello", not "hello.md").
+	// Regular file rename — FS name == DB name, no extension normalization needed.
 	columns, row, fsErr := o.getSynthRow(ctx, schema, table, info, oldFilename)
 	if fsErr != nil {
 		return fsErr
@@ -708,27 +665,10 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 		}
 	}
 
-	// Compute new raw filename preserving the DB's extension convention.
-	// If the DB stores "hello-world.md" (with extension), the new name
-	// should also include the extension. If the DB stores "hello-world"
-	// (without), strip the extension from the new synthesized name.
-	rawNewFilename := newFilename
-	if ext := info.Format.Extension(); ext != "" {
-		if strings.HasSuffix(rawOldFilename, ext) {
-			// DB includes extension — ensure new name has it too
-			if !strings.HasSuffix(rawNewFilename, ext) {
-				rawNewFilename += ext
-			}
-		} else {
-			// DB omits extension — strip it from new name
-			rawNewFilename = strings.TrimSuffix(rawNewFilename, ext)
-		}
-	}
-
 	// Atomic rename: UPDATE SET filename = new WHERE pk = X AND filename = old.
 	// If another process already renamed this file, the WHERE won't match
 	// and we get "row not found" — exactly one concurrent rename wins.
-	err := o.db.UpdateColumnCAS(ctx, schema, table, info.Roles.PrimaryKey, pkValue, info.Roles.Filename, rawNewFilename, info.Roles.Filename, rawOldFilename)
+	err := o.db.UpdateColumnCAS(ctx, schema, table, info.Roles.PrimaryKey, pkValue, info.Roles.Filename, newFilename, info.Roles.Filename, rawOldFilename)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return &FSError{
@@ -753,11 +693,6 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	prefix := parsed.PrimaryKey
-
-	// Strip synth extension if present (e.g., "projects.md" → "projects")
-	if ext := info.Format.Extension(); ext != "" {
-		prefix = strings.TrimSuffix(prefix, ext)
-	}
 
 	// Get all rows from the view
 	limit := o.config.DirListingLimit
@@ -846,19 +781,14 @@ func (o *Operations) filterHierarchicalChildren(columns []string, rows [][]inter
 				ModTime: modTime,
 			})
 		} else {
-			// Add synth extension for files
-			displayName := childName
-			if ext := info.Format.Extension(); ext != "" && !strings.HasSuffix(displayName, ext) {
-				displayName += ext
-			}
 			// Synthesize content to get accurate size (CPU-only, no DB query)
 			var size int64
 			if content, err := o.synthesizeContent(columns, row, info); err == nil {
 				size = int64(len(content))
 			}
-			seen[displayName] = true
+			seen[childName] = true
 			entries = append(entries, Entry{
-				Name:    displayName,
+				Name:    childName,
 				IsDir:   false,
 				Mode:    0644,
 				Size:    size,
@@ -875,11 +805,6 @@ func (o *Operations) filterHierarchicalChildren(columns []string, rows [][]inter
 func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) *FSError {
 	fsCtx := parsed.Context
 	dirPath := parsed.PrimaryKey
-
-	// Strip synth extension if present
-	if ext := info.Format.Extension(); ext != "" {
-		dirPath = strings.TrimSuffix(dirPath, ext)
-	}
 
 	// Check if directory already exists
 	exists, err := o.synthRowExists(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
