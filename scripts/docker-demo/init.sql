@@ -214,7 +214,7 @@ CREATE TABLE "_blog" (
 );
 
 CREATE VIEW "blog" AS SELECT * FROM "_blog";
-COMMENT ON VIEW "blog" IS 'tigerfs:md';
+COMMENT ON VIEW "blog" IS 'tigerfs:md,history';
 
 CREATE OR REPLACE FUNCTION "set__blog_modified_at"()
 RETURNS TRIGGER AS $$
@@ -280,6 +280,73 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
     '2025-02-15 11:20:00+00',
     '2025-02-15 11:20:00+00'
 );
+
+-- History table for blog — captures every UPDATE and DELETE
+CREATE TABLE "_blog_history" (
+    id UUID,
+    filename TEXT NOT NULL,
+    filetype TEXT,
+    title TEXT,
+    author TEXT,
+    headers JSONB,
+    body TEXT,
+    created_at TIMESTAMPTZ,
+    modified_at TIMESTAMPTZ,
+    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    _operation TEXT NOT NULL
+);
+
+CREATE INDEX idx__blog_history_by_filename
+    ON "_blog_history" (filename, _history_id DESC);
+
+CREATE INDEX idx__blog_history_by_id
+    ON "_blog_history" (id, _history_id DESC);
+
+CREATE OR REPLACE FUNCTION "archive__blog_history"() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO "_blog_history"
+        (id, filename, filetype, title, author, headers, body, created_at, modified_at,
+         _history_id, _operation)
+    VALUES
+        (OLD.id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers, OLD.body,
+         OLD.created_at, OLD.modified_at,
+         uuidv7(), TG_OP::text);
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "trg__blog_history_archive"
+    BEFORE UPDATE OR DELETE ON "_blog"
+    FOR EACH ROW EXECUTE FUNCTION "archive__blog_history"();
+
+-- Convert to TimescaleDB hypertable for time-partitioned storage
+SELECT create_hypertable('_blog_history', '_history_id',
+    chunk_time_interval => INTERVAL '1 month');
+
+ALTER TABLE "_blog_history" SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'filename',
+    timescaledb.compress_orderby = '_history_id DESC'
+);
+
+SELECT add_compression_policy('_blog_history',
+    compress_after => INTERVAL '1 day');
+
+-- Seed some history entries by updating blog posts — simulates real editing
+-- Update hello-world to capture the original as a history entry
+UPDATE "_blog"
+SET body = E'Welcome to our blog! This is the first post on our new platform.\n\nWe''re excited to share ideas about databases, filesystems, and the\nintersection of Unix tooling with modern data infrastructure.\n\n## What to Expect\n\n- Tutorials on SQL and PostgreSQL\n- Tips for working with markdown\n- Deep dives into filesystem design\n- Guides for AI-powered workflows\n\nStay tuned for more posts!\n\n## Recent Updates\n\nWe''ve added synthesized app support — create markdown-backed directories\nwith a single command.',
+    title = 'Hello, World!'
+WHERE filename = 'hello-world.md';
+
+-- Update getting-started-with-sql to capture the original
+UPDATE "_blog"
+SET body = E'SQL is the lingua franca of data. Whether you''re building an app or\nanalyzing a dataset, knowing SQL is essential.\n\n## Your First Query\n\n```sql\nSELECT * FROM users WHERE active = true;\n```\n\nThis returns all active users from the `users` table.\n\n## Filtering Results\n\nUse `WHERE` clauses to narrow your results:\n\n```sql\nSELECT name, email\nFROM users\nWHERE age > 25\nORDER BY name;\n```\n\n## Joining Tables\n\nCombine related data with `JOIN`:\n\n```sql\nSELECT u.name, o.total\nFROM users u\nJOIN orders o ON o.user_id = u.id\nWHERE o.status = ''completed'';\n```\n\n## Next Steps\n\nTry creating views to simplify complex queries.',
+    title = 'Getting Started with SQL'
+WHERE filename = 'tutorials/getting-started-with-sql.md';
 
 -- ---------------------------------------------------------------------------
 -- App 2: docs (markdown, 4 pages in 2 subdirectories)
@@ -443,7 +510,7 @@ CREATE TABLE "_snippets" (
 );
 
 CREATE VIEW "snippets" AS SELECT * FROM "_snippets";
-COMMENT ON VIEW "snippets" IS 'tigerfs:txt';
+COMMENT ON VIEW "snippets" IS 'tigerfs:txt,history';
 
 CREATE OR REPLACE FUNCTION "set__snippets_modified_at"()
 RETURNS TRIGGER AS $$
@@ -481,3 +548,65 @@ INSERT INTO "_snippets" (filename, body, created_at, modified_at) VALUES
     '2025-02-12 10:00:00+00',
     '2025-02-12 10:00:00+00'
 );
+
+-- History table for snippets — captures every UPDATE and DELETE
+CREATE TABLE "_snippets_history" (
+    id UUID,
+    filename TEXT NOT NULL,
+    filetype TEXT,
+    body TEXT,
+    created_at TIMESTAMPTZ,
+    modified_at TIMESTAMPTZ,
+    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    _operation TEXT NOT NULL
+);
+
+CREATE INDEX idx__snippets_history_by_filename
+    ON "_snippets_history" (filename, _history_id DESC);
+
+CREATE INDEX idx__snippets_history_by_id
+    ON "_snippets_history" (id, _history_id DESC);
+
+CREATE OR REPLACE FUNCTION "archive__snippets_history"() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO "_snippets_history"
+        (id, filename, filetype, body, created_at, modified_at,
+         _history_id, _operation)
+    VALUES
+        (OLD.id, OLD.filename, OLD.filetype, OLD.body,
+         OLD.created_at, OLD.modified_at,
+         uuidv7(), TG_OP::text);
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER "trg__snippets_history_archive"
+    BEFORE UPDATE OR DELETE ON "_snippets"
+    FOR EACH ROW EXECUTE FUNCTION "archive__snippets_history"();
+
+-- Convert to TimescaleDB hypertable for time-partitioned storage
+SELECT create_hypertable('_snippets_history', '_history_id',
+    chunk_time_interval => INTERVAL '1 month');
+
+ALTER TABLE "_snippets_history" SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'filename',
+    timescaledb.compress_orderby = '_history_id DESC'
+);
+
+SELECT add_compression_policy('_snippets_history',
+    compress_after => INTERVAL '1 day');
+
+-- Seed some history entries by updating snippets — simulates real editing
+-- Update todo list to capture the original as a history entry
+UPDATE "_snippets"
+SET body = E'TODO List\n=========\n\n[ ] Set up CI/CD pipeline\n[ ] Write integration tests for FUSE adapter\n[x] Add CSV export support\n[x] Implement JSON row format\n[x] Create demo data script\n[ ] Update README with examples\n[ ] Benchmark large table performance\n[x] Add index-based navigation\n[x] Add synthesized markdown apps\n[ ] Add history browsing support'
+WHERE filename = 'todo.txt';
+
+-- Update scratch pad to capture the original
+UPDATE "_snippets"
+SET body = E'Random notes and scratch pad\n----------------------------\n\nUseful psql commands:\n  \\dt          list tables\n  \\dv          list views\n  \\d+ table    describe table with details\n  \\x           toggle expanded output\n  \\di          list indexes\n\nConnection string format:\n  postgres://user:pass@host:port/dbname?sslmode=disable\n\nQuick test:\n  SELECT version();\n  SELECT current_database();\n  SELECT current_user;\n\nTimescaleDB:\n  SELECT * FROM timescaledb_information.hypertables;'
+WHERE filename = 'scratch.txt';
