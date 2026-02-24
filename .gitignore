@@ -21,6 +21,9 @@ dist/
 *.tar.gz
 *.zip
 
+# Claude Code
+.claude/
+
 # Editor directories and files
 .idea/
 .vscode/
