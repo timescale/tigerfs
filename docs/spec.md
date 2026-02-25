@@ -1118,7 +1118,7 @@ ls /mnt/db/events/.first/200/.last/100/
 cat /mnt/db/orders/.by/status/pending/.filter/priority/high/.order/amount/.last/20/.export/json
 ```
 
-For complete documentation, see [docs/pipeline-queries.md](../docs/pipeline-queries.md).
+For complete documentation, see [docs/native-tables.md](../docs/native-tables.md).
 
 ---
 
