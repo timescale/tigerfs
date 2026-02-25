@@ -208,6 +208,7 @@ CREATE TABLE "_blog" (
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
@@ -290,6 +291,7 @@ CREATE TABLE "_blog_history" (
     author TEXT,
     headers JSONB,
     body TEXT,
+    encoding TEXT,
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -305,11 +307,11 @@ CREATE INDEX idx__blog_history_by_id
 CREATE OR REPLACE FUNCTION "archive__blog_history"() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO "_blog_history"
-        (id, filename, filetype, title, author, headers, body, created_at, modified_at,
+        (id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
         (OLD.id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers, OLD.body,
-         OLD.created_at, OLD.modified_at,
+         OLD.encoding, OLD.created_at, OLD.modified_at,
          uuidv7(), TG_OP::text);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
@@ -362,6 +364,7 @@ CREATE TABLE "_docs" (
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
@@ -435,6 +438,7 @@ CREATE TABLE "_docs_history" (
     author TEXT,
     headers JSONB,
     body TEXT,
+    encoding TEXT,
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -450,11 +454,11 @@ CREATE INDEX idx__docs_history_by_id
 CREATE OR REPLACE FUNCTION "archive__docs_history"() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO "_docs_history"
-        (id, filename, filetype, title, author, headers, body, created_at, modified_at,
+        (id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
         (OLD.id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers, OLD.body,
-         OLD.created_at, OLD.modified_at,
+         OLD.encoding, OLD.created_at, OLD.modified_at,
          uuidv7(), TG_OP::text);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
@@ -504,6 +508,7 @@ CREATE TABLE "_snippets" (
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
@@ -555,6 +560,7 @@ CREATE TABLE "_snippets_history" (
     filename TEXT NOT NULL,
     filetype TEXT,
     body TEXT,
+    encoding TEXT,
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -570,11 +576,11 @@ CREATE INDEX idx__snippets_history_by_id
 CREATE OR REPLACE FUNCTION "archive__snippets_history"() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO "_snippets_history"
-        (id, filename, filetype, body, created_at, modified_at,
+        (id, filename, filetype, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
         (OLD.id, OLD.filename, OLD.filetype, OLD.body,
-         OLD.created_at, OLD.modified_at,
+         OLD.encoding, OLD.created_at, OLD.modified_at,
          uuidv7(), TG_OP::text);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
