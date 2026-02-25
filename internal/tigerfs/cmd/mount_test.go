@@ -24,12 +24,21 @@ func TestSanitizeConnectionString(t *testing.T) {
 			connStr: "postgres://user@localhost/mydb",
 			want:    "postgres://user@localhost/mydb",
 		},
-		// TODO: Add tests for password redaction when implemented
-		// {
-		// 	name:    "connection string with password",
-		// 	connStr: "postgres://user:secret@localhost/mydb",
-		// 	want:    "postgres://user:***@localhost/mydb",
-		// },
+		{
+			name:    "connection string with password stripped",
+			connStr: "postgres://user:secret@localhost/mydb",
+			want:    "postgres://user@localhost/mydb",
+		},
+		{
+			name:    "connection string with encoded password stripped",
+			connStr: "postgres://user:p%40ss@localhost:5432/mydb?sslmode=require",
+			want:    "postgres://user@localhost:5432/mydb?sslmode=require",
+		},
+		{
+			name:    "non-URL string returned as-is",
+			connStr: "host=localhost dbname=mydb",
+			want:    "host=localhost dbname=mydb",
+		},
 	}
 
 	for _, tt := range tests {
