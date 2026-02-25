@@ -121,7 +121,7 @@ Examples:
 			}
 
 			// Auto-mount the new filesystem.
-			mountpoint, err := resolveCreateMountpoint(mountpointArg, displayName)
+			mountpoint, err := resolveCreateMountpoint(mountpointArg, displayName, cfg.DefaultMountDir)
 			if err != nil {
 				return err
 			}
@@ -181,8 +181,8 @@ func resolveCreateBackend(nameArg string, cfg *config.Config) (backend.Backend, 
 // resolveCreateMountpoint determines where to mount after creation.
 //
 // If mountpointArg is given, it's used (resolved to absolute path).
-// Otherwise, defaults to /tmp/<name>.
-func resolveCreateMountpoint(mountpointArg, name string) (string, error) {
+// Otherwise, defaults to baseDir/<name>.
+func resolveCreateMountpoint(mountpointArg, name, baseDir string) (string, error) {
 	if mountpointArg != "" {
 		abs, err := filepath.Abs(mountpointArg)
 		if err != nil {
@@ -194,7 +194,7 @@ func resolveCreateMountpoint(mountpointArg, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("cannot determine mountpoint: no name and no mountpoint specified")
 	}
-	return filepath.Join(os.TempDir(), name), nil
+	return filepath.Join(baseDir, name), nil
 }
 
 // startMountProcess starts `tigerfs mount` as a background process.

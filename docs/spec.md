@@ -1414,6 +1414,7 @@ connection:
   pool_max_idle: 5             # Max idle connections
   password_command: "..."      # Command to retrieve password
   default_backend: tiger       # Default cloud backend for bare names (tiger or ghost)
+  default_mount_dir: /tmp      # Base directory for auto-generated mountpoints
 
 # Filesystem behavior
 filesystem:
@@ -1472,6 +1473,7 @@ debug: false                   # Enable debug mode (verbose logging)
 - `TIGERFS_PASSWORD_COMMAND` - Command to retrieve password (e.g., from secrets manager)
 - `TIGERFS_DEBUG` - Enable debug mode
 - `TIGERFS_DEFAULT_BACKEND` - Default cloud backend for bare names (`tiger` or `ghost`)
+- `TIGERFS_DEFAULT_MOUNT_DIR` - Base directory for auto-generated mountpoints (default: `/tmp`)
 - `TIGER_PUBLIC_KEY` - Tiger Cloud client credential public key (for headless auth)
 - `TIGER_SECRET_KEY` - Tiger Cloud client credential secret key (for headless auth)
 - `TIGER_PROJECT_ID` - Tiger Cloud project ID (for headless auth)

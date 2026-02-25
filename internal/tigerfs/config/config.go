@@ -26,7 +26,8 @@ type Config struct {
 	TigerCloudProjectID string `mapstructure:"tiger_project_id"`
 
 	// Backend
-	DefaultBackend string `mapstructure:"default_backend"` // "tiger", "ghost", or "" (none)
+	DefaultBackend  string `mapstructure:"default_backend"`   // "tiger", "ghost", or "" (none)
+	DefaultMountDir string `mapstructure:"default_mount_dir"` // Base directory for auto-generated mountpoints (default: /tmp)
 
 	// Filesystem
 	DirListingLimit      int           `mapstructure:"dir_listing_limit"`
@@ -98,6 +99,7 @@ func Init() error {
 	viper.SetDefault("debug", false)
 	viper.SetDefault("legacy_fuse", false)
 	viper.SetDefault("default_backend", "")
+	viper.SetDefault("default_mount_dir", "/tmp")
 	viper.SetDefault("config_dir", GetDefaultConfigDir())
 
 	// Setup config file

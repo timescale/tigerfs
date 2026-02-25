@@ -3,7 +3,6 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -70,13 +69,19 @@ Examples:
 			}
 
 			// Resolve SOURCE to a backend + service ID.
-			b, sourceID, sourceDesc, err := resolveForkSource(args[0], cfg)
+			b, sourceID, sourceDesc, sourceMountpoint, err := resolveForkSource(args[0], cfg)
 			if err != nil {
 				return err
 			}
 
+			// Determine base directory for fork mountpoint.
+			baseDir := cfg.DefaultMountDir
+			if sourceMountpoint != "" {
+				baseDir = filepath.Dir(sourceMountpoint)
+			}
+
 			// Resolve DEST to a service name and mountpoint.
-			forkName, mountpoint := resolveForkDest(args, nameFlag)
+			forkName, mountpoint := resolveForkDest(args, nameFlag, baseDir)
 
 			if !jsonOutput {
 				fmt.Fprintf(cmd.OutOrStdout(), "Forking %s (%s)...\n", sourceDesc, b.Name())
@@ -128,7 +133,7 @@ Examples:
 					fmt.Fprintf(out, "To mount: tigerfs mount %s:%s /path/to/mountpoint\n", b.CLIName(), result.ID)
 					return nil
 				}
-				mountpoint = filepath.Join(os.TempDir(), displayName)
+				mountpoint = filepath.Join(baseDir, displayName)
 			}
 
 			fmt.Fprintln(out)
@@ -155,8 +160,9 @@ Examples:
 // resolveForkSource determines the backend and source service ID from
 // the SOURCE argument.
 //
-// Returns (backend, serviceID, humanDescription, error).
-func resolveForkSource(source string, cfg *config.Config) (backend.Backend, string, string, error) {
+// Returns (backend, serviceID, humanDescription, sourceMountpoint, error).
+// sourceMountpoint is non-empty only when SOURCE was a mounted filesystem path.
+func resolveForkSource(source string, cfg *config.Config) (backend.Backend, string, string, string, error) {
 	// Path detection: starts with . or / → mountpoint lookup.
 	if isPath(source) {
 		return resolveForkSourceFromMount(source)
@@ -165,63 +171,64 @@ func resolveForkSource(source string, cfg *config.Config) (backend.Backend, stri
 	// Prefix detection: tiger:X or ghost:X → backend reference.
 	b, id, err := backend.Resolve(source)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", "", err
 	}
 	if b != nil {
-		return b, id, fmt.Sprintf("%s:%s", b.CLIName(), id), nil
+		return b, id, fmt.Sprintf("%s:%s", b.CLIName(), id), "", nil
 	}
 
 	// Bare name → default_backend config.
 	b, err = backend.ForName(cfg.DefaultBackend)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("no backend specified.\n"+
+		return nil, "", "", "", fmt.Errorf("no backend specified.\n"+
 			"Set default_backend in ~/.config/tigerfs/config.yaml or use a prefix: tigerfs fork tiger:%s", source)
 	}
-	return b, source, source, nil
+	return b, source, source, "", nil
 }
 
 // resolveForkSourceFromMount looks up a mountpoint in the registry and
-// returns its backend and service ID.
-func resolveForkSourceFromMount(mountpoint string) (backend.Backend, string, string, error) {
+// returns its backend, service ID, description, and the absolute mountpoint path.
+func resolveForkSourceFromMount(mountpoint string) (backend.Backend, string, string, string, error) {
 	absMountpoint, err := filepath.Abs(mountpoint)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to resolve mountpoint path: %w", err)
+		return nil, "", "", "", fmt.Errorf("failed to resolve mountpoint path: %w", err)
 	}
 
 	registry, err := mount.NewRegistry("")
 	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to open registry: %w", err)
+		return nil, "", "", "", fmt.Errorf("failed to open registry: %w", err)
 	}
 
 	entry, err := registry.Get(absMountpoint)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to look up mount: %w", err)
+		return nil, "", "", "", fmt.Errorf("failed to look up mount: %w", err)
 	}
 	if entry == nil {
-		return nil, "", "", fmt.Errorf("no TigerFS mount found at %s", absMountpoint)
+		return nil, "", "", "", fmt.Errorf("no TigerFS mount found at %s", absMountpoint)
 	}
 
 	if entry.CLIBackend == "" || entry.ServiceID == "" {
-		return nil, "", "", fmt.Errorf("cannot fork — filesystem at %s has no cloud service.\n"+
+		return nil, "", "", "", fmt.Errorf("cannot fork — filesystem at %s has no cloud service.\n"+
 			"Fork requires a Tiger Cloud or Ghost backed filesystem.", absMountpoint)
 	}
 
 	b, err := backend.ForName(entry.CLIBackend)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("failed to resolve backend %q: %w", entry.CLIBackend, err)
+		return nil, "", "", "", fmt.Errorf("failed to resolve backend %q: %w", entry.CLIBackend, err)
 	}
 
 	desc := fmt.Sprintf("filesystem at %s", absMountpoint)
-	return b, entry.ServiceID, desc, nil
+	return b, entry.ServiceID, desc, absMountpoint, nil
 }
 
 // resolveForkDest determines the fork service name and mountpoint from
-// the DEST argument and --name flag.
+// the DEST argument and --name flag. baseDir is the directory used when
+// DEST is a bare name (e.g., baseDir/NAME).
 //
 // Returns (serviceName, mountpoint). Either may be empty:
 //   - serviceName empty = auto-generate
 //   - mountpoint empty = determine after fork from result name
-func resolveForkDest(args []string, nameFlag string) (string, string) {
+func resolveForkDest(args []string, nameFlag, baseDir string) (string, string) {
 	if len(args) < 2 {
 		// No DEST — auto-name, mountpoint determined after fork.
 		return nameFlag, ""
@@ -242,12 +249,12 @@ func resolveForkDest(args []string, nameFlag string) (string, string) {
 		return name, abs
 	}
 
-	// DEST is a name → service name, mount at /tmp/NAME.
+	// DEST is a bare name → service name, mount at baseDir/NAME.
 	name := dest
 	if nameFlag != "" {
 		name = nameFlag
 	}
-	return name, filepath.Join(os.TempDir(), dest)
+	return name, filepath.Join(baseDir, dest)
 }
 
 // isPath returns true if s looks like a filesystem path (starts with . or /).
