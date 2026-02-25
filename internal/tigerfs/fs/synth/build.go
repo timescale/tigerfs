@@ -11,6 +11,7 @@ import "fmt"
 //   - title, author: text frontmatter columns
 //   - headers: JSONB for user-defined frontmatter key-value pairs
 //   - body: text for markdown content
+//   - encoding: text indicating body encoding ('utf8' or 'base64')
 //   - created_at: timestamptz with auto-default
 //   - modified_at: timestamptz with auto-default
 func GenerateMarkdownTableSQL(schema, name string) string {
@@ -22,6 +23,7 @@ func GenerateMarkdownTableSQL(schema, name string) string {
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
@@ -35,6 +37,7 @@ func GenerateMarkdownTableSQL(schema, name string) string {
 //   - id: UUID primary key with auto-generation
 //   - filename: unique text for .txt file naming
 //   - body: text for file content
+//   - encoding: text indicating body encoding ('utf8' or 'base64')
 //   - created_at: timestamptz with auto-default
 //   - modified_at: timestamptz with auto-default
 func GeneratePlainTextTableSQL(schema, name string) string {
@@ -43,6 +46,7 @@ func GeneratePlainTextTableSQL(schema, name string) string {
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
@@ -170,6 +174,7 @@ func GenerateHistorySQL(schema, appName string) []string {
     author TEXT,
     headers JSONB,
     body TEXT,
+    encoding TEXT,
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
@@ -193,11 +198,11 @@ func GenerateHistorySQL(schema, appName string) []string {
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO %s
-        (id, filename, filetype, title, author, headers, body, created_at, modified_at,
+        (id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
         (OLD.id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers, OLD.body,
-         OLD.created_at, OLD.modified_at,
+         OLD.encoding, OLD.created_at, OLD.modified_at,
          uuidv7(), TG_OP::text);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
