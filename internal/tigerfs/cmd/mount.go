@@ -46,7 +46,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var legacyFuse bool
 
 	cmd := &cobra.Command{
-		Use:   "mount [CONNECTION] MOUNTPOINT",
+		Use:   "mount [CONNECTION] [MOUNTPOINT]",
 		Short: "Mount a PostgreSQL database as a filesystem (default command)",
 		Long: `Mount a PostgreSQL database as a filesystem directory.
 
@@ -57,14 +57,17 @@ CONNECTION uses a prefix to select the backend:
   ghost:ID    Ghost database by ID
   postgres:// Direct connection string
 
-Examples:
-  # Mount Tiger Cloud service
-  tigerfs mount tiger:e6ue9697jf /mnt/db
+MOUNTPOINT is optional when CONNECTION has a backend prefix (tiger: or ghost:).
+When omitted, the mountpoint defaults to <default_mount_dir>/<ID>.
 
-  # Mount Ghost database
+Examples:
+  # Mount Tiger Cloud service (auto-derived mountpoint)
+  tigerfs mount tiger:e6ue9697jf
+
+  # Mount Ghost database with explicit mountpoint
   tigerfs mount ghost:a2x6xoj0oz /mnt/db
 
-  # Mount using connection string
+  # Mount using connection string (mountpoint required)
   tigerfs mount postgres://user@host/db /mnt/db
 
   # Mount read-only
@@ -76,13 +79,16 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 
-			// Parse arguments — connection string is optional, mountpoint is required.
-			var connStr, mountpoint string
-			if len(args) == 2 {
-				connStr = args[0]
-				mountpoint = args[1]
-			} else {
-				mountpoint = args[0]
+			// Load configuration first — needed for DefaultMountDir during arg resolution.
+			cfg, err := config.Load()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+
+			// Parse arguments — mountpoint is optional when a backend prefix is used.
+			connStr, mountpoint, err := resolveMountArgs(args, cfg.DefaultMountDir)
+			if err != nil {
+				return err
 			}
 
 			// Resolve backend prefix (tiger:ID, ghost:ID, or direct connection).
@@ -113,16 +119,17 @@ Examples:
 				return fmt.Errorf("failed to resolve mountpoint path: %w", err)
 			}
 
+			// Auto-create mountpoint directory when it was derived from a backend prefix.
+			if len(args) == 1 {
+				if mkErr := os.MkdirAll(absMountpoint, 0755); mkErr != nil {
+					return fmt.Errorf("failed to create mountpoint directory: %w", mkErr)
+				}
+			}
+
 			logging.Info("Starting TigerFS mount",
 				zap.String("mountpoint", absMountpoint),
 				zap.Bool("read_only", readOnly),
 			)
-
-			// Load configuration from file, environment, and flags.
-			cfg, err := config.Load()
-			if err != nil {
-				return fmt.Errorf("failed to load config: %w", err)
-			}
 
 			if schema != "" {
 				cfg.DefaultSchema = schema
@@ -185,6 +192,38 @@ Examples:
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 
 	return cmd
+}
+
+// resolveMountArgs resolves the connection string and mountpoint from
+// command-line arguments.
+//
+// With 2 args: first is connection, second is mountpoint.
+// With 1 arg and a backend prefix (tiger:, ghost:): connection ref with
+// mountpoint auto-derived as baseDir/<id>.
+// With 1 arg and no backend prefix: treated as mountpoint (existing behavior).
+//
+// Parameters:
+//   - args: Command-line arguments (1 or 2 elements)
+//   - baseDir: Base directory for auto-derived mountpoints (e.g., /tmp)
+//
+// Returns (connStr, mountpoint, error).
+func resolveMountArgs(args []string, baseDir string) (string, string, error) {
+	if len(args) == 2 {
+		return args[0], args[1], nil
+	}
+
+	ref := args[0]
+	b, id, err := backend.Resolve(ref)
+	if err != nil {
+		return "", "", err
+	}
+	if b != nil {
+		// Backend prefix → connection ref, derive mountpoint.
+		return ref, filepath.Join(baseDir, id), nil
+	}
+
+	// No backend prefix → treat as mountpoint (existing behavior).
+	return "", ref, nil
 }
 
 // registerMount adds the current mount to the registry for discovery.
