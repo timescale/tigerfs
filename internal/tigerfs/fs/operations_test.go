@@ -2354,3 +2354,24 @@ func TestSynth_WriteBinaryFile(t *testing.T) {
 	require.NoError(t, decErr)
 	assert.Equal(t, binaryData, decoded)
 }
+
+// TestSynth_ReadBinaryFile verifies base64-encoded rows are decoded back to raw bytes.
+func TestSynth_ReadBinaryFile(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDBWithEncoding()
+
+	// Add a binary file row to the mock
+	binaryData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}
+	encoded := base64.StdEncoding.EncodeToString(binaryData)
+	mockDB.allRowsData["public.posts"].rows = append(
+		mockDB.allRowsData["public.posts"].rows,
+		[]interface{}{3, "photo.jpeg", nil, nil, encoded, "base64"},
+	)
+
+	ops := NewOperations(cfg, mockDB)
+	content, err := ops.ReadFile(context.Background(), "/posts/photo.jpeg")
+
+	require.Nil(t, err)
+	require.NotNil(t, content)
+	assert.Equal(t, binaryData, content.Data)
+}
