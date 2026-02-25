@@ -75,15 +75,26 @@ func GetSchemas(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 	return schemas, nil
 }
 
-// GetTables returns all tables in a given schema
+// GetTables returns all user tables in a given schema.
+// Excludes tables owned by extensions (e.g., pg_buffercache internal tables)
+// via pg_depend deptype='e'. Hypertables are NOT excluded — TimescaleDB
+// tracks them in its own catalog, not pg_depend.
 func GetTables(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
 	logging.Debug("Querying tables from information_schema", zap.String("schema", schema))
 
 	query := `
-		SELECT table_name
-		FROM information_schema.tables
-		WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-		ORDER BY table_name
+		SELECT t.table_name
+		FROM information_schema.tables t
+		WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
+		AND NOT EXISTS (
+			SELECT 1 FROM pg_depend d
+			JOIN pg_class c ON d.objid = c.oid
+			JOIN pg_namespace n ON c.relnamespace = n.oid
+			WHERE n.nspname = t.table_schema
+			AND c.relname = t.table_name
+			AND d.deptype = 'e'
+		)
+		ORDER BY t.table_name
 	`
 
 	rows, err := pool.Query(ctx, query, schema)
@@ -129,15 +140,25 @@ func (c *Client) GetTables(ctx context.Context, schema string) ([]string, error)
 	return GetTables(ctx, c.pool, schema)
 }
 
-// GetViews returns all views in a given schema
+// GetViews returns all user views in a given schema.
+// Excludes views owned by extensions (e.g., pg_buffercache, pg_buffercache_numa)
+// via pg_depend deptype='e'.
 func GetViews(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
 	logging.Debug("Querying views from information_schema", zap.String("schema", schema))
 
 	query := `
-		SELECT table_name
-		FROM information_schema.tables
-		WHERE table_schema = $1 AND table_type = 'VIEW'
-		ORDER BY table_name
+		SELECT t.table_name
+		FROM information_schema.tables t
+		WHERE t.table_schema = $1 AND t.table_type = 'VIEW'
+		AND NOT EXISTS (
+			SELECT 1 FROM pg_depend d
+			JOIN pg_class c ON d.objid = c.oid
+			JOIN pg_namespace n ON c.relnamespace = n.oid
+			WHERE n.nspname = t.table_schema
+			AND c.relname = t.table_name
+			AND d.deptype = 'e'
+		)
+		ORDER BY t.table_name
 	`
 
 	rows, err := pool.Query(ctx, query, schema)
