@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -43,6 +41,7 @@ func TestResolveForkDest(t *testing.T) {
 		name           string
 		args           []string
 		nameFlag       string
+		baseDir        string
 		wantName       string
 		wantMountpoint string // exact match; empty = check emptiness only
 	}{
@@ -50,32 +49,37 @@ func TestResolveForkDest(t *testing.T) {
 			name:     "no DEST, no flag",
 			args:     []string{"/tmp/prod"},
 			nameFlag: "",
+			baseDir:  "/tmp",
 			wantName: "",
 		},
 		{
 			name:     "no DEST, with name flag",
 			args:     []string{"/tmp/prod"},
 			nameFlag: "my-fork",
+			baseDir:  "/tmp",
 			wantName: "my-fork",
 		},
 		{
 			name:           "DEST is bare name",
 			args:           []string{"/tmp/prod", "my-fork"},
 			nameFlag:       "",
+			baseDir:        "/tmp",
 			wantName:       "my-fork",
-			wantMountpoint: filepath.Join(os.TempDir(), "my-fork"),
+			wantMountpoint: "/tmp/my-fork",
 		},
 		{
 			name:           "DEST is bare name, flag overrides",
 			args:           []string{"/tmp/prod", "my-fork"},
 			nameFlag:       "override",
+			baseDir:        "/tmp",
 			wantName:       "override",
-			wantMountpoint: filepath.Join(os.TempDir(), "my-fork"),
+			wantMountpoint: "/tmp/my-fork",
 		},
 		{
 			name:           "DEST is absolute path",
 			args:           []string{"/tmp/prod", "/mnt/data"},
 			nameFlag:       "",
+			baseDir:        "/tmp",
 			wantName:       "data", // basename
 			wantMountpoint: "/mnt/data",
 		},
@@ -83,14 +87,23 @@ func TestResolveForkDest(t *testing.T) {
 			name:           "DEST is absolute path, flag overrides name",
 			args:           []string{"/tmp/prod", "/mnt/data"},
 			nameFlag:       "custom",
+			baseDir:        "/tmp",
 			wantName:       "custom",
 			wantMountpoint: "/mnt/data",
+		},
+		{
+			name:           "DEST is bare name, custom base dir",
+			args:           []string{"/tmp/prod", "my-fork"},
+			nameFlag:       "",
+			baseDir:        "/mnt/data",
+			wantName:       "my-fork",
+			wantMountpoint: "/mnt/data/my-fork",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			name, mountpoint := resolveForkDest(tt.args, tt.nameFlag)
+			name, mountpoint := resolveForkDest(tt.args, tt.nameFlag, tt.baseDir)
 			if name != tt.wantName {
 				t.Errorf("resolveForkDest() name = %q, want %q", name, tt.wantName)
 			}

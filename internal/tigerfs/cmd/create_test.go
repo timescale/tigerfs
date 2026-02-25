@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -86,12 +85,11 @@ func TestResolveCreateBackend(t *testing.T) {
 }
 
 func TestResolveCreateMountpoint(t *testing.T) {
-	tmpDir := os.TempDir()
-
 	tests := []struct {
 		name          string
 		mountpointArg string
 		serviceName   string
+		baseDir       string
 		wantPath      string // exact match, or "" to check prefix
 		wantPrefix    string // if wantPath is empty, check this prefix
 		wantErr       bool
@@ -100,31 +98,42 @@ func TestResolveCreateMountpoint(t *testing.T) {
 			name:          "explicit absolute path",
 			mountpointArg: "/mnt/data",
 			serviceName:   "ignored",
+			baseDir:       "/tmp",
 			wantPath:      "/mnt/data",
 		},
 		{
 			name:          "no mountpoint, name provided",
 			mountpointArg: "",
 			serviceName:   "my-service",
-			wantPath:      filepath.Join(tmpDir, "my-service"),
+			baseDir:       "/tmp",
+			wantPath:      "/tmp/my-service",
 		},
 		{
 			name:          "no mountpoint, no name",
 			mountpointArg: "",
 			serviceName:   "",
+			baseDir:       "/tmp",
 			wantErr:       true,
 		},
 		{
 			name:          "relative path",
 			mountpointArg: "./mydata",
 			serviceName:   "ignored",
+			baseDir:       "/tmp",
 			wantPrefix:    "/", // resolved to absolute
+		},
+		{
+			name:          "custom base directory",
+			mountpointArg: "",
+			serviceName:   "my-service",
+			baseDir:       "/mnt/data",
+			wantPath:      "/mnt/data/my-service",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveCreateMountpoint(tt.mountpointArg, tt.serviceName)
+			got, err := resolveCreateMountpoint(tt.mountpointArg, tt.serviceName, tt.baseDir)
 
 			if tt.wantErr {
 				if err == nil {
