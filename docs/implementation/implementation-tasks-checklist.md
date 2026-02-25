@@ -54,7 +54,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 3.3 | Implement List Command | 1846 |
 | ✅ | 3.4 | Implement Test Connection Command | 1883 |
 | ✅ | 3.5 | Implement Config Commands | 1925 |
-| ✅ | 3.6 | Implement Tiger Cloud Integration | 1970 |
+| ✅ | 3.6 | Implement Cloud Backend Integration (tiger:/ghost: prefix, create, fork, info) | 1970 |
 | ✅ | 3.7 | Example Workflows for Basic Functionality | 2018 |
 
 ---
