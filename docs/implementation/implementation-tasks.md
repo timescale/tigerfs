@@ -1967,50 +1967,50 @@ go run ./cmd/tigerfs config path
 
 ---
 
-### Task 3.6: Implement Tiger Cloud Integration
+### Task 3.6: Implement Cloud Backend Integration
 
-**Objective:** Support `--tiger-service-id` flag to mount Tiger Cloud services
+**Objective:** Support Tiger Cloud and Ghost backends via prefix scheme (`tiger:<id>`, `ghost:<id>`) with `create`, `fork`, and `info` commands.
 
-**Steps:**
-1. Open `internal/tigerfs/cmd/mount.go`
-2. Add Tiger Cloud integration:
-   - Check if `--tiger-service-id` flag provided
-   - Execute: `tiger db connection-string --with-password --service-id=<id>`
-   - Capture stdout (connection string)
-   - Use connection string for mount
-3. Handle errors:
-   - Tiger CLI not found
-   - Not authenticated
-   - Service not found
-   - Service not running
-4. Add tests (mock tiger CLI execution)
+**Implemented (see ADR-013 for design):**
+1. Created `internal/tigerfs/backend/` package with `Backend` interface, `TigerBackend`, `GhostBackend`, `Resolve()` function
+2. Updated `mount` command to accept `tiger:<id>` / `ghost:<id>` prefix on CONNECTION argument (replaced old `--tiger-service-id` flag)
+3. Added `tigerfs create [BACKEND:]NAME [MOUNTPOINT]` command
+4. Added `tigerfs fork SOURCE [DEST]` command
+5. Added `tigerfs info [MOUNTPOINT]` command
+6. Added `default_backend` config option for bare name resolution
+7. Removed old `--host`, `--port`, `--user`, `--database`, `--tiger-service-id` flags
 
-**Files to Modify:**
-- `internal/tigerfs/cmd/mount.go`
+**Files Created:**
+- `internal/tigerfs/backend/backend.go` (interface and types)
+- `internal/tigerfs/backend/tiger.go` (Tiger Cloud backend)
+- `internal/tigerfs/backend/ghost.go` (Ghost backend)
+- `internal/tigerfs/backend/resolve.go` (prefix resolution)
+- `internal/tigerfs/backend/errors.go` (error handling)
+- `internal/tigerfs/backend/resolve_test.go`
+- `internal/tigerfs/backend/errors_test.go`
+- `internal/tigerfs/cmd/create.go`
+- `internal/tigerfs/cmd/fork.go`
+- `internal/tigerfs/cmd/info.go`
+- `internal/tigerfs/cmd/create_test.go`
+- `internal/tigerfs/cmd/fork_test.go`
+- `docs/adr/013-backend-prefix-scheme.md`
 
-**Files to Create:**
-- `internal/tigerfs/tiger/integration.go` (Tiger CLI integration)
-- `internal/tigerfs/tiger/integration_test.go`
+**Files Modified:**
+- `internal/tigerfs/cmd/mount.go` (prefix scheme, removed old flags)
+- `internal/tigerfs/cmd/root.go` (added new commands)
+- `internal/tigerfs/cmd/status.go` (shows backend/service info)
+- `internal/tigerfs/mount/registry.go` (ServiceID, CLIBackend fields)
+- `internal/tigerfs/config/config.go` (DefaultBackend field)
+- `internal/tigerfs/db/connection.go` (uses backend.TigerBackend)
 
-**Verification:**
-```bash
-# With real Tiger Cloud service (if available)
-go run ./cmd/tigerfs --tiger-service-id=<your-service-id> /tmp/testmount
-ls /tmp/testmount/
-# Should list tables from Tiger Cloud database
-
-# Without tiger CLI
-mv $(which tiger) /tmp/tiger.bak
-go run ./cmd/tigerfs --tiger-service-id=test /tmp/testmount
-# Should error: tiger CLI not found in PATH
-mv /tmp/tiger.bak $(which tiger)
-```
+**Files Deleted:**
+- `internal/tigerfs/tigercloud/` (replaced by backend/)
 
 **Completion Criteria:**
-- Tiger service ID flag working
-- Calls tiger CLI correctly
-- Connection string parsed
-- Error messages clear
+- Prefix scheme resolves tiger:/ghost:/postgres:// correctly
+- Create, fork, info commands work with both backends
+- Mount accepts prefix-style connection references
+- Error messages guide users to install CLI or authenticate
 - Tests pass
 
 ---

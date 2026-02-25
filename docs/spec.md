@@ -1151,7 +1151,7 @@ connection:
   pool_size: 10                # Max open connections
   pool_max_idle: 5             # Max idle connections
   password_command: "..."      # Command to retrieve password
-  tiger_service_id: abc123     # Tiger Cloud service ID (alternative to connection params)
+  default_backend: tiger       # Default cloud backend for bare names (tiger or ghost)
 
 # Filesystem behavior
 filesystem:
@@ -1209,7 +1209,7 @@ debug: false                   # Enable debug mode (verbose logging)
 - `TIGERFS_PASSWORD` - Database password (alternative to PGPASSWORD)
 - `TIGERFS_PASSWORD_COMMAND` - Command to retrieve password (e.g., from secrets manager)
 - `TIGERFS_DEBUG` - Enable debug mode
-- `TIGER_SERVICE_ID` - Tiger Cloud service ID
+- `TIGERFS_DEFAULT_BACKEND` - Default cloud backend for bare names (`tiger` or `ghost`)
 - `TIGER_PUBLIC_KEY` - Tiger Cloud client credential public key (for headless auth)
 - `TIGER_SECRET_KEY` - Tiger Cloud client credential secret key (for headless auth)
 - `TIGER_PROJECT_ID` - Tiger Cloud project ID (for headless auth)
@@ -1233,8 +1233,12 @@ tigerfs [mount] [OPTIONS] [CONNECTION] MOUNTPOINT
 
 **Examples:**
 ```bash
-# Simple mount
+# Simple mount with connection string
 tigerfs postgres://localhost/mydb /mnt/db
+
+# Tiger Cloud / Ghost (prefix scheme)
+tigerfs tiger:e6ue9697jf /mnt/db
+tigerfs ghost:a2x6xoj0oz /mnt/db
 
 # With options
 tigerfs --read-only --max-ls-rows=50000 postgres://host/db /mnt/db
@@ -1251,10 +1255,6 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 
 **Connection/Database:**
 ```bash
--h, --host HOST           Database host (default: from config/env)
--p, --port PORT           Database port (default: 5432)
--U, --user USER           Database user
--d, --database DB         Database name
 --password-command CMD    Execute command to get password
 --default-schema SCHEMA   Schema to flatten to root (default: public)
 --pool-size N             Connection pool size (default: 10)
@@ -1305,12 +1305,18 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 
 **Syntax:**
 ```bash
-tigerfs [mount] [OPTIONS] CONNECTION MOUNTPOINT
+tigerfs [mount] [OPTIONS] [CONNECTION] MOUNTPOINT
 ```
 
-**Description:** Mount a PostgreSQL database as a filesystem.
+**Description:** Mount a PostgreSQL database as a filesystem. CONNECTION can be a `postgres://` URL, a `tiger:<id>` or `ghost:<id>` prefix, or omitted (uses environment variables / config).
 
-**Examples:** See mount options above.
+**Examples:**
+```bash
+tigerfs mount postgres://user@host/db /mnt/db
+tigerfs mount tiger:e6ue9697jf /mnt/db
+tigerfs mount ghost:a2x6xoj0oz /mnt/db
+tigerfs mount /mnt/db   # uses PGHOST/PGDATABASE env vars
+```
 
 ---
 
@@ -1516,6 +1522,127 @@ tigerfs help unmount
 
 ---
 
+#### 9. info
+
+**Syntax:**
+```bash
+tigerfs info [MOUNTPOINT] [--json]
+```
+
+**Description:** Show information about a mounted TigerFS instance and its backing cloud service.
+
+**Examples:**
+```bash
+# Info for the sole active mount (or prompts if multiple)
+tigerfs info
+
+# Info for a specific mountpoint
+tigerfs info /mnt/db
+
+# JSON output for scripting
+tigerfs info --json /mnt/db
+```
+
+**Output:**
+```
+Mountpoint:   /mnt/db
+Database:     postgres://host:5432/tsdb (password hidden)
+Backend:      tiger
+Service ID:   e6ue9697jf
+Service Name: my-db
+Region:       us-east-1
+Status:       Running
+Created:      2025-01-15T10:30:00Z
+```
+
+**Behavior:**
+- With no arguments: uses the sole active mount, or errors if zero or multiple mounts
+- Looks up mount in the mount registry to find service ID and backend
+- Calls the cloud backend CLI to fetch live service info
+- `--json` outputs a JSON object with all fields
+
+---
+
+#### 10. create
+
+**Syntax:**
+```bash
+tigerfs create [BACKEND:]NAME [MOUNTPOINT] [--no-mount] [--json]
+```
+
+**Description:** Create a new database service on a cloud backend and optionally mount it.
+
+**Examples:**
+```bash
+# Create on Tiger Cloud and auto-mount to /tmp/my-db
+tigerfs create tiger:my-db
+
+# Create with auto-generated name
+tigerfs create tiger:
+
+# Create and mount at a specific path
+tigerfs create tiger:my-db /mnt/data
+
+# Create without mounting
+tigerfs create tiger:my-db --no-mount
+
+# Use default_backend from config (bare name)
+tigerfs create my-db
+```
+
+**Behavior:**
+- Parses prefix to determine backend (`tiger:` or `ghost:`); falls back to `default_backend` config
+- Calls the backend CLI to create the service (blocks until ready)
+- Unless `--no-mount`, spawns a background `tigerfs mount` process
+- Mountpoint defaults to `$TMPDIR/<name>` if not specified
+- `--json` outputs the create result (service ID, name, connection string, mountpoint)
+
+---
+
+#### 11. fork
+
+**Syntax:**
+```bash
+tigerfs fork SOURCE [DEST] [--name NAME] [--no-mount] [--json]
+```
+
+**Description:** Fork (clone) an existing database and optionally mount the fork.
+
+SOURCE can be:
+- A mountpoint path (`/mnt/db`) — looks up service ID from mount registry
+- A prefixed ID (`tiger:e6ue9697jf`) — uses the specified backend
+- A bare name — resolved via `default_backend` config
+
+DEST can be:
+- A bare name (`my-fork`) — used as service name, mounted at `$TMPDIR/my-fork`
+- An absolute path (`/mnt/fork`) — mounted there, basename used as service name
+
+**Examples:**
+```bash
+# Fork a mounted database
+tigerfs fork /mnt/db my-experiment
+
+# Fork by service ID
+tigerfs fork tiger:e6ue9697jf my-experiment
+
+# Fork to a specific mount path
+tigerfs fork /mnt/db /mnt/experiment
+
+# Fork with explicit name
+tigerfs fork /mnt/db --name my-fork
+
+# Fork without mounting
+tigerfs fork /mnt/db --no-mount
+```
+
+**Behavior:**
+- Resolves SOURCE to a backend and service ID
+- Calls the backend CLI to fork the service (blocks until ready)
+- Unless `--no-mount`, spawns a background `tigerfs mount` process for the fork
+- `--json` outputs the fork result (source ID, fork ID, name, connection string, mountpoint)
+
+---
+
 ## Connection and Authentication
 
 ### Connection Configuration
@@ -1552,10 +1679,13 @@ connection:
   database: mydb
 ```
 
-**4. Command-Line Flags:**
+**4. Cloud Backend Prefix (Tiger Cloud / Ghost):**
 ```bash
-tigerfs --host=localhost --user=myuser --database=mydb /mnt/db
+tigerfs tiger:e6ue9697jf /mnt/db
+tigerfs ghost:a2x6xoj0oz /mnt/db
 ```
+
+Connection credentials are retrieved automatically from the backend CLI. See [Cloud Backend Integration](#cloud-backend-integration).
 
 ### Password Handling
 
@@ -1683,167 +1813,87 @@ ls /mnt/db2/public/orders/
 
 ---
 
-## Tiger Cloud Integration
+## Cloud Backend Integration
 
 ### Overview
 
-TigerFS provides seamless integration with Tiger Cloud, allowing users to mount database services directly using their service ID without manually managing connection credentials. This integration relies on the Tiger CLI to retrieve connection details securely.
+TigerFS integrates with cloud database backends (Tiger Cloud and Ghost) through their respective CLIs. Users specify a backend using a prefix scheme (`tiger:<id>`, `ghost:<id>`) on the connection argument. TigerFS delegates authentication, service management, and connection string retrieval to the backend CLI.
+
+See [ADR-013](adr/013-backend-prefix-scheme.md) for the full design rationale.
 
 ### Design Philosophy
 
-**Use Existing Tools:** Rather than reimplementing Tiger Cloud authentication in TigerFS, leverage the existing `tiger` CLI for credential management. Users authenticate once with `tiger auth login`, and TigerFS automatically retrieves connection details as needed.
+**Use Existing Tools:** Rather than reimplementing authentication, leverage the existing backend CLIs (`tiger`, `ghost`) for credential management. Users authenticate once (e.g., `tiger auth login`), and TigerFS retrieves connection details on demand.
 
-**Explicit Integration:** Tiger Cloud integration is explicitly requested via `--tiger-service-id` flag (or environment variable/config). This avoids confusion with standard PostgreSQL connection strings.
+**Prefix Scheme:** Backend selection is explicit via prefix on the connection reference:
 
-### Command-Line Flag
+| Prefix | Backend | Example |
+|--------|---------|---------|
+| `tiger:` | Tiger Cloud | `tiger:e6ue9697jf` |
+| `ghost:` | Ghost | `ghost:a2x6xoj0oz` |
+| `postgres://` | Direct PostgreSQL | `postgres://user@host/db` |
+| (none) | Environment/config | (uses `PGHOST`, etc.) |
 
-**Flag Name:** `--tiger-service-id`
+### Configuration
 
-**Usage:**
-```bash
-tigerfs --tiger-service-id=e6ue9697jf /mnt/db
-```
+**Default Backend:** Set `default_backend` in config to avoid typing the prefix for every command:
 
-**Description:** Specifies a Tiger Cloud service ID to mount. TigerFS will call the Tiger CLI to retrieve connection details securely.
-
-**Rationale for Naming:**
-- Explicit and descriptive (not just `--service-id`)
-- Clearly indicates Tiger Cloud integration
-- Avoids ambiguity with other service concepts
-
-### Environment Variable
-
-**Variable Name:** `TIGER_SERVICE_ID`
-
-**Usage:**
-```bash
-export TIGER_SERVICE_ID=e6ue9697jf
-tigerfs /mnt/db
-```
-
-**Rationale for Naming:**
-- Consistent with `TIGER_` prefix (not `TIGERFS_SERVICE_ID`)
-- Indicates the service ID belongs to Tiger Cloud platform
-- Matches naming convention of other Tiger-related environment variables
-
-### Configuration File Option
-
-**Config Key:** `tiger_service_id`
-
-**Usage:**
 ```yaml
 # ~/.config/tigerfs/config.yaml
-tiger_service_id: e6ue9697jf
+default_backend: tiger   # or "ghost"
 ```
 
-**Alternative Config Structure:**
-```yaml
-tiger:
-  service_id: e6ue9697jf
-```
+Or via environment: `TIGERFS_DEFAULT_BACKEND=tiger`
 
-**Rationale:** Underscore naming follows YAML convention, matches environment variable format.
-
-### Configuration Precedence
-
-**Resolution Order (First Match Wins):**
-
-1. `--tiger-service-id` command-line flag
-2. `TIGER_SERVICE_ID` environment variable
-3. `tiger_service_id` config file option
-4. Standard connection string/parameters (if no Tiger service ID provided)
-
-**Example:**
+When set, bare names (without a prefix) are resolved using the default backend:
 ```bash
-# CLI flag takes precedence over environment
-export TIGER_SERVICE_ID=service1
-tigerfs --tiger-service-id=service2 /mnt/db
-# Uses service2 (flag wins)
-
-# Environment takes precedence over config
-# Config: tiger_service_id: service3
-export TIGER_SERVICE_ID=service1
-tigerfs /mnt/db
-# Uses service1 (env wins)
-
-# Config used if no flag or env
-# Config: tiger_service_id: service3
-tigerfs /mnt/db
-# Uses service3 (config)
+tigerfs create my-db          # equivalent to: tigerfs create tiger:my-db
+tigerfs fork my-db my-fork    # equivalent to: tigerfs fork tiger:my-db my-fork
 ```
+
+### Backend CLI Differences
+
+| Behavior | Tiger CLI | Ghost CLI |
+|----------|-----------|-----------|
+| Connection string | `tiger db connection-string <id> --with-password` | `ghost connect <id>` |
+| Password delivery | Via `--with-password` flag | Via `~/.pgpass` (automatic) |
+| Create waits | By default (30m timeout, opt-out: `--no-wait`) | Requires explicit `--wait` |
+| Fork waits | By default (30m timeout, opt-out: `--no-wait`) | Requires explicit `--wait` |
+| Service info | `tiger service get <id> --json` | `ghost db get <id> --json` |
 
 ### Implementation Details
 
 #### Connection String Retrieval
 
-**Process:**
-1. TigerFS detects `--tiger-service-id`, `TIGER_SERVICE_ID`, or `tiger_service_id` config
-2. Calls `tiger db connection-string --with-password --service-id=<service-id>` as subprocess
-3. Parses output (PostgreSQL connection string)
-4. Uses connection string for database access
-
-**Command Execution:**
+**Tiger Cloud:**
 ```go
-cmd := exec.Command("tiger", "db", "connection-string",
-    "--with-password",
-    "--service-id="+serviceID)
-
-output, err := cmd.Output()
-if err != nil {
-    return "", fmt.Errorf("failed to get connection string: %w", err)
-}
-
-connStr := strings.TrimSpace(string(output))
-// connStr = "postgres://tsdbadmin:password@host:port/dbname?sslmode=require"
+cmd := exec.Command("tiger", "db", "connection-string", serviceID, "--with-password")
 ```
+
+**Ghost:**
+```go
+cmd := exec.Command("ghost", "connect", serviceID)
+```
+
+Both return a `postgres://...` connection string on stdout.
 
 #### Credential Security
 
-**Advantages:**
 - Password never stored in TigerFS config files
-- Credentials retrieved on-demand from Tiger CLI
-- Tiger CLI handles secure storage (keyring, encrypted files)
-- Users authenticate once with `tiger auth login`
-
-**Password Handling:**
-- `--with-password` flag tells Tiger CLI to include password in connection string
-- Password transmitted via stdout (process isolation)
+- Credentials retrieved on-demand from backend CLI
+- Backend CLI handles secure storage (keyring, encrypted files, pgpass)
 - Connection string used immediately, not persisted
-- No plaintext passwords in TigerFS configuration
 
 #### Error Handling
 
-**Tiger CLI Not Found:**
-```bash
-tigerfs --tiger-service-id=e6ue9697jf /mnt/db
+TigerFS detects and maps common CLI errors:
 
-Error: tiger CLI not found in PATH
-Suggestion: Install tiger CLI from https://docs.tiger.com/install
-```
-
-**Tiger CLI Not Authenticated:**
-```bash
-tigerfs --tiger-service-id=e6ue9697jf /mnt/db
-
-Error: Not authenticated with Tiger Cloud
-Suggestion: Run 'tiger auth login' to authenticate
-```
-
-**Service ID Not Found:**
-```bash
-tigerfs --tiger-service-id=invalid /mnt/db
-
-Error: Service 'invalid' not found
-Suggestion: Run 'tiger service list' to see available services
-```
-
-**Service Not Running:**
-```bash
-tigerfs --tiger-service-id=e6ue9697jf /mnt/db
-
-Error: Service 'e6ue9697jf' is not running
-Suggestion: Run 'tiger service start e6ue9697jf' to start the service
-```
+| Error Pattern | Mapped Error | User Message |
+|---------------|-------------|--------------|
+| CLI not in PATH | `ErrCLINotFound` | Install instructions with download URL |
+| "not authenticated", "unauthorized", "login" | `ErrNotAuthenticated` | Run `<cli> auth login` |
+| "404", "not found" | Service not found | Check service ID |
+| Other stderr | Generic CLI error | Shows stderr content |
 
 ### User Experience Flows
 
@@ -1856,167 +1906,59 @@ curl -fsSL https://cli.tigerdata.com | sh
 # 2. Authenticate
 tiger auth login
 
-# 3. Create database service
-tiger service create --name my-db
-# Created service: e6ue9697jf (set as default)
+# 3. Install TigerFS
+go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 
-# 4. Install TigerFS
-curl -fsSL https://tigerfs.tigerdata.com | sh
+# 4. Create and mount a database
+tigerfs create tiger:my-db
 
-# 5. Mount using service ID
-tigerfs --tiger-service-id=e6ue9697jf /mnt/db
-
-# 6. Use filesystem
-ls /mnt/db/
-cat /mnt/db/users/123/email
+# 5. Use filesystem
+ls /tmp/my-db/
+cat /tmp/my-db/users/1.json
 ```
 
-#### Flow 2: Using Default Service
+#### Flow 2: Multiple Services
 
 ```bash
-# Set default service (done during create or manually)
-tiger service list
-# e6ue9697jf  my-db  us-east-1  active  (default)
-
-# Mount without specifying service ID (uses default)
-export TIGER_SERVICE_ID=$(tiger config get service_id)
-tigerfs /mnt/db
-
-# Or set in config file
-echo "tiger_service_id: e6ue9697jf" >> ~/.config/tigerfs/config.yaml
-tigerfs /mnt/db
-```
-
-#### Flow 3: Multiple Services
-
-```bash
-# List available services
-tiger service list
-# e6ue9697jf  production-db   us-east-1  active
-# u8me885b93  staging-db      us-west-2  active
-
-# Mount multiple services to different mount points
-tigerfs --tiger-service-id=e6ue9697jf /mnt/prod
-tigerfs --tiger-service-id=u8me885b93 /mnt/staging
+# Mount multiple services
+tigerfs mount tiger:e6ue9697jf /mnt/prod
+tigerfs mount tiger:u8me885b93 /mnt/staging
 
 # Access each independently
 cat /mnt/prod/users/123/email
 cat /mnt/staging/users/456/email
+
+# Check info
+tigerfs info /mnt/prod
+```
+
+#### Flow 3: Fork for Experimentation
+
+```bash
+# Fork a production database
+tigerfs fork /mnt/prod my-experiment
+
+# Experiment safely on the fork
+echo '{"price": 0}' > /tmp/my-experiment/products/1.json
+
+# Clean up
+tigerfs unmount /tmp/my-experiment
 ```
 
 #### Flow 4: Headless/Docker Authentication
 
-For environments without browser access (Docker containers, CI/CD pipelines, servers), use client credentials instead of OAuth:
-
 ```bash
-# 1. Create client credentials in Tiger Cloud Console
-#    Go to: Console → Settings → Create credentials
-#    Save the public key and secret key
-
-# 2. Set environment variables
+# Set credentials (from Tiger Cloud Console)
 export TIGER_PUBLIC_KEY=<your-public-key>
 export TIGER_SECRET_KEY=<your-secret-key>
 export TIGER_PROJECT_ID=<your-project-id>
 
-# 3. Authenticate (uses env vars, no browser needed)
+# Authenticate using environment variables
 tiger auth login
 
-# 4. Mount using service ID
-export TIGER_SERVICE_ID=<your-service-id>
-tigerfs /mnt/db
+# Mount using tiger: prefix
+tigerfs mount tiger:<service-id> /mnt/cloud
 ```
-
-**Docker Example:**
-```dockerfile
-FROM ubuntu:22.04
-
-# Install Tiger CLI and TigerFS
-RUN curl -fsSL https://cli.tigerdata.com | sh
-RUN curl -fsSL https://tigerfs.tigerdata.com | sh
-
-# Set credentials (use secrets in production)
-ENV TIGER_PUBLIC_KEY=${TIGER_PUBLIC_KEY}
-ENV TIGER_SECRET_KEY=${TIGER_SECRET_KEY}
-ENV TIGER_PROJECT_ID=${TIGER_PROJECT_ID}
-ENV TIGER_SERVICE_ID=${TIGER_SERVICE_ID}
-
-# Authenticate on startup
-RUN tiger auth login
-
-CMD ["tigerfs", "/mnt/db"]
-```
-
-**CI/CD Example (GitHub Actions):**
-```yaml
-- name: Mount Tiger Cloud database
-  env:
-    TIGER_PUBLIC_KEY: ${{ secrets.TIGER_PUBLIC_KEY }}
-    TIGER_SECRET_KEY: ${{ secrets.TIGER_SECRET_KEY }}
-    TIGER_PROJECT_ID: ${{ secrets.TIGER_PROJECT_ID }}
-    TIGER_SERVICE_ID: ${{ secrets.TIGER_SERVICE_ID }}
-  run: |
-    tiger auth login
-    tigerfs /mnt/db &
-    # Use mounted database...
-```
-
-### Documentation Examples
-
-**README.md Quick Start:**
-```bash
-# Mount a Tiger Cloud database
-tigerfs --tiger-service-id=<service-id> /mnt/db
-
-# Or set as environment variable
-export TIGER_SERVICE_ID=<service-id>
-tigerfs /mnt/db
-
-# Or configure in config file
-echo "tiger_service_id: <service-id>" >> ~/.config/tigerfs/config.yaml
-tigerfs /mnt/db
-```
-
-**Help Text:**
-```
-Flags:
-  --tiger-service-id string   Tiger Cloud service ID to mount
-                              (also via TIGER_SERVICE_ID env var or
-                              tiger_service_id config option)
-                              Requires tiger CLI to be installed and
-                              authenticated (tiger auth login)
-
-Examples:
-  # Mount Tiger Cloud service
-  tigerfs --tiger-service-id=e6ue9697jf /mnt/db
-
-  # Use environment variable
-  export TIGER_SERVICE_ID=e6ue9697jf
-  tigerfs /mnt/db
-
-  # Standard PostgreSQL connection (without Tiger Cloud)
-  tigerfs postgres://user@host/db /mnt/db
-```
-
-### Alternative: Direct Tiger Cloud API Integration
-
-**Decision:** Use Tiger CLI as intermediary (chosen approach above)
-
-**Alternative Considered:** Direct API integration with Tiger Cloud API
-
-**Rationale for Using Tiger CLI:**
-- ✅ No duplicate authentication logic
-- ✅ Users authenticate once (`tiger auth login`)
-- ✅ Credentials managed by Tiger CLI (keyring, secure storage)
-- ✅ Single source of truth for Tiger Cloud access
-- ✅ Simpler TigerFS implementation
-- ✅ Automatic updates to auth flow benefit TigerFS
-
-**Drawbacks of Direct API:**
-- ❌ Duplicate authentication implementation
-- ❌ Separate credential storage
-- ❌ Users authenticate twice (tiger CLI + TigerFS)
-- ❌ More complex, more surface area for bugs
-- ❌ Must maintain compatibility with Tiger Cloud API changes
 
 ---
 
@@ -3694,7 +3636,7 @@ See `docs/implementation-tasks.md` for detailed step-by-step tasks.
 - List mounts command
 - Test connection command
 - Config subcommands (show, validate, path)
-- Tiger Cloud integration (--tiger-service-id)
+- Cloud backend integration (tiger:/ghost: prefix scheme, create, fork, info commands)
 
 ### Phase 4: Advanced Features
 

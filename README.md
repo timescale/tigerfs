@@ -167,17 +167,26 @@ curl -fsSL https://tigerfs.tigerdata.com | sh
 ### Mount a Database
 
 ```bash
-# Using connection string
-tigerfs postgres://user@host:port/database /mnt/db
-
-# Using flags
-tigerfs --host=localhost --database=mydb /mnt/db
+# Mount using connection string
+tigerfs mount postgres://user@host:port/database /mnt/db
 
 # Mount Tiger Cloud service
-tigerfs --tiger-service-id=<service-id> /mnt/db
+tigerfs mount tiger:<service-id> /mnt/db
+
+# Mount Ghost database
+tigerfs mount ghost:<database-id> /mnt/db
 
 # Read-only mount
-tigerfs --read-only postgres://host/db /mnt/db
+tigerfs mount --read-only postgres://host/db /mnt/db
+
+# Create a new database and mount it
+tigerfs create tiger:my-db
+
+# Fork an existing mounted database
+tigerfs fork /mnt/db my-experiment
+
+# Show info about a mounted filesystem
+tigerfs info /mnt/db
 ```
 
 ### Explore Data
@@ -497,8 +506,8 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - DDL operations via filesystem (`.create/`, `.modify/`, `.delete/` for tables, indexes, views)
 - Schema management (flattening, `.schemas/` for explicit access)
 - Metadata directory (`.info/` with schema, columns, count, ddl, indexes)
-- CLI commands: mount, unmount, status, list, config
-- Tiger Cloud integration (`--tiger-service-id`)
+- CLI commands: mount, unmount, status, list, info, create, fork, config
+- Cloud backends: Tiger Cloud (`tiger:ID`) and Ghost (`ghost:ID`) with prefix scheme
 - macOS native NFS backend (no dependencies required)
 - Linux FUSE backend
 - PostgreSQL connection pooling (pgx/v5)
