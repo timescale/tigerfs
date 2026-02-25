@@ -1,7 +1,7 @@
 # TigerFS - Complete Specification
 
-**Version:** 1.0
-**Date:** 2026-01-23
+**Version:** 1.2
+**Date:** 2026-02-25
 **Status:** Implementation Ready
 
 ## Table of Contents
@@ -15,24 +15,26 @@
 7. [Index-Based Navigation](#index-based-navigation)
 8. [Large Table Handling](#large-table-handling)
 9. [Pipeline Query Architecture](#pipeline-query-architecture)
-10. [Configuration System](#configuration-system)
-11. [CLI Interface](#cli-interface)
-12. [Connection and Authentication](#connection-and-authentication)
-13. [Tiger Cloud Integration](#tiger-cloud-integration)
-14. [File Metadata and Permissions](#file-metadata-and-permissions)
-15. [Error Handling](#error-handling)
-16. [Schema Metadata](#schema-metadata)
-17. [Database Objects](#database-objects)
-18. [Special PostgreSQL Types](#special-postgresql-types)
-19. [Concurrency and Multi-User](#concurrency-and-multi-user)
-20. [Unmounting and Shutdown](#unmounting-and-shutdown)
-21. [Logging](#logging)
-22. [Performance Monitoring](#performance-monitoring)
-23. [Testing Strategy](#testing-strategy)
-24. [Distribution and Installation](#distribution-and-installation)
-25. [Documentation Plan](#documentation-plan)
-26. [Implementation Priorities](#implementation-priorities)
-27. [Open Questions](#open-questions)
+10. [Synthesized Apps](#synthesized-apps)
+11. [History](#history)
+12. [Configuration System](#configuration-system)
+13. [CLI Interface](#cli-interface)
+14. [Connection and Authentication](#connection-and-authentication)
+15. [Cloud Backend Integration](#cloud-backend-integration)
+16. [File Metadata and Permissions](#file-metadata-and-permissions)
+17. [Error Handling](#error-handling)
+18. [Schema Metadata](#schema-metadata)
+19. [Database Objects](#database-objects)
+20. [Special PostgreSQL Types](#special-postgresql-types)
+21. [Concurrency and Multi-User](#concurrency-and-multi-user)
+22. [Unmounting and Shutdown](#unmounting-and-shutdown)
+23. [Logging](#logging)
+24. [Performance Monitoring](#performance-monitoring)
+25. [Testing Strategy](#testing-strategy)
+26. [Distribution and Installation](#distribution-and-installation)
+27. [Documentation Plan](#documentation-plan)
+28. [Implementation Priorities](#implementation-priorities)
+29. [Open Questions](#open-questions)
 
 ---
 
@@ -48,6 +50,8 @@
 - Multiple data formats (TSV, CSV, JSON, YAML)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
+- Synthesized apps present rows as domain-specific files (e.g., markdown with YAML frontmatter) with automatic versioning
+- Cloud backend integration (Tiger Cloud, Ghost) with prefix scheme
 - Respects database constraints and permissions
 - Cross-platform support (Linux, macOS, Windows)
 
@@ -232,6 +236,48 @@
         └── reports/
 ```
 
+#### Synthesized App and DDL Layer
+
+Synthesized apps, DDL operations, and pipeline queries add additional dotfile directories at the root and table levels:
+
+```
+/mount/
+├── .build/                               # Create synthesized apps
+│   └── <name>                            # Write format (e.g., "markdown") to create
+├── .create/                              # DDL: create new tables
+│   └── <name>/                           # Staging directory (mkdir, edit sql, touch .commit)
+├── .views/                               # Database views
+│   └── .create/<name>/                   # Create new view
+├── table1/                               # Native table
+│   ├── .filter/                          # Filter by any column (pipeline query)
+│   │   └── <col>/<val>/                  # Chained filter
+│   ├── .order/                           # Sort results (pipeline query)
+│   │   └── <col>/                        # Chained ordering
+│   ├── .export/                          # Bulk export (pipeline query)
+│   │   └── csv|json|tsv                  # Format file
+│   ├── .format/                          # Add synthesized view to existing table
+│   │   └── markdown                      # Write to create markdown view
+│   ├── .modify/                          # DDL: ALTER table
+│   │   └── sql, .test, .commit, .abort   # Staging files
+│   ├── .delete/                          # DDL: DROP table
+│   │   └── sql, .test, .commit, .abort   # Staging files
+│   └── ...                               # (existing: .by/, .info/, .indexes/, rows)
+├── notes/                                # Synthesized app (created via .build/)
+│   ├── hello.md                          # Synthesized file (row as markdown)
+│   ├── tutorials/                        # Subdirectory (directory hierarchy)
+│   │   ├── intro.md
+│   │   └── .history/                     # Per-directory history
+│   │       └── intro.md/                 # Versions of intro.md
+│   └── .history/                         # Version history (root level)
+│       ├── .by/                          # UUID-based lookups
+│       │   └── <uuid>/                   # Versions for a specific row UUID
+│       └── hello.md/                     # Versions of a file
+│           ├── .id                       # Row UUID
+│           └── 2026-02-24T150000Z        # Timestamped snapshot (read-only)
+└── _notes/                               # Backing native table (underscore prefix)
+    └── 1/                                # Standard row-as-directory access
+```
+
 ### Schema Handling
 
 **Default Schema Flattening:**
@@ -252,15 +298,25 @@
 
 **Dotfiles (Hidden by Default):**
 - `.by/` - Index-based navigation (`.by/email/`, `.by/created_at/`)
-- `.info/` - Table metadata (count, ddl, schema, columns)
-- `.indexes/` - Index metadata directory (list indexes, view DDL, create/delete)
-- `.sample/` - Random row samples
+- `.build/` - Synthesized app creation (root level)
+- `.create/` - DDL staging for new tables/indexes
+- `.delete/` - DDL staging for table/object deletion
+- `.export/` - Bulk export in CSV, JSON, or TSV format (pipeline query)
+- `.filter/` - Non-indexed column filtering (pipeline query)
 - `.first/` - First N rows (ascending by PK)
-- `.last/` - Last N rows (descending by PK)
+- `.format/` - Add synthesized view to existing table
+- `.history/` - Version history for synthesized apps
+- `.indexes/` - Index metadata directory (list indexes, view DDL, create/delete)
+- `.info/` - Table metadata (count, ddl, schema, columns)
 - `.information_schema/` - Global metadata
-- `.schemas/` - Explicit schema access
+- `.last/` - Last N rows (descending by PK)
+- `.modify/` - DDL staging for table modifications
+- `.order/` - Result ordering (pipeline query)
 - `.refresh` - Cache refresh trigger
+- `.sample/` - Random row samples
+- `.schemas/` - Explicit schema access
 - `.stats` - Performance monitoring
+- `.views/` - Database views and view creation
 
 **Rationale:**
 - Standard Unix convention (dotfiles hidden from `ls`)
@@ -1119,6 +1175,212 @@ cat /mnt/db/orders/.by/status/pending/.filter/priority/high/.order/amount/.last/
 ```
 
 For complete documentation, see [docs/native-tables.md](../docs/native-tables.md).
+
+---
+
+## Synthesized Apps
+
+### Overview
+
+Synthesized apps present database rows as domain-specific files — markdown documents, plain text, or other formats — instead of the default row-as-directory structure. Each synthesized app is a PostgreSQL VIEW backed by a table, where TigerFS maps columns to file components (filename, body, frontmatter metadata).
+
+This is the primary user interface for content-oriented workflows: blog posts, knowledge bases, meeting notes, and agent-generated documents are all managed as plain files while being stored transactionally in PostgreSQL.
+
+For the complete user guide with examples, see [docs/markdown-app.md](../docs/markdown-app.md).
+
+### Creation: `.build/` and `.format/`
+
+There are two creation paths:
+
+**`.build/<name>` — Create a new app from scratch:**
+
+```bash
+echo "markdown" > /mnt/db/.build/notes
+```
+
+Creates a backing table `_notes`, a view `notes`, and sets the view comment to `tigerfs:md`. The view gets the clean name; the table gets an underscore prefix.
+
+**`<table>/.format/markdown` — Add a synthesized view to an existing table:**
+
+```bash
+echo "markdown" > /mnt/db/posts/.format/markdown
+```
+
+Creates a view `posts_md` over the existing `posts` table, with comment `tigerfs:md`. The view gets a `_md` suffix to avoid colliding with the existing table name.
+
+| Method | View Name | Table Name | Example Path |
+|--------|-----------|------------|--------------|
+| `.build/notes` | `notes/` | `_notes/` | `/mnt/db/notes/hello.md` |
+| `posts/.format/markdown` | `posts_md/` | `posts/` | `/mnt/db/posts_md/hello.md` |
+
+### Markdown Format
+
+The markdown format maps table columns to file components using naming conventions:
+
+| Role | Detected From (priority order) | Required |
+|------|-------------------------------|----------|
+| Filename | `filename`, `name`, `title`, `slug` | Yes |
+| Body | `body`, `content`, `description`, `text` | Yes |
+| Timestamps | `modified_at`/`updated_at` (mtime); `created_at` (ctime) | No |
+| Extra Headers | `headers` (JSONB, merged into frontmatter) | No |
+| Frontmatter | All remaining columns (excluding primary key) | — |
+
+Files are rendered with YAML frontmatter followed by the body:
+
+```markdown
+---
+title: Hello World
+author: alice
+draft: false
+tags:
+  - intro
+---
+
+# Hello World
+
+Content here...
+```
+
+Known columns appear first in schema order, then extra headers (from the `headers` JSONB column) appear alphabetically.
+
+### Directory Hierarchies
+
+Synthesized apps support subdirectories via the `filetype` column and slashes in the `filename` column:
+
+- **`filetype`** — Either `'file'` or `'directory'` (default: `'file'`). When present in a table, TigerFS enables hierarchical directory support.
+- **`filename`** — Encodes the full path using slashes (e.g., `tutorials/intro.md` for a file in the `tutorials/` subdirectory)
+
+Operations:
+- `mkdir` creates a row with `filetype='directory'`
+- `rmdir` deletes the directory row (only if empty)
+- Moving a file between directories updates the slash-separated prefix in `filename`
+- Renaming a directory atomically updates the `filename` of all contained files
+- Writing a file with a path auto-creates parent directories
+
+### Backing Table Schema
+
+The `.build/` command creates a table with this schema (for markdown apps):
+
+```sql
+CREATE TABLE "_notes" (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename TEXT NOT NULL,
+    filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
+    title TEXT,
+    author TEXT,
+    headers JSONB DEFAULT '{}'::jsonb,
+    body TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(filename, filetype)
+);
+```
+
+A `BEFORE UPDATE` trigger automatically sets `modified_at = now()` on every update.
+
+### View Architecture
+
+Each synthesized app is exposed through a PostgreSQL VIEW (`CREATE VIEW "notes" AS SELECT * FROM "_notes"`). TigerFS identifies synthesized apps by parsing the view comment:
+
+| Comment | Meaning |
+|---------|---------|
+| `tigerfs:md` | Markdown format |
+| `tigerfs:txt` | Plain text format |
+| `tigerfs:md,history` | Markdown with version history |
+| `tigerfs:txt,history` | Plain text with version history |
+
+The comment is set via `COMMENT ON VIEW "notes" IS 'tigerfs:md'`. TigerFS scans view comments on mount to discover all synthesized apps.
+
+The native backing table remains accessible alongside the synthesized view — `ls /mnt/db/_notes/` shows the standard row-as-directory structure, while `ls /mnt/db/notes/` shows synthesized markdown files.
+
+---
+
+## History
+
+### Overview
+
+History provides automatic versioning for synthesized apps. A PostgreSQL `BEFORE UPDATE OR DELETE` trigger copies the old row into a companion history table on every change. Past versions appear as read-only files under `.history/` directories.
+
+For the complete user guide, see [docs/history.md](../docs/history.md).
+
+### Enabling History
+
+History can be enabled at creation or added later:
+
+```bash
+# At creation
+echo "markdown,history" > /mnt/db/.build/notes
+
+# Add to existing app
+echo "history" > /mnt/db/.build/notes
+```
+
+Both paths store the feature flag in the view comment (`tigerfs:md,history`).
+
+### History Table Schema
+
+Each history-enabled app gets a companion table named `_<name>_history`:
+
+```sql
+CREATE TABLE "_notes_history" (
+    -- Mirrors all source table columns --
+    id UUID,
+    filename TEXT NOT NULL,
+    filetype TEXT,
+    title TEXT,
+    author TEXT,
+    headers JSONB,
+    body TEXT,
+    created_at TIMESTAMPTZ,
+    modified_at TIMESTAMPTZ,
+    -- History metadata --
+    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    _operation TEXT NOT NULL  -- 'UPDATE' or 'DELETE'
+);
+```
+
+Indexes are created on `(filename, _history_id DESC)` and `(id, _history_id DESC)` for efficient lookups by filename or row UUID.
+
+### Trigger Mechanism
+
+A `BEFORE UPDATE OR DELETE` trigger on the source table copies the `OLD` row into the history table with a UUIDv7 `_history_id` (encoding the current timestamp) and the operation type (`UPDATE` or `DELETE`).
+
+### TimescaleDB Integration
+
+The history table is converted to a TimescaleDB hypertable for efficient time-partitioned storage:
+
+- **Chunk interval:** 1 month (partitioned by `_history_id`)
+- **Compression:** `segment_by='filename'`, `order_by='_history_id DESC'`
+- **Compression policy:** After 1 day
+
+History requires **TimescaleDB** — it will not work on vanilla PostgreSQL.
+
+### Filesystem Interface
+
+The `.history/` directory appears inside each synthesized app:
+
+| Path | Description |
+|------|-------------|
+| `app/.history/` | List files that have history entries |
+| `app/.history/file.md/` | List versions of a file (newest first) |
+| `app/.history/file.md/.id` | Read the row's stable UUID |
+| `app/.history/file.md/<timestamp>` | Read a past version's full content |
+| `app/.history/.by/` | List all row UUIDs with history |
+| `app/.history/.by/<uuid>/` | List versions for a specific UUID |
+| `app/.history/.by/<uuid>/<timestamp>` | Read a past version by UUID |
+| `app/subdir/.history/` | Per-directory history (scoped to that directory) |
+
+Version timestamps are extracted from the UUIDv7 `_history_id`, formatted as `2006-01-02T150405Z` (filesystem-safe, no colons). Versions are listed newest-first.
+
+**Cross-rename tracking:** Every row has a stable UUID that persists across renames. The `.by/` directory enables lookups by UUID even after a file is renamed. `.by/` is only available at the root `.history/` level.
+
+**Subdirectory history:** Each directory has its own `.history/` scoped to files in that directory. Subdirectory `.history/` does not include `.by/`.
+
+### Detection
+
+TigerFS detects history support via:
+1. **View comment** — parsing `tigerfs:md,history` from `COMMENT ON VIEW`
+2. **Companion table** — checking for a `_<name>_history` table if the comment doesn't specify history
 
 ---
 
@@ -3573,17 +3835,18 @@ go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 
 ---
 
-### Phase 2: Comprehensive Documentation (Post-MVP)
+### Phase 2: Feature Documentation (Shipped)
 
-Deferred:
-- docs/user-guide.md (comprehensive reference)
-- docs/configuration.md (detailed config options)
-- docs/examples.md (common patterns)
-- docs/claude-code-integration.md (AI assistant guide)
+- [docs/markdown-app.md](../docs/markdown-app.md) — Markdown synthesized app guide (creation, usage, column mapping)
+- [docs/history.md](../docs/history.md) — Version history feature (browsing, recovery, UUID tracking)
+- [docs/native-tables.md](../docs/native-tables.md) — Native table access reference (pipeline queries, DDL)
+- [docs/quickstart.md](../docs/quickstart.md) — Guided scenarios with sample data
 
 ### Phase 3: Advanced Documentation
 
 Deferred:
+- docs/user-guide.md (comprehensive reference)
+- docs/configuration.md (detailed config options)
 - docs/troubleshooting.md (based on real issues)
 - docs/development.md (for contributors)
 - docs/architecture.md (technical deep dive)
@@ -3664,10 +3927,16 @@ See `docs/implementation-tasks.md` for detailed step-by-step tasks.
 - Bug fixes and polish
 - v1.0.0 release
 
+### Phase 6: Synthesized Apps
+
+- Synthesized app framework (`.build/`, `.format/`)
+- Markdown format with column auto-detection
+- Directory hierarchies with subdirectories
+- Automatic version history with TimescaleDB
+
 ### Post-MVP Enhancements
 
 **Prioritize Based on Feedback:**
-- Views and sequences
 - Performance monitoring (`.stats`)
 - Additional distribution methods (Homebrew, apt, yum)
 - Windows support polish
@@ -3899,6 +4168,7 @@ SELECT id FROM users TABLESAMPLE BERNOULLI(1.0) LIMIT 100;
 |---------|------------|--------------------------------------------------------------------------------------------------|
 | 1.0     | 2026-01-23 | Initial complete specification                                                                   |
 | 1.1     | 2026-01-23 | Added Tiger Cloud integration (--tiger-service-id); clarified JOINs via views; DDL scope defined |
+| 1.2     | 2026-02-25 | Added Synthesized Apps and History sections; updated filesystem structure with new dotfiles; updated implementation priorities and documentation plan |
 
 ---
 
