@@ -15,6 +15,7 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 		wantModAt string
 		wantCreAt string
 		wantExtra string
+		wantEnc   string
 		wantErr   bool
 	}{
 		{
@@ -151,6 +152,17 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			wantFront: []string{"title"},
 			wantExtra: "",
 		},
+		{
+			name:      "encoding column detected and excluded from frontmatter",
+			columns:   []string{"id", "filename", "title", "author", "body", "encoding", "created_at", "modified_at"},
+			pk:        "id",
+			wantFile:  "filename",
+			wantBody:  "body",
+			wantFront: []string{"title", "author"},
+			wantModAt: "modified_at",
+			wantCreAt: "created_at",
+			wantEnc:   "encoding",
+		},
 	}
 
 	for _, tt := range tests {
@@ -182,6 +194,9 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			}
 			if roles.ExtraHeaders != tt.wantExtra {
 				t.Errorf("ExtraHeaders = %q, want %q", roles.ExtraHeaders, tt.wantExtra)
+			}
+			if roles.Encoding != tt.wantEnc {
+				t.Errorf("Encoding = %q, want %q", roles.Encoding, tt.wantEnc)
 			}
 			if len(roles.Frontmatter) != len(tt.wantFront) {
 				t.Fatalf("Frontmatter = %v, want %v", roles.Frontmatter, tt.wantFront)

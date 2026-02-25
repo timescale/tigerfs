@@ -23,6 +23,9 @@ var (
 	// extraHeadersConventions lists column names recognized as the JSONB store
 	// for user-defined frontmatter key-value pairs.
 	extraHeadersConventions = []string{"headers"}
+
+	// encodingConventions lists column names recognized as the body encoding indicator.
+	encodingConventions = []string{"encoding"}
 )
 
 // ColumnRoles maps database columns to their roles in synthesized file rendering.
@@ -60,6 +63,11 @@ type ColumnRoles struct {
 	// When present, the view supports hierarchical directory structure.
 	// Expected values: "file", "directory". Empty if no matching column found.
 	Filetype string
+
+	// Encoding is the column indicating how body content is encoded.
+	// Values: "utf8" (plain text, default), "base64" (binary data encoded as base64).
+	// Empty if no matching column found (treated as utf8).
+	Encoding string
 }
 
 // DetectColumnRoles identifies which columns serve which roles for a given format.
@@ -106,6 +114,9 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 	// Detect optional filetype column (for hierarchical directory support)
 	roles.Filetype = findMatchingColumn(columnNames, []string{"filetype"})
 
+	// Detect optional encoding column
+	roles.Encoding = findMatchingColumn(columnNames, encodingConventions)
+
 	// Remaining columns become frontmatter (markdown only), preserving schema order.
 	// Exclude: filename, body, primary key, timestamp, extra headers, and filetype columns.
 	if format == FormatMarkdown {
@@ -125,6 +136,9 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 		}
 		if roles.Filetype != "" {
 			excluded[strings.ToLower(roles.Filetype)] = true
+		}
+		if roles.Encoding != "" {
+			excluded[strings.ToLower(roles.Encoding)] = true
 		}
 		for _, col := range columnNames {
 			if !excluded[strings.ToLower(col)] {
