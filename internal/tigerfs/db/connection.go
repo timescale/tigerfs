@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/timescale/tigerfs/internal/tigerfs/backend"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
-	"github.com/timescale/tigerfs/internal/tigerfs/tigercloud"
 	"go.uber.org/zap"
 )
 
@@ -36,12 +36,13 @@ func ResolveConnectionString(ctx context.Context, cfg *config.Config, explicitCo
 		return explicitConnStr, nil
 	}
 
-	// 2. Tiger Cloud service ID
+	// 2. Tiger Cloud service ID (from config/env — legacy fallback for TIGER_SERVICE_ID env var)
 	if cfg.TigerCloudServiceID != "" {
 		logging.Debug("Resolving connection string from Tiger Cloud",
 			zap.String("service_id", cfg.TigerCloudServiceID))
 
-		connStr, err := tigercloud.GetConnectionString(ctx, cfg.TigerCloudServiceID)
+		tiger := &backend.TigerBackend{}
+		connStr, err := tiger.GetConnectionString(ctx, cfg.TigerCloudServiceID)
 		if err != nil {
 			return "", fmt.Errorf("failed to get Tiger Cloud connection string: %w", err)
 		}
