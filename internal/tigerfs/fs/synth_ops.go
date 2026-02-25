@@ -615,7 +615,29 @@ func (o *Operations) getSynthRowPK(ctx context.Context, schema, table string, in
 }
 
 // synthesizeContent generates file content from a database row.
+// If the row's encoding column is "base64", the body is decoded from base64
+// and returned as raw bytes (binary round-trip). Otherwise, the row is
+// synthesized into markdown or plaintext format.
 func (o *Operations) synthesizeContent(columns []string, row []interface{}, info *synth.ViewInfo) ([]byte, error) {
+	// Check if this row is base64-encoded binary
+	if info.Roles.Encoding != "" {
+		for i, col := range columns {
+			if col == info.Roles.Encoding {
+				if enc, ok := row[i].(string); ok && enc == "base64" {
+					// Decode base64 body and return raw bytes
+					for j, c := range columns {
+						if c == info.Roles.Body {
+							bodyStr := synth.ValueToString(row[j])
+							return synth.DecodeBody(bodyStr)
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Text synthesis (markdown or plaintext)
 	switch info.Format {
 	case synth.FormatMarkdown:
 		return synth.SynthesizeMarkdown(columns, row, info.Roles)
