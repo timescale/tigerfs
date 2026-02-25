@@ -115,8 +115,8 @@ func TestBuildMountCmd(t *testing.T) {
 		t.Fatal("buildMountCmd returned nil")
 	}
 
-	if cmd.Use != "mount [CONNECTION] MOUNTPOINT" {
-		t.Errorf("Expected Use='mount [CONNECTION] MOUNTPOINT', got %q", cmd.Use)
+	if cmd.Use != "mount [CONNECTION] [MOUNTPOINT]" {
+		t.Errorf("Expected Use='mount [CONNECTION] [MOUNTPOINT]', got %q", cmd.Use)
 	}
 }
 
