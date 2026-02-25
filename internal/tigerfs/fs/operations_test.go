@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1066,6 +1067,10 @@ type mockDBClient struct {
 	lastColumnValue    string
 	lastDeletePK       string
 
+	// Insert detail tracking
+	lastInsertColumns []string
+	lastInsertValues  []interface{}
+
 	// Atomic rename tracking
 	updateColumnCASCalled   bool
 	updateColumnCASError    error
@@ -1433,6 +1438,8 @@ func (m *mockDBClient) ImportAppend(ctx context.Context, schema, table string, c
 
 func (m *mockDBClient) InsertRow(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error) {
 	m.insertCalled = true
+	m.lastInsertColumns = columns
+	m.lastInsertValues = values
 	return "1", nil
 }
 
@@ -2289,4 +2296,61 @@ func TestStat_SynthView_IsDirectory(t *testing.T) {
 	require.NotNil(t, entry)
 	assert.True(t, entry.IsDir, "synth view should appear as a directory")
 	assert.Equal(t, "posts", entry.Name)
+}
+
+// newSynthMockDBWithEncoding creates a mock DB like newSynthMockDB but with the encoding column.
+func newSynthMockDBWithEncoding() *mockDBClient {
+	mock := newSynthMockDB()
+	// Add encoding column to the column list
+	mock.columns["public.posts"] = append(mock.columns["public.posts"],
+		mockColumn{name: "encoding", dataType: "text"})
+	// Add encoding value to existing rows in allRowsData
+	for i := range mock.allRowsData["public.posts"].rows {
+		mock.allRowsData["public.posts"].rows[i] = append(
+			mock.allRowsData["public.posts"].rows[i], "utf8")
+	}
+	mock.allRowsData["public.posts"].columns = append(
+		mock.allRowsData["public.posts"].columns, "encoding")
+	return mock
+}
+
+// TestSynth_WriteBinaryFile verifies that writing binary data base64-encodes the body
+// and sets the encoding column to "base64".
+func TestSynth_WriteBinaryFile(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := newSynthMockDBWithEncoding()
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Write binary data (JPEG-like with null bytes)
+	binaryData := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46}
+	err := ops.WriteFile(context.Background(), "/posts/photo.jpeg", binaryData)
+
+	require.Nil(t, err)
+	assert.True(t, mockDB.insertCalled, "should have called InsertRow")
+
+	// Verify encoding column was set to 'base64'
+	encodingIdx := -1
+	for i, col := range mockDB.lastInsertColumns {
+		if col == "encoding" {
+			encodingIdx = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, encodingIdx, "should include encoding column")
+	assert.Equal(t, "base64", mockDB.lastInsertValues[encodingIdx])
+
+	// Verify body is base64-encoded
+	bodyIdx := -1
+	for i, col := range mockDB.lastInsertColumns {
+		if col == "body" {
+			bodyIdx = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, bodyIdx, "should include body column")
+	encoded := mockDB.lastInsertValues[bodyIdx].(string)
+	decoded, decErr := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, decErr)
+	assert.Equal(t, binaryData, decoded)
 }
