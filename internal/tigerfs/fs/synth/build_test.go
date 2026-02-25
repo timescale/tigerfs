@@ -35,6 +35,9 @@ func TestGenerateMarkdownTableSQL(t *testing.T) {
 	if !strings.Contains(sql, "body TEXT") {
 		t.Errorf("should have body column, got:\n%s", sql)
 	}
+	if !strings.Contains(sql, `encoding TEXT NOT NULL DEFAULT 'utf8'`) {
+		t.Errorf("should contain encoding column, got:\n%s", sql)
+	}
 	if !strings.Contains(sql, "created_at TIMESTAMPTZ") {
 		t.Errorf("should have created_at column, got:\n%s", sql)
 	}
@@ -60,6 +63,9 @@ func TestGeneratePlainTextTableSQL(t *testing.T) {
 	}
 	if !strings.Contains(sql, "body TEXT") {
 		t.Errorf("should have body column, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, `encoding TEXT NOT NULL DEFAULT 'utf8'`) {
+		t.Errorf("should contain encoding column, got:\n%s", sql)
 	}
 	// Plain text should NOT have title/author
 	if strings.Contains(sql, "title TEXT") {
@@ -150,6 +156,9 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, "CREATE TRIGGER") {
 		t.Errorf("should contain CREATE TRIGGER, got:\n%s", allSQL)
 	}
+	if !strings.Contains(allSQL, `encoding TEXT NOT NULL DEFAULT 'utf8'`) {
+		t.Errorf("should contain encoding column, got:\n%s", allSQL)
+	}
 	// Should have 5 statements: table, view, comment, function, trigger
 	if len(stmts) != 5 {
 		t.Errorf("expected 5 statements, got %d", len(stmts))
@@ -203,12 +212,21 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 		t.Errorf("should create id index, got:\n%s", allSQL)
 	}
 
+	// Encoding column in history table
+	if !strings.Contains(allSQL, "encoding TEXT,") {
+		t.Errorf("history table should contain encoding column, got:\n%s", allSQL)
+	}
+
 	// Trigger
 	if !strings.Contains(allSQL, "BEFORE UPDATE OR DELETE") {
 		t.Errorf("should create BEFORE UPDATE OR DELETE trigger, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "TG_OP::text") {
 		t.Errorf("should record TG_OP as _operation, got:\n%s", allSQL)
+	}
+	// History trigger should copy encoding column
+	if !strings.Contains(allSQL, "OLD.encoding") {
+		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
 	}
 
 	// Hypertable
@@ -252,6 +270,15 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 	// History table should exist
 	if !strings.Contains(allSQL, "_memory_history") {
 		t.Errorf("should create history table, got:\n%s", allSQL)
+	}
+
+	// History trigger should copy encoding column
+	if !strings.Contains(allSQL, "OLD.encoding") {
+		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
+	}
+	// History table should have encoding column
+	if !strings.Contains(allSQL, "encoding TEXT,") {
+		t.Errorf("history table should contain encoding column, got:\n%s", allSQL)
 	}
 }
 
