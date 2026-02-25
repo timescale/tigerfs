@@ -71,6 +71,8 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 	cmd.AddCommand(buildStopCmd())
 	cmd.AddCommand(buildStatusCmd())
 	cmd.AddCommand(buildInfoCmd())
+	cmd.AddCommand(buildCreateCmd())
+	cmd.AddCommand(buildForkCmd())
 	cmd.AddCommand(buildListCmd())
 	cmd.AddCommand(buildTestConnectionCmd())
 	cmd.AddCommand(buildVersionCmd())
