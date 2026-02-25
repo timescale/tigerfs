@@ -52,6 +52,14 @@ EOF
 grep -l "author: alice" /mnt/db/blog/*.md
 ```
 
+Files can be organized into nested directories — `mkdir` creates folders, `mv` moves files between them, and the directory structure is stored in a path column in the database:
+
+```bash
+mkdir /mnt/db/blog/tutorials
+mv /mnt/db/blog/hello-world.md /mnt/db/blog/tutorials/
+ls /mnt/db/blog/tutorials/
+```
+
 Or add a markdown view to an existing table:
 
 ```bash
@@ -60,6 +68,26 @@ ls /mnt/db/posts_md/
 ```
 
 See [Markdown App](docs/markdown-app.md) for full documentation.
+
+### History
+
+Any synthesized app can opt into automatic versioning — every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
+
+```bash
+# Create an app with history enabled
+echo "markdown,history" > /mnt/db/.build/notes
+
+# Browse past versions of a file
+ls /mnt/db/notes/.history/hello.md/
+# .id  2026-02-24T150000Z  2026-02-12T013000Z
+
+# Read a past version
+cat /mnt/db/notes/.history/hello.md/2026-02-12T013000Z
+```
+
+History tracks files across renames via stable row UUIDs, supports per-subdirectory scoping, and uses TimescaleDB hypertables for efficient compressed storage.
+
+See [History](docs/history.md) for full documentation.
 
 ## Architecture
 
@@ -102,7 +130,10 @@ TigerFS maps filesystem paths to database queries:
 curl -fsSL https://tigerfs.tigerdata.com | sh
 
 # Mount a PostgreSQL database
-tigerfs postgres://localhost/mydb /mnt/db
+tigerfs mount postgres://localhost/mydb /mnt/db
+
+# Or mount a Tiger Cloud / Ghost service directly
+tigerfs mount tiger:<service-id> /mnt/db
 
 # Use standard Unix tools
 ls /mnt/db/public/users/
@@ -111,7 +142,7 @@ echo 'new@example.com' > /mnt/db/public/users/123/email.txt
 rm /mnt/db/public/users/456
 
 # Unmount
-umount /mnt/db
+tigerfs unmount /mnt/db
 ```
 
 ## Try the Demos
@@ -187,6 +218,85 @@ tigerfs fork /mnt/db my-experiment
 
 # Show info about a mounted filesystem
 tigerfs info /mnt/db
+```
+
+### Cloud Backends
+
+TigerFS integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.dev) through their CLIs. Use a prefix on the connection argument to specify the backend:
+
+```bash
+# Tiger Cloud
+tigerfs mount tiger:e6ue9697jf /mnt/db
+
+# Ghost
+tigerfs mount ghost:a2x6xoj0oz /mnt/db
+```
+
+TigerFS calls the backend CLI to retrieve connection credentials — no passwords in your config. Authenticate once with `tiger auth login` (or `ghost login`) and TigerFS handles the rest.
+
+Set a default backend to skip the prefix:
+
+```bash
+# In ~/.config/tigerfs/config.yaml
+# default_backend: tiger
+
+tigerfs mount e6ue9697jf /mnt/db    # uses tiger: implicitly
+```
+
+### Creating a Database
+
+Create a new cloud database and mount it in one step:
+
+```bash
+# Create on Tiger Cloud (auto-mounts to /tmp/my-db)
+tigerfs create tiger:my-db
+
+# Create with auto-generated name
+tigerfs create tiger:
+
+# Create at a specific mount path
+tigerfs create tiger:my-db /mnt/data
+
+# Create without mounting
+tigerfs create ghost:my-db --no-mount
+```
+
+### Forking a Database
+
+Fork (clone) an existing database for safe experimentation:
+
+```bash
+# Fork a mounted database
+tigerfs fork /mnt/db my-experiment
+
+# Fork by service ID
+tigerfs fork tiger:e6ue9697jf my-experiment
+
+# Fork to a specific path
+tigerfs fork /mnt/db /mnt/experiment
+
+# Fork without mounting
+tigerfs fork /mnt/db --no-mount
+```
+
+The fork is a full copy — write freely without affecting the original.
+
+### Inspecting a Mount
+
+View details about a mounted filesystem and its backing service:
+
+```bash
+tigerfs info /mnt/db
+
+# Output:
+# Mountpoint:   /mnt/db
+# Database:     postgres://host:5432/tsdb (password hidden)
+# Backend:      tiger
+# Service ID:   e6ue9697jf
+# ...
+
+# JSON output for scripting
+tigerfs info --json /mnt/db
 ```
 
 ### Explore Data
@@ -434,6 +544,9 @@ connection:
   default_schema: public
   pool_size: 10
 
+# Cloud backend (tiger or ghost) — enables bare names without prefix
+default_backend: tiger
+
 filesystem:
   dir_listing_limit: 10000
   no_filename_extensions: false  # Set true to disable .txt/.json/.bin extensions
@@ -490,7 +603,7 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 
 ## Project Status
 
-🚧 **Active Development** — v0.2.0 brings full platform parity: macOS NFS now supports all write and DDL operations, matching Linux FUSE capabilities.
+🚧 **Active Development** — v0.3.0 adds synthesized apps (markdown views, directory hierarchies) and cloud backend integration with Tiger Cloud and Ghost.
 
 **Completed:**
 - Virtual filesystem with full CRUD operations (read, write, create, delete)
@@ -512,13 +625,15 @@ For detailed development information, see [CLAUDE.md](CLAUDE.md).
 - Linux FUSE backend
 - PostgreSQL connection pooling (pgx/v5)
 - Permission mapping (PostgreSQL grants → file permissions)
+- Rename/mv support (primary key updates, cross-directory moves)
 - Comprehensive test coverage
 - Synthesized apps: markdown (`.build/` and `.format/markdown`)
+- Claude Code skills for discovering, reading, writing, and searching mounted data
+- Docker demo with sample data for quick start
 
 **Planned:**
 - Tables without primary keys (read-only via ctid)
 - TimescaleDB hypertables (time-based navigation)
-- Synthesized apps: task management, kanban boards
 - Distribution (install scripts, GoReleaser, daemon mode)
 - Windows support
 
