@@ -262,6 +262,9 @@ func InsertRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, co
 
 	// Read returned row to get PK
 	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", fmt.Errorf("failed to insert row: %w", err)
+		}
 		return "", fmt.Errorf("insert did not return a row")
 	}
 
