@@ -327,17 +327,36 @@ func (o *Operations) readFileSynthView(ctx context.Context, parsed *ParsedPath, 
 
 // writeSynthFile handles writes to synthesized view files (create or update).
 // For views with hierarchy, auto-creates parent directory rows on insert.
+// Binary data (null bytes or invalid UTF-8) is base64-encoded for TEXT column storage.
 func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo, data []byte) *FSError {
 	fsCtx := parsed.Context
 	filename := parsed.PrimaryKey
 
-	// Parse the written content into column values
-	colValues, err := o.parseSynthContent(data, info)
-	if err != nil {
-		return &FSError{
-			Code:    ErrInvalidPath,
-			Message: "failed to parse file content",
-			Cause:   err,
+	var colValues map[string]interface{}
+
+	// Check if data is binary (null bytes or invalid UTF-8)
+	if synth.IsBinary(data) {
+		// Binary: base64-encode raw bytes, skip format-specific parsing
+		colValues = map[string]interface{}{
+			info.Roles.Body: synth.EncodeBody(data),
+		}
+		if info.Roles.Encoding != "" {
+			colValues[info.Roles.Encoding] = "base64"
+		}
+	} else {
+		// Text: parse as markdown/plaintext (existing behavior)
+		var err error
+		colValues, err = o.parseSynthContent(data, info)
+		if err != nil {
+			return &FSError{
+				Code:    ErrInvalidPath,
+				Message: "failed to parse file content",
+				Cause:   err,
+			}
+		}
+		// Explicitly set encoding to utf8 if column exists
+		if info.Roles.Encoding != "" {
+			colValues[info.Roles.Encoding] = "utf8"
 		}
 	}
 
@@ -369,12 +388,12 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 			return fsErr
 		}
 
-		err = o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, pkValue, columns, values)
-		if err != nil {
+		dbErr := o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, pkValue, columns, values)
+		if dbErr != nil {
 			return &FSError{
 				Code:    ErrIO,
 				Message: "failed to update synth file",
-				Cause:   err,
+				Cause:   dbErr,
 			}
 		}
 	} else {
@@ -386,12 +405,12 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		}
 
 		// INSERT new row
-		_, err = o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
-		if err != nil {
+		_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+		if dbErr != nil {
 			return &FSError{
 				Code:    ErrIO,
 				Message: "failed to create synth file",
-				Cause:   err,
+				Cause:   dbErr,
 			}
 		}
 	}
