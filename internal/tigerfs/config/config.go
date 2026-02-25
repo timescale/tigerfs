@@ -25,6 +25,9 @@ type Config struct {
 	TigerCloudSecretKey string `mapstructure:"tiger_secret_key"`
 	TigerCloudProjectID string `mapstructure:"tiger_project_id"`
 
+	// Backend
+	DefaultBackend string `mapstructure:"default_backend"` // "tiger", "ghost", or "" (none)
+
 	// Filesystem
 	DirListingLimit      int           `mapstructure:"dir_listing_limit"`
 	DirWritingLimit      int           `mapstructure:"dir_writing_limit"`
@@ -94,6 +97,7 @@ func Init() error {
 	viper.SetDefault("binary_encoding", "raw")
 	viper.SetDefault("debug", false)
 	viper.SetDefault("legacy_fuse", false)
+	viper.SetDefault("default_backend", "")
 	viper.SetDefault("config_dir", GetDefaultConfigDir())
 
 	// Setup config file

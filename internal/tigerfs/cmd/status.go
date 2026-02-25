@@ -140,6 +140,12 @@ func showMountStatus(cmd *cobra.Command, registry *mount.Registry, mountpoint st
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "Mountpoint: %s\n", entry.Mountpoint)
 	fmt.Fprintf(out, "Database:   %s\n", entry.Database)
+	if entry.CLIBackend != "" {
+		fmt.Fprintf(out, "Backend:    %s\n", entry.CLIBackend)
+	}
+	if entry.ServiceID != "" {
+		fmt.Fprintf(out, "Service ID: %s\n", entry.ServiceID)
+	}
 	fmt.Fprintf(out, "PID:        %d\n", entry.PID)
 	fmt.Fprintf(out, "Status:     %s\n", status)
 	fmt.Fprintf(out, "Started:    %s\n", entry.StartTime.Format(time.RFC3339))

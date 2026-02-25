@@ -129,14 +129,14 @@ func TestBuildMountCmd_Flags(t *testing.T) {
 		name      string
 		shorthand string
 	}{
-		{"host", ""},
-		{"port", "p"},
-		{"user", "U"},
-		{"database", "d"},
-		{"tiger-service-id", ""},
+		{"schema", ""},
 		{"read-only", ""},
 		{"max-ls-rows", ""},
 		{"foreground", ""},
+		{"no-filename-extensions", ""},
+		{"query-timeout", ""},
+		{"dir-filter-limit", ""},
+		{"legacy-fuse", ""},
 	}
 
 	for _, expected := range expectedFlags {
@@ -161,10 +161,10 @@ func TestBuildMountCmd_FlagDefaults(t *testing.T) {
 		name     string
 		expected string
 	}{
-		{"port", "5432"},
 		{"max-ls-rows", "10000"},
 		{"read-only", "false"},
 		{"foreground", "false"},
+		{"legacy-fuse", "false"},
 	}
 
 	for _, tc := range testCases {
@@ -361,8 +361,8 @@ func TestMountCmd_Help(t *testing.T) {
 		t.Errorf("Expected mount help to contain 'Examples'")
 	}
 
-	if !strings.Contains(output, "--host") {
-		t.Errorf("Expected mount help to contain '--host'")
+	if !strings.Contains(output, "tiger:") {
+		t.Errorf("Expected mount help to contain 'tiger:'")
 	}
 }
 

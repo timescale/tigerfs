@@ -8,15 +8,16 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/timescale/tigerfs/internal/tigerfs/backend"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/mount"
-	"github.com/timescale/tigerfs/internal/tigerfs/tigercloud"
 	"go.uber.org/zap"
 )
 
@@ -29,18 +30,12 @@ import (
 // Parameters:
 //   - ctx: Parent context for cancellation (typically from signal handling)
 //
-// The command supports multiple ways to specify the database connection:
-//   - Connection string argument (postgres://...)
-//   - Individual flags (--host, --port, --user, --database)
-//   - Tiger Cloud service ID (--tiger-service-id)
-//   - Environment variables (PGHOST, etc.)
+// CONNECTION uses the prefix scheme (see ADR-013):
+//   - "tiger:ID" — Tiger Cloud service
+//   - "ghost:ID" — Ghost database
+//   - "postgres://..." — direct connection string
+//   - Environment variables (PGHOST, etc.) when no CONNECTION argument
 func buildMountCmd(ctx context.Context) *cobra.Command {
-	// Declare local flags - these are scoped to this command only
-	var host string
-	var port int
-	var user string
-	var database string
-	var tigerServiceID string
 	var schema string
 	var readOnly bool
 	var maxLsRows int
@@ -49,10 +44,6 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var queryTimeout time.Duration
 	var dirFilterLimit int
 	var legacyFuse bool
-	// TODO: allow-other support has inconsistent cross-platform behavior
-	// (works on Linux, limited on macOS, different model on Windows).
-	// Revisit in Phase 6 Task 6.2. For now, mounts are single-user only.
-	// var allowOther bool
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] MOUNTPOINT",
@@ -61,26 +52,31 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 
 The mount command is the default command and can be omitted.
 
+CONNECTION uses a prefix to select the backend:
+  tiger:ID    Tiger Cloud service by ID
+  ghost:ID    Ghost database by ID
+  postgres:// Direct connection string
+
 Examples:
-  # Mount using connection string
-  tigerfs postgres://user@host/db /mnt/db
-
-  # Mount using flags
-  tigerfs --host=localhost --database=mydb /mnt/db
-
   # Mount Tiger Cloud service
-  tigerfs --tiger-service-id=e6ue9697jf /mnt/db
+  tigerfs mount tiger:e6ue9697jf /mnt/db
+
+  # Mount Ghost database
+  tigerfs mount ghost:a2x6xoj0oz /mnt/db
+
+  # Mount using connection string
+  tigerfs mount postgres://user@host/db /mnt/db
 
   # Mount read-only
-  tigerfs --read-only postgres://host/db /mnt/db
+  tigerfs mount --read-only tiger:e6ue9697jf /mnt/db
 
   # Run in foreground with debug logging
-  tigerfs --foreground --debug postgres://host/db /mnt/db`,
-		Args: cobra.RangeArgs(1, 2), // [CONNECTION] MOUNTPOINT or just MOUNTPOINT
+  tigerfs mount --foreground --debug postgres://host/db /mnt/db`,
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 
-			// Parse arguments - connection string is optional, mountpoint is required
+			// Parse arguments — connection string is optional, mountpoint is required.
 			var connStr, mountpoint string
 			if len(args) == 2 {
 				connStr = args[0]
@@ -89,20 +85,29 @@ Examples:
 				mountpoint = args[0]
 			}
 
-			// If --tiger-service-id is provided, fetch connection string from Tiger Cloud
-			if tigerServiceID != "" {
-				logging.Info("Fetching connection string from Tiger Cloud",
-					zap.String("service_id", tigerServiceID))
-
-				var err error
-				connStr, err = tigercloud.GetConnectionString(ctx, tigerServiceID)
+			// Resolve backend prefix (tiger:ID, ghost:ID, or direct connection).
+			var serviceID, cliBackend string
+			if connStr != "" {
+				b, id, err := backend.Resolve(connStr)
 				if err != nil {
-					return fmt.Errorf("failed to get connection string from Tiger Cloud: %w", err)
+					return err
 				}
-				logging.Debug("Got connection string from Tiger Cloud")
+				if b != nil {
+					serviceID = id
+					cliBackend = b.CLIName()
+					logging.Info("Fetching connection string from backend",
+						zap.String("backend", b.Name()),
+						zap.String("service_id", serviceID))
+
+					connStr, err = b.GetConnectionString(ctx, serviceID)
+					if err != nil {
+						return fmt.Errorf("failed to get connection string from %s: %w", b.Name(), err)
+					}
+					logging.Debug("Got connection string from backend")
+				}
 			}
 
-			// Resolve mountpoint to absolute path for consistent registry handling
+			// Resolve mountpoint to absolute path for consistent registry handling.
 			absMountpoint, err := filepath.Abs(mountpoint)
 			if err != nil {
 				return fmt.Errorf("failed to resolve mountpoint path: %w", err)
@@ -113,39 +118,30 @@ Examples:
 				zap.Bool("read_only", readOnly),
 			)
 
-			// Load configuration from file, environment, and flags
+			// Load configuration from file, environment, and flags.
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
 
-			// Apply --schema flag if set (overrides config/env)
 			if schema != "" {
 				cfg.DefaultSchema = schema
 			}
-
-			// Apply --no-filename-extensions flag if set
 			if noFilenameExtensions {
 				cfg.NoFilenameExtensions = true
 			}
-
-			// Apply --query-timeout flag if set (overrides config/env)
 			if queryTimeout > 0 {
 				cfg.QueryTimeout = queryTimeout
 			}
-
-			// Apply --dir-filter-limit flag if set (overrides config/env)
 			if dirFilterLimit > 0 {
 				cfg.DirFilterLimit = dirFilterLimit
 			}
-
-			// Apply --legacy-fuse flag if set (Linux only, uses specialized FUSE nodes)
 			if legacyFuse {
 				cfg.LegacyFuse = true
 			}
 
-			// Mount the filesystem using platform-specific backend
-			// (NFS on macOS, FUSE on Linux)
+			// Mount the filesystem using platform-specific method
+			// (NFS on macOS, FUSE on Linux).
 			fs, err := mountFilesystem(ctx, cfg, connStr, absMountpoint)
 			if err != nil {
 				return fmt.Errorf("failed to mount: %w", err)
@@ -158,22 +154,18 @@ Examples:
 
 			logging.Info("Filesystem mounted successfully", zap.String("mountpoint", absMountpoint))
 
-			// Register the mount in the registry for discovery by other commands
-			// (status, list, unmount). We sanitize the connection string to remove
-			// any password before storing.
-			if err := registerMount(absMountpoint, connStr); err != nil {
-				// Log but don't fail - mount itself succeeded
+			// Register the mount in the registry for discovery by other commands.
+			if err := registerMount(absMountpoint, connStr, serviceID, cliBackend); err != nil {
 				logging.Warn("Failed to register mount in registry", zap.Error(err))
 			}
 
-			// Ensure we clean up the registry entry when we exit
 			defer func() {
 				if err := unregisterMount(absMountpoint); err != nil {
 					logging.Warn("Failed to unregister mount from registry", zap.Error(err))
 				}
 			}()
 
-			// Serve filesystem requests - this blocks until unmount or signal
+			// Serve filesystem requests — blocks until unmount or signal.
 			if err := fs.Serve(ctx); err != nil {
 				return fmt.Errorf("filesystem error: %w", err)
 			}
@@ -183,25 +175,13 @@ Examples:
 		},
 	}
 
-	// Connection flags
-	cmd.Flags().StringVar(&host, "host", "", "database host")
-	cmd.Flags().IntVarP(&port, "port", "p", 5432, "database port")
-	cmd.Flags().StringVarP(&user, "user", "U", "", "database user")
-	cmd.Flags().StringVarP(&database, "database", "d", "", "database name")
-	cmd.Flags().StringVar(&tigerServiceID, "tiger-service-id", "", "Tiger Cloud service ID")
 	cmd.Flags().StringVar(&schema, "schema", "", "default schema (inherits from PostgreSQL if not set)")
-
-	// Filesystem flags
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount as read-only")
 	cmd.Flags().IntVar(&maxLsRows, "max-ls-rows", 10000, "large table threshold")
 	cmd.Flags().BoolVar(&foreground, "foreground", false, "run in foreground (don't daemonize)")
 	cmd.Flags().BoolVar(&noFilenameExtensions, "no-filename-extensions", false, "disable automatic file extensions based on column type")
-
-	// Query safety flags
 	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
-
-	// Backend flags
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 
 	return cmd
@@ -212,9 +192,11 @@ Examples:
 // Parameters:
 //   - mountpoint: Absolute path to the mountpoint
 //   - connStr: Database connection string (will be sanitized to remove password)
+//   - serviceID: Cloud service ID (empty for direct connections)
+//   - cliBackend: Backend name — "tiger", "ghost", or "" (empty for direct connections)
 //
 // Returns an error if the registry cannot be accessed or modified.
-func registerMount(mountpoint, connStr string) error {
+func registerMount(mountpoint, connStr, serviceID, cliBackend string) error {
 	registry, err := mount.NewRegistry("")
 	if err != nil {
 		return fmt.Errorf("failed to open registry: %w", err)
@@ -225,6 +207,8 @@ func registerMount(mountpoint, connStr string) error {
 		PID:        os.Getpid(),
 		Database:   sanitizeConnectionString(connStr),
 		StartTime:  time.Now(),
+		ServiceID:  serviceID,
+		CLIBackend: cliBackend,
 	}
 
 	if err := registry.Register(entry); err != nil {
@@ -234,6 +218,8 @@ func registerMount(mountpoint, connStr string) error {
 	logging.Debug("Registered mount in registry",
 		zap.String("mountpoint", mountpoint),
 		zap.Int("pid", entry.PID),
+		zap.String("service_id", serviceID),
+		zap.String("backend", cliBackend),
 	)
 	return nil
 }
@@ -258,26 +244,26 @@ func unregisterMount(mountpoint string) error {
 	return nil
 }
 
-// sanitizeConnectionString removes sensitive information (password) from a
-// connection string for safe storage and display.
-//
-// This is a simple implementation that handles common PostgreSQL URL formats.
-// For full parsing, consider using pgx's connection string parser.
+// sanitizeConnectionString removes the password from a connection string
+// for safe storage and display.
 //
 // Parameters:
-//   - connStr: The original connection string
+//   - connStr: The original connection string (postgres:// URL format)
 //
-// Returns a sanitized connection string with password removed or masked.
+// Returns the connection string with the password removed, or the original
+// string if it can't be parsed as a URL.
 func sanitizeConnectionString(connStr string) string {
 	if connStr == "" {
 		return "(from environment)"
 	}
 
-	// Simple approach: if it looks like a URL, try to redact password
-	// A more robust solution would use net/url parsing
-	// For now, just return the connection string with a note that passwords
-	// should not be included in connection strings (use .pgpass or env vars)
-	//
-	// TODO: Implement proper password redaction using net/url parsing
-	return connStr
+	u, err := url.Parse(connStr)
+	if err != nil || u.User == nil {
+		return connStr
+	}
+
+	if _, hasPassword := u.User.Password(); hasPassword {
+		u.User = url.User(u.User.Username())
+	}
+	return u.String()
 }

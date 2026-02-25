@@ -62,6 +62,15 @@ type Entry struct {
 	// StartTime records when the mount was initiated.
 	// Used to calculate uptime in status displays.
 	StartTime time.Time `json:"start_time"`
+
+	// ServiceID is the cloud service identifier (Tiger service ID or Ghost database ID).
+	// Empty for direct postgres:// connections.
+	ServiceID string `json:"service_id,omitempty"`
+
+	// CLIBackend is the backend that manages this service ("tiger", "ghost", or "").
+	// Empty for direct postgres:// connections. Used by `tigerfs info` and `tigerfs fork`
+	// to resolve the backend without re-parsing the connection string.
+	CLIBackend string `json:"cli_backend,omitempty"`
 }
 
 // Registry manages the collection of active TigerFS mounts.
