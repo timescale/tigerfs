@@ -1,21 +1,21 @@
 # TigerFS
 
-TigerFS is a shared filesystem for agents and humans. Every file is a real database row — multiple agents and humans read and write the same files concurrently with full transactional safety. No sync protocols, no merge conflicts, no coordination layer. Just files.
+TigerFS is a shared filesystem for agents and humans. Every file is a real database row. Multiple agents and humans read and write the same files concurrently with full transactional safety. No sync protocols, no merge conflicts, no coordination layer. Just files.
 
-Write a markdown file with YAML frontmatter and TigerFS stores it as a structured database row with automatic version history. Directories map to database tables. Every tool that reads files — `cat`, `grep`, your editor, Claude Code, Cursor — works out of the box. Search with `grep`, organize with `mv` and `mkdir`, recover past versions from `.history/`.
+Write a markdown file with YAML frontmatter and TigerFS stores it as a structured database row with automatic version history. Directories map to database tables. Every tool that reads files (`cat`, `grep`, your editor, Claude Code, Cursor) works out of the box. Search with `grep`, organize with `mv` and `mkdir`, recover past versions from `.history/`.
 
-Built on PostgreSQL, so you get ACID transactions, real concurrent access, and a SQL escape hatch when you need it. TigerFS mounts as a native filesystem via FUSE (Linux) or NFS (macOS) — no dependencies, no daemon to babysit.
+Built on PostgreSQL, so you get ACID transactions, real concurrent access, and a SQL escape hatch when you need it. TigerFS mounts as a native filesystem via FUSE (Linux) or NFS (macOS). No dependencies, no daemon to babysit.
 
 ## Why TigerFS
 
 - **vs. local files:** No sync conflicts, built-in version history, multiple agents and humans sharing the same data in real time
-- **vs. git:** Real-time collaboration without pull/push/merge — every write is immediately visible to all readers, with automatic versioning
+- **vs. git:** Real-time collaboration without pull/push/merge. Every write is immediately visible to all readers, with automatic versioning
 - **vs. object storage (S3):** Filesystem interface, ACID transactions, structured metadata in frontmatter, and SQL queries when you need them
-- **vs. databases directly:** File-native — every tool, editor, and AI agent already knows how to read and write files
+- **vs. databases directly:** File-native. Every tool, editor, and AI agent already knows how to read and write files
 
 ## Use Cases
 
-**Shared agent memory** — Multiple agents read and write the same knowledge base concurrently. Every edit is automatically versioned, so if one agent overwrites another's work, recover it from `.history/`.
+**Shared agent memory.** Multiple agents read and write the same knowledge base concurrently. Every edit is automatically versioned, so if one agent overwrites another's work, recover it from `.history/`.
 
 ```bash
 # Agent A writes research findings
@@ -26,11 +26,11 @@ author: agent-a
 OAuth 2.0 is the recommended approach because...
 EOF
 
-# Agent B reads it immediately — no sync, no pull
+# Agent B reads it immediately, no sync, no pull
 cat /mnt/db/kb/auth-analysis.md
 ```
 
-**Multi-agent task queue** — Three directories — `todo/`, `doing/`, `done/` — and `mv` is your only API. Moves are atomic database operations, so two agents can't claim the same task.
+**Multi-agent task queue.** Three directories (`todo/`, `doing/`, `done/`) and `mv` is your only API. Moves are atomic database operations, so two agents can't claim the same task.
 
 ```bash
 # Set up a task board
@@ -48,7 +48,7 @@ ls /mnt/db/tasks/doing/
 grep "author:" /mnt/db/tasks/doing/*.md
 ```
 
-**Collaborative docs** — A human writes a draft, an agent reviews and edits it, another agent summarizes it. All in the same directory, all visible immediately, no pull/push/merge. History shows who changed what and when.
+**Collaborative docs.** A human writes a draft, an agent reviews and edits it, another agent summarizes it. All in the same directory, all visible immediately, no pull/push/merge. History shows who changed what and when.
 
 ```bash
 # Human writes a draft
@@ -71,7 +71,7 @@ reviewer: agent-b
 We should invest in... (with agent edits)
 EOF
 
-# Human sees changes instantly — browse the full edit trail
+# Human sees changes instantly. Browse the full edit trail
 ls /mnt/db/docs/.history/proposal.md/
 cat /mnt/db/docs/.history/proposal.md/2026-02-25T100000Z  # see previous version
 ```
@@ -117,7 +117,7 @@ The markdown app presents database rows as `.md` files with YAML frontmatter. Cr
 # Create a markdown app
 echo "markdown" > /mnt/db/.build/blog
 
-# Write a post — frontmatter becomes columns, body becomes text
+# Write a post. Frontmatter becomes columns, body becomes text
 cat > /mnt/db/blog/hello-world.md << 'EOF'
 ---
 title: Hello World
@@ -134,7 +134,7 @@ EOF
 grep -l "author: alice" /mnt/db/blog/*.md
 ```
 
-Organize files into directories — `mkdir` creates folders, `mv` moves files between them:
+Organize files into directories. `mkdir` creates folders, `mv` moves files between them:
 
 ```bash
 mkdir /mnt/db/blog/tutorials
@@ -145,7 +145,7 @@ See [docs/markdown-app.md](docs/markdown-app.md) for column mapping, frontmatter
 
 ### History
 
-Any app can opt into automatic versioning — every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
+Any app can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
 
 ```bash
 # Create an app with history enabled
@@ -165,7 +165,7 @@ See [docs/history.md](docs/history.md) for cross-rename tracking, subdirectory s
 
 ## Cloud Backends
 
-TigerFS works with any PostgreSQL database — just pass a connection string. It also integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.dev) through their CLIs for credential-free mounting. Use a prefix to specify the backend:
+TigerFS works with any PostgreSQL database. Just pass a connection string. It also integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.dev) through their CLIs for credential-free mounting. Use a prefix to specify the backend:
 
 ```bash
 # Mount any Postgres database
@@ -176,7 +176,7 @@ tigerfs mount tiger:e6ue9697jf /mnt/db
 tigerfs mount ghost:a2x6xoj0oz /mnt/db
 ```
 
-TigerFS calls the backend CLI to retrieve credentials — no passwords in your config. Authenticate once with `tiger auth login` or `ghost login`.
+TigerFS calls the backend CLI to retrieve credentials, so there are no passwords in your config. Authenticate once with `tiger auth login` or `ghost login`.
 
 Set a default backend to skip the prefix:
 
@@ -204,13 +204,13 @@ tigerfs info --json /mnt/db           # JSON output for scripting
 
 ## Native Table Access
 
-Below the app layer, every table is a directory of rows. Read columns, write JSON, navigate indexes, and chain pipeline queries — all pushed down to the database as optimized SQL.
+Below the app layer, every table is a directory of rows. Read columns, write JSON, navigate indexes, and chain pipeline queries, all pushed down to the database as optimized SQL.
 
-**Explore an unfamiliar database** — Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
+**Explore an unfamiliar database.** Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
 
-**Quick data fixes** — Update a customer's email, toggle a feature flag, delete a test record. One shell command instead of opening a SQL client, remembering the table schema, and writing a `WHERE` clause.
+**Quick data fixes.** Update a customer's email, toggle a feature flag, delete a test record. One shell command instead of opening a SQL client, remembering the table schema, and writing a `WHERE` clause.
 
-**Export and analyze** — Chain filters, ordering, and pagination into a single path, then pipe the result into `jq`, `awk`, or export as CSV for a spreadsheet.
+**Export and analyze.** Chain filters, ordering, and pagination into a single path, then pipe the result into `jq`, `awk`, or export as CSV for a spreadsheet.
 
 ### Explore
 
@@ -233,7 +233,7 @@ rm -r /mnt/db/users/456/                                        # Delete row
 
 ### Pipeline Queries
 
-Chain filters, ordering, and pagination in a single path — the database executes it as one query:
+Chain filters, ordering, and pagination in a single path. The database executes it as one query:
 
 ```bash
 cat /mnt/db/orders/.by/customer_id/123/.order/created_at/.last/10/.export/json
@@ -250,7 +250,7 @@ mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (...)" > /mnt/db/.crea
 touch /mnt/db/.create/orders/.commit
 ```
 
-See [docs/native-tables.md](docs/native-tables.md) for the full reference — row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
+See [docs/native-tables.md](docs/native-tables.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
 
 ## Architecture
 
@@ -273,7 +273,7 @@ TigerFS maps filesystem paths to database queries:
   /mnt/db/public/users/123/    →   columns as files
 ```
 
-FUSE on Linux, NFS on macOS — no external dependencies on either platform.
+FUSE on Linux, NFS on macOS. No external dependencies on either platform.
 
 ## Try the Demos
 
@@ -318,9 +318,9 @@ All options support environment variables with `TIGERFS_` prefix (e.g., `TIGERFS
 
 | Guide | Description |
 |-------|-------------|
-| [docs/markdown-app.md](docs/markdown-app.md) | Markdown app — column mapping, frontmatter, directories |
-| [docs/history.md](docs/history.md) | Version history — snapshots, cross-rename tracking, recovery |
-| [docs/native-tables.md](docs/native-tables.md) | Native table access — row formats, indexes, pipeline queries, schema management |
+| [docs/markdown-app.md](docs/markdown-app.md) | Markdown app: column mapping, frontmatter, directories |
+| [docs/history.md](docs/history.md) | Version history: snapshots, cross-rename tracking, recovery |
+| [docs/native-tables.md](docs/native-tables.md) | Native table access: row formats, indexes, pipeline queries, schema management |
 | [docs/quickstart.md](docs/quickstart.md) | Guided scenarios with sample data |
 
 ## Development
@@ -336,11 +336,11 @@ For development guidelines, architecture details, and the full specification, se
 
 ## Project Status
 
-**v0.3.0** — Apps (markdown views, directory hierarchies, version history) and cloud backend integration with Tiger Cloud and Ghost.
+**v0.3.0.** Apps (markdown views, directory hierarchies, version history) and cloud backend integration with Tiger Cloud and Ghost.
 
 **Highlights:**
 - Markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
-- Cloud backends — mount, create, and fork Tiger Cloud and Ghost databases by service ID
+- Cloud backends: mount, create, and fork Tiger Cloud and Ghost databases by service ID
 - Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, chained pagination, `.export/`)
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
 - Full CRUD with multiple formats (TSV, CSV, JSON, YAML), index navigation, and PATCH semantics
