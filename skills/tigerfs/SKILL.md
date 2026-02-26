@@ -13,6 +13,18 @@ TigerFS mounts PostgreSQL databases as directories. You interact with data using
 
 Tables with more than 10,000 rows will return an error on `ls`. Always check the size, then use `.first/N/`, `.sample/N/`, or `.by/column/value/` for large tables.
 
+## Common Workflows
+
+When asked to create a **task list, kanban board, todo, or project tracker**:
+→ Read [recipes.md](recipes.md) Recipe 1 and follow it exactly.
+  Core principle: **directories = states** (`todo/`, `doing/`, `done/`), **`mv` = transitions**. Do NOT use `status` frontmatter fields.
+
+When asked to create a **knowledge base, wiki, or documentation store**:
+→ Read [recipes.md](recipes.md) Recipe 2 and follow it exactly.
+
+When asked to **save or resume session context**:
+→ Read [recipes.md](recipes.md) Recipe 3 and follow it exactly.
+
 ## Detecting a TigerFS Mount
 
 Look for `.md`/`.txt` files (synth apps) or `.info/` in subdirectories (native tables):
@@ -162,6 +174,7 @@ See [native-ops.md](native-ops.md) for the full reference.
 | Write full row JSON expecting replace semantics | JSON/CSV/TSV writes are **PATCH** — only specified keys update |
 | `Grep` across all rows of a large native table | Use `.by/` index lookups for indexed columns |
 | `ls` a table directory without checking size | Read `.info/count` first — large tables return EIO on `ls` |
+| Put `status:` in frontmatter to track state | Use directories as states (`todo/`, `doing/`, `done/`), `mv` to transition |
 
 ## Detailed References
 
