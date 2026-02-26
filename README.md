@@ -26,7 +26,7 @@ In under 60 seconds, you can mount a live PostgreSQL database as a collaborative
 
 ```bash
 # Install (macOS requires no dependencies; Linux needs fuse3)
-curl -fsSL https://tigerfs.tigerdata.com | sh
+curl -fsSL https://install.tigerfs.io | sh
 
 # Mount a database
 tigerfs mount postgres://localhost/mydb /mnt/db

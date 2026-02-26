@@ -5,6 +5,7 @@ project_name: tigerfs
 before:
   hooks:
     - go mod tidy
+    - sh -c 'echo "{{ .Tag }}" > latest.txt'
 
 builds:
   - id: tigerfs
@@ -25,7 +26,8 @@ builds:
       - -X github.com/timescale/tigerfs/internal/tigerfs/cmd.GitCommit={{.Commit}}
 
 archives:
-  - formats:
+  - id: archive
+    formats:
       - tar.gz
     name_template: >-
       {{ .ProjectName }}_
@@ -39,7 +41,7 @@ archives:
       - docs/spec.md
 
 checksum:
-  name_template: 'checksums.txt'
+  split: true
 
 changelog:
   sort: asc
@@ -56,3 +58,25 @@ release:
     name: tigerfs
   draft: false
   prerelease: auto
+
+blobs:
+  # Versioned release artifacts
+  - provider: s3
+    bucket: tigerfs-releases
+    region: us-east-1
+    directory: "releases/{{ .Tag }}"
+    ids:
+      - archive
+
+  # Root-level files (stable releases only)
+  - provider: s3
+    bucket: tigerfs-releases
+    region: us-east-1
+    directory: ""
+    extra_files_only: true
+    disable: "{{ if .Prerelease }}true{{ end }}"
+    extra_files:
+      - glob: ./latest.txt
+        name_template: "latest.txt"
+      - glob: ./scripts/install.sh
+        name_template: "install.sh"
