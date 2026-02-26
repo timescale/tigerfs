@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 func TestNewSampleNode(t *testing.T) {
@@ -228,7 +229,7 @@ func TestSampleLimitNode_Readdir_WithMock_WithCache(t *testing.T) {
 		return &db.TablePermissions{CanSelect: true}, nil
 	}
 
-	cache := NewMetadataCache(cfg, mock)
+	cache := tigerfs.NewMetadataCache(cfg, mock)
 	if err := cache.Refresh(context.Background()); err != nil {
 		t.Fatalf("Failed to refresh cache: %v", err)
 	}

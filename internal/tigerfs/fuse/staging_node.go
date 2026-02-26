@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -46,6 +47,7 @@ type StagingDirNode struct {
 
 	cfg     *config.Config
 	db      db.DDLExecutor
+	cache   *tigerfs.MetadataCache // May be nil (e.g., index DDL)
 	staging *StagingTracker
 	ctx     StagingContext // Context for this staging operation
 }
@@ -58,10 +60,12 @@ var _ fs.NodeCreater = (*StagingDirNode)(nil)
 var _ fs.NodeUnlinker = (*StagingDirNode)(nil)
 
 // NewStagingDirNode creates a new staging directory node.
-func NewStagingDirNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *StagingDirNode {
+// cache may be nil for DDL operations that don't affect the metadata cache (e.g., index DDL).
+func NewStagingDirNode(cfg *config.Config, dbClient db.DDLExecutor, cache *tigerfs.MetadataCache, staging *StagingTracker, ctx StagingContext) *StagingDirNode {
 	return &StagingDirNode{
 		cfg:     cfg,
 		db:      dbClient,
+		cache:   cache,
 		staging: staging,
 		ctx:     ctx,
 	}
@@ -152,7 +156,7 @@ func (s *StagingDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 		return child, 0
 
 	case FileCommit:
-		node := NewCommitFileNode(s.cfg, s.db, s.staging, s.ctx)
+		node := NewCommitFileNode(s.cfg, s.db, s.cache, s.staging, s.ctx)
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
 		child := s.NewPersistentInode(ctx, node, stableAttr)
 		// Set file attributes - .commit is a trigger file (no readable content)
@@ -251,7 +255,7 @@ type CreateDirNode struct {
 
 	cfg        *config.Config
 	db         db.DDLExecutor
-	cache      *MetadataCache
+	cache      *tigerfs.MetadataCache
 	staging    *StagingTracker
 	objectType string // "table", "index", "schema", "view"
 	schema     string // PostgreSQL schema (for tables)
@@ -266,7 +270,7 @@ var _ fs.NodeLookuper = (*CreateDirNode)(nil)
 var _ fs.NodeMkdirer = (*CreateDirNode)(nil)
 
 // NewCreateDirNode creates a new .create directory node.
-func NewCreateDirNode(cfg *config.Config, dbClient db.DDLExecutor, cache *MetadataCache, staging *StagingTracker, objectType, schema, tableName, pathPrefix string) *CreateDirNode {
+func NewCreateDirNode(cfg *config.Config, dbClient db.DDLExecutor, cache *tigerfs.MetadataCache, staging *StagingTracker, objectType, schema, tableName, pathPrefix string) *CreateDirNode {
 	return &CreateDirNode{
 		cfg:        cfg,
 		db:         dbClient,
@@ -338,7 +342,7 @@ func (c *CreateDirNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 		StagingPath: stagingPath,
 	}
 
-	node := NewStagingDirNode(c.cfg, c.db, c.staging, stagingCtx)
+	node := NewStagingDirNode(c.cfg, c.db, c.cache, c.staging, stagingCtx)
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
 	child := c.NewPersistentInode(ctx, node, stableAttr)
 
@@ -366,7 +370,7 @@ func (c *CreateDirNode) Mkdir(ctx context.Context, name string, mode uint32, out
 		StagingPath: stagingPath,
 	}
 
-	node := NewStagingDirNode(c.cfg, c.db, c.staging, stagingCtx)
+	node := NewStagingDirNode(c.cfg, c.db, c.cache, c.staging, stagingCtx)
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
 	child := c.NewPersistentInode(ctx, node, stableAttr)
 

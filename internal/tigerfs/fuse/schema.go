@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -20,7 +21,7 @@ type SchemaNode struct {
 
 	cfg         *config.Config
 	db          *db.Client
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string // The schema this node represents
 	partialRows *PartialRowTracker
 	staging     *StagingTracker
@@ -40,7 +41,7 @@ var _ fs.NodeGetattrer = (*SchemaNode)(nil)
 //   - schema: The schema name this node represents
 //   - partialRows: Tracker for partial row creation
 //   - staging: Tracker for DDL staging operations
-func NewSchemaNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, schema string, partialRows *PartialRowTracker, staging *StagingTracker) *SchemaNode {
+func NewSchemaNode(cfg *config.Config, dbClient *db.Client, cache *tigerfs.MetadataCache, schema string, partialRows *PartialRowTracker, staging *StagingTracker) *SchemaNode {
 	return &SchemaNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -168,6 +169,7 @@ func (s *SchemaNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		deleteNode := NewStagingDirNode(
 			s.cfg,
 			s.db, // db.DDLExecutor
+			s.cache,
 			s.staging,
 			stagingCtx,
 		)

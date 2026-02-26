@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -509,7 +510,7 @@ type CommitFileNode struct {
 	cfg     *config.Config
 	db      db.DDLExecutor
 	staging *StagingTracker
-	cache   *MetadataCache
+	cache   *tigerfs.MetadataCache
 	ctx     StagingContext
 }
 
@@ -519,11 +520,13 @@ var _ fs.NodeOpener = (*CommitFileNode)(nil)
 var _ fs.NodeSetattrer = (*CommitFileNode)(nil)
 
 // NewCommitFileNode creates a new .commit file node.
-func NewCommitFileNode(cfg *config.Config, dbClient db.DDLExecutor, staging *StagingTracker, ctx StagingContext) *CommitFileNode {
+// cache may be nil for DDL operations that don't affect the metadata cache.
+func NewCommitFileNode(cfg *config.Config, dbClient db.DDLExecutor, cache *tigerfs.MetadataCache, staging *StagingTracker, ctx StagingContext) *CommitFileNode {
 	return &CommitFileNode{
 		cfg:     cfg,
 		db:      dbClient,
 		staging: staging,
+		cache:   cache,
 		ctx:     ctx,
 	}
 }

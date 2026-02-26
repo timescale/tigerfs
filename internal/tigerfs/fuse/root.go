@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -19,7 +20,7 @@ type RootNode struct {
 
 	cfg         *config.Config
 	db          *db.Client
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	partialRows *PartialRowTracker
 	staging     *StagingTracker
 }
@@ -31,7 +32,7 @@ var _ fs.NodeGetattrer = (*RootNode)(nil)
 
 // NewRootNode creates a new root directory node
 func NewRootNode(cfg *config.Config, dbClient *db.Client, partialRows *PartialRowTracker) *RootNode {
-	cache := NewMetadataCache(cfg, dbClient)
+	cache := tigerfs.NewMetadataCache(cfg, dbClient)
 	staging := NewStagingTracker()
 
 	return &RootNode{

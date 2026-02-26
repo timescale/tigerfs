@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -21,7 +22,7 @@ type AllRowsNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	tableName   string
 	partialRows *PartialRowTracker
@@ -33,7 +34,7 @@ var _ fs.NodeReaddirer = (*AllRowsNode)(nil)
 var _ fs.NodeLookuper = (*AllRowsNode)(nil)
 
 // NewAllRowsNode creates a new .all/ directory node
-func NewAllRowsNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *AllRowsNode {
+func NewAllRowsNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *AllRowsNode {
 	return &AllRowsNode{
 		cfg:         cfg,
 		db:          dbClient,

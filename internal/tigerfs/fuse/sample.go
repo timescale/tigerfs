@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -21,13 +22,13 @@ import (
 type SampleNode struct {
 	fs.Inode
 
-	cfg         *config.Config     // TigerFS configuration
-	db          db.DBClient        // Database client for queries
-	cache       *MetadataCache     // Cache for row count estimates
-	schema      string             // PostgreSQL schema name
-	tableName   string             // Table this sample belongs to
-	partialRows *PartialRowTracker // Tracker for partial row writes
-	pipeline    *PipelineContext   // Pipeline context for capability chaining (may be nil)
+	cfg         *config.Config         // TigerFS configuration
+	db          db.DBClient            // Database client for queries
+	cache       *tigerfs.MetadataCache // Cache for row count estimates
+	schema      string                 // PostgreSQL schema name
+	tableName   string                 // Table this sample belongs to
+	partialRows *PartialRowTracker     // Tracker for partial row writes
+	pipeline    *PipelineContext       // Pipeline context for capability chaining (may be nil)
 }
 
 var _ fs.InodeEmbedder = (*SampleNode)(nil)
@@ -44,7 +45,7 @@ var _ fs.NodeLookuper = (*SampleNode)(nil)
 //   - schema: PostgreSQL schema name
 //   - tableName: Name of the table
 //   - partialRows: Tracker for partial row writes
-func NewSampleNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *SampleNode {
+func NewSampleNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *SampleNode {
 	return &SampleNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -57,7 +58,7 @@ func NewSampleNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCach
 
 // NewSampleNodeWithPipeline creates a new .sample/ directory node with pipeline context.
 // The pipeline context is passed through to child nodes for capability chaining.
-func NewSampleNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *SampleNode {
+func NewSampleNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *SampleNode {
 	return &SampleNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -125,14 +126,14 @@ func (s *SampleNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 type SampleLimitNode struct {
 	fs.Inode
 
-	cfg         *config.Config     // TigerFS configuration
-	db          db.DBClient        // Database client for queries
-	cache       *MetadataCache     // Cache for row count estimates
-	schema      string             // PostgreSQL schema name
-	tableName   string             // Table this sample belongs to
-	sampleSize  int                // Target number of random rows to return
-	partialRows *PartialRowTracker // Tracker for partial row writes
-	pipeline    *PipelineContext   // Pipeline context for capability chaining (may be nil)
+	cfg         *config.Config         // TigerFS configuration
+	db          db.DBClient            // Database client for queries
+	cache       *tigerfs.MetadataCache // Cache for row count estimates
+	schema      string                 // PostgreSQL schema name
+	tableName   string                 // Table this sample belongs to
+	sampleSize  int                    // Target number of random rows to return
+	partialRows *PartialRowTracker     // Tracker for partial row writes
+	pipeline    *PipelineContext       // Pipeline context for capability chaining (may be nil)
 }
 
 var _ fs.InodeEmbedder = (*SampleLimitNode)(nil)
@@ -151,13 +152,13 @@ var _ fs.NodeLookuper = (*SampleLimitNode)(nil)
 //   - tableName: Name of the table
 //   - sampleSize: Target number of random rows to return
 //   - partialRows: Tracker for partial row writes
-func NewSampleLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, sampleSize int, partialRows *PartialRowTracker) *SampleLimitNode {
+func NewSampleLimitNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, sampleSize int, partialRows *PartialRowTracker) *SampleLimitNode {
 	return NewSampleLimitNodeWithPipeline(cfg, dbClient, cache, schema, tableName, sampleSize, partialRows, nil)
 }
 
 // NewSampleLimitNodeWithPipeline creates a new sample limit node with pipeline context.
 // When basePipeline is provided, the sample limit is applied to create the node's pipeline.
-func NewSampleLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, sampleSize int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *SampleLimitNode {
+func NewSampleLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, sampleSize int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *SampleLimitNode {
 	var pipeline *PipelineContext
 
 	// Apply sample limit to pipeline if context exists

@@ -1,7 +1,8 @@
-package fuse
+package fs
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -13,19 +14,33 @@ import (
 
 // MetadataCache caches database metadata (schemas, tables, views, columns, permissions)
 // to avoid excessive queries to information_schema and system catalogs.
-// All cached data is refreshed together based on MetadataRefreshInterval.
+//
+// Cache is split into two tiers with independent TTLs:
+//   - Catalog tier (fast): schemas, tables, views — refreshed every MetadataRefreshInterval (default 10s)
+//   - Structural tier (slow): row counts, permissions, primary keys — refreshed every StructuralMetadataRefreshInterval (default 5m)
+//
+// Explicit Invalidate() resets both tiers, causing a full refresh on next access.
 type MetadataCache struct {
 	mu sync.RWMutex
 
 	cfg *config.Config // TigerFS configuration
 	db  db.DBClient    // Database client for queries
 
-	// Cached data - all refreshed together
-	tables           []string                        // List of table names in default schema
-	views            []string                        // List of view names in default schema
-	tableRowCounts   map[string]int64                // table name -> estimated row count
-	tablePermissions map[string]*db.TablePermissions // table name -> user permissions
-	lastFetch        time.Time                       // When cache was last refreshed
+	// Catalog tier — refreshed on fast TTL (MetadataRefreshInterval)
+	tables    []string  // List of table names in default schema
+	views     []string  // List of view names in default schema
+	lastFetch time.Time // When catalog was last refreshed
+
+	// Structural tier — refreshed on slow TTL (StructuralMetadataRefreshInterval)
+	tableRowCounts      map[string]int64                // table name -> estimated row count
+	tablePermissions    map[string]*db.TablePermissions // table name -> user permissions
+	structuralLastFetch time.Time                       // When structural data was last refreshed
+
+	// Primary key cache — uses slow TTL (structural metadata).
+	// Key: "schema\x00table"
+	pkMu        sync.RWMutex
+	primaryKeys map[string][]string // cached PK column names
+	pkNegatives map[string]bool     // tables known to have no PK (views, tables without PK)
 
 	// defaultSchema is the PostgreSQL schema for root-level tables.
 	// Inherited from PostgreSQL's current_schema() if not explicitly configured.
@@ -43,7 +58,7 @@ type MetadataCache struct {
 // NewMetadataCache creates a new metadata cache.
 //
 // Parameters:
-//   - cfg: TigerFS configuration (determines refresh interval)
+//   - cfg: TigerFS configuration (determines refresh intervals)
 //   - dbClient: Database client for queries (accepts db.DBClient interface)
 //
 // Returns an empty cache that will be populated on first access.
@@ -58,6 +73,8 @@ func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 		views:             []string{},
 		tableRowCounts:    make(map[string]int64),
 		tablePermissions:  make(map[string]*db.TablePermissions),
+		primaryKeys:       make(map[string][]string),
+		pkNegatives:       make(map[string]bool),
 		schemas:           []string{},
 		schemaTables:      make(map[string][]string),
 		schemaViews:       make(map[string][]string),
@@ -65,6 +82,11 @@ func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
 		schemaLastFetch:   make(map[string]time.Time),
 	}
+}
+
+// pkKey returns the cache key for a schema+table pair.
+func pkKey(schema, table string) string {
+	return schema + "\x00" + table
 }
 
 // GetTables returns the list of tables from the default schema.
@@ -76,24 +98,15 @@ func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 // Returns a copy of the table list to prevent external modification.
 // Returns error if the cache refresh fails.
 func (c *MetadataCache) GetTables(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		logging.Debug("Metadata cache expired, refreshing")
-		if err := c.Refresh(ctx); err != nil {
-			return nil, err
-		}
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return nil, err
 	}
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Return a copy to prevent external modification
 	tablesCopy := make([]string, len(c.tables))
 	copy(tablesCopy, c.tables)
-
 	return tablesCopy, nil
 }
 
@@ -106,24 +119,15 @@ func (c *MetadataCache) GetTables(ctx context.Context) ([]string, error) {
 // Returns a copy of the view list to prevent external modification.
 // Returns error if the cache refresh fails.
 func (c *MetadataCache) GetViews(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		logging.Debug("Metadata cache expired, refreshing for views")
-		if err := c.Refresh(ctx); err != nil {
-			return nil, err
-		}
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return nil, err
 	}
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Return a copy to prevent external modification
 	viewsCopy := make([]string, len(c.views))
 	copy(viewsCopy, c.views)
-
 	return viewsCopy, nil
 }
 
@@ -137,29 +141,206 @@ func (c *MetadataCache) GetViews(ctx context.Context) ([]string, error) {
 // Returns true if the view exists, false otherwise.
 // Returns error if the cache refresh fails.
 func (c *MetadataCache) HasView(ctx context.Context, viewName string) (bool, error) {
-	views, err := c.GetViews(ctx)
-	if err != nil {
+	if err := c.ensureCatalogFresh(ctx); err != nil {
 		return false, err
 	}
 
-	for _, view := range views {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, view := range c.views {
 		if view == viewName {
 			return true, nil
 		}
 	}
-
 	return false, nil
 }
 
-// Refresh updates the cache from the database.
-// Fetches schemas, tables, row count estimates, and permissions.
-// Non-critical data (row counts, permissions) failures are logged but don't
-// cause the refresh to fail, ensuring the cache remains usable.
+// HasTable checks if a table exists in the cache.
+// Refreshes the cache if stale before checking.
 //
-// If defaultSchema is empty, queries PostgreSQL's current_schema() to determine it.
+// Parameters:
+//   - ctx: Context for cancellation
+//   - tableName: Name of the table to check
 //
-// Returns error only if critical queries (schemas, tables) fail.
-func (c *MetadataCache) Refresh(ctx context.Context) error {
+// Returns true if the table exists, false otherwise.
+// Returns error if the cache refresh fails.
+func (c *MetadataCache) HasTable(ctx context.Context, tableName string) (bool, error) {
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return false, err
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, table := range c.tables {
+		if table == tableName {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// HasTableOrView checks if a name exists as a table or view in the default schema.
+// Returns (isTable, isView, err). At most one of isTable/isView is true.
+// Refreshes the catalog cache if stale.
+func (c *MetadataCache) HasTableOrView(ctx context.Context, name string) (isTable, isView bool, err error) {
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return false, false, err
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for _, t := range c.tables {
+		if t == name {
+			return true, false, nil
+		}
+	}
+	for _, v := range c.views {
+		if v == name {
+			return false, true, nil
+		}
+	}
+	return false, false, nil
+}
+
+// HasTableOrViewInSchema checks if a name exists as a table or view in a specific schema.
+// For the default schema, uses the main cache. For other schemas, lazy-loads.
+func (c *MetadataCache) HasTableOrViewInSchema(ctx context.Context, schema, name string) (isTable, isView bool, err error) {
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return false, false, err
+	}
+
+	c.mu.RLock()
+	defaultSchema := c.defaultSchema
+	c.mu.RUnlock()
+
+	if schema == defaultSchema {
+		return c.HasTableOrView(ctx, name)
+	}
+
+	// For non-default schemas, load and check
+	tables, err := c.GetTablesForSchema(ctx, schema)
+	if err != nil {
+		return false, false, err
+	}
+	for _, t := range tables {
+		if t == name {
+			return true, false, nil
+		}
+	}
+	views, err := c.GetViewsForSchema(ctx, schema)
+	if err != nil {
+		return false, false, err
+	}
+	for _, v := range views {
+		if v == name {
+			return false, true, nil
+		}
+	}
+	return false, false, nil
+}
+
+// GetPrimaryKey returns the cached primary key columns for a table.
+// On cache miss, queries the database and caches the result.
+// Tables without a primary key (views, etc.) are cached as negatives
+// to avoid repeated DB queries.
+//
+// Uses the structural TTL for expiration.
+func (c *MetadataCache) GetPrimaryKey(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
+	key := pkKey(schema, table)
+
+	c.pkMu.RLock()
+	if cols, ok := c.primaryKeys[key]; ok {
+		c.pkMu.RUnlock()
+		return &db.PrimaryKey{Columns: cols}, nil
+	}
+	if c.pkNegatives[key] {
+		c.pkMu.RUnlock()
+		return nil, fmt.Errorf("table %s.%s has no primary key (cached)", schema, table)
+	}
+	c.pkMu.RUnlock()
+
+	// Cache miss — query the DB
+	pk, err := c.db.GetPrimaryKey(ctx, schema, table)
+	if err != nil {
+		// Cache the negative result
+		c.pkMu.Lock()
+		c.pkNegatives[key] = true
+		c.pkMu.Unlock()
+		return nil, err
+	}
+
+	// Cache the positive result
+	c.pkMu.Lock()
+	c.primaryKeys[key] = pk.Columns
+	c.pkMu.Unlock()
+
+	return pk, nil
+}
+
+// InvalidatePrimaryKey removes a specific PK entry from the cache.
+// Call after DDL that might change a table's primary key.
+func (c *MetadataCache) InvalidatePrimaryKey(schema, table string) {
+	key := pkKey(schema, table)
+	c.pkMu.Lock()
+	delete(c.primaryKeys, key)
+	delete(c.pkNegatives, key)
+	c.pkMu.Unlock()
+}
+
+// ensureCatalogFresh checks if the catalog tier needs refresh and refreshes if needed.
+func (c *MetadataCache) ensureCatalogFresh(ctx context.Context) error {
+	c.mu.RLock()
+	needsRefresh := c.needsCatalogRefresh()
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		logging.Debug("Metadata cache catalog expired, refreshing")
+		return c.RefreshCatalog(ctx)
+	}
+	return nil
+}
+
+// ensureStructuralFresh checks if the structural tier needs refresh and refreshes if needed.
+func (c *MetadataCache) ensureStructuralFresh(ctx context.Context) error {
+	c.mu.RLock()
+	needsRefresh := c.needsStructuralRefresh()
+	c.mu.RUnlock()
+
+	if needsRefresh {
+		logging.Debug("Metadata cache structural data expired, refreshing")
+		return c.RefreshStructural(ctx)
+	}
+	return nil
+}
+
+// needsCatalogRefresh checks if the catalog tier has expired.
+// IMPORTANT: Must be called with at least read lock held.
+func (c *MetadataCache) needsCatalogRefresh() bool {
+	if c.lastFetch.IsZero() {
+		return true
+	}
+	return time.Since(c.lastFetch) > c.cfg.MetadataRefreshInterval
+}
+
+// needsStructuralRefresh checks if the structural tier has expired.
+// IMPORTANT: Must be called with at least read lock held.
+func (c *MetadataCache) needsStructuralRefresh() bool {
+	if c.structuralLastFetch.IsZero() {
+		return true
+	}
+	interval := c.cfg.StructuralMetadataRefreshInterval
+	if interval == 0 {
+		interval = 5 * time.Minute // fallback default
+	}
+	return time.Since(c.structuralLastFetch) > interval
+}
+
+// RefreshCatalog refreshes the catalog tier: schemas, tables, views.
+// This is the fast tier, called frequently (default every 10s).
+func (c *MetadataCache) RefreshCatalog(ctx context.Context) error {
 	// Resolve default schema from PostgreSQL if not explicitly configured
 	c.mu.RLock()
 	needsSchemaResolution := c.defaultSchema == ""
@@ -183,7 +364,7 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 	schema := c.defaultSchema
 	c.mu.RUnlock()
 
-	logging.Debug("Refreshing metadata cache", zap.String("schema", schema))
+	logging.Debug("Refreshing metadata cache (catalog)", zap.String("schema", schema))
 
 	// Query all schemas
 	schemas, err := c.db.GetSchemas(ctx)
@@ -207,17 +388,53 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 		views = []string{}
 	}
 
+	c.mu.Lock()
+	c.schemas = schemas
+	c.tables = tables
+	c.views = views
+	c.lastFetch = time.Now()
+	c.mu.Unlock()
+
+	// Clear PK negatives on catalog refresh — a previously-view-only name might now be a table.
+	c.pkMu.Lock()
+	c.pkNegatives = make(map[string]bool)
+	c.pkMu.Unlock()
+
+	logging.Debug("Metadata cache catalog refreshed",
+		zap.Int("schema_count", len(schemas)),
+		zap.Int("table_count", len(tables)),
+		zap.Int("view_count", len(views)),
+		zap.Strings("tables", tables),
+		zap.Strings("views", views))
+
+	return nil
+}
+
+// RefreshStructural refreshes the structural tier: row counts, permissions.
+// This is the slow tier, called infrequently (default every 5m).
+func (c *MetadataCache) RefreshStructural(ctx context.Context) error {
+	// Ensure catalog is fresh first (need table list for structural queries)
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return err
+	}
+
+	c.mu.RLock()
+	schema := c.defaultSchema
+	tables := make([]string, len(c.tables))
+	copy(tables, c.tables)
+	c.mu.RUnlock()
+
+	logging.Debug("Refreshing metadata cache (structural)", zap.String("schema", schema))
+
 	// Query row count estimates for all tables
 	rowCounts, err := c.db.GetRowCountEstimates(ctx, schema, tables)
 	if err != nil {
-		// Log warning but don't fail - row counts are optional
 		logging.Warn("Failed to get row count estimates, continuing without",
 			zap.Error(err))
 		rowCounts = make(map[string]int64)
 	}
 
 	// Query permissions for all tables
-	// Done individually since there's no batch API for has_table_privilege
 	permissions := make(map[string]*db.TablePermissions)
 	for _, table := range tables {
 		perms, err := c.db.GetTablePermissions(ctx, schema, table)
@@ -231,63 +448,24 @@ func (c *MetadataCache) Refresh(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	c.schemas = schemas
-	c.tables = tables
-	c.views = views
 	c.tableRowCounts = rowCounts
 	c.tablePermissions = permissions
-	c.lastFetch = time.Now()
+	c.structuralLastFetch = time.Now()
 	c.mu.Unlock()
 
-	logging.Debug("Metadata cache refreshed",
-		zap.Int("schema_count", len(schemas)),
-		zap.Int("table_count", len(tables)),
-		zap.Int("view_count", len(views)),
-		zap.Int("permissions_count", len(permissions)),
-		zap.Strings("tables", tables),
-		zap.Strings("views", views))
+	logging.Debug("Metadata cache structural refreshed",
+		zap.Int("permissions_count", len(permissions)))
 
 	return nil
 }
 
-// HasTable checks if a table exists in the cache.
-// Refreshes the cache if stale before checking.
-//
-// Parameters:
-//   - ctx: Context for cancellation
-//   - tableName: Name of the table to check
-//
-// Returns true if the table exists, false otherwise.
-// Returns error if the cache refresh fails.
-func (c *MetadataCache) HasTable(ctx context.Context, tableName string) (bool, error) {
-	tables, err := c.GetTables(ctx)
-	if err != nil {
-		return false, err
+// Refresh updates all tiers from the database.
+// Called by Invalidate() to force a full refresh.
+func (c *MetadataCache) Refresh(ctx context.Context) error {
+	if err := c.RefreshCatalog(ctx); err != nil {
+		return err
 	}
-
-	for _, table := range tables {
-		if table == tableName {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-// needsRefresh checks if the cache needs to be refreshed.
-// Returns true if the cache has never been populated or has expired
-// based on MetadataRefreshInterval config setting.
-//
-// IMPORTANT: Must be called with at least read lock held.
-func (c *MetadataCache) needsRefresh() bool {
-	// If never fetched, needs refresh
-	if c.lastFetch.IsZero() {
-		return true
-	}
-
-	// Check if cache has expired
-	age := time.Since(c.lastFetch)
-	return age > c.cfg.MetadataRefreshInterval
+	return c.RefreshStructural(ctx)
 }
 
 // GetRowCountEstimate returns the cached row count estimate for a table.
@@ -300,15 +478,8 @@ func (c *MetadataCache) needsRefresh() bool {
 // Returns the estimated row count, or -1 if the table is not in cache.
 // Callers should treat -1 as "unknown" and may fall back to exact count.
 func (c *MetadataCache) GetRowCountEstimate(ctx context.Context, tableName string) (int64, error) {
-	// Ensure cache is fresh
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		if err := c.Refresh(ctx); err != nil {
-			return -1, err
-		}
+	if err := c.ensureStructuralFresh(ctx); err != nil {
+		return -1, err
 	}
 
 	c.mu.RLock()
@@ -329,15 +500,8 @@ func (c *MetadataCache) GetRowCountEstimate(ctx context.Context, tableName strin
 //
 // Returns the cached permissions, or nil if not available.
 func (c *MetadataCache) GetTablePermissions(ctx context.Context, tableName string) (*db.TablePermissions, error) {
-	// Ensure cache is fresh
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		if err := c.Refresh(ctx); err != nil {
-			return nil, err
-		}
+	if err := c.ensureStructuralFresh(ctx); err != nil {
+		return nil, err
 	}
 
 	c.mu.RLock()
@@ -365,24 +529,15 @@ func (c *MetadataCache) GetDefaultSchema() string {
 //
 // Returns a copy of the schema list to prevent external modification.
 func (c *MetadataCache) GetSchemas(ctx context.Context) ([]string, error) {
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		logging.Debug("Metadata cache expired, refreshing for schemas")
-		if err := c.Refresh(ctx); err != nil {
-			return nil, err
-		}
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return nil, err
 	}
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Return a copy to prevent external modification
 	schemasCopy := make([]string, len(c.schemas))
 	copy(schemasCopy, c.schemas)
-
 	return schemasCopy, nil
 }
 
@@ -419,20 +574,14 @@ func (c *MetadataCache) HasSchema(ctx context.Context, schemaName string) (bool,
 //
 // Returns a copy of the table list to prevent external modification.
 func (c *MetadataCache) GetTablesForSchema(ctx context.Context, schemaName string) ([]string, error) {
-	// Ensure main cache is fresh
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	defaultSchema := c.defaultSchema
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		if err := c.Refresh(ctx); err != nil {
-			return nil, err
-		}
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return nil, err
 	}
 
-	// For default schema, return cached tables
 	c.mu.RLock()
+	defaultSchema := c.defaultSchema
+
+	// For default schema, return cached tables
 	if schemaName == defaultSchema {
 		tablesCopy := make([]string, len(c.tables))
 		copy(tablesCopy, c.tables)
@@ -467,20 +616,14 @@ func (c *MetadataCache) GetTablesForSchema(ctx context.Context, schemaName strin
 //
 // Returns a copy of the view list to prevent external modification.
 func (c *MetadataCache) GetViewsForSchema(ctx context.Context, schemaName string) ([]string, error) {
-	// Ensure main cache is fresh
-	c.mu.RLock()
-	needsRefresh := c.needsRefresh()
-	defaultSchema := c.defaultSchema
-	c.mu.RUnlock()
-
-	if needsRefresh {
-		if err := c.Refresh(ctx); err != nil {
-			return nil, err
-		}
+	if err := c.ensureCatalogFresh(ctx); err != nil {
+		return nil, err
 	}
 
-	// For default schema, return cached views
 	c.mu.RLock()
+	defaultSchema := c.defaultSchema
+
+	// For default schema, return cached views
 	if schemaName == defaultSchema {
 		viewsCopy := make([]string, len(c.views))
 		copy(viewsCopy, c.views)
@@ -658,14 +801,13 @@ func (c *MetadataCache) GetTablePermissionsForSchema(ctx context.Context, schema
 // Call this when you know metadata has changed (e.g., after DDL operations).
 func (c *MetadataCache) Invalidate() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	logging.Debug("Invalidating metadata cache")
 	c.tables = []string{}
 	c.views = []string{}
 	c.tableRowCounts = make(map[string]int64)
 	c.tablePermissions = make(map[string]*db.TablePermissions)
 	c.lastFetch = time.Time{}
+	c.structuralLastFetch = time.Time{}
 
 	// Clear multi-schema caches
 	c.schemas = []string{}
@@ -674,4 +816,11 @@ func (c *MetadataCache) Invalidate() {
 	c.schemaRowCounts = make(map[string]map[string]int64)
 	c.schemaPermissions = make(map[string]map[string]*db.TablePermissions)
 	c.schemaLastFetch = make(map[string]time.Time)
+	c.mu.Unlock()
+
+	// Clear PK caches
+	c.pkMu.Lock()
+	c.primaryKeys = make(map[string][]string)
+	c.pkNegatives = make(map[string]bool)
+	c.pkMu.Unlock()
 }

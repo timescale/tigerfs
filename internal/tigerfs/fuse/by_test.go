@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // TestNewByDirNode tests ByDirNode creation
@@ -114,7 +115,7 @@ func TestByDirNode_DifferentTables(t *testing.T) {
 // TestByDirNode_FieldsSet verifies all fields are set correctly
 func TestByDirNode_FieldsSet(t *testing.T) {
 	cfg := &config.Config{}
-	cache := &MetadataCache{}
+	cache := &tigerfs.MetadataCache{}
 	partialRows := &PartialRowTracker{}
 
 	node := NewByDirNode(cfg, nil, cache, "myschema", "mytable", partialRows)

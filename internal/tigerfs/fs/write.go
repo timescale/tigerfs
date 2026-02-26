@@ -90,7 +90,7 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -189,7 +189,7 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -458,6 +458,8 @@ func (o *Operations) writeDDLFile(ctx context.Context, parsed *ParsedPath, data 
 				Cause:   err,
 			}
 		}
+		// Invalidate metadata cache after DDL changes
+		o.metaCache.Invalidate()
 		logging.Info("DDL committed successfully",
 			zap.String("object", parsed.DDLName))
 		return nil
@@ -552,7 +554,7 @@ func (o *Operations) Rename(ctx context.Context, oldPath, newPath string) *FSErr
 		return fsErr
 	}
 
-	pk, dbErr := o.db.GetPrimaryKey(ctx, schema, table)
+	pk, dbErr := o.metaCache.GetPrimaryKey(ctx, schema, table)
 	if dbErr != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -683,7 +685,7 @@ func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -752,7 +754,7 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -868,7 +870,7 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 		}
 
 		// Get primary key
-		pk, dbErr := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+		pk, dbErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 		if dbErr != nil {
 			return &FSError{
 				Code:    ErrIO,
@@ -922,21 +924,13 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 
 // checkWritePermission checks if writes are allowed for the table/view.
 func (o *Operations) checkWritePermission(ctx context.Context, schema, table string) *FSError {
-	// Check if this is a view
-	views, err := o.db.GetViews(ctx, schema)
+	// Check if this is a view (via cache)
+	isView, err := o.metaCache.HasView(ctx, table)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
 			Message: "failed to check views",
 			Cause:   err,
-		}
-	}
-
-	isView := false
-	for _, v := range views {
-		if v == table {
-			isView = true
-			break
 		}
 	}
 

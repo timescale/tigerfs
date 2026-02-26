@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -18,14 +19,14 @@ import (
 type RowDirectoryNode struct {
 	fs.Inode
 
-	cfg         *config.Config     // TigerFS configuration
-	db          db.DBClient        // Database client for queries
-	cache       *MetadataCache     // Metadata cache for permissions lookup
-	schema      string             // PostgreSQL schema name
-	tableName   string             // Table name
-	pkColumn    string             // Primary key column name
-	pkValue     string             // Primary key value identifying this row
-	partialRows *PartialRowTracker // Tracker for uncommitted partial rows
+	cfg         *config.Config         // TigerFS configuration
+	db          db.DBClient            // Database client for queries
+	cache       *tigerfs.MetadataCache // Metadata cache for permissions lookup
+	schema      string                 // PostgreSQL schema name
+	tableName   string                 // Table name
+	pkColumn    string                 // Primary key column name
+	pkValue     string                 // Primary key value identifying this row
+	partialRows *PartialRowTracker     // Tracker for uncommitted partial rows
 }
 
 var _ fs.InodeEmbedder = (*RowDirectoryNode)(nil)
@@ -45,7 +46,7 @@ var _ fs.NodeUnlinker = (*RowDirectoryNode)(nil)
 //   - pkColumn: Primary key column name
 //   - pkValue: Primary key value identifying this row
 //   - partialRows: Tracker for uncommitted partial rows
-func NewRowDirectoryNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
+func NewRowDirectoryNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, pkColumn, pkValue string, partialRows *PartialRowTracker) *RowDirectoryNode {
 	return &RowDirectoryNode{
 		cfg:         cfg,
 		db:          dbClient,

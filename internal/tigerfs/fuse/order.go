@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -27,7 +28,7 @@ type OrderDirNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -48,7 +49,7 @@ var _ fs.NodeReaddirer = (*OrderDirNode)(nil)
 var _ fs.NodeLookuper = (*OrderDirNode)(nil)
 
 // NewOrderDirNode creates a new .order directory node.
-func NewOrderDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *OrderDirNode {
+func NewOrderDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *OrderDirNode {
 	return &OrderDirNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -61,7 +62,7 @@ func NewOrderDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCa
 
 // NewOrderDirNodeWithPipeline creates a new .order directory node with pipeline context.
 // The pipeline context is passed through to child nodes for capability chaining.
-func NewOrderDirNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderDirNode {
+func NewOrderDirNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderDirNode {
 	return &OrderDirNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -172,7 +173,7 @@ type OrderColumnNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -196,7 +197,7 @@ var _ fs.NodeReaddirer = (*OrderColumnNode)(nil)
 var _ fs.NodeLookuper = (*OrderColumnNode)(nil)
 
 // NewOrderColumnNode creates a new order column node.
-func NewOrderColumnNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, partialRows *PartialRowTracker) *OrderColumnNode {
+func NewOrderColumnNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, orderColumn string, partialRows *PartialRowTracker) *OrderColumnNode {
 	return &OrderColumnNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -210,7 +211,7 @@ func NewOrderColumnNode(cfg *config.Config, dbClient db.DBClient, cache *Metadat
 
 // NewOrderColumnNodeWithPipeline creates a new order column node with pipeline context.
 // The pipeline context is passed through to child nodes for capability chaining.
-func NewOrderColumnNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderColumnNode {
+func NewOrderColumnNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, orderColumn string, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderColumnNode {
 	return &OrderColumnNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -329,7 +330,7 @@ type OrderedPaginationNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -356,7 +357,7 @@ var _ fs.NodeReaddirer = (*OrderedPaginationNode)(nil)
 var _ fs.NodeLookuper = (*OrderedPaginationNode)(nil)
 
 // NewOrderedPaginationNode creates a new ordered pagination node.
-func NewOrderedPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *OrderedPaginationNode {
+func NewOrderedPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *OrderedPaginationNode {
 	return &OrderedPaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -371,7 +372,7 @@ func NewOrderedPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *M
 
 // NewOrderedPaginationNodeWithPipeline creates a new ordered pagination node with pipeline context.
 // The pipeline context has the order already applied; it's passed through to child nodes.
-func NewOrderedPaginationNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderedPaginationNode {
+func NewOrderedPaginationNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, partialRows *PartialRowTracker, pipeline *PipelineContext) *OrderedPaginationNode {
 	return &OrderedPaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -454,7 +455,7 @@ type OrderedPaginationLimitNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -485,13 +486,13 @@ var _ fs.NodeLookuper = (*OrderedPaginationLimitNode)(nil)
 
 // NewOrderedPaginationLimitNode creates a new ordered pagination limit node.
 // For backward compatibility, this creates a node without pipeline context.
-func NewOrderedPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *OrderedPaginationLimitNode {
+func NewOrderedPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *OrderedPaginationLimitNode {
 	return NewOrderedPaginationLimitNodeWithPipeline(cfg, dbClient, cache, schema, tableName, orderColumn, paginationType, limit, partialRows, nil)
 }
 
 // NewOrderedPaginationLimitNodeWithPipeline creates a new ordered pagination limit node with pipeline context.
 // When basePipeline is provided, the limit is applied to create the node's pipeline.
-func NewOrderedPaginationLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *OrderedPaginationLimitNode {
+func NewOrderedPaginationLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, orderColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *OrderedPaginationLimitNode {
 	var pipeline *PipelineContext
 
 	// Apply limit to pipeline if context exists

@@ -19,10 +19,11 @@ import (
 // Operations provides filesystem operations backed by PostgreSQL.
 // This is the shared core that can be used by both FUSE and NFS handlers.
 type Operations struct {
-	config  *config.Config
-	db      db.DBClient
-	staging *StagingManager // Tracks partial rows for incremental creation
-	ddl     *DDLManager     // Handles DDL staging operations
+	config    *config.Config
+	db        db.DBClient
+	staging   *StagingManager // Tracks partial rows for incremental creation
+	ddl       *DDLManager     // Handles DDL staging operations
+	metaCache *MetadataCache  // Shared metadata cache for tables/views/PKs
 
 	// Schema caching: the current schema doesn't change during a mount session,
 	// so we resolve it once and reuse. This eliminates ~4-6 DB queries per NFS RPC
@@ -39,10 +40,17 @@ type Operations struct {
 // NewOperations creates a new Operations instance.
 func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 	return &Operations{
-		config: cfg,
-		db:     dbClient,
-		ddl:    NewDDLManager(dbClient, cfg.DDLGracePeriod),
+		config:    cfg,
+		db:        dbClient,
+		ddl:       NewDDLManager(dbClient, cfg.DDLGracePeriod),
+		metaCache: NewMetadataCache(cfg, dbClient),
 	}
+}
+
+// MetaCache returns the shared metadata cache.
+// Used by FUSE nodes that need access to cached table/view/PK metadata.
+func (o *Operations) MetaCache() *MetadataCache {
+	return o.metaCache
 }
 
 // GetDDLManager returns the DDL manager for direct access to DDL operations.
@@ -170,8 +178,8 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 	}
 	currentSchema := o.cachedSchema
 
-	// Get tables from current schema
-	tables, err := o.db.GetTables(ctx, currentSchema)
+	// Get tables from current schema (via cache)
+	tables, err := o.metaCache.GetTablesForSchema(ctx, currentSchema)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -180,8 +188,8 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 		}
 	}
 
-	// Get views from current schema
-	views, err := o.db.GetViews(ctx, currentSchema)
+	// Get views from current schema (via cache)
+	views, err := o.metaCache.GetViewsForSchema(ctx, currentSchema)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -224,7 +232,7 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 // readDirSchemaList lists all schemas (/.schemas/).
 // Includes .create for schema creation DDL.
 func (o *Operations) readDirSchemaList(ctx context.Context) ([]Entry, *FSError) {
-	schemas, err := o.db.GetSchemas(ctx)
+	schemas, err := o.metaCache.GetSchemas(ctx)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -259,7 +267,7 @@ func (o *Operations) readDirViews(ctx context.Context) ([]Entry, *FSError) {
 // readDirSchema lists tables in a specific schema.
 // Includes .delete for schema deletion DDL.
 func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry, *FSError) {
-	tables, err := o.db.GetTables(ctx, schema)
+	tables, err := o.metaCache.GetTablesForSchema(ctx, schema)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -268,7 +276,7 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 		}
 	}
 
-	views, err := o.db.GetViews(ctx, schema)
+	views, err := o.metaCache.GetViewsForSchema(ctx, schema)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -320,7 +328,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -906,18 +914,16 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathSchema:
-		// Verify the schema actually exists in the database
-		schemas, err := o.db.GetSchemas(ctx)
+		// Verify the schema actually exists (via cache)
+		schemaName := parsed.Context.Schema
+		exists, err := o.metaCache.HasSchema(ctx, schemaName)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to list schemas", Cause: err}
 		}
-		schemaName := parsed.Context.Schema
-		for _, s := range schemas {
-			if s == schemaName {
-				return &Entry{Name: schemaName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
-			}
+		if !exists {
+			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("schema %s not found", schemaName)}
 		}
-		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("schema %s not found", schemaName)}
+		return &Entry{Name: schemaName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathViewList:
 		return &Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
@@ -930,34 +936,21 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 				Message: "missing context for table path",
 			}
 		}
-		// Verify table or view exists. We first try GetPrimaryKey (works for tables),
-		// and if that fails, check if it's a view. This is necessary because table paths
-		// are parsed without database validation, and NFS clients need accurate stat
-		// responses to avoid caching nonexistent entries.
-		_, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+		// Verify table or view exists using the metadata cache.
+		// This replaces the previous pattern of GetPrimaryKey + GetViews fallback,
+		// turning 2 DB queries into a single cache lookup (0 DB queries on cache hit).
+		isTable, isView, err := o.metaCache.HasTableOrViewInSchema(ctx, fsCtx.Schema, fsCtx.TableName)
 		if err != nil {
-			// Maybe it's a view - views don't have primary keys
-			views, viewErr := o.db.GetViews(ctx, fsCtx.Schema)
-			if viewErr != nil {
-				return nil, &FSError{
-					Code:    ErrNotExist,
-					Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
-					Cause:   err,
-				}
+			return nil, &FSError{
+				Code:    ErrNotExist,
+				Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
+				Cause:   err,
 			}
-			isView := false
-			for _, v := range views {
-				if v == fsCtx.TableName {
-					isView = true
-					break
-				}
-			}
-			if !isView {
-				return nil, &FSError{
-					Code:    ErrNotExist,
-					Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
-					Cause:   err,
-				}
+		}
+		if !isTable && !isView {
+			return nil, &FSError{
+				Code:    ErrNotExist,
+				Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
 			}
 		}
 		name := fsCtx.TableName
@@ -1061,7 +1054,7 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 	now := time.Now()
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1143,7 +1136,7 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1522,7 +1515,7 @@ func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*File
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1603,7 +1596,7 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 	}
 
 	// Get primary key
-	pk, err := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	pk, err := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1759,7 +1752,7 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 	// Check if we have any pipeline operations (filters, order, limits)
 	if fsCtx.HasPipelineOperations() {
 		// Get primary key for pipeline query ordering
-		pk, pkErr := o.db.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+		pk, pkErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 		if pkErr != nil {
 			return nil, &FSError{
 				Code:    ErrIO,

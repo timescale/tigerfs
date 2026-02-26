@@ -289,7 +289,7 @@ func (n *IndexDDLNode) lookupDeleteDirectory(ctx context.Context, out *fuse.Entr
 		Mode: syscall.S_IFDIR,
 	}
 
-	deleteNode := NewStagingDirNode(n.cfg, n.db, n.staging, stagingCtx)
+	deleteNode := NewStagingDirNode(n.cfg, n.db, nil, n.staging, stagingCtx)
 	child := n.NewPersistentInode(ctx, deleteNode, stableAttr)
 
 	out.Mode = 0700 | syscall.S_IFDIR
@@ -536,7 +536,7 @@ func (n *IndexCreateDirNode) createStagingNode(ctx context.Context, name string,
 		Mode: syscall.S_IFDIR,
 	}
 
-	stagingNode := NewStagingDirNode(n.cfg, n.db, n.staging, stagingCtx)
+	stagingNode := NewStagingDirNode(n.cfg, n.db, nil, n.staging, stagingCtx)
 	child := n.NewPersistentInode(ctx, stagingNode, stableAttr)
 
 	out.Mode = 0700 | syscall.S_IFDIR

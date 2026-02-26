@@ -10,6 +10,7 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -21,14 +22,14 @@ import (
 type RowFileNode struct {
 	fs.Inode
 
-	cfg       *config.Config // TigerFS configuration
-	db        db.DBClient    // Database client for queries
-	cache     *MetadataCache // Metadata cache for permissions lookup
-	schema    string         // PostgreSQL schema name
-	tableName string         // Table name
-	pkColumn  string         // Primary key column name
-	pkValue   string         // Primary key value identifying this row
-	format    string         // Output format: "tsv", "csv", or "json"
+	cfg       *config.Config         // TigerFS configuration
+	db        db.DBClient            // Database client for queries
+	cache     *tigerfs.MetadataCache // Metadata cache for permissions lookup
+	schema    string                 // PostgreSQL schema name
+	tableName string                 // Table name
+	pkColumn  string                 // Primary key column name
+	pkValue   string                 // Primary key value identifying this row
+	format    string                 // Output format: "tsv", "csv", or "json"
 
 	// Cached row data - populated on first read, invalidated on write
 	data []byte
@@ -50,7 +51,7 @@ var _ fs.NodeSetattrer = (*RowFileNode)(nil)
 //   - pkColumn: Primary key column name
 //   - pkValue: Primary key value identifying this row
 //   - format: Output format ("tsv", "csv", or "json")
-func NewRowFileNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, pkColumn, pkValue, format string) *RowFileNode {
+func NewRowFileNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, pkColumn, pkValue, format string) *RowFileNode {
 	return &RowFileNode{
 		cfg:       cfg,
 		db:        dbClient,

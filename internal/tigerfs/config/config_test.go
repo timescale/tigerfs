@@ -112,7 +112,7 @@ func TestInit_SetsDefaults(t *testing.T) {
 		{"entry_timeout", 1 * time.Second},
 		{"query_timeout", 30 * time.Second},
 		{"dir_filter_limit", 100000},
-		{"metadata_refresh_interval", 30 * time.Second},
+		{"metadata_refresh_interval", 10 * time.Second},
 		{"nfs_streaming_threshold", int64(10 * 1024 * 1024)},
 		{"nfs_max_random_write_size", int64(100 * 1024 * 1024)},
 		{"nfs_cache_reaper_interval", 30 * time.Second},
@@ -187,8 +187,8 @@ func TestLoad_UnmarshalConfig(t *testing.T) {
 	if cfg.EntryTimeout != 1*time.Second {
 		t.Errorf("Expected EntryTimeout=1s, got %v", cfg.EntryTimeout)
 	}
-	if cfg.MetadataRefreshInterval != 30*time.Second {
-		t.Errorf("Expected MetadataRefreshInterval=30s, got %v", cfg.MetadataRefreshInterval)
+	if cfg.MetadataRefreshInterval != 10*time.Second {
+		t.Errorf("Expected MetadataRefreshInterval=10s, got %v", cfg.MetadataRefreshInterval)
 	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("Expected LogLevel='info', got %q", cfg.LogLevel)
@@ -560,8 +560,8 @@ func TestConfig_FilesystemFields(t *testing.T) {
 	if cfg.EntryTimeout != 1*time.Second {
 		t.Errorf("Expected EntryTimeout=1s, got %v", cfg.EntryTimeout)
 	}
-	if cfg.MetadataRefreshInterval != 30*time.Second {
-		t.Errorf("Expected MetadataRefreshInterval=30s, got %v", cfg.MetadataRefreshInterval)
+	if cfg.MetadataRefreshInterval != 10*time.Second {
+		t.Errorf("Expected MetadataRefreshInterval=10s, got %v", cfg.MetadataRefreshInterval)
 	}
 }
 

@@ -131,8 +131,9 @@ func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, dat
 		}
 	}
 
-	// Invalidate synth cache so the new view is detected
+	// Invalidate synth cache and metadata cache so the new view/table are detected
 	o.invalidateSynthCache()
+	o.metaCache.Invalidate()
 
 	historyStr := ""
 	if features.History {
@@ -190,8 +191,9 @@ func (o *Operations) writeBuildAddHistory(ctx context.Context, schema, appName s
 		}
 	}
 
-	// Invalidate synth cache
+	// Invalidate synth cache and metadata cache
 	o.invalidateSynthCache()
+	o.metaCache.Invalidate()
 
 	logging.Info("versioned history added",
 		zap.String("app", appName),
@@ -297,8 +299,9 @@ func (o *Operations) writeFormatFile(ctx context.Context, parsed *ParsedPath, da
 		}
 	}
 
-	// Invalidate synth cache so the new view is detected
+	// Invalidate synth cache and metadata cache so the new view/table are detected
 	o.invalidateSynthCache()
+	o.metaCache.Invalidate()
 
 	logging.Info("synthesized view created",
 		zap.String("table", fsCtx.TableName),

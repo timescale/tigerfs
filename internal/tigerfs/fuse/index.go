@@ -10,6 +10,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -30,7 +31,7 @@ type IndexNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name (e.g., "public")
 	schema string
@@ -67,7 +68,7 @@ var _ fs.NodeLookuper = (*IndexNode)(nil)
 //   - column: Indexed column name
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewIndexNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker) *IndexNode {
+func NewIndexNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker) *IndexNode {
 	return &IndexNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -82,7 +83,7 @@ func NewIndexNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 
 // NewIndexNodeWithPipeline creates a new index directory node with pipeline context.
 // The pipeline context is passed through to child nodes for capability chaining.
-func NewIndexNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *IndexNode {
+func NewIndexNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *IndexNode {
 	return &IndexNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -264,7 +265,7 @@ type IndexValueNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -309,7 +310,7 @@ var _ fs.NodeLookuper = (*IndexValueNode)(nil)
 //   - pkColumn: Primary key column name
 //   - matchingPKs: Primary keys of rows matching the value
 //   - partialRows: Tracker for incremental row creation
-func NewIndexValueNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker) *IndexValueNode {
+func NewIndexValueNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker) *IndexValueNode {
 	return &IndexValueNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -326,7 +327,7 @@ func NewIndexValueNode(cfg *config.Config, dbClient db.DBClient, cache *Metadata
 
 // NewIndexValueNodeWithPipeline creates a node for an index value lookup result with pipeline context.
 // The pipeline context has the filter already applied.
-func NewIndexValueNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker, pipeline *PipelineContext) *IndexValueNode {
+func NewIndexValueNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column, value, pkColumn string, matchingPKs []string, partialRows *PartialRowTracker, pipeline *PipelineContext) *IndexValueNode {
 	return &IndexValueNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -563,7 +564,7 @@ type IndexValuePaginationNode struct {
 
 	cfg            *config.Config
 	db             db.DBClient
-	cache          *MetadataCache
+	cache          *tigerfs.MetadataCache
 	schema         string
 	tableName      string
 	column         string
@@ -579,7 +580,7 @@ var _ fs.NodeReaddirer = (*IndexValuePaginationNode)(nil)
 var _ fs.NodeLookuper = (*IndexValuePaginationNode)(nil)
 
 // NewIndexValuePaginationNode creates a new pagination node within an index value.
-func NewIndexValuePaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexValuePaginationNode {
+func NewIndexValuePaginationNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexValuePaginationNode {
 	return &IndexValuePaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -631,7 +632,7 @@ type IndexValuePaginationLimitNode struct {
 
 	cfg            *config.Config
 	db             db.DBClient
-	cache          *MetadataCache
+	cache          *tigerfs.MetadataCache
 	schema         string
 	tableName      string
 	column         string
@@ -648,7 +649,7 @@ var _ fs.NodeReaddirer = (*IndexValuePaginationLimitNode)(nil)
 var _ fs.NodeLookuper = (*IndexValuePaginationLimitNode)(nil)
 
 // NewIndexValuePaginationLimitNode creates a new pagination limit node within an index value.
-func NewIndexValuePaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexValuePaginationLimitNode {
+func NewIndexValuePaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column, value, pkColumn string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexValuePaginationLimitNode {
 	return &IndexValuePaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -768,7 +769,7 @@ type CompositeIndexNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name (e.g., "public")
 	schema string
@@ -805,7 +806,7 @@ var _ fs.NodeLookuper = (*CompositeIndexNode)(nil)
 //   - columns: All column names in the composite index (in index order)
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewCompositeIndexNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexNode {
+func NewCompositeIndexNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexNode {
 	return &CompositeIndexNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -820,7 +821,7 @@ func NewCompositeIndexNode(cfg *config.Config, dbClient db.DBClient, cache *Meta
 
 // NewCompositeIndexNodeWithPipeline creates a new composite index directory node with pipeline context.
 // The pipeline context is passed through to child nodes for capability chaining.
-func NewCompositeIndexNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *CompositeIndexNode {
+func NewCompositeIndexNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, columns []string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *CompositeIndexNode {
 	return &CompositeIndexNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -947,7 +948,7 @@ type CompositeIndexLevelNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name
 	schema string
@@ -988,7 +989,7 @@ var _ fs.NodeLookuper = (*CompositeIndexLevelNode)(nil)
 //   - values: Values specified so far (for columns[0] through columns[len(values)-1])
 //   - index: Full index metadata
 //   - partialRows: Tracker for incremental row creation
-func NewCompositeIndexLevelNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexLevelNode {
+func NewCompositeIndexLevelNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker) *CompositeIndexLevelNode {
 	return &CompositeIndexLevelNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -1004,7 +1005,7 @@ func NewCompositeIndexLevelNode(cfg *config.Config, dbClient db.DBClient, cache 
 
 // NewCompositeIndexLevelNodeWithPipeline creates a node for an intermediate composite index level with pipeline context.
 // The pipeline context enables capability chaining when all columns have values.
-func NewCompositeIndexLevelNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *CompositeIndexLevelNode {
+func NewCompositeIndexLevelNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, columns, values []string, index *db.Index, partialRows *PartialRowTracker, pipeline *PipelineContext) *CompositeIndexLevelNode {
 	return &CompositeIndexLevelNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -1344,7 +1345,7 @@ type IndexPaginationNode struct {
 
 	cfg            *config.Config
 	db             db.DBClient
-	cache          *MetadataCache
+	cache          *tigerfs.MetadataCache
 	schema         string
 	tableName      string
 	column         string
@@ -1358,7 +1359,7 @@ var _ fs.NodeReaddirer = (*IndexPaginationNode)(nil)
 var _ fs.NodeLookuper = (*IndexPaginationNode)(nil)
 
 // NewIndexPaginationNode creates a new .first/ or .last/ directory node within an index.
-func NewIndexPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexPaginationNode {
+func NewIndexPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column string, paginationType PaginationType, partialRows *PartialRowTracker) *IndexPaginationNode {
 	return &IndexPaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -1408,7 +1409,7 @@ type IndexPaginationLimitNode struct {
 
 	cfg            *config.Config
 	db             db.DBClient
-	cache          *MetadataCache
+	cache          *tigerfs.MetadataCache
 	schema         string
 	tableName      string
 	column         string
@@ -1423,7 +1424,7 @@ var _ fs.NodeReaddirer = (*IndexPaginationLimitNode)(nil)
 var _ fs.NodeLookuper = (*IndexPaginationLimitNode)(nil)
 
 // NewIndexPaginationLimitNode creates a new .first/N/ or .last/N/ directory node within an index.
-func NewIndexPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, column string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexPaginationLimitNode {
+func NewIndexPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, column string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *IndexPaginationLimitNode {
 	return &IndexPaginationLimitNode{
 		cfg:            cfg,
 		db:             dbClient,

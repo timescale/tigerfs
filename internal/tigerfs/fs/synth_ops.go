@@ -63,7 +63,7 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 	mountTime := time.Now()
 
 	// Get all views
-	views, err := o.db.GetViews(ctx, schema)
+	views, err := o.metaCache.GetViewsForSchema(ctx, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list views: %w", err)
 	}
@@ -116,7 +116,7 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 
 		// Detect PK column (views might not have one, try anyway)
 		pkColumn := "id"
-		pk, err := o.db.GetPrimaryKey(ctx, schema, viewName)
+		pk, err := o.metaCache.GetPrimaryKey(ctx, schema, viewName)
 		if err == nil {
 			pkColumn = pk.Columns[0]
 		}

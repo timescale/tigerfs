@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -21,7 +22,7 @@ type TableNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	tableName   string
 	schema      string
 	isView      bool // true if this is a view, not a table
@@ -38,7 +39,7 @@ var _ fs.NodeRmdirer = (*TableNode)(nil)
 var _ fs.NodeMkdirer = (*TableNode)(nil)
 
 // NewTableNode creates a new table directory node
-func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, staging *StagingTracker) *TableNode {
+func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker, staging *StagingTracker) *TableNode {
 	return &TableNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -53,7 +54,7 @@ func NewTableNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 
 // NewViewNode creates a new view directory node.
 // Views are treated like tables for reading but may have write restrictions.
-func NewViewNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, viewName string, partialRows *PartialRowTracker, staging *StagingTracker) *TableNode {
+func NewViewNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, viewName string, partialRows *PartialRowTracker, staging *StagingTracker) *TableNode {
 	return &TableNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -575,7 +576,7 @@ func (t *TableNode) lookupModifyDirectory(ctx context.Context) (*fs.Inode, sysca
 		StagingPath: t.tableName + "/.modify",
 	}
 
-	modifyNode := NewStagingDirNode(t.cfg, t.db, t.staging, stagingCtx)
+	modifyNode := NewStagingDirNode(t.cfg, t.db, t.cache, t.staging, stagingCtx)
 	child := t.NewPersistentInode(ctx, modifyNode, stableAttr)
 
 	logging.Debug("Created .modify directory node",
@@ -604,7 +605,7 @@ func (t *TableNode) lookupDeleteDirectory(ctx context.Context) (*fs.Inode, sysca
 		StagingPath: t.tableName + "/.delete",
 	}
 
-	deleteNode := NewStagingDirNode(t.cfg, t.db, t.staging, stagingCtx)
+	deleteNode := NewStagingDirNode(t.cfg, t.db, t.cache, t.staging, stagingCtx)
 	child := t.NewPersistentInode(ctx, deleteNode, stableAttr)
 
 	logging.Debug("Created .delete directory node",
