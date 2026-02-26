@@ -1,21 +1,92 @@
 # TigerFS
 
-TigerFS is a shared filesystem for agents and humans. Every file is a real database row. Multiple agents and humans read and write the same files concurrently with full transactional safety. No sync protocols, no merge conflicts, no coordination layer. Just files.
+TigerFS is a shared, transactional workspace for humans and AI agents, exposed as a native filesystem.
 
-Write a markdown file with YAML frontmatter and TigerFS stores it as a structured database row with automatic version history. Directories map to database tables. Every tool that reads files (`cat`, `grep`, your editor, Claude Code, Cursor) works out of the box. Search with `grep`, organize with `mv` and `mkdir`, recover past versions from `.history/`.
+Every file is a real PostgreSQL row. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No merge conflicts. No coordination layer.
 
-Built on PostgreSQL, so you get ACID transactions, real concurrent access, and a SQL escape hatch when you need it. TigerFS mounts as a native filesystem via FUSE (Linux) or NFS (macOS). No dependencies, no daemon to babysit.
+The filesystem is the API.
+
+Write a markdown file with YAML frontmatter and TigerFS stores it as structured data with automatic version history. Directories map to tables. Rows map to files. Columns map to file contents. Every tool that works with files (`cat`, `grep`, your editor, Claude Code, Cursor) works out of the box.
+
+Search with `grep`. Organize with `mv` and `mkdir`. Recover past versions from `.history/`.
+
+**Mental model:** TigerFS is PostgreSQL presented as a live, shared filesystem. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux or NFS on macOS.
+
+You can use TigerFS in two ways:
+
+- As an app layer, working with Markdown and other higher-level file formats.
+
+- As a native table layer, navigating PostgreSQL tables, rows, and indexes directly through the filesystem.
+
+Both are backed by the same transactional database.
+
+## Quick Start
+
+In under 60 seconds, you can mount a live PostgreSQL database as a collaborative workspace.
+
+```bash
+# Install (macOS requires no dependencies; Linux needs fuse3)
+curl -fsSL https://tigerfs.tigerdata.com | sh
+
+# Mount a database
+tigerfs mount postgres://localhost/mydb /mnt/db
+
+# Create a markdown app and start writing
+echo "markdown" > /mnt/db/.build/notes
+
+cat > /mnt/db/notes/hello.md << 'EOF'
+---
+title: Hello World
+author: alice
+---
+
+# Hello World
+
+Welcome to my notes...
+EOF
+
+# Search, explore, unmount
+grep -l "author: alice" /mnt/db/notes/*.md
+ls /mnt/db/notes/
+tigerfs unmount /mnt/db
+```
+
+
 
 ## Why TigerFS
 
-- **vs. local files:** No sync conflicts, built-in version history, multiple agents and humans sharing the same data in real time
-- **vs. git:** Real-time collaboration without pull/push/merge. Every write is immediately visible to all readers, with automatic versioning
-- **vs. object storage (S3):** Filesystem interface, ACID transactions, structured metadata in frontmatter, and SQL queries when you need them
-- **vs. databases directly:** File-native. Every tool, editor, and AI agent already knows how to read and write files
+Agents are concurrent. Traditional filesystems are not.
+
+Today, agents coordinate through:
+
+- Local files that do not sync
+- Git workflows that require pull, push, and merge
+- APIs that require custom coordination logic
+- Object storage that is not transactional
+
+None of these were designed for multiple autonomous writers operating in real time.
+
+TigerFS makes files shared and transactional by backing them with PostgreSQL. Every read and write runs inside a real database transaction.
+
+That changes the model:
+
+- **vs. local files:** Instead of a single-writer assumption, TigerFS supports real concurrent access with isolation guarantees.
+
+- **vs. git:** Instead of asynchronous collaboration and merges, TigerFS provides immediate visibility with automatic version history.
+
+- **vs. object storage (S3):** Instead of blobs, you get structured rows, ACID transactions, and query pushdown.
+
+- **vs. using a database directly:** Instead of clients and schemas, you use files. Every tool and every agent already understands the interface.
+
+The result is simple: you delete coordination code from your application.
 
 ## Use Cases
 
-**Shared agent memory.** Multiple agents read and write the same knowledge base concurrently. Every edit is automatically versioned, so if one agent overwrites another's work, recover it from `.history/`.
+TigerFS turns a database into a live, shared workspace.
+
+**Shared agent workspace.**
+Multiple agents and humans operate on the same knowledge base concurrently.
+Every edit is automatically versioned, so if one agent overwrites another's work, recover it from `.history/`.
 
 ```bash
 # Agent A writes research findings
@@ -76,34 +147,6 @@ ls /mnt/db/docs/.history/proposal.md/
 cat /mnt/db/docs/.history/proposal.md/2026-02-25T100000Z  # see previous version
 ```
 
-## Quick Start
-
-```bash
-# Install (macOS requires no dependencies; Linux needs fuse3)
-curl -fsSL https://tigerfs.tigerdata.com | sh
-
-# Mount a database
-tigerfs mount postgres://localhost/mydb /mnt/db
-
-# Create a markdown app and start writing
-echo "markdown" > /mnt/db/.build/notes
-
-cat > /mnt/db/notes/hello.md << 'EOF'
----
-title: Hello World
-author: alice
----
-
-# Hello World
-
-Welcome to my notes...
-EOF
-
-# Search, explore, unmount
-grep -l "author: alice" /mnt/db/notes/*.md
-ls /mnt/db/notes/
-tigerfs unmount /mnt/db
-```
 
 ## Apps
 
@@ -204,6 +247,8 @@ tigerfs info --json /mnt/db           # JSON output for scripting
 
 ## Native Table Access
 
+Agents excel at manipulating files. TigerFS lets them operate on structured data using the tools they already understand.
+
 Below the app layer, every table is a directory of rows. Read columns, write JSON, navigate indexes, and chain pipeline queries, all pushed down to the database as optimized SQL.
 
 **Explore an unfamiliar database.** Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
@@ -262,6 +307,8 @@ See [docs/native-tables.md](docs/native-tables.md) for the full reference: row f
 └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
+TigerFS replaces "application-level coordination" with database transactions. **The filesystem becomes the API.**
+
 TigerFS maps filesystem paths to database queries:
 
 ```
@@ -274,6 +321,14 @@ TigerFS maps filesystem paths to database queries:
 ```
 
 FUSE on Linux, NFS on macOS. No external dependencies on either platform.
+
+## Design Principles
+
+- **Keep the interface familiar.** If you can `ls`, you can explore a database.
+- **Make concurrency safe.** Multiple writers without corruption or conflicts.
+- **Push logic down.** Every path resolves to optimized SQL.
+- **Preserve history.** Every change is recoverable.
+- **Remove coordination code.** The database handles it.
 
 ## Try the Demos
 
@@ -335,6 +390,8 @@ go test ./...
 For development guidelines, architecture details, and the full specification, see [CLAUDE.md](CLAUDE.md) and [docs/spec.md](docs/spec.md).
 
 ## Project Status
+
+TigerFS is early, but the core idea is stable: transactional, concurrent files as the foundation for human-agent collaboration.
 
 **v0.3.0.** Apps (markdown views, directory hierarchies, version history) and cloud backend integration with Tiger Cloud and Ghost.
 
