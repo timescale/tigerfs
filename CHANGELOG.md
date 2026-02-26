@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Versioned history** — `.history/` virtual directory shows previous versions of synth files using TimescaleDB continuous aggregates
 - **Per-directory history** — `.history/` works at every level of hierarchical synth views, not just the root
 - **Extension-aware table listing** — tables and views owned by extensions (like TimescaleDB internals) are excluded from directory listings
+- **Query reduction caching** — three-tier cache strategy reduces `ls -l` on synth views from ~37 SQL queries to 1, with targeted WHERE queries for single-file lookups
+- **SQL query tracing** — `--debug` mode now logs every SQL query with timing, statement text, and PostgreSQL backend PID
 
 ## [0.3.0] - 2026-02-13
 
