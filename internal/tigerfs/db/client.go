@@ -91,10 +91,19 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 	poolConfig.MaxConns = int32(cfg.PoolSize)
 	poolConfig.MinConns = int32(cfg.PoolMaxIdle)
 
-	// Set statement_timeout on each new connection for belt-and-suspenders timeout protection
+	// Enable SQL query tracing (logs SQL text, timing, and backend PID at debug level)
+	poolConfig.ConnConfig.Tracer = &dbTracer{}
+
+	// Log when a new TCP connection is created and set statement_timeout
+	timeoutMs := 0
 	if cfg.QueryTimeout > 0 {
-		timeoutMs := int(cfg.QueryTimeout.Milliseconds())
-		poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		timeoutMs = int(cfg.QueryTimeout.Milliseconds())
+	}
+	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		logging.Debug("pool: new connection created",
+			zap.Uint32("pg_pid", conn.PgConn().PID()),
+		)
+		if timeoutMs > 0 {
 			// SET statement_timeout in milliseconds
 			_, err := conn.Exec(ctx, fmt.Sprintf("SET statement_timeout = %d", timeoutMs))
 			if err != nil {
@@ -103,8 +112,24 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 					zap.Error(err))
 				// Don't fail the connection, just warn
 			}
-			return nil
 		}
+		return nil
+	}
+
+	// Log when an idle connection is reused from the pool
+	poolConfig.PrepareConn = func(ctx context.Context, conn *pgx.Conn) (bool, error) {
+		logging.Debug("pool: reusing idle connection",
+			zap.Uint32("pg_pid", conn.PgConn().PID()),
+		)
+		return true, nil
+	}
+
+	// Log when a connection is returned to the pool
+	poolConfig.AfterRelease = func(conn *pgx.Conn) bool {
+		logging.Debug("pool: connection released",
+			zap.Uint32("pg_pid", conn.PgConn().PID()),
+		)
+		return true
 	}
 
 	logging.Debug("Configuring connection pool",

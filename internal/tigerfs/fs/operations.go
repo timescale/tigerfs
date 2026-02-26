@@ -35,6 +35,11 @@ type Operations struct {
 	// synthState caches detected synth views per schema.
 	// Lazily loaded, invalidated on .build/ or .format/ writes.
 	synthState synthCacheState
+
+	// statCache caches Entry metadata from ReadDir results.
+	// Stat checks this before querying the DB. ReadFile bypasses it (always fresh).
+	// Invalidated by write operations; 2-second TTL as safety net.
+	statCache synthStatCache
 }
 
 // NewOperations creates a new Operations instance.
@@ -45,6 +50,75 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 		ddl:       NewDDLManager(dbClient, cfg.DDLGracePeriod),
 		metaCache: NewMetadataCache(cfg, dbClient),
 	}
+}
+
+// synthStatCache caches Entry metadata from ReadDir results.
+// Stat checks this before querying the DB. ReadFile bypasses it (always fresh).
+// Invalidated by write operations; 2-second TTL as safety net.
+type synthStatCache struct {
+	mu     sync.RWMutex
+	tables map[string]*synthTableCache // key: "schema\x00table"
+}
+
+// synthTableCache holds cached entries for a single table.
+type synthTableCache struct {
+	entries map[string]Entry // key: filename (matches parsed.PrimaryKey)
+	created time.Time
+}
+
+// synthStatCacheTTL is the maximum age of cached entries before they expire.
+const synthStatCacheTTL = 2 * time.Second
+
+// lookup returns a cached entry if it exists and hasn't expired.
+func (c *synthStatCache) lookup(schema, table, filename string) (Entry, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.tables == nil {
+		return Entry{}, false
+	}
+
+	key := schema + "\x00" + table
+	tc := c.tables[key]
+	if tc == nil {
+		return Entry{}, false
+	}
+
+	if time.Since(tc.created) > synthStatCacheTTL {
+		return Entry{}, false
+	}
+
+	entry, ok := tc.entries[filename]
+	return entry, ok
+}
+
+// prime stores entries from a ReadDir result into the cache.
+func (c *synthStatCache) prime(schema, table string, entries map[string]Entry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.tables == nil {
+		c.tables = make(map[string]*synthTableCache)
+	}
+
+	key := schema + "\x00" + table
+	c.tables[key] = &synthTableCache{
+		entries: entries,
+		created: time.Now(),
+	}
+}
+
+// invalidate clears cached entries for a table (called on writes).
+func (c *synthStatCache) invalidate(schema, table string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.tables == nil {
+		return
+	}
+
+	key := schema + "\x00" + table
+	delete(c.tables, key)
 }
 
 // MetaCache returns the shared metadata cache.
