@@ -1,6 +1,80 @@
 # TigerFS
 
-TigerFS mounts a PostgreSQL database as a directory. Write markdown files, and each file becomes a database row with transactional writes, shared access, and full version history. Drop below the synthesized layer any time to work with native tables, rows, and columns using `ls`, `cat`, `grep`, and `rm` instead of SQL.
+TigerFS is a shared filesystem for agents and humans. Every file is a real database row — multiple agents and humans read and write the same files concurrently with full transactional safety. No sync protocols, no merge conflicts, no coordination layer. Just files.
+
+Write a markdown file with YAML frontmatter and TigerFS stores it as a structured database row with automatic version history. Directories map to database tables. Every tool that reads files — `cat`, `grep`, your editor, Claude Code, Cursor — works out of the box. Search with `grep`, organize with `mv` and `mkdir`, recover past versions from `.history/`.
+
+Built on PostgreSQL, so you get ACID transactions, real concurrent access, and a SQL escape hatch when you need it. TigerFS mounts as a native filesystem via FUSE (Linux) or NFS (macOS) — no dependencies, no daemon to babysit.
+
+## Why TigerFS
+
+- **vs. local files:** No sync conflicts, built-in version history, multiple agents and humans sharing the same data in real time
+- **vs. git:** Real-time collaboration without pull/push/merge — every write is immediately visible to all readers, with automatic versioning
+- **vs. object storage (S3):** Filesystem interface, ACID transactions, structured metadata in frontmatter, and SQL queries when you need them
+- **vs. databases directly:** File-native — every tool, editor, and AI agent already knows how to read and write files
+
+## Use Cases
+
+**Shared agent memory** — Multiple agents read and write the same knowledge base concurrently. Every edit is automatically versioned, so if one agent overwrites another's work, recover it from `.history/`.
+
+```bash
+# Agent A writes research findings
+cat > /mnt/db/kb/auth-analysis.md << 'EOF'
+---
+author: agent-a
+---
+OAuth 2.0 is the recommended approach because...
+EOF
+
+# Agent B reads it immediately — no sync, no pull
+cat /mnt/db/kb/auth-analysis.md
+```
+
+**Multi-agent task queue** — Three directories — `todo/`, `doing/`, `done/` — and `mv` is your only API. Moves are atomic database operations, so two agents can't claim the same task.
+
+```bash
+# Set up a task board
+echo "markdown,history" > /mnt/db/.build/tasks
+mkdir /mnt/db/tasks/todo /mnt/db/tasks/doing /mnt/db/tasks/done
+
+# Agent claims a task by moving it to doing
+mv /mnt/db/tasks/todo/fix-auth-bug.md /mnt/db/tasks/doing/fix-auth-bug.md
+
+# Marks it complete
+mv /mnt/db/tasks/doing/fix-auth-bug.md /mnt/db/tasks/done/fix-auth-bug.md
+
+# See what everyone is working on
+ls /mnt/db/tasks/doing/
+grep "author:" /mnt/db/tasks/doing/*.md
+```
+
+**Collaborative docs** — A human writes a draft, an agent reviews and edits it, another agent summarizes it. All in the same directory, all visible immediately, no pull/push/merge. History shows who changed what and when.
+
+```bash
+# Human writes a draft
+cat > /mnt/db/docs/proposal.md << 'EOF'
+---
+title: Q2 Proposal
+status: draft
+---
+We should invest in...
+EOF
+
+# Agent reads, edits, and updates the status
+cat /mnt/db/docs/proposal.md
+cat > /mnt/db/docs/proposal.md << 'EOF'
+---
+title: Q2 Proposal
+status: reviewed
+reviewer: agent-b
+---
+We should invest in... (with agent edits)
+EOF
+
+# Human sees changes instantly — browse the full edit trail
+ls /mnt/db/docs/.history/proposal.md/
+cat /mnt/db/docs/.history/proposal.md/2026-02-25T100000Z  # see previous version
+```
 
 ## Quick Start
 
@@ -31,13 +105,13 @@ ls /mnt/db/notes/
 tigerfs unmount /mnt/db
 ```
 
-## Synthesized Apps
+## Apps
 
-TigerFS can synthesize higher-level file formats on top of database tables. Instead of navigating row directories and column files, you work with files that feel native to their domain.
+Apps present database tables as higher-level file formats. Instead of navigating row directories and column files, you work with files that feel native to their domain.
 
 ### Markdown
 
-The first synthesized app presents database rows as `.md` files with YAML frontmatter. Create one with a single command:
+The markdown app presents database rows as `.md` files with YAML frontmatter. Create one with a single command:
 
 ```bash
 # Create a markdown app
@@ -71,7 +145,7 @@ See [docs/markdown-app.md](docs/markdown-app.md) for column mapping, frontmatter
 
 ### History
 
-Any synthesized app can opt into automatic versioning — every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
+Any app can opt into automatic versioning — every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
 
 ```bash
 # Create an app with history enabled
@@ -89,9 +163,54 @@ History tracks files across renames via stable row UUIDs and uses TimescaleDB hy
 
 See [docs/history.md](docs/history.md) for cross-rename tracking, subdirectory scoping, and recovery workflows.
 
+## Cloud Backends
+
+TigerFS works with any PostgreSQL database — just pass a connection string. It also integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.dev) through their CLIs for credential-free mounting. Use a prefix to specify the backend:
+
+```bash
+# Mount any Postgres database
+tigerfs mount postgres://user:pass@host/mydb /mnt/db
+
+# Or mount cloud services by ID
+tigerfs mount tiger:e6ue9697jf /mnt/db
+tigerfs mount ghost:a2x6xoj0oz /mnt/db
+```
+
+TigerFS calls the backend CLI to retrieve credentials — no passwords in your config. Authenticate once with `tiger auth login` or `ghost login`.
+
+Set a default backend to skip the prefix:
+
+```bash
+# In ~/.config/tigerfs/config.yaml: default_backend: tiger
+tigerfs mount e6ue9697jf /mnt/db    # uses tiger: implicitly
+```
+
+### Create and Fork
+
+```bash
+# Create a new cloud database (auto-mounts)
+tigerfs create tiger:my-db
+tigerfs create tiger:my-db /mnt/data   # custom mount path
+tigerfs create ghost:my-db --no-mount  # create without mounting
+
+# Fork (clone) for safe experimentation
+tigerfs fork /mnt/db my-experiment
+tigerfs fork tiger:e6ue9697jf my-experiment
+
+# Inspect a mount
+tigerfs info /mnt/db
+tigerfs info --json /mnt/db           # JSON output for scripting
+```
+
 ## Native Table Access
 
-Below the synthesized layer, every table is a directory of rows. Read columns, write JSON, navigate indexes, and chain pipeline queries — all pushed down to the database as optimized SQL.
+Below the app layer, every table is a directory of rows. Read columns, write JSON, navigate indexes, and chain pipeline queries — all pushed down to the database as optimized SQL.
+
+**Explore an unfamiliar database** — Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
+
+**Quick data fixes** — Update a customer's email, toggle a feature flag, delete a test record. One shell command instead of opening a SQL client, remembering the table schema, and writing a `WHERE` clause.
+
+**Export and analyze** — Chain filters, ordering, and pagination into a single path, then pipe the result into `jq`, `awk`, or export as CSV for a spreadsheet.
 
 ### Explore
 
@@ -132,42 +251,6 @@ touch /mnt/db/.create/orders/.commit
 ```
 
 See [docs/native-tables.md](docs/native-tables.md) for the full reference — row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
-
-## Cloud Backends
-
-TigerFS integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.dev) through their CLIs. Use a prefix to specify the backend:
-
-```bash
-# Mount cloud services
-tigerfs mount tiger:e6ue9697jf /mnt/db
-tigerfs mount ghost:a2x6xoj0oz /mnt/db
-```
-
-TigerFS calls the backend CLI to retrieve credentials — no passwords in your config. Authenticate once with `tiger auth login` or `ghost login`.
-
-Set a default backend to skip the prefix:
-
-```bash
-# In ~/.config/tigerfs/config.yaml: default_backend: tiger
-tigerfs mount e6ue9697jf /mnt/db    # uses tiger: implicitly
-```
-
-### Create and Fork
-
-```bash
-# Create a new cloud database (auto-mounts)
-tigerfs create tiger:my-db
-tigerfs create tiger:my-db /mnt/data   # custom mount path
-tigerfs create ghost:my-db --no-mount  # create without mounting
-
-# Fork (clone) for safe experimentation
-tigerfs fork /mnt/db my-experiment
-tigerfs fork tiger:e6ue9697jf my-experiment
-
-# Inspect a mount
-tigerfs info /mnt/db
-tigerfs info --json /mnt/db           # JSON output for scripting
-```
 
 ## Architecture
 
@@ -253,10 +336,10 @@ For development guidelines, architecture details, and the full specification, se
 
 ## Project Status
 
-**v0.3.0** — Synthesized apps (markdown views, directory hierarchies, version history) and cloud backend integration with Tiger Cloud and Ghost.
+**v0.3.0** — Apps (markdown views, directory hierarchies, version history) and cloud backend integration with Tiger Cloud and Ghost.
 
 **Highlights:**
-- Synthesized markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
+- Markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
 - Cloud backends — mount, create, and fork Tiger Cloud and Ghost databases by service ID
 - Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, chained pagination, `.export/`)
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
