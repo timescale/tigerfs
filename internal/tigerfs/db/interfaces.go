@@ -211,6 +211,15 @@ type ExportReader interface {
 
 	// GetLastNRowsWithData returns the last N rows with full data ordered by PK descending.
 	GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+
+	// RowExistsByColumns checks if any row matches the given column=value conditions.
+	// Generates: SELECT 1 FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1
+	RowExistsByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error)
+
+	// GetRowByColumns returns a single row matching column=value conditions.
+	// Returns all columns. Returns (nil, nil, nil) if no match.
+	// Generates: SELECT * FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1
+	GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error)
 }
 
 // ImportWriter provides bulk data import operations.

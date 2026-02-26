@@ -188,6 +188,75 @@ func extractModTime(columns []string, values []interface{}, info *synth.ViewInfo
 	return info.CachedMountTime
 }
 
+// primeSynthStatCache builds and stores a Stat cache from raw query results.
+// Called by ReadDir after GetAllRows. Subsequent Stat calls use the cached entries
+// instead of re-querying the database, eliminating ~36 of 37 queries for `ls -l`.
+func (o *Operations) primeSynthStatCache(schema, table string, columns []string, rows [][]interface{}, info *synth.ViewInfo) {
+	entries := make(map[string]Entry, len(rows))
+
+	for _, row := range rows {
+		// For hierarchical views, check filetype
+		if info.SupportsHierarchy {
+			filetypeIdx := -1
+			for i, col := range columns {
+				if col == info.Roles.Filetype {
+					filetypeIdx = i
+					break
+				}
+			}
+			if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
+				// Cache directory entry keyed by its filename path
+				fn := synth.ValueToString(row[findColIdx(columns, info.Roles.Filename)])
+				modTime := extractModTime(columns, row, info)
+				entries[fn] = Entry{
+					Name:    fn,
+					IsDir:   true,
+					Mode:    0755,
+					ModTime: modTime,
+				}
+				continue
+			}
+		}
+
+		// File row: synthesize filename and content size
+		var filename string
+		switch info.Format {
+		case synth.FormatMarkdown:
+			filename = synth.GetMarkdownFilename(columns, row, info.Roles)
+		case synth.FormatPlainText:
+			filename = synth.GetPlainTextFilename(columns, row, info.Roles)
+		default:
+			continue
+		}
+
+		modTime := extractModTime(columns, row, info)
+		var size int64
+		if content, err := o.synthesizeContent(columns, row, info); err == nil {
+			size = int64(len(content))
+		}
+
+		entries[filename] = Entry{
+			Name:    filename,
+			IsDir:   false,
+			Mode:    0644,
+			Size:    size,
+			ModTime: modTime,
+		}
+	}
+
+	o.statCache.prime(schema, table, entries)
+}
+
+// findColIdx returns the index of a column name, or -1 if not found.
+func findColIdx(columns []string, name string) int {
+	for i, col := range columns {
+		if col == name {
+			return i
+		}
+	}
+	return -1
+}
+
 // readDirSynthView lists synthesized filenames as file entries.
 // For views with hierarchy support, shows only root-level entries (files and directories).
 func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
@@ -207,6 +276,9 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 			Cause:   err,
 		}
 	}
+
+	// Prime Stat cache so subsequent Stat calls avoid DB queries
+	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, columns, rows, info)
 
 	// For hierarchical views, filter to root-level entries only
 	if info.SupportsHierarchy {
@@ -258,6 +330,11 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) (*Entry, *FSError) {
 	// The PrimaryKey field contains the filename (e.g., "hello-world.md")
 	filename := parsed.PrimaryKey
+
+	// Check ReadDir-primed cache first (0 DB queries on hit)
+	if entry, ok := o.statCache.lookup(parsed.Context.Schema, parsed.Context.TableName, filename); ok {
+		return &entry, nil
+	}
 
 	// For hierarchical views, check for directory first (directory takes priority)
 	if info.SupportsHierarchy {
@@ -415,6 +492,7 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
@@ -462,6 +540,7 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 					Cause:   err,
 				}
 			}
+			o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 			return nil
 		}
 	}
@@ -481,17 +560,16 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
 // getSynthRowPKByFiletype looks up the primary key for a row with a specific filetype.
+// Uses a targeted WHERE query on filename + filetype columns.
 func (o *Operations) getSynthRowPKByFiletype(ctx context.Context, schema, table string, info *synth.ViewInfo, filename, filetype string) (string, *FSError) {
-	limit := o.config.DirListingLimit
-	if limit <= 0 {
-		limit = 10000
-	}
-
-	columns, rows, err := o.db.GetAllRows(ctx, schema, table, limit)
+	columns, row, err := o.db.GetRowByColumns(ctx, schema, table,
+		[]string{info.Roles.Filename, info.Roles.Filetype},
+		[]interface{}{filename, filetype})
 	if err != nil {
 		return "", &FSError{
 			Code:    ErrIO,
@@ -500,48 +578,81 @@ func (o *Operations) getSynthRowPKByFiletype(ctx context.Context, schema, table 
 		}
 	}
 
-	filenameIdx := -1
-	filetypeIdx := -1
-	pkIdx := -1
-	for i, col := range columns {
-		if col == info.Roles.Filename {
-			filenameIdx = i
-		}
-		if col == info.Roles.Filetype {
-			filetypeIdx = i
-		}
-		if col == info.Roles.PrimaryKey {
-			pkIdx = i
+	if row == nil {
+		return "", &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("row not found: %s (filetype=%s)", filename, filetype),
 		}
 	}
 
-	if filenameIdx < 0 || filetypeIdx < 0 || pkIdx < 0 {
+	pkIdx := findColIdx(columns, info.Roles.PrimaryKey)
+	if pkIdx < 0 {
 		return "", &FSError{
 			Code:    ErrIO,
-			Message: "required columns not found in view",
+			Message: "primary key column not found in view",
 		}
 	}
 
-	for _, row := range rows {
-		fn := synth.ValueToString(row[filenameIdx])
-		ft := synth.ValueToString(row[filetypeIdx])
-		if fn == filename && ft == filetype {
-			return synth.ValueToString(row[pkIdx]), nil
-		}
-	}
-
-	return "", &FSError{
-		Code:    ErrNotExist,
-		Message: fmt.Sprintf("row not found: %s (filetype=%s)", filename, filetype),
-	}
+	return synth.ValueToString(row[pkIdx]), nil
 }
 
 // getSynthRow looks up a row in a synth view by the synthesized filename.
 // Returns the column names and row values, or an error if not found.
 // For hierarchical views, only matches file rows (skips directory rows).
+//
+// Uses a targeted WHERE query on the filename column for O(1) lookup.
+// Falls back to full scan if the targeted query misses (handles NULL filename
+// rows where the FS name is derived from the PK, and rare sanitization mismatches).
 func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, filename string) ([]string, []interface{}, *FSError) {
-	// Get all rows and find the one matching the filename
-	// TODO: optimize with a direct query on the filename column
+	// Try targeted query first: WHERE filename = $1 [AND filetype != 'directory']
+	whereCols := []string{info.Roles.Filename}
+	whereVals := []interface{}{filename}
+
+	columns, row, err := o.db.GetRowByColumns(ctx, schema, table, whereCols, whereVals)
+	if err != nil {
+		return nil, nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to query synth row",
+			Cause:   err,
+		}
+	}
+
+	if row != nil {
+		// For hierarchical views, verify it's not a directory row
+		if info.SupportsHierarchy {
+			filetypeIdx := findColIdx(columns, info.Roles.Filetype)
+			if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
+				// Got a directory row; there might still be a file row with the same name.
+				// Fall through to full scan below.
+				row = nil
+			}
+		}
+	}
+
+	if row != nil {
+		// Verify the synthesized filename matches (handles sanitization edge cases)
+		var rowFilename string
+		switch info.Format {
+		case synth.FormatMarkdown:
+			rowFilename = synth.GetMarkdownFilename(columns, row, info.Roles)
+		case synth.FormatPlainText:
+			rowFilename = synth.GetPlainTextFilename(columns, row, info.Roles)
+		}
+		if rowFilename == filename {
+			return columns, row, nil
+		}
+		// Sanitized name differs from DB value; fall through to full scan
+	}
+
+	// Fallback: full scan for NULL-filename rows or sanitization mismatches.
+	// This is rare -- only happens when filename column is NULL (FS name derived
+	// from PK) or contains sanitized characters (\, \x00, :).
+	return o.getSynthRowFullScan(ctx, schema, table, info, filename)
+}
+
+// getSynthRowFullScan finds a row by scanning all rows and matching synthesized filenames.
+// Used as fallback when the targeted WHERE query misses.
+func (o *Operations) getSynthRowFullScan(ctx context.Context, schema, table string, info *synth.ViewInfo, filename string) ([]string, []interface{}, *FSError) {
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
 		limit = 10000
@@ -559,12 +670,7 @@ func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info
 	// Find filetype column index for hierarchical filtering
 	filetypeIdx := -1
 	if info.SupportsHierarchy {
-		for i, col := range columns {
-			if col == info.Roles.Filetype {
-				filetypeIdx = i
-				break
-			}
-		}
+		filetypeIdx = findColIdx(columns, info.Roles.Filetype)
 	}
 
 	for _, row := range rows {
@@ -679,6 +785,7 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 					Message: "directory already moved by another process",
 				}
 			}
+			o.statCache.invalidate(schema, table)
 			return nil
 		}
 	}
@@ -725,6 +832,7 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 		}
 	}
 
+	o.statCache.invalidate(schema, table)
 	return nil
 }
 
@@ -749,6 +857,9 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 			Cause:   err,
 		}
 	}
+
+	// Prime Stat cache so subsequent Stat calls avoid DB queries
+	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, columns, rows, info)
 
 	children := o.filterHierarchicalChildren(columns, rows, prefix, info)
 	if info.HasHistory {
@@ -876,6 +987,7 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
@@ -906,44 +1018,19 @@ func (o *Operations) ensureSynthParentDirs(ctx context.Context, schema, table st
 }
 
 // synthRowExists checks if a row exists in a synth view with the given filename and filetype.
+// Uses a targeted WHERE query instead of scanning all rows.
 func (o *Operations) synthRowExists(ctx context.Context, schema, table string, info *synth.ViewInfo, filename, filetype string) (bool, *FSError) {
-	limit := o.config.DirListingLimit
-	if limit <= 0 {
-		limit = 10000
-	}
-
-	columns, rows, err := o.db.GetAllRows(ctx, schema, table, limit)
+	exists, err := o.db.RowExistsByColumns(ctx, schema, table,
+		[]string{info.Roles.Filename, info.Roles.Filetype},
+		[]interface{}{filename, filetype})
 	if err != nil {
 		return false, &FSError{
 			Code:    ErrIO,
-			Message: "failed to query synth view",
+			Message: "failed to check synth row existence",
 			Cause:   err,
 		}
 	}
-
-	filenameIdx := -1
-	filetypeIdx := -1
-	for i, col := range columns {
-		if col == info.Roles.Filename {
-			filenameIdx = i
-		}
-		if col == info.Roles.Filetype {
-			filetypeIdx = i
-		}
-	}
-	if filenameIdx < 0 || filetypeIdx < 0 {
-		return false, nil
-	}
-
-	for _, row := range rows {
-		fn := synth.ValueToString(row[filenameIdx])
-		ft := synth.ValueToString(row[filetypeIdx])
-		if fn == filename && ft == filetype {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return exists, nil
 }
 
 // parseSynthContent parses file content back into column values.

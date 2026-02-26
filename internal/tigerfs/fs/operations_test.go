@@ -1419,6 +1419,55 @@ func (m *mockDBClient) GetLastNRowsWithData(ctx context.Context, schema, table, 
 	return nil, nil, nil
 }
 
+func (m *mockDBClient) RowExistsByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error) {
+	key := schema + "." + table
+	data, ok := m.allRowsData[key]
+	if !ok {
+		return false, nil
+	}
+	for _, row := range data.rows {
+		if mockRowMatchesWhere(data.columns, row, columns, values) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *mockDBClient) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error) {
+	key := schema + "." + table
+	data, ok := m.allRowsData[key]
+	if !ok {
+		return nil, nil, nil
+	}
+	for _, row := range data.rows {
+		if mockRowMatchesWhere(data.columns, row, columns, values) {
+			return data.columns, row, nil
+		}
+	}
+	return nil, nil, nil
+}
+
+// mockRowMatchesWhere checks if a row matches all column=value conditions.
+func mockRowMatchesWhere(allColumns []string, row []interface{}, whereCols []string, whereVals []interface{}) bool {
+	for i, wCol := range whereCols {
+		colIdx := -1
+		for j, c := range allColumns {
+			if c == wCol {
+				colIdx = j
+				break
+			}
+		}
+		if colIdx < 0 {
+			return false
+		}
+		// Compare as strings (matches how synth code uses ValueToString)
+		if fmt.Sprintf("%v", row[colIdx]) != fmt.Sprintf("%v", whereVals[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // Implement db.ImportWriter
 
 func (m *mockDBClient) ImportOverwrite(ctx context.Context, schema, table string, columns []string, rows [][]interface{}) error {

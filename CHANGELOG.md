@@ -5,6 +5,19 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-02-25
+
+**Cloud backends and versioned history — manage databases and travel through time from the filesystem.**
+
+- **Cloud backend prefixes** — `tiger:ID` and `ghost:ID` prefix scheme for connecting to Tiger Cloud and Ghost databases without raw connection strings
+- **`tigerfs create` command** — provision new databases via `tigerfs create tiger:mydb` or `tigerfs create ghost:mydb`
+- **`tigerfs fork` command** — fork existing databases with `tigerfs fork tiger:source`, supports point-in-time recovery
+- **`tigerfs info` command** — display service details for cloud-managed databases
+- **Optional mountpoint** — `tigerfs mount tiger:ID` auto-derives mountpoint from `default_mount_dir`, no explicit path needed
+- **Versioned history** — `.history/` virtual directory shows previous versions of synth files using TimescaleDB continuous aggregates
+- **Per-directory history** — `.history/` works at every level of hierarchical synth views, not just the root
+- **Extension-aware table listing** — tables and views owned by extensions (like TimescaleDB internals) are excluded from directory listings
+
 ## [0.3.0] - 2026-02-13
 
 **Synthesized apps — work with domain-native files instead of raw rows.**
@@ -51,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI** — mount, unmount, status, list, config commands
 - **Install script** — `curl -fsSL https://tigerfs.tigerdata.com | sh`
 
+[0.4.0]: https://github.com/timescale/tigerfs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/timescale/tigerfs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/timescale/tigerfs/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/timescale/tigerfs/releases/tag/v0.1.0

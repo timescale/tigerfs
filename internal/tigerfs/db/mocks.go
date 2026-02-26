@@ -466,6 +466,8 @@ type MockExportReader struct {
 	GetAllRowsFunc            func(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error)
 	GetFirstNRowsWithDataFunc func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
 	GetLastNRowsWithDataFunc  func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+	RowExistsByColumnsFunc    func(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error)
+	GetRowByColumnsFunc       func(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error)
 }
 
 var _ ExportReader = (*MockExportReader)(nil)
@@ -489,6 +491,20 @@ func (m *MockExportReader) GetLastNRowsWithData(ctx context.Context, schema, tab
 		return m.GetLastNRowsWithDataFunc(ctx, schema, table, pkColumn, limit)
 	}
 	return []string{}, [][]interface{}{}, nil
+}
+
+func (m *MockExportReader) RowExistsByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error) {
+	if m.RowExistsByColumnsFunc != nil {
+		return m.RowExistsByColumnsFunc(ctx, schema, table, columns, values)
+	}
+	return false, nil
+}
+
+func (m *MockExportReader) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error) {
+	if m.GetRowByColumnsFunc != nil {
+		return m.GetRowByColumnsFunc(ctx, schema, table, columns, values)
+	}
+	return nil, nil, nil
 }
 
 // MockImportWriter is a mock implementation of ImportWriter for testing.

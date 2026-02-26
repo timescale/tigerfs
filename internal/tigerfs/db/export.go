@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
@@ -190,4 +191,91 @@ func (c *Client) GetLastNRowsWithData(ctx context.Context, schema, table, pkColu
 		return nil, nil, fmt.Errorf("database connection not initialized")
 	}
 	return GetLastNRowsWithData(ctx, c.pool, schema, table, pkColumn, limit)
+}
+
+// RowExistsByColumns checks if any row matches the given column=value conditions.
+// Generates: SELECT 1 FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1
+func (c *Client) RowExistsByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error) {
+	if c.pool == nil {
+		return false, fmt.Errorf("database connection not initialized")
+	}
+
+	// Build WHERE clause
+	var whereParts []string
+	for i, col := range columns {
+		whereParts = append(whereParts, fmt.Sprintf(`"%s" = $%d`, col, i+1))
+	}
+
+	query := fmt.Sprintf(
+		`SELECT 1 FROM "%s"."%s" WHERE %s LIMIT 1`,
+		schema, table, strings.Join(whereParts, " AND "),
+	)
+
+	logging.Debug("Checking row existence by columns",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Strings("columns", columns))
+
+	var dummy int
+	err := c.pool.QueryRow(ctx, query, values...).Scan(&dummy)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check row existence: %w", err)
+	}
+
+	return true, nil
+}
+
+// GetRowByColumns returns a single row matching column=value conditions.
+// Returns all columns. Returns (nil, nil, nil) if no match.
+// Generates: SELECT * FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1
+func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error) {
+	if c.pool == nil {
+		return nil, nil, fmt.Errorf("database connection not initialized")
+	}
+
+	// Build WHERE clause
+	var whereParts []string
+	for i, col := range columns {
+		whereParts = append(whereParts, fmt.Sprintf(`"%s" = $%d`, col, i+1))
+	}
+
+	query := fmt.Sprintf(
+		`SELECT * FROM "%s"."%s" WHERE %s LIMIT 1`,
+		schema, table, strings.Join(whereParts, " AND "),
+	)
+
+	logging.Debug("Getting row by columns",
+		zap.String("schema", schema),
+		zap.String("table", table),
+		zap.Strings("columns", columns))
+
+	rows, err := c.pool.Query(ctx, query, values...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query row by columns: %w", err)
+	}
+	defer rows.Close()
+
+	// Get column names from field descriptions
+	fieldDescriptions := rows.FieldDescriptions()
+	colNames := make([]string, len(fieldDescriptions))
+	for i, fd := range fieldDescriptions {
+		colNames[i] = string(fd.Name)
+	}
+
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, nil, fmt.Errorf("error reading row: %w", err)
+		}
+		return nil, nil, nil // No match
+	}
+
+	rowValues, err := rows.Values()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to scan row values: %w", err)
+	}
+
+	return colNames, rowValues, nil
 }
