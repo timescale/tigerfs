@@ -42,7 +42,8 @@ type Config struct {
 	DirFilterLimit int           `mapstructure:"dir_filter_limit"` // Row count threshold for .filter/ value listing (default: 100000)
 
 	// Metadata
-	MetadataRefreshInterval time.Duration `mapstructure:"metadata_refresh_interval"`
+	MetadataRefreshInterval           time.Duration `mapstructure:"metadata_refresh_interval"`            // Catalog TTL: schemas/tables/views (default: 10s)
+	StructuralMetadataRefreshInterval time.Duration `mapstructure:"structural_metadata_refresh_interval"` // Structural TTL: PKs/permissions/row counts (default: 5m)
 
 	// NFS file cache settings (ADR-010)
 	NFSStreamingThreshold  int64         `mapstructure:"nfs_streaming_threshold"`   // Buffer size triggering streaming commit (default: 10MB)
@@ -86,7 +87,8 @@ func Init() error {
 	viper.SetDefault("entry_timeout", 1*time.Second)
 	viper.SetDefault("query_timeout", 30*time.Second)
 	viper.SetDefault("dir_filter_limit", 100000)
-	viper.SetDefault("metadata_refresh_interval", 30*time.Second)
+	viper.SetDefault("metadata_refresh_interval", 10*time.Second)
+	viper.SetDefault("structural_metadata_refresh_interval", 5*time.Minute)
 	viper.SetDefault("nfs_streaming_threshold", int64(10*1024*1024))
 	viper.SetDefault("nfs_max_random_write_size", int64(100*1024*1024))
 	viper.SetDefault("nfs_cache_reaper_interval", 30*time.Second)

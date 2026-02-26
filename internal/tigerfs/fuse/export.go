@@ -9,6 +9,7 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -19,15 +20,15 @@ import (
 type ExportDirNode struct {
 	fs.Inode
 
-	cfg       *config.Config // TigerFS configuration
-	db        db.DBClient    // Database client for queries
-	cache     *MetadataCache // Cache for row count estimates
-	schema    string         // PostgreSQL schema name
-	tableName string         // Table to export from
-	limit     int            // Row limit for export (0 = use DirListingLimit)
-	pkColumn  string         // Primary key column (empty = no ordering)
-	orderBy   string         // Column to order by (empty = default order)
-	ascending bool           // Order direction (true = ASC, false = DESC)
+	cfg       *config.Config         // TigerFS configuration
+	db        db.DBClient            // Database client for queries
+	cache     *tigerfs.MetadataCache // Cache for row count estimates
+	schema    string                 // PostgreSQL schema name
+	tableName string                 // Table to export from
+	limit     int                    // Row limit for export (0 = use DirListingLimit)
+	pkColumn  string                 // Primary key column (empty = no ordering)
+	orderBy   string                 // Column to order by (empty = default order)
+	ascending bool                   // Order direction (true = ASC, false = DESC)
 }
 
 var _ fs.InodeEmbedder = (*ExportDirNode)(nil)
@@ -37,7 +38,7 @@ var _ fs.NodeLookuper = (*ExportDirNode)(nil)
 
 // NewExportDirNode creates a new .export/ directory node for a table.
 // Used when .export/ appears directly under a table.
-func NewExportDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string) *ExportDirNode {
+func NewExportDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string) *ExportDirNode {
 	return &ExportDirNode{
 		cfg:       cfg,
 		db:        dbClient,
@@ -50,7 +51,7 @@ func NewExportDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataC
 
 // NewExportDirNodeWithLimit creates a new .export/ directory node with a row limit.
 // Used for .first/N/.export/, .last/N/.export/, etc.
-func NewExportDirNodeWithLimit(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, pkColumn string, limit int, ascending bool) *ExportDirNode {
+func NewExportDirNodeWithLimit(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, pkColumn string, limit int, ascending bool) *ExportDirNode {
 	return &ExportDirNode{
 		cfg:       cfg,
 		db:        dbClient,
@@ -65,7 +66,7 @@ func NewExportDirNodeWithLimit(cfg *config.Config, dbClient db.DBClient, cache *
 
 // NewExportDirNodeOrdered creates a new .export/ directory node with ordering.
 // Used for .order/<column>/.first/N/.export/, etc.
-func NewExportDirNodeOrdered(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName, pkColumn, orderBy string, limit int, ascending bool) *ExportDirNode {
+func NewExportDirNodeOrdered(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName, pkColumn, orderBy string, limit int, ascending bool) *ExportDirNode {
 	return &ExportDirNode{
 		cfg:       cfg,
 		db:        dbClient,
@@ -166,17 +167,17 @@ func (e *ExportDirNode) Lookup(ctx context.Context, name string, out *fuse.Entry
 type ExportFileNode struct {
 	fs.Inode
 
-	cfg         *config.Config // TigerFS configuration
-	db          db.DBClient    // Database client for queries
-	cache       *MetadataCache // Cache for row count estimates
-	schema      string         // PostgreSQL schema name
-	tableName   string         // Table to export from
-	format      string         // Export format (csv, tsv, json, yaml)
-	limit       int            // Row limit for export (0 = use DirListingLimit)
-	pkColumn    string         // Primary key column (empty = no ordering)
-	orderBy     string         // Column to order by (empty = default order)
-	ascending   bool           // Order direction (true = ASC, false = DESC)
-	withHeaders bool           // Include header row in CSV/TSV output
+	cfg         *config.Config         // TigerFS configuration
+	db          db.DBClient            // Database client for queries
+	cache       *tigerfs.MetadataCache // Cache for row count estimates
+	schema      string                 // PostgreSQL schema name
+	tableName   string                 // Table to export from
+	format      string                 // Export format (csv, tsv, json, yaml)
+	limit       int                    // Row limit for export (0 = use DirListingLimit)
+	pkColumn    string                 // Primary key column (empty = no ordering)
+	orderBy     string                 // Column to order by (empty = default order)
+	ascending   bool                   // Order direction (true = ASC, false = DESC)
+	withHeaders bool                   // Include header row in CSV/TSV output
 
 	// Cached data (materialized on first access)
 	data []byte
@@ -361,7 +362,7 @@ type ExportWithHeadersNode struct {
 
 	cfg       *config.Config
 	db        db.DBClient
-	cache     *MetadataCache
+	cache     *tigerfs.MetadataCache
 	schema    string
 	tableName string
 	limit     int

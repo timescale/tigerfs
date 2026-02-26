@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -32,7 +33,7 @@ type ByDirNode struct {
 	db db.DBClient
 
 	// cache holds metadata cache for permission lookups
-	cache *MetadataCache
+	cache *tigerfs.MetadataCache
 
 	// schema is the PostgreSQL schema name (e.g., "public")
 	schema string
@@ -61,7 +62,7 @@ var _ fs.NodeLookuper = (*ByDirNode)(nil)
 //   - schema: PostgreSQL schema name
 //   - tableName: Name of the table this index directory belongs to
 //   - partialRows: Tracker for incremental row creation
-func NewByDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *ByDirNode {
+func NewByDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker) *ByDirNode {
 	return &ByDirNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -74,7 +75,7 @@ func NewByDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache
 
 // NewByDirNodeWithPipeline creates a new .by directory node with pipeline context.
 // The pipeline context is passed through to child nodes for capability chaining.
-func NewByDirNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *ByDirNode {
+func NewByDirNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, partialRows *PartialRowTracker, pipeline *PipelineContext) *ByDirNode {
 	return &ByDirNode{
 		cfg:         cfg,
 		db:          dbClient,

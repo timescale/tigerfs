@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -20,7 +21,7 @@ type SchemasNode struct {
 
 	cfg         *config.Config
 	db          *db.Client
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	partialRows *PartialRowTracker
 	staging     *StagingTracker
 }
@@ -38,7 +39,7 @@ var _ fs.NodeGetattrer = (*SchemasNode)(nil)
 //   - cache: Metadata cache for schema info
 //   - partialRows: Tracker for partial row creation
 //   - staging: Tracker for DDL staging operations
-func NewSchemasNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, partialRows *PartialRowTracker, staging *StagingTracker) *SchemasNode {
+func NewSchemasNode(cfg *config.Config, dbClient *db.Client, cache *tigerfs.MetadataCache, partialRows *PartialRowTracker, staging *StagingTracker) *SchemasNode {
 	return &SchemasNode{
 		cfg:         cfg,
 		db:          dbClient,

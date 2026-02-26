@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -21,7 +22,7 @@ type ViewsNode struct {
 
 	cfg         *config.Config
 	db          *db.Client
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	partialRows *PartialRowTracker
 	staging     *StagingTracker
 }
@@ -39,7 +40,7 @@ var _ fs.NodeGetattrer = (*ViewsNode)(nil)
 //   - cache: Metadata cache for view info
 //   - partialRows: Tracker for partial row creation
 //   - staging: Tracker for DDL staging operations
-func NewViewsNode(cfg *config.Config, dbClient *db.Client, cache *MetadataCache, partialRows *PartialRowTracker, staging *StagingTracker) *ViewsNode {
+func NewViewsNode(cfg *config.Config, dbClient *db.Client, cache *tigerfs.MetadataCache, partialRows *PartialRowTracker, staging *StagingTracker) *ViewsNode {
 	return &ViewsNode{
 		cfg:         cfg,
 		db:          dbClient,

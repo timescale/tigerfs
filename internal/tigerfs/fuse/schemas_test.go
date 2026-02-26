@@ -9,7 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
-	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // setupTestSchemasNode creates a SchemasNode with a pre-populated cache for testing
@@ -19,18 +19,12 @@ func setupTestSchemasNode(schemas []string) *SchemasNode {
 		MetadataRefreshInterval: 30 * time.Second,
 	}
 
-	cache := &MetadataCache{
-		cfg:               cfg,
-		db:                nil,
-		defaultSchema:     "public",
-		schemas:           schemas,
-		tables:            []string{},
-		schemaTables:      make(map[string][]string),
-		schemaRowCounts:   make(map[string]map[string]int64),
-		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
-		schemaLastFetch:   make(map[string]time.Time),
-		lastFetch:         time.Now(),
-	}
+	cache := tigerfs.NewTestMetadataCache(tigerfs.TestMetadataCacheConfig{
+		Cfg:           cfg,
+		DefaultSchema: "public",
+		Schemas:       schemas,
+		Tables:        []string{},
+	})
 
 	return &SchemasNode{
 		cfg:         cfg,
@@ -48,7 +42,7 @@ func TestNewSchemasNode(t *testing.T) {
 		MetadataRefreshInterval: 30 * time.Second,
 	}
 
-	cache := NewMetadataCache(cfg, nil)
+	cache := tigerfs.NewMetadataCache(cfg, nil)
 	partialRows := NewPartialRowTracker(nil)
 	staging := NewStagingTracker()
 

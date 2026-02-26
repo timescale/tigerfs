@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 func TestNewColumnFileNode(t *testing.T) {
@@ -922,7 +923,7 @@ func TestColumnFileNode_getFileMode_WithMock(t *testing.T) {
 				}, nil
 			}
 
-			cache := NewMetadataCache(cfg, mock)
+			cache := tigerfs.NewMetadataCache(cfg, mock)
 			// Pre-populate the cache by calling Refresh
 			if err := cache.Refresh(context.Background()); err != nil {
 				t.Fatalf("Failed to refresh cache: %v", err)

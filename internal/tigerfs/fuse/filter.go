@@ -14,6 +14,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -31,7 +32,7 @@ type FilterDirNode struct {
 
 	cfg    *config.Config
 	db     db.DBClient
-	cache  *MetadataCache
+	cache  *tigerfs.MetadataCache
 	schema string
 	table  string
 
@@ -57,7 +58,7 @@ var _ fs.NodeLookuper = (*FilterDirNode)(nil)
 //   - table: Table name
 //   - pipeline: Current pipeline context (nil for fresh context)
 //   - partialRows: Tracker for incremental row creation
-func NewFilterDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *FilterDirNode {
+func NewFilterDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *FilterDirNode {
 	return &FilterDirNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -161,7 +162,7 @@ type FilterColumnNode struct {
 
 	cfg    *config.Config
 	db     db.DBClient
-	cache  *MetadataCache
+	cache  *tigerfs.MetadataCache
 	schema string
 	table  string
 	column string
@@ -179,7 +180,7 @@ var _ fs.NodeReaddirer = (*FilterColumnNode)(nil)
 var _ fs.NodeLookuper = (*FilterColumnNode)(nil)
 
 // NewFilterColumnNode creates a new filter column node.
-func NewFilterColumnNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table, column string, pipeline *PipelineContext, partialRows *PartialRowTracker) *FilterColumnNode {
+func NewFilterColumnNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table, column string, pipeline *PipelineContext, partialRows *PartialRowTracker) *FilterColumnNode {
 	return &FilterColumnNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -402,7 +403,7 @@ type FilterValueNode struct {
 
 	cfg    *config.Config
 	db     db.DBClient
-	cache  *MetadataCache
+	cache  *tigerfs.MetadataCache
 	schema string
 	table  string
 	column string
@@ -421,7 +422,7 @@ var _ fs.NodeReaddirer = (*FilterValueNode)(nil)
 var _ fs.NodeLookuper = (*FilterValueNode)(nil)
 
 // NewFilterValueNode creates a new filter value node.
-func NewFilterValueNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table, column, value string, basePipeline *PipelineContext, partialRows *PartialRowTracker) *FilterValueNode {
+func NewFilterValueNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table, column, value string, basePipeline *PipelineContext, partialRows *PartialRowTracker) *FilterValueNode {
 	// Get primary key column for pipeline context
 	// Note: In real usage, this should be passed in or cached
 	pkColumn := "id" // Default, will be overridden

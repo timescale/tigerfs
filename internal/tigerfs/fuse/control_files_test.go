@@ -7,6 +7,7 @@ import (
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // TestTestFileNode_runTest_Success tests that DDL validation succeeds with valid SQL.
@@ -192,7 +193,7 @@ func TestCommitFileNode_runCommit_Success(t *testing.T) {
 	}
 
 	// Verify node creation works with mock
-	node := NewCommitFileNode(cfg, mockDB, staging, stagingCtx)
+	node := NewCommitFileNode(cfg, mockDB, nil, staging, stagingCtx)
 	if node == nil {
 		t.Fatal("NewCommitFileNode returned nil")
 	}
@@ -279,7 +280,7 @@ func TestCommitFileNode_runCommit_ExecutionFails(t *testing.T) {
 	}
 
 	// Verify node creation works with mock
-	node := NewCommitFileNode(cfg, mockDB, staging, stagingCtx)
+	node := NewCommitFileNode(cfg, mockDB, nil, staging, stagingCtx)
 	if node == nil {
 		t.Fatal("NewCommitFileNode returned nil")
 	}
@@ -363,7 +364,7 @@ func TestStagingDirNode_Creation(t *testing.T) {
 	}
 
 	// Verify StagingDirNode accepts DDLExecutor
-	node := NewStagingDirNode(cfg, mockDB, staging, stagingCtx)
+	node := NewStagingDirNode(cfg, mockDB, nil, staging, stagingCtx)
 	if node == nil {
 		t.Fatal("NewStagingDirNode returned nil")
 	}
@@ -462,7 +463,7 @@ func runTestWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *
 
 // runCommitWithExecutor extracts the commit logic from CommitFileNode.runCommit for unit testing.
 // This allows testing the core DDL execution logic without FUSE dependencies.
-func runCommitWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *StagingTracker, cache *MetadataCache, stagingCtx StagingContext) error {
+func runCommitWithExecutor(ctx context.Context, executor db.DDLExecutor, staging *StagingTracker, cache *tigerfs.MetadataCache, stagingCtx StagingContext) error {
 	// Check if staging entry exists - be idempotent
 	// (touch may trigger both Open and Setattr, causing double execution)
 	entry := staging.Get(stagingCtx.StagingPath)
@@ -859,7 +860,7 @@ func TestTableCreateWorkflow_WithMocks(t *testing.T) {
 	}
 
 	// Step 5: Create CommitFileNode and commit (simulates touch .create/orders/.commit)
-	commitNode := NewCommitFileNode(cfg, mockDB, staging, stagingCtx)
+	commitNode := NewCommitFileNode(cfg, mockDB, nil, staging, stagingCtx)
 	if commitNode == nil {
 		t.Fatal("NewCommitFileNode returned nil")
 	}
@@ -1057,7 +1058,7 @@ func TestTableModifyWorkflow_WithMocks(t *testing.T) {
 		TableName:   "users",
 	}
 
-	stagingNode := NewStagingDirNode(cfg, mockDB, staging, stagingCtx)
+	stagingNode := NewStagingDirNode(cfg, mockDB, nil, staging, stagingCtx)
 	if stagingNode == nil {
 		t.Fatal("NewStagingDirNode returned nil")
 	}
@@ -1115,7 +1116,7 @@ func TestTableModifyWorkflow_WithMocks(t *testing.T) {
 	}
 
 	// Step 5: Create CommitFileNode and commit (simulates touch .modify/.commit)
-	commitNode := NewCommitFileNode(cfg, mockDB, staging, stagingCtx)
+	commitNode := NewCommitFileNode(cfg, mockDB, nil, staging, stagingCtx)
 	if commitNode == nil {
 		t.Fatal("NewCommitFileNode returned nil")
 	}

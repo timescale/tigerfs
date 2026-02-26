@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -28,13 +29,13 @@ const (
 type PaginationNode struct {
 	fs.Inode
 
-	cfg            *config.Config     // TigerFS configuration
-	db             db.DBClient        // Database client for queries
-	cache          *MetadataCache     // Metadata cache for permissions lookup
-	schema         string             // PostgreSQL schema name
-	tableName      string             // Table this pagination belongs to
-	paginationType PaginationType     // Whether this is .first or .last
-	partialRows    *PartialRowTracker // Tracker for partial row writes
+	cfg            *config.Config         // TigerFS configuration
+	db             db.DBClient            // Database client for queries
+	cache          *tigerfs.MetadataCache // Metadata cache for permissions lookup
+	schema         string                 // PostgreSQL schema name
+	tableName      string                 // Table this pagination belongs to
+	paginationType PaginationType         // Whether this is .first or .last
+	partialRows    *PartialRowTracker     // Tracker for partial row writes
 
 	// pipeline is the current pipeline context (may be nil for table root)
 	pipeline *PipelineContext
@@ -55,7 +56,7 @@ var _ fs.NodeLookuper = (*PaginationNode)(nil)
 //   - tableName: Name of the table
 //   - paginationType: PaginationFirst or PaginationLast
 //   - partialRows: Tracker for partial row writes
-func NewPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker) *PaginationNode {
+func NewPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker) *PaginationNode {
 	return &PaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -70,7 +71,7 @@ func NewPaginationNode(cfg *config.Config, dbClient db.DBClient, cache *Metadata
 
 // NewPaginationNodeWithPipeline creates a new pagination node with pipeline context.
 // Used when .first/ or .last/ appears within a pipeline path.
-func NewPaginationNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker, pipeline *PipelineContext) *PaginationNode {
+func NewPaginationNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, paginationType PaginationType, partialRows *PartialRowTracker, pipeline *PipelineContext) *PaginationNode {
 	return &PaginationNode{
 		cfg:            cfg,
 		db:             dbClient,
@@ -144,14 +145,14 @@ func (p *PaginationNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 type PaginationLimitNode struct {
 	fs.Inode
 
-	cfg            *config.Config     // TigerFS configuration
-	db             db.DBClient        // Database client for queries
-	cache          *MetadataCache     // Metadata cache for permissions lookup
-	schema         string             // PostgreSQL schema name
-	tableName      string             // Table this pagination belongs to
-	paginationType PaginationType     // Whether this is .first or .last
-	limit          int                // Maximum number of rows to return
-	partialRows    *PartialRowTracker // Tracker for partial row writes
+	cfg            *config.Config         // TigerFS configuration
+	db             db.DBClient            // Database client for queries
+	cache          *tigerfs.MetadataCache // Metadata cache for permissions lookup
+	schema         string                 // PostgreSQL schema name
+	tableName      string                 // Table this pagination belongs to
+	paginationType PaginationType         // Whether this is .first or .last
+	limit          int                    // Maximum number of rows to return
+	partialRows    *PartialRowTracker     // Tracker for partial row writes
 
 	// pipeline is the current pipeline context with this limit applied
 	pipeline *PipelineContext
@@ -174,13 +175,13 @@ var _ fs.NodeLookuper = (*PaginationLimitNode)(nil)
 //   - paginationType: PaginationFirst or PaginationLast
 //   - limit: Maximum number of rows to list
 //   - partialRows: Tracker for partial row writes
-func NewPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *PaginationLimitNode {
+func NewPaginationLimitNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker) *PaginationLimitNode {
 	return NewPaginationLimitNodeWithPipeline(cfg, dbClient, cache, schema, tableName, paginationType, limit, partialRows, nil)
 }
 
 // NewPaginationLimitNodeWithPipeline creates a new pagination limit node with pipeline context.
 // When basePipeline is provided, the limit is applied to create the node's pipeline.
-func NewPaginationLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *PaginationLimitNode {
+func NewPaginationLimitNodeWithPipeline(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, tableName string, paginationType PaginationType, limit int, partialRows *PartialRowTracker, basePipeline *PipelineContext) *PaginationLimitNode {
 	var pipeline *PipelineContext
 
 	// Apply limit to pipeline if context exists

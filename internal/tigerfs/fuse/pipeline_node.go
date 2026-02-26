@@ -20,6 +20,7 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/util"
 	"go.uber.org/zap"
@@ -38,7 +39,7 @@ type PipelineNode struct {
 
 	cfg    *config.Config
 	db     db.DBClient
-	cache  *MetadataCache
+	cache  *tigerfs.MetadataCache
 	schema string
 	table  string
 
@@ -64,7 +65,7 @@ var _ fs.NodeLookuper = (*PipelineNode)(nil)
 //   - table: Table name
 //   - pipeline: Current pipeline context (must not be nil)
 //   - partialRows: Tracker for incremental row creation
-func NewPipelineNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineNode {
+func NewPipelineNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineNode {
 	return &PipelineNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -317,7 +318,7 @@ type PipelineByDirNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	table       string
 	pipeline    *PipelineContext
@@ -330,7 +331,7 @@ var _ fs.NodeReaddirer = (*PipelineByDirNode)(nil)
 var _ fs.NodeLookuper = (*PipelineByDirNode)(nil)
 
 // NewPipelineByDirNode creates a pipeline-aware .by/ node.
-func NewPipelineByDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineByDirNode {
+func NewPipelineByDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineByDirNode {
 	return &PipelineByDirNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -405,7 +406,7 @@ type PipelineByColumnNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	table       string
 	column      string
@@ -419,7 +420,7 @@ var _ fs.NodeReaddirer = (*PipelineByColumnNode)(nil)
 var _ fs.NodeLookuper = (*PipelineByColumnNode)(nil)
 
 // NewPipelineByColumnNode creates a pipeline-aware index column node.
-func NewPipelineByColumnNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table, column string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineByColumnNode {
+func NewPipelineByColumnNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table, column string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineByColumnNode {
 	return &PipelineByColumnNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -481,7 +482,7 @@ type PipelineOrderDirNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	table       string
 	pipeline    *PipelineContext
@@ -494,7 +495,7 @@ var _ fs.NodeReaddirer = (*PipelineOrderDirNode)(nil)
 var _ fs.NodeLookuper = (*PipelineOrderDirNode)(nil)
 
 // NewPipelineOrderDirNode creates a pipeline-aware .order/ node.
-func NewPipelineOrderDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineOrderDirNode {
+func NewPipelineOrderDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineOrderDirNode {
 	return &PipelineOrderDirNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -567,7 +568,7 @@ type PipelineOrderColumnNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	table       string
 	column      string
@@ -581,7 +582,7 @@ var _ fs.NodeReaddirer = (*PipelineOrderColumnNode)(nil)
 var _ fs.NodeLookuper = (*PipelineOrderColumnNode)(nil)
 
 // NewPipelineOrderColumnNode creates a pipeline-aware order column node.
-func NewPipelineOrderColumnNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table, column string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineOrderColumnNode {
+func NewPipelineOrderColumnNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table, column string, pipeline *PipelineContext, partialRows *PartialRowTracker) *PipelineOrderColumnNode {
 	return &PipelineOrderColumnNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -639,7 +640,7 @@ type PipelineLimitNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	table       string
 	pipeline    *PipelineContext
@@ -653,7 +654,7 @@ var _ fs.NodeReaddirer = (*PipelineLimitNode)(nil)
 var _ fs.NodeLookuper = (*PipelineLimitNode)(nil)
 
 // NewPipelineLimitNode creates a pipeline-aware limit node.
-func NewPipelineLimitNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext, limitType LimitType, partialRows *PartialRowTracker) *PipelineLimitNode {
+func NewPipelineLimitNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext, limitType LimitType, partialRows *PartialRowTracker) *PipelineLimitNode {
 	return &PipelineLimitNode{
 		cfg:         cfg,
 		db:          dbClient,
@@ -705,7 +706,7 @@ type PipelineExportDirNode struct {
 
 	cfg      *config.Config
 	db       db.DBClient
-	cache    *MetadataCache
+	cache    *tigerfs.MetadataCache
 	schema   string
 	table    string
 	pipeline *PipelineContext
@@ -717,7 +718,7 @@ var _ fs.NodeReaddirer = (*PipelineExportDirNode)(nil)
 var _ fs.NodeLookuper = (*PipelineExportDirNode)(nil)
 
 // NewPipelineExportDirNode creates a pipeline-aware export directory node.
-func NewPipelineExportDirNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext) *PipelineExportDirNode {
+func NewPipelineExportDirNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext) *PipelineExportDirNode {
 	return &PipelineExportDirNode{
 		cfg:      cfg,
 		db:       dbClient,
@@ -778,7 +779,7 @@ type PipelineExportWithHeadersNode struct {
 
 	cfg      *config.Config
 	db       db.DBClient
-	cache    *MetadataCache
+	cache    *tigerfs.MetadataCache
 	schema   string
 	table    string
 	pipeline *PipelineContext
@@ -790,7 +791,7 @@ var _ fs.NodeReaddirer = (*PipelineExportWithHeadersNode)(nil)
 var _ fs.NodeLookuper = (*PipelineExportWithHeadersNode)(nil)
 
 // NewPipelineExportWithHeadersNode creates a pipeline-aware with-headers node.
-func NewPipelineExportWithHeadersNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table string, pipeline *PipelineContext) *PipelineExportWithHeadersNode {
+func NewPipelineExportWithHeadersNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table string, pipeline *PipelineContext) *PipelineExportWithHeadersNode {
 	return &PipelineExportWithHeadersNode{
 		cfg:      cfg,
 		db:       dbClient,
@@ -839,7 +840,7 @@ type PipelineExportFileNode struct {
 
 	cfg         *config.Config
 	db          db.DBClient
-	cache       *MetadataCache
+	cache       *tigerfs.MetadataCache
 	schema      string
 	table       string
 	format      string
@@ -855,7 +856,7 @@ var _ fs.NodeGetattrer = (*PipelineExportFileNode)(nil)
 var _ fs.NodeOpener = (*PipelineExportFileNode)(nil)
 
 // NewPipelineExportFileNode creates a pipeline-aware export file node.
-func NewPipelineExportFileNode(cfg *config.Config, dbClient db.DBClient, cache *MetadataCache, schema, table, format string, pipeline *PipelineContext, withHeaders bool) *PipelineExportFileNode {
+func NewPipelineExportFileNode(cfg *config.Config, dbClient db.DBClient, cache *tigerfs.MetadataCache, schema, table, format string, pipeline *PipelineContext, withHeaders bool) *PipelineExportFileNode {
 	return &PipelineExportFileNode{
 		cfg:         cfg,
 		db:          dbClient,

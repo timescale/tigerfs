@@ -9,7 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
-	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // setupTestSchemaNode creates a SchemaNode with a pre-populated cache for testing
@@ -19,25 +19,21 @@ func setupTestSchemaNode(schema string, tables []string) *SchemaNode {
 		MetadataRefreshInterval: 30 * time.Second,
 	}
 
-	cache := &MetadataCache{
-		cfg:               cfg,
-		db:                nil,
-		defaultSchema:     "public",
-		schemas:           []string{"public", schema},
-		tables:            []string{}, // Default schema tables (not used in this test)
-		views:             []string{}, // Default schema views
-		schemaTables:      make(map[string][]string),
-		schemaViews:       make(map[string][]string),
-		schemaRowCounts:   make(map[string]map[string]int64),
-		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
-		schemaLastFetch:   make(map[string]time.Time),
-		lastFetch:         time.Now(),
-	}
+	// Pre-populate schema-specific cache data
+	schemaTables := map[string][]string{schema: tables}
+	schemaViews := map[string][]string{schema: {}}
+	schemaLastFetch := map[string]time.Time{schema: time.Now()}
 
-	// Pre-populate cache for this schema
-	cache.schemaTables[schema] = tables
-	cache.schemaViews[schema] = []string{} // No views in test
-	cache.schemaLastFetch[schema] = time.Now()
+	cache := tigerfs.NewTestMetadataCache(tigerfs.TestMetadataCacheConfig{
+		Cfg:             cfg,
+		DefaultSchema:   "public",
+		Schemas:         []string{"public", schema},
+		Tables:          []string{},
+		Views:           []string{},
+		SchemaTables:    schemaTables,
+		SchemaViews:     schemaViews,
+		SchemaLastFetch: schemaLastFetch,
+	})
 
 	return &SchemaNode{
 		cfg:         cfg,
@@ -56,7 +52,7 @@ func TestNewSchemaNode(t *testing.T) {
 		MetadataRefreshInterval: 30 * time.Second,
 	}
 
-	cache := NewMetadataCache(cfg, nil)
+	cache := tigerfs.NewMetadataCache(cfg, nil)
 	partialRows := NewPartialRowTracker(nil)
 	staging := NewStagingTracker()
 

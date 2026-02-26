@@ -8,6 +8,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // TestNewOrderDirNode tests OrderDirNode creation
@@ -246,7 +247,7 @@ func TestOrderedPaginationLimitNode_Getattr(t *testing.T) {
 // TestOrderDirNode_FieldsSet verifies all fields are set correctly
 func TestOrderDirNode_FieldsSet(t *testing.T) {
 	cfg := &config.Config{}
-	cache := &MetadataCache{}
+	cache := &tigerfs.MetadataCache{}
 	partialRows := &PartialRowTracker{}
 
 	node := NewOrderDirNode(cfg, nil, cache, "myschema", "mytable", partialRows)

@@ -8,7 +8,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
-	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // setupTestRootNode creates a RootNode with a pre-populated cache for testing
@@ -28,20 +28,13 @@ func setupTestRootNode(tables []string) *RootNode {
 	}
 
 	// Create cache and pre-populate it
-	cache := &MetadataCache{
-		cfg:               cfg,
-		db:                nil,
-		defaultSchema:     cfg.DefaultSchema,
-		tables:            tables,
-		views:             []string{}, // Empty views for tests
-		schemas:           []string{"public"},
-		schemaTables:      make(map[string][]string),
-		schemaViews:       make(map[string][]string),
-		schemaRowCounts:   make(map[string]map[string]int64),
-		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
-		schemaLastFetch:   make(map[string]time.Time),
-		lastFetch:         time.Now(), // Recent fetch prevents DB refresh
-	}
+	cache := tigerfs.NewTestMetadataCache(tigerfs.TestMetadataCacheConfig{
+		Cfg:           cfg,
+		DefaultSchema: cfg.DefaultSchema,
+		Tables:        tables,
+		Views:         []string{},
+		Schemas:       []string{"public"},
+	})
 	root.cache = cache
 
 	return root
@@ -63,20 +56,13 @@ func setupTestRootNodeWithSchemas(tables []string, schemas []string) *RootNode {
 	}
 
 	// Create cache and pre-populate it
-	cache := &MetadataCache{
-		cfg:               cfg,
-		db:                nil,
-		defaultSchema:     cfg.DefaultSchema,
-		tables:            tables,
-		views:             []string{}, // Empty views for tests
-		schemas:           schemas,
-		schemaTables:      make(map[string][]string),
-		schemaViews:       make(map[string][]string),
-		schemaRowCounts:   make(map[string]map[string]int64),
-		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
-		schemaLastFetch:   make(map[string]time.Time),
-		lastFetch:         time.Now(), // Recent fetch prevents DB refresh
-	}
+	cache := tigerfs.NewTestMetadataCache(tigerfs.TestMetadataCacheConfig{
+		Cfg:           cfg,
+		DefaultSchema: cfg.DefaultSchema,
+		Tables:        tables,
+		Views:         []string{},
+		Schemas:       schemas,
+	})
 	root.cache = cache
 
 	return root
