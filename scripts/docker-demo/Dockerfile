@@ -29,6 +29,16 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
 
+# Install Tiger CLI
+RUN curl -s https://packagecloud.io/install/repositories/timescale/tiger-cli/script.deb.sh | os=any dist=any bash \
+    && apt-get install -y tiger-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Ghost CLI
+RUN curl -s https://packagecloud.io/install/repositories/timescale/ghost/script.deb.sh | os=any dist=any bash \
+    && apt-get install -y ghost \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /build/tigerfs /usr/local/bin/tigerfs
 
 RUN mkdir -p /mnt/db
