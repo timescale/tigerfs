@@ -39,7 +39,7 @@ type Operations struct {
 	// statCache caches Entry metadata from ReadDir results.
 	// Stat checks this before querying the DB. ReadFile bypasses it (always fresh).
 	// Invalidated by write operations; 2-second TTL as safety net.
-	statCache synthStatCache
+	statCache statCache
 }
 
 // NewOperations creates a new Operations instance.
@@ -52,25 +52,26 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 	}
 }
 
-// synthStatCache caches Entry metadata from ReadDir results.
+// statCache caches Entry metadata from ReadDir results.
 // Stat checks this before querying the DB. ReadFile bypasses it (always fresh).
 // Invalidated by write operations; 2-second TTL as safety net.
-type synthStatCache struct {
+// Used for both native tables (row directory entries) and synth views (file entries).
+type statCache struct {
 	mu     sync.RWMutex
-	tables map[string]*synthTableCache // key: "schema\x00table"
+	tables map[string]*tableCache // key: "schema\x00table"
 }
 
-// synthTableCache holds cached entries for a single table.
-type synthTableCache struct {
+// tableCache holds cached entries for a single table.
+type tableCache struct {
 	entries map[string]Entry // key: filename (matches parsed.PrimaryKey)
 	created time.Time
 }
 
-// synthStatCacheTTL is the maximum age of cached entries before they expire.
-const synthStatCacheTTL = 2 * time.Second
+// statCacheTTL is the maximum age of cached entries before they expire.
+const statCacheTTL = 2 * time.Second
 
 // lookup returns a cached entry if it exists and hasn't expired.
-func (c *synthStatCache) lookup(schema, table, filename string) (Entry, bool) {
+func (c *statCache) lookup(schema, table, filename string) (Entry, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -84,7 +85,7 @@ func (c *synthStatCache) lookup(schema, table, filename string) (Entry, bool) {
 		return Entry{}, false
 	}
 
-	if time.Since(tc.created) > synthStatCacheTTL {
+	if time.Since(tc.created) > statCacheTTL {
 		return Entry{}, false
 	}
 
@@ -93,23 +94,23 @@ func (c *synthStatCache) lookup(schema, table, filename string) (Entry, bool) {
 }
 
 // prime stores entries from a ReadDir result into the cache.
-func (c *synthStatCache) prime(schema, table string, entries map[string]Entry) {
+func (c *statCache) prime(schema, table string, entries map[string]Entry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.tables == nil {
-		c.tables = make(map[string]*synthTableCache)
+		c.tables = make(map[string]*tableCache)
 	}
 
 	key := schema + "\x00" + table
-	c.tables[key] = &synthTableCache{
+	c.tables[key] = &tableCache{
 		entries: entries,
 		created: time.Now(),
 	}
 }
 
 // invalidate clears cached entries for a table (called on writes).
-func (c *synthStatCache) invalidate(schema, table string) {
+func (c *statCache) invalidate(schema, table string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -477,9 +478,16 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	}
 
 	// Add rows as directories (row files like 1.json accessible but not listed)
+	cacheEntries := make(map[string]Entry, len(rows))
 	for _, rowPK := range rows {
-		entries = append(entries, Entry{Name: rowPK, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+		entry := Entry{Name: rowPK, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
+		entries = append(entries, entry)
+		cacheEntries[rowPK] = entry
 	}
+
+	// Prime the stat cache so subsequent Stat calls (from ls -l, NFS GETATTR, etc.)
+	// return cached entries instead of issuing per-row SELECT queries.
+	o.statCache.prime(fsCtx.Schema, fsCtx.TableName, cacheEntries)
 
 	return entries, nil
 }
@@ -1193,6 +1201,14 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 	// Check if this is a synthesized view — synth files are always files, not directories
 	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
 		return o.statSynthFile(ctx, parsed, info)
+	}
+
+	// For directory stats (no format extension), check ReadDir-primed cache first.
+	// This avoids per-row SELECT queries during ls -l / NFS GETATTR bursts.
+	if parsed.Format == "" {
+		if entry, ok := o.statCache.lookup(fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey); ok {
+			return &entry, nil
+		}
 	}
 
 	now := time.Now()
