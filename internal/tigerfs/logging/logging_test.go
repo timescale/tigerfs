@@ -15,9 +15,9 @@ func resetLogger() {
 func TestInit_DebugMode(t *testing.T) {
 	resetLogger()
 
-	err := Init(true)
+	err := Init("debug")
 	if err != nil {
-		t.Fatalf("Init(true) failed: %v", err)
+		t.Fatalf("Init(\"debug\") failed: %v", err)
 	}
 
 	if logger == nil {
@@ -32,9 +32,9 @@ func TestInit_DebugMode(t *testing.T) {
 func TestInit_ProductionMode(t *testing.T) {
 	resetLogger()
 
-	err := Init(false)
+	err := Init("warn")
 	if err != nil {
-		t.Fatalf("Init(false) failed: %v", err)
+		t.Fatalf("Init(\"warn\") failed: %v", err)
 	}
 
 	if logger == nil {
@@ -45,18 +45,45 @@ func TestInit_ProductionMode(t *testing.T) {
 	_ = Sync()
 }
 
+// TestInit_AllLevels tests that all valid levels are accepted
+func TestInit_AllLevels(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		t.Run(level, func(t *testing.T) {
+			resetLogger()
+			err := Init(level)
+			if err != nil {
+				t.Fatalf("Init(%q) failed: %v", level, err)
+			}
+			if logger == nil {
+				t.Error("Expected logger to be initialized")
+			}
+			_ = Sync()
+		})
+	}
+}
+
+// TestInit_InvalidLevel tests that invalid levels return an error
+func TestInit_InvalidLevel(t *testing.T) {
+	resetLogger()
+
+	err := Init("invalid")
+	if err == nil {
+		t.Error("Expected error for invalid log level")
+	}
+}
+
 // TestInit_Multiple tests calling Init multiple times
 func TestInit_Multiple(t *testing.T) {
 	resetLogger()
 
 	// First init
-	err := Init(true)
+	err := Init("debug")
 	if err != nil {
 		t.Fatalf("First Init failed: %v", err)
 	}
 
 	// Second init should succeed and replace logger
-	err = Init(false)
+	err = Init("warn")
 	if err != nil {
 		t.Fatalf("Second Init failed: %v", err)
 	}
@@ -71,7 +98,7 @@ func TestInit_Multiple(t *testing.T) {
 // TestDebug_WithInitializedLogger tests Debug with an initialized logger
 func TestDebug_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	_ = Init(true) // Debug mode to actually log debug messages
+	_ = Init("debug") // Debug mode to actually log debug messages
 
 	// Should not panic
 	Debug("test debug message")
@@ -93,7 +120,7 @@ func TestDebug_WithNilLogger(t *testing.T) {
 // TestInfo_WithInitializedLogger tests Info with an initialized logger
 func TestInfo_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	// Should not panic
 	Info("test info message")
@@ -115,7 +142,7 @@ func TestInfo_WithNilLogger(t *testing.T) {
 // TestWarn_WithInitializedLogger tests Warn with an initialized logger
 func TestWarn_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	_ = Init(false) // Production mode still logs warn
+	_ = Init("warn") // Production mode still logs warn
 
 	// Should not panic
 	Warn("test warn message")
@@ -137,7 +164,7 @@ func TestWarn_WithNilLogger(t *testing.T) {
 // TestError_WithInitializedLogger tests Error with an initialized logger
 func TestError_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	_ = Init(false)
+	_ = Init("warn")
 
 	// Should not panic
 	Error("test error message")
@@ -162,7 +189,7 @@ func TestError_WithNilLogger(t *testing.T) {
 // TestSync_WithInitializedLogger tests Sync with an initialized logger
 func TestSync_WithInitializedLogger(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	err := Sync()
 	// Note: Sync may return an error on some systems due to stderr
@@ -180,10 +207,10 @@ func TestSync_WithNilLogger(t *testing.T) {
 	}
 }
 
-// TestLogging_AllLevels tests all logging levels in sequence
-func TestLogging_AllLevels(t *testing.T) {
+// TestLogging_AllLogLevels tests all logging levels in sequence
+func TestLogging_AllLogLevels(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	// Log at all levels
 	Debug("debug message")
@@ -197,7 +224,7 @@ func TestLogging_AllLevels(t *testing.T) {
 // TestLogging_VariousFieldTypes tests logging with various field types
 func TestLogging_VariousFieldTypes(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	Debug("test",
 		zap.String("string", "value"),
@@ -215,9 +242,9 @@ func TestLogging_VariousFieldTypes(t *testing.T) {
 // TestInit_DebugModeConfiguration tests that debug mode is configured correctly
 func TestInit_DebugModeConfiguration(t *testing.T) {
 	resetLogger()
-	err := Init(true)
+	err := Init("debug")
 	if err != nil {
-		t.Fatalf("Init(true) failed: %v", err)
+		t.Fatalf("Init(\"debug\") failed: %v", err)
 	}
 
 	// In debug mode, debug messages should be logged
@@ -232,9 +259,9 @@ func TestInit_DebugModeConfiguration(t *testing.T) {
 // TestInit_ProductionModeConfiguration tests that production mode is configured correctly
 func TestInit_ProductionModeConfiguration(t *testing.T) {
 	resetLogger()
-	err := Init(false)
+	err := Init("warn")
 	if err != nil {
-		t.Fatalf("Init(false) failed: %v", err)
+		t.Fatalf("Init(\"warn\") failed: %v", err)
 	}
 
 	// In production mode, only warn and above should be logged
@@ -249,7 +276,7 @@ func TestInit_ProductionModeConfiguration(t *testing.T) {
 // TestLogging_EmptyMessage tests logging empty messages
 func TestLogging_EmptyMessage(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	// Should not panic with empty messages
 	Debug("")
@@ -263,7 +290,7 @@ func TestLogging_EmptyMessage(t *testing.T) {
 // TestLogging_LongMessage tests logging very long messages
 func TestLogging_LongMessage(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	// Create a long message
 	longMsg := ""
@@ -280,7 +307,7 @@ func TestLogging_LongMessage(t *testing.T) {
 // TestLogging_SpecialCharacters tests logging messages with special characters
 func TestLogging_SpecialCharacters(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	// Should not panic with special characters
 	Debug("Tab:\t Newline:\n Quote:\"")
@@ -293,7 +320,7 @@ func TestLogging_SpecialCharacters(t *testing.T) {
 // TestLogging_ConcurrentAccess tests concurrent logging
 func TestLogging_ConcurrentAccess(t *testing.T) {
 	resetLogger()
-	_ = Init(true)
+	_ = Init("debug")
 
 	done := make(chan bool, 10)
 

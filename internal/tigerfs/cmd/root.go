@@ -19,7 +19,6 @@ func Execute(ctx context.Context) error {
 func buildRootCmd(ctx context.Context) *cobra.Command {
 	// Declare ALL persistent flag variables locally
 	var configDir string
-	var debug bool
 	var logLevel string
 	var logFile string
 	var logFormat string
@@ -36,7 +35,6 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 			// Bind persistent flags to viper at execution time
 			if err := errors.Join(
 				viper.BindPFlag("config_dir", cmd.Flags().Lookup("config-dir")),
-				viper.BindPFlag("debug", cmd.Flags().Lookup("debug")),
 				viper.BindPFlag("log_level", cmd.Flags().Lookup("log-level")),
 				viper.BindPFlag("log_file", cmd.Flags().Lookup("log-file")),
 				viper.BindPFlag("log_format", cmd.Flags().Lookup("log-format")),
@@ -45,7 +43,7 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 			}
 
 			// Initialize logging first
-			if err := logging.Init(debug); err != nil {
+			if err := logging.Init(logLevel); err != nil {
 				return fmt.Errorf("failed to initialize logging: %w", err)
 			}
 
@@ -60,8 +58,7 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 
 	// Add persistent flags
 	cmd.PersistentFlags().StringVar(&configDir, "config-dir", config.GetDefaultConfigDir(), "config directory")
-	cmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug logging")
-	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug, info, warn, error)")
+	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "warn", "log level (debug, info, warn, error)")
 	cmd.PersistentFlags().StringVar(&logFile, "log-file", "", "log file path (default: stderr)")
 	cmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log format (text, json)")
 

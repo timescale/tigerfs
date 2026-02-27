@@ -29,7 +29,7 @@ func TestRegistry_MountUnmountRoundTrip(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()

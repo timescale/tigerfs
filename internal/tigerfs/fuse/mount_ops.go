@@ -55,7 +55,7 @@ func MountOps(ctx context.Context, cfg *config.Config, connStr, mountpoint strin
 		MountOptions: fuse.MountOptions{
 			Name:        "tigerfs",
 			FsName:      "tigerfs",
-			Debug:       cfg.Debug,
+			Debug:       cfg.LogLevel == "debug",
 			DirectMount: true,
 		},
 		AttrTimeout:  &cfg.AttrTimeout,
@@ -65,7 +65,7 @@ func MountOps(ctx context.Context, cfg *config.Config, connStr, mountpoint strin
 	logging.Debug("FUSE+Operations mount options",
 		zap.Duration("attr_timeout", cfg.AttrTimeout),
 		zap.Duration("entry_timeout", cfg.EntryTimeout),
-		zap.Bool("debug", cfg.Debug),
+		zap.String("log_level", cfg.LogLevel),
 	)
 
 	// 6. Mount the filesystem

@@ -63,9 +63,6 @@ type Config struct {
 	DefaultFormat  string `mapstructure:"default_format"`
 	BinaryEncoding string `mapstructure:"binary_encoding"`
 
-	// Debug
-	Debug bool `mapstructure:"debug"`
-
 	// FUSE backend selection (Linux only)
 	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
 
@@ -94,11 +91,10 @@ func Init() error {
 	viper.SetDefault("nfs_cache_reaper_interval", 30*time.Second)
 	viper.SetDefault("nfs_cache_idle_timeout", 5*time.Minute)
 	viper.SetDefault("ddl_grace_period", 30*time.Second)
-	viper.SetDefault("log_level", "info")
+	viper.SetDefault("log_level", "warn")
 	viper.SetDefault("log_format", "text")
 	viper.SetDefault("default_format", "tsv")
 	viper.SetDefault("binary_encoding", "raw")
-	viper.SetDefault("debug", false)
 	viper.SetDefault("legacy_fuse", false)
 	viper.SetDefault("default_backend", "")
 	viper.SetDefault("default_mount_dir", "/tmp")

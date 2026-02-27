@@ -12,10 +12,8 @@ import (
 	"sync"
 
 	"github.com/go-git/go-billy/v5"
-	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	nfs "github.com/willscott/go-nfs"
 	nfshelper "github.com/willscott/go-nfs/helpers"
-	"go.uber.org/zap"
 )
 
 // StableHandler implements nfs.Handler with stateless file handles.
@@ -68,8 +66,6 @@ func (h *StableHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 	if joinedPath == "" {
 		joinedPath = "/"
 	}
-	logging.Debug("StableHandler.ToHandle", zap.Strings("path", path), zap.String("joined", joinedPath))
-
 	// Simple approach: store path directly if it fits
 	pathBytes := []byte(joinedPath)
 	if len(pathBytes)+1 <= maxHandleSize {
@@ -109,9 +105,7 @@ func (h *StableHandler) ToHandle(f billy.Filesystem, path []string) []byte {
 
 // FromHandle converts an opaque file handle back to a path.
 func (h *StableHandler) FromHandle(fh []byte) (billy.Filesystem, []string, error) {
-	logging.Debug("StableHandler.FromHandle", zap.Int("handle_len", len(fh)))
 	if len(fh) < 2 {
-		logging.Debug("StableHandler.FromHandle: handle too short")
 		return nil, nil, &nfs.NFSStatusError{NFSStatus: nfs.NFSStatusStale}
 	}
 
@@ -164,7 +158,6 @@ func (h *StableHandler) FromHandle(fh []byte) (billy.Filesystem, []string, error
 		}
 	}
 
-	logging.Debug("StableHandler.FromHandle: decoded", zap.String("joinedPath", joinedPath), zap.Strings("pathParts", pathParts))
 	return h.fs, pathParts, nil
 }
 

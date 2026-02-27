@@ -117,11 +117,10 @@ func TestInit_SetsDefaults(t *testing.T) {
 		{"nfs_max_random_write_size", int64(100 * 1024 * 1024)},
 		{"nfs_cache_reaper_interval", 30 * time.Second},
 		{"nfs_cache_idle_timeout", 5 * time.Minute},
-		{"log_level", "info"},
+		{"log_level", "warn"},
 		{"log_format", "text"},
 		{"default_format", "tsv"},
 		{"binary_encoding", "raw"},
-		{"debug", false},
 	}
 
 	for _, tc := range tests {
@@ -190,8 +189,8 @@ func TestLoad_UnmarshalConfig(t *testing.T) {
 	if cfg.MetadataRefreshInterval != 10*time.Second {
 		t.Errorf("Expected MetadataRefreshInterval=10s, got %v", cfg.MetadataRefreshInterval)
 	}
-	if cfg.LogLevel != "info" {
-		t.Errorf("Expected LogLevel='info', got %q", cfg.LogLevel)
+	if cfg.LogLevel != "warn" {
+		t.Errorf("Expected LogLevel='warn', got %q", cfg.LogLevel)
 	}
 	if cfg.LogFormat != "text" {
 		t.Errorf("Expected LogFormat='text', got %q", cfg.LogFormat)
@@ -201,9 +200,6 @@ func TestLoad_UnmarshalConfig(t *testing.T) {
 	}
 	if cfg.BinaryEncoding != "raw" {
 		t.Errorf("Expected BinaryEncoding='raw', got %q", cfg.BinaryEncoding)
-	}
-	if cfg.Debug != false {
-		t.Errorf("Expected Debug=false, got %v", cfg.Debug)
 	}
 }
 
@@ -215,7 +211,6 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 	envVars := []string{
 		"TIGERFS_DIR_LISTING_LIMIT",
 		"TIGERFS_LOG_LEVEL",
-		"TIGERFS_DEBUG",
 		"TIGERFS_DEFAULT_FORMAT",
 	}
 	origValues := make(map[string]string)
@@ -235,7 +230,6 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 	// Set env vars
 	_ = os.Setenv("TIGERFS_DIR_LISTING_LIMIT", "5000")
 	_ = os.Setenv("TIGERFS_LOG_LEVEL", "debug")
-	_ = os.Setenv("TIGERFS_DEBUG", "true")
 	_ = os.Setenv("TIGERFS_DEFAULT_FORMAT", "json")
 
 	err := Init()
@@ -253,9 +247,6 @@ func TestConfig_TigerFSEnvVars(t *testing.T) {
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("Expected LogLevel='debug' from env, got %q", cfg.LogLevel)
-	}
-	if cfg.Debug != true {
-		t.Errorf("Expected Debug=true from env, got %v", cfg.Debug)
 	}
 	if cfg.DefaultFormat != "json" {
 		t.Errorf("Expected DefaultFormat='json' from env, got %q", cfg.DefaultFormat)
@@ -491,8 +482,8 @@ func TestConfig_EmptyEnvVars(t *testing.T) {
 	// Empty env var should NOT override default
 	// Note: This depends on viper's behavior - empty string might be used
 	// This test documents the actual behavior
-	if cfg.LogLevel != "" && cfg.LogLevel != "info" {
-		t.Errorf("Expected LogLevel='info' (default) or '' (empty), got %q", cfg.LogLevel)
+	if cfg.LogLevel != "" && cfg.LogLevel != "warn" {
+		t.Errorf("Expected LogLevel='warn' (default) or '' (empty), got %q", cfg.LogLevel)
 	}
 }
 
@@ -579,17 +570,14 @@ func TestConfig_LoggingFields(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.LogLevel != "info" {
-		t.Errorf("Expected LogLevel='info', got %q", cfg.LogLevel)
+	if cfg.LogLevel != "warn" {
+		t.Errorf("Expected LogLevel='warn', got %q", cfg.LogLevel)
 	}
 	if cfg.LogFile != "" {
 		t.Errorf("Expected empty LogFile by default, got %q", cfg.LogFile)
 	}
 	if cfg.LogFormat != "text" {
 		t.Errorf("Expected LogFormat='text', got %q", cfg.LogFormat)
-	}
-	if cfg.Debug != false {
-		t.Errorf("Expected Debug=false, got %v", cfg.Debug)
 	}
 }
 

@@ -116,22 +116,6 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 		return nil
 	}
 
-	// Log when an idle connection is reused from the pool
-	poolConfig.PrepareConn = func(ctx context.Context, conn *pgx.Conn) (bool, error) {
-		logging.Debug("pool: reusing idle connection",
-			zap.Uint32("pg_pid", conn.PgConn().PID()),
-		)
-		return true, nil
-	}
-
-	// Log when a connection is returned to the pool
-	poolConfig.AfterRelease = func(conn *pgx.Conn) bool {
-		logging.Debug("pool: connection released",
-			zap.Uint32("pg_pid", conn.PgConn().PID()),
-		)
-		return true
-	}
-
 	logging.Debug("Configuring connection pool",
 		zap.Int("max_conns", cfg.PoolSize),
 		zap.Int("min_conns", cfg.PoolMaxIdle),

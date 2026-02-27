@@ -224,7 +224,7 @@ func TestFormats_TSV_Default(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -297,7 +297,7 @@ func TestFormats_TSV_Explicit(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -355,7 +355,7 @@ func TestFormats_CSV(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -421,7 +421,7 @@ func TestFormats_CSV_WithCommas(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -479,7 +479,7 @@ func TestFormats_JSON(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -563,7 +563,7 @@ func TestFormats_NULL_TSV(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -622,7 +622,7 @@ func TestFormats_NULL_CSV(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -681,7 +681,7 @@ func TestFormats_NULL_JSON(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -751,7 +751,7 @@ func TestFormats_SpecialCharacters_TSV(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -813,7 +813,7 @@ func TestFormats_SpecialCharacters_JSON(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -884,7 +884,7 @@ func TestFormats_YAML(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -954,7 +954,7 @@ func TestFormats_YAML_NULL(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -1012,7 +1012,7 @@ func TestMetadata_InfoSchema(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -1079,7 +1079,7 @@ func TestMetadata_InfoColumns(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -1151,7 +1151,7 @@ func TestMetadata_InfoCount(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -1209,7 +1209,7 @@ func TestMetadata_InfoDDL(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -1270,7 +1270,7 @@ func TestMetadata_InfoIndexes(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
