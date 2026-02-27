@@ -71,6 +71,11 @@ type Entry struct {
 	// Empty for direct postgres:// connections. Used by `tigerfs info` and `tigerfs fork`
 	// to resolve the backend without re-parsing the connection string.
 	CLIBackend string `json:"cli_backend,omitempty"`
+
+	// AutoCreated is true when the mountpoint directory was auto-created by TigerFS
+	// (i.e., derived from a backend prefix like tiger:ID). Auto-created directories
+	// are cleaned up on unmount; user-specified mountpoints are left alone.
+	AutoCreated bool `json:"auto_created,omitempty"`
 }
 
 // Registry manages the collection of active TigerFS mounts.

@@ -162,7 +162,8 @@ Examples:
 			logging.Info("Filesystem mounted successfully", zap.String("mountpoint", absMountpoint))
 
 			// Register the mount in the registry for discovery by other commands.
-			if err := registerMount(absMountpoint, connStr, serviceID, cliBackend); err != nil {
+			autoCreated := len(args) == 1
+			if err := registerMount(absMountpoint, connStr, serviceID, cliBackend, autoCreated); err != nil {
 				logging.Warn("Failed to register mount in registry", zap.Error(err))
 			}
 
@@ -175,6 +176,17 @@ Examples:
 			// Serve filesystem requests — blocks until unmount or signal.
 			if err := fs.Serve(ctx); err != nil {
 				return fmt.Errorf("filesystem error: %w", err)
+			}
+
+			// Clean up auto-created mountpoint directory (only succeeds if empty).
+			if autoCreated {
+				if err := os.Remove(absMountpoint); err != nil {
+					logging.Debug("Could not remove auto-created mountpoint directory",
+						zap.String("mountpoint", absMountpoint), zap.Error(err))
+				} else {
+					logging.Debug("Removed auto-created mountpoint directory",
+						zap.String("mountpoint", absMountpoint))
+				}
 			}
 
 			logging.Info("Filesystem unmounted", zap.String("mountpoint", absMountpoint))
@@ -233,21 +245,23 @@ func resolveMountArgs(args []string, baseDir string) (string, string, error) {
 //   - connStr: Database connection string (will be sanitized to remove password)
 //   - serviceID: Cloud service ID (empty for direct connections)
 //   - cliBackend: Backend name — "tiger", "ghost", or "" (empty for direct connections)
+//   - autoCreated: true if the mountpoint directory was auto-created (should be cleaned up on unmount)
 //
 // Returns an error if the registry cannot be accessed or modified.
-func registerMount(mountpoint, connStr, serviceID, cliBackend string) error {
+func registerMount(mountpoint, connStr, serviceID, cliBackend string, autoCreated bool) error {
 	registry, err := mount.NewRegistry("")
 	if err != nil {
 		return fmt.Errorf("failed to open registry: %w", err)
 	}
 
 	entry := mount.Entry{
-		Mountpoint: mountpoint,
-		PID:        os.Getpid(),
-		Database:   sanitizeConnectionString(connStr),
-		StartTime:  time.Now(),
-		ServiceID:  serviceID,
-		CLIBackend: cliBackend,
+		Mountpoint:  mountpoint,
+		PID:         os.Getpid(),
+		Database:    sanitizeConnectionString(connStr),
+		StartTime:   time.Now(),
+		ServiceID:   serviceID,
+		CLIBackend:  cliBackend,
+		AutoCreated: autoCreated,
 	}
 
 	if err := registry.Register(entry); err != nil {
