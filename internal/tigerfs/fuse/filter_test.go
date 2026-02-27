@@ -232,9 +232,9 @@ func TestFilterValueNode_Readdir(t *testing.T) {
 	}
 
 	// Should have capabilities available (filter not after order, so all capabilities)
-	// Expected: .by, .filter, .order, .first, .last, .sample, .export
+	// Expected: .by, .columns, .filter, .order, .first, .last, .sample, .export
 	expectedCaps := map[string]bool{
-		".by": true, ".filter": true, ".order": true,
+		".by": true, ".columns": true, ".filter": true, ".order": true,
 		".first": true, ".last": true, ".sample": true, ".export": true,
 	}
 

@@ -65,6 +65,10 @@ type QueryParams struct {
 	// Filters (from .by and .filter), AND-combined
 	Filters []FilterCondition
 
+	// Column projection (from .columns/col1,col2,col3/)
+	// Empty means SELECT * (all columns).
+	Columns []string
+
 	// Ordering
 	OrderBy   string
 	OrderDesc bool
@@ -231,17 +235,12 @@ func (c *Client) QueryRowsWithDataPipeline(ctx context.Context, params QueryPara
 
 // buildPipelineSQL constructs the SQL query for a pipeline operation.
 // If selectPKOnly is true, only the primary key column is selected.
-// Otherwise, all columns are selected (for export).
+// Otherwise, columns from params.Columns are selected (or * if empty).
 //
 // Returns the SQL string and parameter values.
 func buildPipelineSQL(params QueryParams, selectPKOnly bool) (string, []interface{}) {
 	// Determine what to select
-	var selectClause string
-	if selectPKOnly {
-		selectClause = fmt.Sprintf(`"%s"`, params.PKColumn)
-	} else {
-		selectClause = "*"
-	}
+	selectClause := buildSelectClause(params, selectPKOnly)
 
 	// Base table reference
 	tableRef := fmt.Sprintf(`"%s"."%s"`, params.Schema, params.Table)
@@ -253,6 +252,22 @@ func buildPipelineSQL(params QueryParams, selectPKOnly bool) (string, []interfac
 
 	// Simple case: no nested limits
 	return buildSimplePipelineSQL(params, selectClause, tableRef)
+}
+
+// buildSelectClause constructs the SELECT column list.
+// Priority: selectPKOnly > params.Columns > *.
+func buildSelectClause(params QueryParams, selectPKOnly bool) string {
+	if selectPKOnly {
+		return fmt.Sprintf(`"%s"`, params.PKColumn)
+	}
+	if len(params.Columns) > 0 {
+		quoted := make([]string, len(params.Columns))
+		for i, col := range params.Columns {
+			quoted[i] = fmt.Sprintf(`"%s"`, col)
+		}
+		return strings.Join(quoted, ", ")
+	}
+	return "*"
 }
 
 // buildSimplePipelineSQL builds SQL for non-nested pipelines.
@@ -302,13 +317,8 @@ func buildNestedPipelineSQL(params QueryParams, selectPKOnly bool) (string, []in
 	var queryParams []interface{}
 	paramIndex := 1
 
-	// Determine outer select
-	var outerSelect string
-	if selectPKOnly {
-		outerSelect = fmt.Sprintf(`"%s"`, params.PKColumn)
-	} else {
-		outerSelect = "*"
-	}
+	// Determine outer select (applies column projection)
+	outerSelect := buildSelectClause(params, selectPKOnly)
 
 	// Build the inner subquery for the previous limit
 	innerQuery, innerParams := buildInnerLimitQuery(params, &paramIndex)

@@ -283,7 +283,7 @@ func TestFSContextAvailableCapabilities(t *testing.T) {
 	caps := ctx.AvailableCapabilities()
 
 	// Should have all capabilities initially
-	expected := []string{".by", ".filter", ".order", ".first", ".last", ".sample", ".export"}
+	expected := []string{".by", ".columns", ".filter", ".order", ".first", ".last", ".sample", ".export"}
 	for _, exp := range expected {
 		found := false
 		for _, cap := range caps {
@@ -354,5 +354,115 @@ func TestFSContextNeedsSubquery(t *testing.T) {
 	ctx = ctx.WithLimit(10, LimitLast)
 	if !ctx.NeedsSubquery() {
 		t.Error("Nested limit should need subquery")
+	}
+}
+
+// TestFSContextWithColumns verifies column projection.
+func TestFSContextWithColumns(t *testing.T) {
+	ctx := NewFSContext("public", "users", "id")
+	ctx2 := ctx.WithColumns([]string{"id", "name", "email"})
+
+	// Original unchanged
+	if len(ctx.Columns) != 0 {
+		t.Errorf("Original has columns: %v", ctx.Columns)
+	}
+	if ctx.HasColumns {
+		t.Error("Original should not have HasColumns set")
+	}
+
+	// Columns set on new context
+	if len(ctx2.Columns) != 3 {
+		t.Fatalf("ctx2 has %d columns, want 3", len(ctx2.Columns))
+	}
+	if ctx2.Columns[0] != "id" || ctx2.Columns[1] != "name" || ctx2.Columns[2] != "email" {
+		t.Errorf("Columns = %v, want [id, name, email]", ctx2.Columns)
+	}
+	if !ctx2.HasColumns {
+		t.Error("ctx2 should have HasColumns set")
+	}
+}
+
+// TestFSContextCanAddColumns verifies column projection permission rules.
+func TestFSContextCanAddColumns(t *testing.T) {
+	ctx := NewFSContext("public", "users", "id")
+
+	// Can add initially
+	if !ctx.CanAddColumns() {
+		t.Error("Should be able to add columns initially")
+	}
+
+	// Cannot add after columns already set
+	ctx2 := ctx.WithColumns([]string{"id"})
+	if ctx2.CanAddColumns() {
+		t.Error("Should not be able to add columns after .columns/")
+	}
+
+	// Cannot add when terminal
+	ctx3 := ctx.WithTerminal()
+	if ctx3.CanAddColumns() {
+		t.Error("Should not be able to add columns when terminal")
+	}
+}
+
+// TestFSContextColumnsAvailableCapabilities verifies only .export after .columns.
+func TestFSContextColumnsAvailableCapabilities(t *testing.T) {
+	ctx := NewFSContext("public", "users", "id")
+	ctx = ctx.WithColumns([]string{"id", "name"})
+
+	caps := ctx.AvailableCapabilities()
+	if len(caps) != 1 {
+		t.Fatalf("After .columns/, expected 1 capability, got %v", caps)
+	}
+	if caps[0] != ".export" {
+		t.Errorf("After .columns/, expected [.export], got %v", caps)
+	}
+}
+
+// TestFSContextColumnsHasPipelineOperations verifies columns trigger pipeline mode.
+func TestFSContextColumnsHasPipelineOperations(t *testing.T) {
+	ctx := NewFSContext("public", "users", "id")
+	if ctx.HasPipelineOperations() {
+		t.Error("New context should not have pipeline operations")
+	}
+
+	ctx2 := ctx.WithColumns([]string{"id"})
+	if !ctx2.HasPipelineOperations() {
+		t.Error("Context with columns should have pipeline operations")
+	}
+}
+
+// TestFSContextCloneColumns verifies deep copy of columns slice.
+func TestFSContextCloneColumns(t *testing.T) {
+	ctx := NewFSContext("public", "users", "id")
+	ctx = ctx.WithColumns([]string{"id", "name"})
+
+	clone := ctx.Clone()
+
+	// Modify clone's columns
+	clone.Columns[0] = "email"
+
+	// Original should be unchanged
+	if ctx.Columns[0] != "id" {
+		t.Errorf("Original columns modified: got %q, want %q", ctx.Columns[0], "id")
+	}
+}
+
+// TestFSContextToQueryParamsColumns verifies columns are copied to QueryParams.
+func TestFSContextToQueryParamsColumns(t *testing.T) {
+	ctx := NewFSContext("public", "users", "id")
+	ctx = ctx.WithColumns([]string{"id", "name", "email"})
+
+	params := ctx.ToQueryParams()
+	if len(params.Columns) != 3 {
+		t.Fatalf("params.Columns has %d entries, want 3", len(params.Columns))
+	}
+	if params.Columns[0] != "id" || params.Columns[1] != "name" || params.Columns[2] != "email" {
+		t.Errorf("params.Columns = %v, want [id, name, email]", params.Columns)
+	}
+
+	// Verify independence: modify params, original ctx unchanged
+	params.Columns[0] = "changed"
+	if ctx.Columns[0] != "id" {
+		t.Errorf("ctx.Columns modified via params: got %q, want %q", ctx.Columns[0], "id")
 	}
 }

@@ -22,13 +22,14 @@ const (
 
 // Navigation capabilities (re-exported from fs)
 const (
-	DirBy     = fs.DirBy
-	DirFilter = fs.DirFilter
-	DirFirst  = fs.DirFirst
-	DirLast   = fs.DirLast
-	DirSample = fs.DirSample
-	DirAll    = fs.DirAll
-	DirOrder  = fs.DirOrder
+	DirBy      = fs.DirBy
+	DirColumns = fs.DirColumns
+	DirFilter  = fs.DirFilter
+	DirFirst   = fs.DirFirst
+	DirLast    = fs.DirLast
+	DirSample  = fs.DirSample
+	DirAll     = fs.DirAll
+	DirOrder   = fs.DirOrder
 )
 
 // Bulk data capabilities (re-exported from fs)
@@ -86,15 +87,16 @@ const (
 // capabilityDirectories lists all pipeline capability directory names.
 // Used to prevent these names from being interpreted as column values.
 var capabilityDirectories = map[string]bool{
-	DirBy:     true,
-	DirFilter: true,
-	DirFirst:  true,
-	DirLast:   true,
-	DirSample: true,
-	DirAll:    true,
-	DirOrder:  true,
-	DirExport: true,
-	DirImport: true,
+	DirBy:      true,
+	DirColumns: true,
+	DirFilter:  true,
+	DirFirst:   true,
+	DirLast:    true,
+	DirSample:  true,
+	DirAll:     true,
+	DirOrder:   true,
+	DirExport:  true,
+	DirImport:  true,
 }
 
 // isCapabilityDirectory returns true if name is a reserved capability directory.

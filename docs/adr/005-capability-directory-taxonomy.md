@@ -129,13 +129,15 @@ Use **Option 3: Capability-based organization with `.info/` subdirectory**.
 | Type | Location | Naming | Examples |
 |------|----------|--------|----------|
 | **Metadata** | `.info/` subdirectory | Nouns (what it IS) | `.info/count`, `.info/ddl`, `.info/schema`, `.info/columns` |
-| **Capabilities** | Top-level dotfiles | Verbs/prepositions (what you DO) | `.by/`, `.first/`, `.last/`, `.sample/`, `.order/`, `.export/`, `.import/`, `.indexes/`, `.all/`, `.delete/`, `.modify/` |
+| **Capabilities** | Top-level dotfiles | Verbs/prepositions (what you DO) | `.by/`, `.columns/`, `.first/`, `.last/`, `.sample/`, `.order/`, `.export/`, `.import/`, `.indexes/`, `.all/`, `.delete/`, `.modify/` |
 
 Key distinctions:
 - **Metadata** (`.info/`): Read-only files describing the table
 - **Capabilities**: Directories enabling actions (may also list options when browsed)
 
 Note: Capability directories can be self-describing. For example, `ls .by/` shows available indexed columns, and `ls .indexes/` shows existing indexes. The distinction is that `.info/` contains pure data files, while capabilities enable operations.
+
+**Name reuse:** The metadata file `.info/columns` (column definitions) and the capability directory `.columns/` (column projection) share the word "columns" but serve different purposes. `.info/columns` describes the table schema; `.columns/col1,col2/` selects which columns appear in query output. The disambiguation is structural: metadata lives under `.info/`, capabilities live at the top level.
 
 ### Why `.info/`?
 
@@ -165,6 +167,9 @@ Considered alternatives:
 │   │   └── Electronics/
 │   └── name/
 │       └── Widget/
+├── .columns/         # capability: column projection (pipeline query)
+│   └── id,name,price/
+│       └── .export/
 ├── .first/           # capability: first N rows
 │   └── 100/
 ├── .last/            # capability: last N rows

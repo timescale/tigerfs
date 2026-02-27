@@ -279,9 +279,12 @@ Chain filters, ordering, and pagination in a single path. The database executes 
 
 ```bash
 cat /mnt/db/orders/.by/customer_id/123/.order/created_at/.last/10/.export/json
+
+# Select specific columns from a filtered query
+cat /mnt/db/orders/.filter/status/shipped/.columns/id,total,created_at/.export/csv
 ```
 
-Capabilities: `.by/` (indexed filter), `.filter/` (any column), `.order/`, `.first/N/`, `.last/N/`, `.sample/N/`, `.export/csv|json|tsv`
+Capabilities: `.by/` (indexed filter), `.filter/` (any column), `.order/`, `.columns/col,...` (projection), `.first/N/`, `.last/N/`, `.sample/N/`, `.export/csv|json|tsv`
 
 ### Schema Management
 
@@ -395,7 +398,7 @@ TigerFS is early, but the core idea is stable: transactional, concurrent files a
 **Highlights:**
 - Markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
 - Cloud backends: mount, create, and fork Tiger Cloud and Ghost databases by service ID
-- Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, chained pagination, `.export/`)
+- Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, `.columns/`, chained pagination, `.export/`)
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
 - Full CRUD with multiple formats (TSV, CSV, JSON, YAML), index navigation, and PATCH semantics
 - Binary distribution via GoReleaser with install script (`curl -fsSL https://install.tigerfs.io | sh`)

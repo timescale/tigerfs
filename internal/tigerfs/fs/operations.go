@@ -468,7 +468,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	} else {
 		// Show all capabilities for raw table access
 		capabilities := []string{
-			DirAll, DirBy, DirDelete, DirExport, DirFilter, DirFirst,
+			DirAll, DirBy, DirColumns, DirDelete, DirExport, DirFilter, DirFirst,
 			DirFormat, DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
 		}
 		for _, cap := range capabilities {
@@ -550,6 +550,8 @@ func (o *Operations) readDirCapability(ctx context.Context, parsed *ParsedPath) 
 	switch parsed.CapabilityDir {
 	case DirBy:
 		return o.readDirByCapability(ctx, parsed)
+	case DirColumns:
+		return o.readDirColumnsCapability(ctx, parsed)
 	case DirFilter:
 		return o.readDirFilterCapability(ctx, parsed)
 	case DirOrder:
@@ -603,6 +605,33 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 		limit = 10000
 	}
 	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
+}
+
+// readDirColumnsCapability lists available column names for .columns/ navigation.
+func (o *Operations) readDirColumnsCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	fsCtx := parsed.Context
+	if fsCtx == nil {
+		return nil, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "missing context for .columns path",
+		}
+	}
+
+	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to get columns",
+			Cause:   err,
+		}
+	}
+
+	now := time.Now()
+	entries := make([]Entry, len(columns))
+	for i, col := range columns {
+		entries[i] = Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
+	}
+	return entries, nil
 }
 
 // readDirFilterCapability lists columns or values for .filter/ navigation.
@@ -1817,6 +1846,31 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
 		limit = 10000
+	}
+
+	// Validate column names if column projection is specified
+	if len(fsCtx.Columns) > 0 {
+		tableColumns, colErr := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		if colErr != nil {
+			return nil, &FSError{
+				Code:    ErrIO,
+				Message: "failed to get columns for validation",
+				Cause:   colErr,
+			}
+		}
+		validCols := make(map[string]bool, len(tableColumns))
+		for _, c := range tableColumns {
+			validCols[c.Name] = true
+		}
+		for _, col := range fsCtx.Columns {
+			if !validCols[col] {
+				return nil, &FSError{
+					Code:    ErrNotExist,
+					Message: fmt.Sprintf("column %q does not exist in table %q", col, fsCtx.TableName),
+					Hint:    "check column names with: ls .columns/",
+				}
+			}
+		}
 	}
 
 	var columns []string

@@ -168,6 +168,8 @@ func (p *PipelineNode) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	switch name {
 	case DirBy:
 		return p.lookupBy(ctx)
+	case DirColumns:
+		return p.lookupColumns(ctx)
 	case DirFilter:
 		return p.lookupFilter(ctx)
 	case DirOrder:
@@ -201,6 +203,23 @@ func (p *PipelineNode) lookupBy(ctx context.Context) (*fs.Inode, syscall.Errno) 
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
 	byNode := NewPipelineByDirNode(p.cfg, p.db, p.cache, p.schema, p.table, p.pipeline, p.partialRows)
 	child := p.NewPersistentInode(ctx, byNode, stableAttr)
+	return child, 0
+}
+
+// lookupColumns creates a PipelineColumnsDirNode for .columns/ navigation.
+func (p *PipelineNode) lookupColumns(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	if !p.pipeline.CanAddColumns() {
+		logging.Debug("Cannot add columns - already set or terminal",
+			zap.String("table", p.table))
+		return nil, syscall.ENOENT
+	}
+
+	logging.Debug("PipelineNode routing to .columns/",
+		zap.String("table", p.table))
+
+	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
+	columnsNode := NewPipelineColumnsDirNode(p.cfg, p.db, p.cache, p.schema, p.table, p.pipeline, p.partialRows)
+	child := p.NewPersistentInode(ctx, columnsNode, stableAttr)
 	return child, 0
 }
 
