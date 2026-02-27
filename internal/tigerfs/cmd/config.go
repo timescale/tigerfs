@@ -99,7 +99,6 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		LogFormat               string `yaml:"log_format"`
 		DefaultFormat           string `yaml:"default_format"`
 		BinaryEncoding          string `yaml:"binary_encoding"`
-		Debug                   bool   `yaml:"debug"`
 		ConfigDir               string `yaml:"config_dir"`
 	}{
 		Host:                    cfg.Host,
@@ -123,7 +122,6 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		LogFormat:               cfg.LogFormat,
 		DefaultFormat:           cfg.DefaultFormat,
 		BinaryEncoding:          cfg.BinaryEncoding,
-		Debug:                   cfg.Debug,
 		ConfigDir:               cfg.ConfigDir,
 	}
 

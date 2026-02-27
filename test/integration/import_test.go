@@ -123,7 +123,7 @@ func TestImport_WithTimestamps(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()
@@ -183,7 +183,7 @@ func TestImport_OverwriteMode(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()
@@ -248,7 +248,7 @@ func TestExport_WithHeaders(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()
@@ -311,7 +311,7 @@ func TestExport_WithoutHeaders(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()
@@ -400,7 +400,7 @@ func TestExportImportRoundTrip_WithHeaders(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()
@@ -480,7 +480,7 @@ func TestExportImportRoundTrip_NoHeaders(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()
@@ -540,7 +540,7 @@ func TestAccess_ViaSchemaPath(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	mountpoint := t.TempDir()

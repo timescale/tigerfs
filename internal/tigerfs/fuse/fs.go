@@ -56,7 +56,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 		MountOptions: fuse.MountOptions{
 			Name:   "tigerfs",
 			FsName: "tigerfs",
-			Debug:  cfg.Debug,
+			Debug:  cfg.LogLevel == "debug",
 
 			// Use DirectMount for macOS compatibility
 			DirectMount: true,
@@ -70,7 +70,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	logging.Debug("FUSE mount options",
 		zap.Duration("attr_timeout", cfg.AttrTimeout),
 		zap.Duration("entry_timeout", cfg.EntryTimeout),
-		zap.Bool("debug", cfg.Debug),
+		zap.String("log_level", cfg.LogLevel),
 	)
 
 	// 6. Mount the filesystem

@@ -496,7 +496,7 @@ func normalizePath(p string) string {
 // then committed once to the database.
 func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	filename = normalizePath(filename)
-	logging.Debug("OpsFilesystem.Create", zap.String("filename", filename))
+	logging.Info("OpsFilesystem.Create", zap.String("filename", filename))
 
 	// Get or create cached file entry with O_CREATE|O_TRUNC semantics
 	cached := f.getOrCreateCachedFile(filename, os.O_CREATE|os.O_TRUNC)
@@ -547,7 +547,7 @@ func (f *OpsFilesystem) Open(filename string) (billy.File, error) {
 //   - Row files (JSON, CSV, etc.): Writes at offset 0 replace entire buffer
 func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
 	filename = normalizePath(filename)
-	logging.Debug("OpsFilesystem.OpenFile", zap.String("filename", filename), zap.Int("flag", flag))
+	logging.Info("OpsFilesystem.OpenFile", zap.String("filename", filename), zap.Int("flag", flag))
 
 	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
 
@@ -703,7 +703,6 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 // being written but not yet committed.
 func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	filename = normalizePath(filename)
-	logging.Debug("OpsFilesystem.Stat", zap.String("filename", filename))
 
 	// Check for cached files with dirty or newly-created (truncated) data.
 	// NFS calls Stat after Write but before Close, and the data may not be in
@@ -764,12 +763,6 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 	}
 
 	fi := &opsFileInfo{entry: entry, path: filename}
-	logging.Debug("OpsFilesystem.Stat success",
-		zap.String("filename", filename),
-		zap.String("name", entry.Name),
-		zap.Bool("isDir", entry.IsDir),
-		zap.Int64("size", entry.Size),
-		zap.Uint32("mode", uint32(fi.Mode())))
 	return fi, nil
 }
 
@@ -781,7 +774,7 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 func (f *OpsFilesystem) Rename(oldpath, newpath string) error {
 	oldpath = normalizePath(oldpath)
 	newpath = normalizePath(newpath)
-	logging.Debug("OpsFilesystem.Rename", zap.String("oldpath", oldpath), zap.String("newpath", newpath))
+	logging.Info("OpsFilesystem.Rename", zap.String("oldpath", oldpath), zap.String("newpath", newpath))
 
 	rctx, rcancel := ctx()
 	defer rcancel()
@@ -819,7 +812,7 @@ func (f *OpsFilesystem) Rename(oldpath, newpath string) error {
 // is removed when the last handle closes.
 func (f *OpsFilesystem) Remove(filename string) error {
 	filename = normalizePath(filename)
-	logging.Debug("OpsFilesystem.Remove", zap.String("filename", filename))
+	logging.Info("OpsFilesystem.Remove", zap.String("filename", filename))
 
 	// Mark cached file as deleted if it exists
 	cached := f.getCachedFile(filename)
@@ -856,7 +849,7 @@ func (f *OpsFilesystem) TempFile(dir, prefix string) (billy.File, error) {
 // ReadDir returns directory entries for the given path.
 func (f *OpsFilesystem) ReadDir(dirname string) ([]os.FileInfo, error) {
 	dirname = normalizePath(dirname)
-	logging.Debug("OpsFilesystem.ReadDir", zap.String("dirname", dirname))
+	logging.Info("OpsFilesystem.ReadDir", zap.String("dirname", dirname))
 
 	rdctx, rdcancel := ctx()
 	defer rdcancel()
@@ -884,7 +877,7 @@ func (f *OpsFilesystem) ReadDir(dirname string) ([]os.FileInfo, error) {
 		}
 	}
 
-	logging.Debug("OpsFilesystem.ReadDir success",
+	logging.Info("OpsFilesystem.ReadDir success",
 		zap.String("dirname", dirname),
 		zap.Int("count", len(entries)))
 	result := make([]os.FileInfo, len(entries))
@@ -1047,15 +1040,6 @@ func (fi *opsFileInfo) Sys() interface{} {
 
 	uid := uint32(os.Getuid())
 	gid := uint32(os.Getgid())
-
-	logging.Debug("opsFileInfo.Sys",
-		zap.String("path", fi.path),
-		zap.String("name", fi.entry.Name),
-		zap.Uint64("fileid", fileid),
-		zap.Uint32("uid", uid),
-		zap.Uint32("gid", gid),
-		zap.Bool("isDir", fi.IsDir()),
-		zap.Uint32("mode", uint32(fi.Mode())))
 
 	return &nfsfile.FileInfo{
 		Fileid: fileid,
@@ -1523,7 +1507,7 @@ func (f *memFile) Close() error {
 		// and per-RPC overhead is reduced to ~1 DB write via the schema cache and
 		// Stat cache. See docs/spec.md § NFS Write Limitations.
 
-		logging.Debug("memFile.Close: committing dirty data to DB",
+		logging.Info("memFile.Close: committing dirty data to DB",
 			zap.String("path", filePath),
 			zap.Int("size", len(data)),
 			zap.Bool("isDDLSQL", isDDLSQL))

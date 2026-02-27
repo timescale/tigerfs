@@ -1,26 +1,35 @@
 package logging
 
 import (
+	"fmt"
+	"strings"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var logger *zap.Logger
 
-// Init initializes the global logger with the specified debug mode
-func Init(debug bool) error {
+// Init initializes the global logger with the specified level.
+// Valid levels: "error", "warn", "info", "debug".
+// For "warn" and "error", a minimal production config is used.
+// For "info" and "debug", a development config with timestamps and colors is used.
+func Init(level string) error {
+	zapLevel, err := parseLevel(level)
+	if err != nil {
+		return err
+	}
+
 	var config zap.Config
 
-	if debug {
+	if zapLevel <= zapcore.InfoLevel {
 		// Development mode: full logging with colors
 		config = zap.NewDevelopmentConfig()
-		config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 		config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	} else {
 		// Production mode: minimal logging
 		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zapcore.WarnLevel)
 		config.EncoderConfig.MessageKey = "message"
 		config.EncoderConfig.LevelKey = ""
 		config.EncoderConfig.TimeKey = ""
@@ -28,17 +37,34 @@ func Init(debug bool) error {
 		config.EncoderConfig.StacktraceKey = ""
 	}
 
+	config.Level = zap.NewAtomicLevelAt(zapLevel)
+
 	// Output to stderr by default
 	config.OutputPaths = []string{"stderr"}
 	config.ErrorOutputPaths = []string{"stderr"}
 
-	var err error
 	logger, err = config.Build()
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// parseLevel converts a level string to a zapcore.Level.
+func parseLevel(level string) (zapcore.Level, error) {
+	switch strings.ToLower(level) {
+	case "debug":
+		return zapcore.DebugLevel, nil
+	case "info":
+		return zapcore.InfoLevel, nil
+	case "warn":
+		return zapcore.WarnLevel, nil
+	case "error":
+		return zapcore.ErrorLevel, nil
+	default:
+		return zapcore.WarnLevel, fmt.Errorf("invalid log level %q (must be debug, info, warn, or error)", level)
+	}
 }
 
 // Debug logs a debug message

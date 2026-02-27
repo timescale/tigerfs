@@ -74,7 +74,7 @@ Examples:
   tigerfs mount --read-only tiger:e6ue9697jf /mnt/db
 
   # Run in foreground with debug logging
-  tigerfs mount --foreground --debug postgres://host/db /mnt/db`,
+  tigerfs mount --foreground --log-level debug postgres://host/db /mnt/db`,
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true

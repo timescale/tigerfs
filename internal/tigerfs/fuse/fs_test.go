@@ -83,7 +83,7 @@ func TestMount_Success(t *testing.T) {
 		PoolMaxIdle:  2,
 		AttrTimeout:  1 * time.Second,
 		EntryTimeout: 1 * time.Second,
-		Debug:        false,
+		LogLevel:     "warn",
 	}
 
 	mountpoint := t.TempDir()

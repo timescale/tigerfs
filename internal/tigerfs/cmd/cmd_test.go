@@ -63,7 +63,6 @@ func TestBuildRootCmd_PersistentFlags(t *testing.T) {
 
 	expectedFlags := []string{
 		"config-dir",
-		"debug",
 		"log-level",
 		"log-file",
 		"log-format",

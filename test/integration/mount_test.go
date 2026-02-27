@@ -29,7 +29,7 @@ func TestMount_ListTables(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -88,7 +88,7 @@ func TestMount_ListRows(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -154,7 +154,7 @@ func TestMount_ReadRow(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -238,7 +238,7 @@ func TestMount_ReadNonExistentRow(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint
@@ -289,7 +289,7 @@ func TestMount_FileSizes(t *testing.T) {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 
 	// Create mountpoint

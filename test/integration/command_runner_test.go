@@ -227,6 +227,6 @@ func commandTestConfig() *config.Config {
 		AttrTimeout:             1 * time.Second,
 		EntryTimeout:            1 * time.Second,
 		MetadataRefreshInterval: 30 * time.Second,
-		Debug:                   false,
+		LogLevel:                "warn",
 	}
 }

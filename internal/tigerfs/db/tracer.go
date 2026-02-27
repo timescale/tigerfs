@@ -46,5 +46,5 @@ func (t *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.T
 	if data.Err != nil {
 		fields = append(fields, zap.Error(data.Err))
 	}
-	logging.Debug("sql query", fields...)
+	logging.Info("sql query", fields...)
 }
