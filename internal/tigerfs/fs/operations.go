@@ -509,6 +509,22 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		}
 	}
 
+	// Filter columns by projection when .columns/ is active.
+	// This makes `ls .columns/id,status/<pk>/` show only projected column files.
+	if fsCtx.HasColumns && len(fsCtx.Columns) > 0 {
+		colSet := make(map[string]bool, len(fsCtx.Columns))
+		for _, c := range fsCtx.Columns {
+			colSet[c] = true
+		}
+		filtered := columns[:0]
+		for _, col := range columns {
+			if colSet[col.Name] {
+				filtered = append(filtered, col)
+			}
+		}
+		columns = filtered
+	}
+
 	now := time.Now()
 
 	// Include row export format files (.json, .tsv, .csv, .yaml)
@@ -1054,6 +1070,31 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 			return nil, &FSError{
 				Code:    ErrNotExist,
 				Message: fmt.Sprintf("table or view not found: %s.%s", fsCtx.Schema, fsCtx.TableName),
+			}
+		}
+		// Validate projected column names if .columns/ is active.
+		// This makes `cd .columns/nonexistent/` fail with ENOENT immediately
+		// rather than silently succeeding and only failing at export time.
+		if fsCtx.HasColumns && len(fsCtx.Columns) > 0 {
+			columns, colErr := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+			if colErr != nil {
+				return nil, &FSError{
+					Code:    ErrIO,
+					Message: "failed to get columns for validation",
+					Cause:   colErr,
+				}
+			}
+			validCols := make(map[string]bool, len(columns))
+			for _, col := range columns {
+				validCols[col.Name] = true
+			}
+			for _, name := range fsCtx.Columns {
+				if !validCols[name] {
+					return nil, &FSError{
+						Code:    ErrNotExist,
+						Message: fmt.Sprintf("column %q not found in %s.%s", name, fsCtx.Schema, fsCtx.TableName),
+					}
+				}
 			}
 		}
 		name := fsCtx.TableName

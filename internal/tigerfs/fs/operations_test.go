@@ -2424,3 +2424,99 @@ func TestSynth_ReadBinaryFile(t *testing.T) {
 	require.NotNil(t, content)
 	assert.Equal(t, binaryData, content.Data)
 }
+
+// TestStat_TableWithInvalidColumns tests that Stat on a table with invalid
+// column projection returns ErrNotExist.
+func TestStat_TableWithInvalidColumns(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+				{name: "email", dataType: "text"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Stat with a valid column works
+	fsCtx := NewFSContext("public", "users", "id")
+	fsCtx = fsCtx.WithColumns([]string{"id", "name"})
+	entry, err := ops.StatWithContext(context.Background(), fsCtx)
+	require.Nil(t, err)
+	require.NotNil(t, entry)
+	assert.True(t, entry.IsDir)
+
+	// Stat with an invalid column returns ErrNotExist
+	fsCtx2 := NewFSContext("public", "users", "id")
+	fsCtx2 = fsCtx2.WithColumns([]string{"id", "nonexistent"})
+	_, err2 := ops.StatWithContext(context.Background(), fsCtx2)
+	require.NotNil(t, err2)
+	assert.Equal(t, ErrNotExist, err2.Code)
+}
+
+// TestReadDir_RowDirectoryWithColumnProjection tests that ReadDir on a row
+// directory with column projection only returns projected column files.
+func TestReadDir_RowDirectoryWithColumnProjection(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+				{name: "email", dataType: "text"},
+				{name: "age", dataType: "integer"},
+			},
+		},
+		rowData: map[string]*mockRow{
+			"public.users.1": {
+				columns: []string{"id", "name", "email", "age"},
+				values:  []interface{}{1, "Alice", "alice@example.com", 30},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// ReadDir on /users/.columns/id,name/1 should only show id and name columns
+	entries, err := ops.ReadDir(context.Background(), "/users/.columns/id,name/1")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+
+	// Should contain export format files
+	assert.Contains(t, names, ".json")
+	assert.Contains(t, names, ".tsv")
+	assert.Contains(t, names, ".csv")
+	assert.Contains(t, names, ".yaml")
+
+	// Should contain only projected columns (with extensions)
+	assert.Contains(t, names, "id")       // integer has no extension
+	assert.Contains(t, names, "name.txt") // text gets .txt extension
+
+	// Should NOT contain non-projected columns
+	assert.NotContains(t, names, "email.txt")
+	assert.NotContains(t, names, "age")
+
+	// Total: 4 export files + 2 projected columns = 6
+	assert.Len(t, entries, 6)
+}
