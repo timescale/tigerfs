@@ -5,7 +5,6 @@ project_name: tigerfs
 before:
   hooks:
     - go mod tidy
-    - sh -c 'echo "{{ .Tag }}" > latest.txt'
 
 builds:
   - id: tigerfs
@@ -67,16 +66,3 @@ blobs:
     directory: "releases/{{ .Tag }}"
     ids:
       - archive
-
-  # Root-level files (stable releases only)
-  - provider: s3
-    bucket: tigerfs-releases
-    region: us-east-1
-    directory: ""
-    extra_files_only: true
-    disable: "{{ if .Prerelease }}true{{ end }}"
-    extra_files:
-      - glob: ./latest.txt
-        name_template: "latest.txt"
-      - glob: ./scripts/install.sh
-        name_template: "install.sh"

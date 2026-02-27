@@ -34,7 +34,19 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: us-east-1
 
+      - name: Upload root files to S3
+        if: "!contains(github.ref_name, '-')"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          echo "${GITHUB_REF_NAME}" > latest.txt
+          aws s3 cp latest.txt s3://tigerfs-releases/latest.txt
+          aws s3 cp scripts/install.sh s3://tigerfs-releases/install.sh
+
       - name: Invalidate CloudFront Cache
+        if: "!contains(github.ref_name, '-')"
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
