@@ -119,8 +119,16 @@ Examples:
 				return fmt.Errorf("failed to resolve mountpoint path: %w", err)
 			}
 
-			// Auto-create mountpoint directory when it was derived from a backend prefix.
-			if len(args) == 1 {
+			// Check if the mountpoint directory already exists before we (or the
+			// platform mount layer) create it. If TigerFS creates the directory,
+			// we clean it up on unmount. Pre-existing directories are left alone.
+			_, statErr := os.Stat(absMountpoint)
+			autoCreated := os.IsNotExist(statErr)
+
+			// Ensure mountpoint directory exists (the NFS mount layer also calls
+			// MkdirAll, but we do it here too for the FUSE path and to keep the
+			// auto-created check above accurate).
+			if autoCreated {
 				if mkErr := os.MkdirAll(absMountpoint, 0755); mkErr != nil {
 					return fmt.Errorf("failed to create mountpoint directory: %w", mkErr)
 				}
@@ -157,12 +165,23 @@ Examples:
 				if err := fs.Close(); err != nil {
 					logging.Error("Failed to close filesystem", zap.Error(err))
 				}
+				// Clean up auto-created mountpoint directory after unmount.
+				// Must run after fs.Close() which actually unmounts the filesystem;
+				// os.Remove would fail on a mounted directory.
+				if autoCreated {
+					if err := os.Remove(absMountpoint); err != nil {
+						logging.Debug("Could not remove auto-created mountpoint directory",
+							zap.String("mountpoint", absMountpoint), zap.Error(err))
+					} else {
+						logging.Debug("Removed auto-created mountpoint directory",
+							zap.String("mountpoint", absMountpoint))
+					}
+				}
 			}()
 
 			logging.Info("Filesystem mounted successfully", zap.String("mountpoint", absMountpoint))
 
 			// Register the mount in the registry for discovery by other commands.
-			autoCreated := len(args) == 1
 			if err := registerMount(absMountpoint, connStr, serviceID, cliBackend, autoCreated); err != nil {
 				logging.Warn("Failed to register mount in registry", zap.Error(err))
 			}
@@ -176,17 +195,6 @@ Examples:
 			// Serve filesystem requests — blocks until unmount or signal.
 			if err := fs.Serve(ctx); err != nil {
 				return fmt.Errorf("filesystem error: %w", err)
-			}
-
-			// Clean up auto-created mountpoint directory (only succeeds if empty).
-			if autoCreated {
-				if err := os.Remove(absMountpoint); err != nil {
-					logging.Debug("Could not remove auto-created mountpoint directory",
-						zap.String("mountpoint", absMountpoint), zap.Error(err))
-				} else {
-					logging.Debug("Removed auto-created mountpoint directory",
-						zap.String("mountpoint", absMountpoint))
-				}
 			}
 
 			logging.Info("Filesystem unmounted", zap.String("mountpoint", absMountpoint))
