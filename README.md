@@ -2,15 +2,11 @@
 
 TigerFS is a shared, transactional workspace for humans and AI agents, exposed as a native filesystem.
 
-Every file is a real PostgreSQL row. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No merge conflicts. No coordination layer.
+Every file is a real PostgreSQL row. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No coordination layer.
 
 The filesystem is the API.
 
-Write a markdown file with YAML frontmatter and TigerFS stores it as structured data with automatic version history. Directories map to tables. Rows map to files. Columns map to file contents. Every tool that works with files (`cat`, `grep`, your editor, Claude Code, Cursor) works out of the box.
-
-Search with `grep`. Organize with `mv` and `mkdir`. Recover past versions from `.history/`.
-
-**Mental model:** TigerFS is PostgreSQL presented as a live, shared filesystem. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux or NFS on macOS.
+Write a markdown file with YAML frontmatter and TigerFS stores it as structured data with automatic version history. Directories map to tables. Rows map to files. Columns map to file contents. Every tool that works with files (`cat`, `grep`, your editor, Claude Code, Cursor) works out of the box.  Search with `grep`. Organize with `mv` and `mkdir`. Recover past versions from `.history/`.
 
 You can use TigerFS in two ways:
 
@@ -18,7 +14,7 @@ You can use TigerFS in two ways:
 
 - As a native table layer, navigating PostgreSQL tables, rows, and indexes directly through the filesystem.
 
-Both are backed by the same transactional database.
+Both are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux or NFS on macOS.
 
 ## Quick Start
 
@@ -28,8 +24,11 @@ In under 60 seconds, you can mount a live PostgreSQL database as a collaborative
 # Install (macOS requires no dependencies; Linux needs fuse3)
 curl -fsSL https://install.tigerfs.io | sh
 
-# Mount a database
+# Mount a local database
 tigerfs mount postgres://localhost/mydb /mnt/db
+
+# Mount cloud services by ID
+tigerfs mount tiger:e6ue9697jf /mnt/db
 
 # Create a markdown app and start writing
 echo "markdown" > /mnt/db/.build/notes
@@ -41,8 +40,6 @@ author: alice
 ---
 
 # Hello World
-
-Welcome to my notes...
 EOF
 
 # Search, explore, unmount
