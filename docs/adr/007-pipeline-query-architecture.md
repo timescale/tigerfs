@@ -11,6 +11,7 @@ TigerFS exposes PostgreSQL databases as mountable filesystems. Users interact wi
 - `.by/<col>/<val>/` - Filter by indexed column value
 - `.filter/<col>/<val>/` - Filter by any column value (planned)
 - `.order/<col>/` - Order results by column
+- `.columns/col1,col2/` - Select specific columns (projection)
 - `.first/N/` - Limit to first N rows
 - `.last/N/` - Limit to last N rows
 - `.sample/N/` - Random sample of N rows
@@ -47,6 +48,10 @@ type PipelineContext struct {
     Limit     int
     LimitType LimitType  // None, First, Last, Sample
 
+    // Column projection (from .columns)
+    Columns   []string  // Column names to SELECT (empty = *)
+    HasColumns bool
+
     // For nested limit operations (subquery needed)
     PreviousLimit     int
     PreviousLimitType LimitType
@@ -73,16 +78,17 @@ The system uses a **permissive model** that allows all semantically meaningful c
 
 #### Capability Matrix
 
-| Parent ↓ / Child → | `.by/` | `.filter/` | `.order/` | `.first/` | `.last/` | `.sample/` | `.export/` |
-|--------------------|:------:|:----------:|:---------:|:---------:|:--------:|:----------:|:----------:|
-| **Table root**           | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **`.by/<col>/<val>/`**   | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **`.filter/<col>/<val>/`** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **`.order/<col>/`**      | ⛔ | ⛔ | ⛔ | ✅ | ✅ | ✅ | ✅ |
-| **`.first/N/`**          | ✅ | ✅ | ✅ | ⛔ | ✅ | ✅ | ✅ |
-| **`.last/N/`**           | ✅ | ✅ | ✅ | ✅ | ⛔ | ✅ | ✅ |
-| **`.sample/N/`**         | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ | ✅ |
-| **`.export/<fmt>`**      | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ |
+| Parent ↓ / Child → | `.by/` | `.filter/` | `.order/` | `.columns/` | `.first/` | `.last/` | `.sample/` | `.export/` |
+|--------------------|:------:|:----------:|:---------:|:-----------:|:---------:|:--------:|:----------:|:----------:|
+| **Table root**           | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.by/<col>/<val>/`**   | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.filter/<col>/<val>/`** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.order/<col>/`**      | ⛔ | ⛔ | ⛔ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **`.columns/col,.../`**  | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ✅ |
+| **`.first/N/`**          | ✅ | ✅ | ✅ | ✅ | ⛔ | ✅ | ✅ | ✅ |
+| **`.last/N/`**           | ✅ | ✅ | ✅ | ✅ | ✅ | ⛔ | ✅ | ✅ |
+| **`.sample/N/`**         | ✅ | ✅ | ✅ | ✅ | ⛔ | ⛔ | ⛔ | ✅ |
+| **`.export/<fmt>`**      | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ | ⛔ |
 
 **Legend:** ✅ = Allowed, ⛔ = Disallowed
 
@@ -91,6 +97,7 @@ The system uses a **permissive model** that allows all semantically meaningful c
 | Parent | Disallowed Children | Rationale |
 |--------|---------------------|-----------|
 | `.order/<col>/` | `.by/`, `.filter/`, `.order/` | Filter before ordering; second order is redundant |
+| `.columns/col,.../` | Everything except `.export/` | Column selection is the last transformation before export |
 | `.first/N/` | `.first/` | No double-first (redundant—just use smaller N) |
 | `.last/N/` | `.last/` | No double-last (redundant—just use smaller N) |
 | `.sample/N/` | `.first/`, `.last/`, `.sample/` | No limit after sample (just sample fewer) |
@@ -119,6 +126,11 @@ The system uses a **permissive model** that allows all semantically meaningful c
 .sample/50/.order/name/                          # Sort the sampled 50
 .sample/50/.filter/status/active/                # Filter the sampled 50
 
+# Column projection
+.columns/id,name,email/.export/csv                             # Select specific columns
+.filter/status/active/.columns/id,email/.export/json           # Filter then project
+.by/customer_id/123/.order/date/.last/10/.columns/id,total/.export/json
+
 # Full pipelines
 .by/customer_id/123/.order/created_at/.last/10/.export/json
 .filter/status/active/.first/1000/.sample/50/.export/csv
@@ -134,6 +146,7 @@ The system uses a **permissive model** that allows all semantically meaningful c
 .sample/50/.first/25/      # Use .sample/25/
 .sample/50/.last/25/       # Use .sample/25/
 .order/a/.order/b/         # Use .order/b/
+.columns/a,b/.columns/c/  # Use .columns/a,b,c/
 .export/csv/.anything/     # Export is terminal
 ```
 
@@ -189,6 +202,9 @@ Simple cases use flat queries:
 ```sql
 -- .filter/status/active/.order/name/.first/100/
 SELECT * FROM t WHERE status = 'active' ORDER BY name LIMIT 100
+
+-- .filter/status/active/.columns/id,email/.export/json
+SELECT "id", "email" FROM t WHERE status = 'active'
 ```
 
 Nested limit operations use subqueries:

@@ -1411,6 +1411,7 @@ func TestSynth_IsKnownCapability(t *testing.T) {
 		{".history", true},
 		{".info", true},
 		{".by", true},
+		{".columns", true},
 		{".filter", true},
 		{".format", true},
 		{".export", true},
@@ -1437,4 +1438,120 @@ func TestSynth_IsKnownCapability(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestParsePathColumns tests .columns/ path parsing.
+func TestParsePathColumns(t *testing.T) {
+	t.Run("columns directory", func(t *testing.T) {
+		parsed, err := ParsePath("/orders/.columns")
+		if err != nil {
+			t.Fatalf("ParsePath failed: %v", err)
+		}
+		if parsed.Type != PathCapability {
+			t.Errorf("Type = %v, want PathCapability", parsed.Type)
+		}
+		if parsed.CapabilityDir != DirColumns {
+			t.Errorf("CapabilityDir = %q, want %q", parsed.CapabilityDir, DirColumns)
+		}
+	})
+
+	t.Run("single column", func(t *testing.T) {
+		parsed, err := ParsePath("/orders/.columns/id")
+		if err != nil {
+			t.Fatalf("ParsePath failed: %v", err)
+		}
+		if parsed.Type != PathTable {
+			t.Errorf("Type = %v, want PathTable", parsed.Type)
+		}
+		if len(parsed.Context.Columns) != 1 {
+			t.Fatalf("Columns length = %d, want 1", len(parsed.Context.Columns))
+		}
+		if parsed.Context.Columns[0] != "id" {
+			t.Errorf("Columns[0] = %q, want %q", parsed.Context.Columns[0], "id")
+		}
+		if !parsed.Context.HasColumns {
+			t.Error("HasColumns should be true")
+		}
+	})
+
+	t.Run("multiple columns", func(t *testing.T) {
+		parsed, err := ParsePath("/orders/.columns/id,status,total")
+		if err != nil {
+			t.Fatalf("ParsePath failed: %v", err)
+		}
+		if parsed.Type != PathTable {
+			t.Errorf("Type = %v, want PathTable", parsed.Type)
+		}
+		if len(parsed.Context.Columns) != 3 {
+			t.Fatalf("Columns length = %d, want 3", len(parsed.Context.Columns))
+		}
+		expected := []string{"id", "status", "total"}
+		for i, want := range expected {
+			if parsed.Context.Columns[i] != want {
+				t.Errorf("Columns[%d] = %q, want %q", i, parsed.Context.Columns[i], want)
+			}
+		}
+	})
+
+	t.Run("columns then export", func(t *testing.T) {
+		parsed, err := ParsePath("/orders/.columns/id,status/.export/json")
+		if err != nil {
+			t.Fatalf("ParsePath failed: %v", err)
+		}
+		if parsed.Type != PathExport {
+			t.Errorf("Type = %v, want PathExport", parsed.Type)
+		}
+		if parsed.Format != "json" {
+			t.Errorf("Format = %q, want %q", parsed.Format, "json")
+		}
+		if len(parsed.Context.Columns) != 2 {
+			t.Fatalf("Columns length = %d, want 2", len(parsed.Context.Columns))
+		}
+		if parsed.Context.Columns[0] != "id" || parsed.Context.Columns[1] != "status" {
+			t.Errorf("Columns = %v, want [id, status]", parsed.Context.Columns)
+		}
+	})
+
+	t.Run("filter then columns then export", func(t *testing.T) {
+		parsed, err := ParsePath("/orders/.filter/status/active/.columns/id,amount/.export/csv")
+		if err != nil {
+			t.Fatalf("ParsePath failed: %v", err)
+		}
+		if parsed.Type != PathExport {
+			t.Errorf("Type = %v, want PathExport", parsed.Type)
+		}
+		if parsed.Format != "csv" {
+			t.Errorf("Format = %q, want %q", parsed.Format, "csv")
+		}
+		if len(parsed.Context.Filters) != 1 {
+			t.Fatalf("Filters length = %d, want 1", len(parsed.Context.Filters))
+		}
+		if parsed.Context.Filters[0].Column != "status" || parsed.Context.Filters[0].Value != "active" {
+			t.Errorf("Filter = %+v, want status=active", parsed.Context.Filters[0])
+		}
+		if len(parsed.Context.Columns) != 2 {
+			t.Fatalf("Columns length = %d, want 2", len(parsed.Context.Columns))
+		}
+	})
+
+	t.Run("empty column name error", func(t *testing.T) {
+		_, err := ParsePath("/orders/.columns/id,,name")
+		if err == nil {
+			t.Error("Expected error for empty column name, got nil")
+		}
+	})
+
+	t.Run("trailing comma empty column error", func(t *testing.T) {
+		_, err := ParsePath("/orders/.columns/id,")
+		if err == nil {
+			t.Error("Expected error for trailing comma, got nil")
+		}
+	})
+
+	t.Run("leading comma empty column error", func(t *testing.T) {
+		_, err := ParsePath("/orders/.columns/,id")
+		if err == nil {
+			t.Error("Expected error for leading comma, got nil")
+		}
+	})
 }

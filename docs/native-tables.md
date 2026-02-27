@@ -17,7 +17,7 @@ TigerFS maps every table to a directory. Each row appears as a file (in your cho
 │   └── avatar.bin          # bytea column
 ├── .by/                    # Index navigation
 ├── .first/  .last/  .sample/   # Pagination
-├── .filter/  .order/  .export/ # Pipeline queries
+├── .columns/  .filter/  .order/  .export/ # Pipeline queries
 ├── .info/                  # Table metadata
 ├── .create/  .modify/  .delete/ # Schema management
 └── .indexes/               # Index metadata
@@ -145,6 +145,7 @@ LIMIT 10
 | `.by/<col>/<val>/` | Filter by indexed column (fast) | `.by/status/active/` |
 | `.filter/<col>/<val>/` | Filter by any column | `.filter/notes/urgent/` |
 | `.order/<col>/` | Sort results | `.order/created_at/` |
+| `.columns/col1,col2/` | Select specific columns | `.columns/id,name,email/` |
 | `.first/N/` | First N rows | `.first/100/` |
 | `.last/N/` | Last N rows | `.last/100/` |
 | `.sample/N/` | Random sample of N rows | `.sample/50/` |
@@ -177,6 +178,10 @@ Capabilities can be chained in many combinations. Each step operates on the resu
 .first/100/.filter/status/active/             # Filter within the first 100
 .sample/50/.order/name/                       # Sort the sampled rows
 
+# Column projection (select specific columns)
+.columns/id,name,email/.export/csv                                # Select columns then export
+.filter/status/active/.columns/id,email/.export/json              # Filter then project
+
 # Full pipeline with export
 .by/customer_id/123/.order/date/.last/10/.export/json
 ```
@@ -188,6 +193,7 @@ Capabilities can be chained in many combinations. Each step operates on the resu
 .last/100/.last/50/        # Just use .last/50/
 .sample/50/.sample/25/     # Just use .sample/25/
 .order/a/.order/b/         # Second order replaces first; just use .order/b/
+.columns/a,b/.columns/c/   # Just use .columns/a,b,c/
 .export/csv/.first/10/     # Export is terminal—nothing after it
 ```
 
@@ -218,6 +224,23 @@ Direct access still works — just type the value:
 ```bash
 cat /mnt/db/large_events/.filter/type/click/.first/100/.export/json
 ```
+
+### Column Projection
+
+The `.columns/` capability selects specific columns, producing `SELECT "col1", "col2"` instead of `SELECT *`:
+
+```bash
+# Export only id, name, and email
+cat /mnt/db/users/.columns/id,name,email/.export/csv
+
+# Combine with filters
+cat /mnt/db/orders/.filter/status/shipped/.columns/id,total,created_at/.export/json
+
+# Browse available columns
+ls /mnt/db/users/.columns/
+```
+
+**Important:** After `.columns/`, only `.export/` is available. Add all filters and ordering before column selection.
 
 ### Ordering
 
@@ -314,7 +337,7 @@ Use `ls` to see available capabilities at each level:
 
 ```bash
 $ ls /mnt/db/orders/
-.by/  .filter/  .first/  .last/  .sample/  .order/  .export/  .info/
+.by/  .columns/  .filter/  .first/  .last/  .sample/  .order/  .export/  .info/
 1  2  3  4  5  ...
 
 $ ls /mnt/db/orders/.by/
@@ -324,7 +347,7 @@ $ ls /mnt/db/orders/.by/status/
 active/  pending/  completed/  .first/  .last/
 
 $ ls /mnt/db/orders/.by/status/active/
-.by/  .filter/  .order/  .first/  .last/  .sample/  .export/
+.by/  .columns/  .filter/  .order/  .first/  .last/  .sample/  .export/
 1  2  3  ...                               # Matching row IDs
 ```
 
@@ -355,7 +378,8 @@ cat /mnt/db/customers/.by/tier/premium/.by/state/CA/.filter/last_active_gt/2024-
 2. **Single-column ordering** — no `.order/col1.col2/`
 3. **Sample then sort** — `.sample/N/.order/col/` samples first, then sorts the sample
 4. **Export is terminal** — cannot chain after `.export/`
-5. **No import pipeline** — `.import/` is separate and not composable
+5. **Columns is near-terminal** — after `.columns/`, only `.export/` is available
+6. **No import pipeline** — `.import/` is separate and not composable
 
 ## Table Metadata
 

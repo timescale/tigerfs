@@ -253,6 +253,8 @@ Synthesized apps, DDL operations, and pipeline queries add additional dotfile di
 │   │   └── <col>/<val>/                  # Chained filter
 │   ├── .order/                           # Sort results (pipeline query)
 │   │   └── <col>/                        # Chained ordering
+│   ├── .columns/                         # Column projection (pipeline query)
+│   │   └── col1,col2,col3/              # Comma-separated column names
 │   ├── .export/                          # Bulk export (pipeline query)
 │   │   └── csv|json|tsv                  # Format file
 │   ├── .format/                          # Add synthesized view to existing table
@@ -299,6 +301,7 @@ Synthesized apps, DDL operations, and pipeline queries add additional dotfile di
 **Dotfiles (Hidden by Default):**
 - `.by/` - Index-based navigation (`.by/email/`, `.by/created_at/`)
 - `.build/` - Synthesized app creation (root level)
+- `.columns/` - Column projection (`.columns/id,name,email/`) (pipeline query)
 - `.create/` - DDL staging for new tables/indexes
 - `.delete/` - DDL staging for table/object deletion
 - `.export/` - Bulk export in CSV, JSON, or TSV format (pipeline query)
@@ -337,7 +340,7 @@ Every row accessible in **two ways**:
 **Directory Listing Behavior:**
 ```bash
 $ ls /mount/users/
-.all/  .by/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
+.all/  .by/  .columns/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
 1/  2/  3/  ...
 
 $ cd /mount/users/1        # Enter row directory
@@ -571,7 +574,7 @@ SELECT id FROM users ORDER BY id;
 ```
 
 **Output:**
-- Capability directories: `.all/`, `.by/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
+- Capability directories: `.all/`, `.by/`, `.columns/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
 - Row directories: `1/`, `2/`, `3/`, ... (primary key values)
 
 **Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings.
@@ -1041,6 +1044,7 @@ Pipeline queries allow users to:
 - Chain filters, ordering, and pagination in filesystem paths
 - Combine indexed (`.by/`) and non-indexed (`.filter/`) filters
 - Nest pagination operations (e.g., `.first/100/.last/50/`)
+- Select specific columns with `.columns/` for efficient projection
 - Export filtered results in multiple formats
 
 **Example:**
@@ -1064,6 +1068,7 @@ LIMIT 10
 | `.by/<col>/<val>/` | Filter by indexed column | Fast (index scan) |
 | `.filter/<col>/<val>/` | Filter by any column | May scan table |
 | `.order/<col>/` | Sort results | Uses index if available |
+| `.columns/col1,col2/` | Select specific columns | Reduces data transfer |
 | `.first/N/` | First N rows | Fast (LIMIT) |
 | `.last/N/` | Last N rows | Fast (ORDER DESC + LIMIT) |
 | `.sample/N/` | Random N rows | Full scan (ORDER BY RANDOM()) |
@@ -1073,13 +1078,14 @@ LIMIT 10
 
 | Parent | Allowed Children |
 |--------|------------------|
-| Table root | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/` |
-| `.by/<col>/<val>/` | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/` |
-| `.filter/<col>/<val>/` | `.by/`, `.filter/`, `.order/`, `.first/`, `.last/`, `.sample/`, `.export/` |
-| `.order/<col>/` | `.first/`, `.last/`, `.sample/`, `.export/` |
-| `.first/N/` | `.by/`, `.filter/`, `.order/`, `.last/`, `.sample/`, `.export/` |
-| `.last/N/` | `.by/`, `.filter/`, `.order/`, `.first/`, `.sample/`, `.export/` |
-| `.sample/N/` | `.by/`, `.filter/`, `.order/`, `.export/` |
+| Table root | `.by/`, `.filter/`, `.order/`, `.columns/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.by/<col>/<val>/` | `.by/`, `.filter/`, `.order/`, `.columns/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.filter/<col>/<val>/` | `.by/`, `.filter/`, `.order/`, `.columns/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.order/<col>/` | `.columns/`, `.first/`, `.last/`, `.sample/`, `.export/` |
+| `.columns/col,...` | `.export/` |
+| `.first/N/` | `.by/`, `.filter/`, `.order/`, `.columns/`, `.last/`, `.sample/`, `.export/` |
+| `.last/N/` | `.by/`, `.filter/`, `.order/`, `.columns/`, `.first/`, `.sample/`, `.export/` |
+| `.sample/N/` | `.by/`, `.filter/`, `.order/`, `.columns/`, `.export/` |
 | `.export/<fmt>` | None (terminal) |
 
 **Disallowed (redundant):**
@@ -1088,6 +1094,7 @@ LIMIT 10
 - `.sample/N/.sample/M/` - Use `.sample/M/`
 - `.sample/N/.first/M/` or `.sample/N/.last/M/` - Use `.sample/M/`
 - `.order/a/.order/b/` - Second order replaces first
+- `.columns/a,b/.columns/c,d/` - Use `.columns/a,b,c,d/`
 
 ### `.by/` vs `.filter/`
 
@@ -1128,6 +1135,31 @@ SELECT * FROM (
     SELECT * FROM t ORDER BY pk ASC LIMIT 1000
 ) sub ORDER BY RANDOM() LIMIT 50
 ```
+
+### Column Projection
+
+`.columns/` selects specific columns, generating `SELECT "col1", "col2"` instead of `SELECT *`:
+
+```bash
+cat /mnt/db/orders/.columns/id,status,total/.export/csv
+cat /mnt/db/orders/.filter/status/shipped/.columns/id,total/.export/json
+```
+
+**Generated SQL:**
+```sql
+-- .columns/id,status,total/.export/csv
+SELECT "id", "status", "total" FROM orders
+
+-- .filter/status/shipped/.columns/id,total/.export/json
+SELECT "id", "total" FROM orders WHERE status = 'shipped'
+```
+
+**Rules:**
+- `ls .columns/` shows available column names
+- Comma-separated column names: `.columns/col1,col2,col3/`
+- After `.columns/`, only `.export/` is available
+- No double `.columns/` (list all desired columns in one)
+- Invalid column names return ENOENT
 
 ### Large Table Safety for `.filter/`
 
@@ -4135,6 +4167,11 @@ DELETE FROM users WHERE id = 123;
 SELECT * FROM users WHERE email = 'foo@example.com';
 ```
 
+**Column projection:**
+```sql
+SELECT "id", "email", "name" FROM users WHERE status = 'active';
+```
+
 **Large table sample:**
 ```sql
 SELECT id FROM users TABLESAMPLE BERNOULLI(1.0) LIMIT 100;
@@ -4171,6 +4208,7 @@ SELECT id FROM users TABLESAMPLE BERNOULLI(1.0) LIMIT 100;
 | 1.0     | 2026-01-23 | Initial complete specification                                                                   |
 | 1.1     | 2026-01-23 | Added Tiger Cloud integration (--tiger-service-id); clarified JOINs via views; DDL scope defined |
 | 1.2     | 2026-02-25 | Added Synthesized Apps and History sections; updated filesystem structure with new dotfiles; updated implementation priorities and documentation plan |
+| 1.3     | 2026-02-27 | Added `.columns/` pipeline capability for column projection |
 
 ---
 

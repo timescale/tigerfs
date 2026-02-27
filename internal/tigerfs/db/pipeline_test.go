@@ -603,3 +603,139 @@ func TestBuildPipelineSQL_ComplexScenarios(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildPipelineSQL_Columns tests SQL generation with column projection.
+func TestBuildPipelineSQL_Columns(t *testing.T) {
+	tests := []struct {
+		name         string
+		params       QueryParams
+		selectPKOnly bool
+		wantSQL      string
+		wantParams   int
+	}{
+		{
+			name: "columns produce SELECT col list",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "orders",
+				PKColumn: "id",
+				Columns:  []string{"id", "status", "total"},
+			},
+			selectPKOnly: false,
+			wantSQL:      `SELECT "id", "status", "total" FROM "public"."orders"`,
+			wantParams:   0,
+		},
+		{
+			name: "selectPKOnly overrides columns",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "orders",
+				PKColumn: "id",
+				Columns:  []string{"id", "status"},
+			},
+			selectPKOnly: true,
+			wantSQL:      `SELECT "id" FROM "public"."orders"`,
+			wantParams:   0,
+		},
+		{
+			name: "columns with filter",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "orders",
+				PKColumn: "id",
+				Columns:  []string{"id", "amount"},
+				Filters: []FilterCondition{
+					{Column: "status", Value: "active"},
+				},
+			},
+			selectPKOnly: false,
+			wantSQL:      `SELECT "id", "amount" FROM "public"."orders" WHERE "status" = $1`,
+			wantParams:   1,
+		},
+		{
+			name: "columns with filter and limit",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "orders",
+				PKColumn: "id",
+				Columns:  []string{"id", "status"},
+				Filters: []FilterCondition{
+					{Column: "status", Value: "pending"},
+				},
+				Limit:     10,
+				LimitType: LimitFirst,
+			},
+			selectPKOnly: false,
+			wantSQL:      `SELECT "id", "status" FROM "public"."orders" WHERE "status" = $1`,
+			wantParams:   2,
+		},
+		{
+			name: "single column",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "users",
+				PKColumn: "id",
+				Columns:  []string{"email"},
+			},
+			selectPKOnly: false,
+			wantSQL:      `SELECT "email" FROM "public"."users"`,
+			wantParams:   0,
+		},
+		{
+			name: "empty columns means SELECT *",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "users",
+				PKColumn: "id",
+				Columns:  []string{},
+			},
+			selectPKOnly: false,
+			wantSQL:      `SELECT * FROM "public"."users"`,
+			wantParams:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, params := BuildPipelineSQLForTest(tt.params, tt.selectPKOnly)
+
+			if !strings.Contains(sql, tt.wantSQL) {
+				t.Errorf("SQL does not contain expected fragment:\n  got:  %s\n  want: %s", sql, tt.wantSQL)
+			}
+
+			if len(params) != tt.wantParams {
+				t.Errorf("Parameter count = %d, want %d\nSQL: %s", len(params), tt.wantParams, sql)
+			}
+		})
+	}
+}
+
+// TestBuildPipelineSQL_ColumnsNested tests column projection with nested subqueries.
+func TestBuildPipelineSQL_ColumnsNested(t *testing.T) {
+	params := QueryParams{
+		Schema:            "public",
+		Table:             "orders",
+		PKColumn:          "id",
+		Columns:           []string{"id", "status"},
+		Limit:             50,
+		LimitType:         LimitLast,
+		PreviousLimit:     100,
+		PreviousLimitType: LimitFirst,
+	}
+
+	sql, qp := BuildPipelineSQLForTest(params, false)
+
+	// Outer SELECT should use columns
+	if !strings.HasPrefix(sql, `SELECT "id", "status" FROM (`) {
+		t.Errorf("Outer SELECT should use column projection, got: %s", sql)
+	}
+
+	// Inner subquery should still be SELECT * (for filters/ordering to work on all columns)
+	if !strings.Contains(sql, "SELECT * FROM") {
+		t.Errorf("Inner subquery should use SELECT *, got: %s", sql)
+	}
+
+	if len(qp) != 2 {
+		t.Errorf("Expected 2 parameters (two limits), got %d", len(qp))
+	}
+}

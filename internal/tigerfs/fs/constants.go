@@ -20,13 +20,14 @@ const (
 // Navigation capabilities
 // These directories provide different ways to access rows.
 const (
-	DirBy     = ".by"     // Index-based navigation (.by/<column>/<value>/)
-	DirFilter = ".filter" // Column filtering (.filter/<column>/<value>/)
-	DirFirst  = ".first"  // First N rows (.first/<N>/)
-	DirLast   = ".last"   // Last N rows (.last/<N>/)
-	DirSample = ".sample" // Random sample (.sample/<N>/)
-	DirAll    = ".all"    // All rows (no limit)
-	DirOrder  = ".order"  // Ordered access (.order/<column>/)
+	DirBy      = ".by"      // Index-based navigation (.by/<column>/<value>/)
+	DirColumns = ".columns" // Column projection (.columns/col1,col2,col3/)
+	DirFilter  = ".filter"  // Column filtering (.filter/<column>/<value>/)
+	DirFirst   = ".first"   // First N rows (.first/<N>/)
+	DirLast    = ".last"    // Last N rows (.last/<N>/)
+	DirSample  = ".sample"  // Random sample (.sample/<N>/)
+	DirAll     = ".all"     // All rows (no limit)
+	DirOrder   = ".order"   // Ordered access (.order/<column>/)
 )
 
 // Bulk data capabilities
@@ -98,16 +99,17 @@ const (
 // capabilityDirectories lists all pipeline capability directory names.
 // Used to prevent these names from being interpreted as column values.
 var capabilityDirectories = map[string]bool{
-	DirBy:     true,
-	DirFilter: true,
-	DirFirst:  true,
-	DirLast:   true,
-	DirSample: true,
-	DirAll:    true,
-	DirOrder:  true,
-	DirExport: true,
-	DirImport: true,
-	DirInfo:   true,
+	DirBy:      true,
+	DirColumns: true,
+	DirFilter:  true,
+	DirFirst:   true,
+	DirLast:    true,
+	DirSample:  true,
+	DirAll:     true,
+	DirOrder:   true,
+	DirExport:  true,
+	DirImport:  true,
+	DirInfo:    true,
 }
 
 // IsCapabilityDirectory returns true if name is a reserved capability directory.

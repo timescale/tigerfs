@@ -711,6 +711,290 @@ func TestPipeline_BackwardCompatibility(t *testing.T) {
 	})
 }
 
+// TestMount_ColumnsExportJSON tests .columns/ with JSON export.
+func TestMount_ColumnsExportJSON(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// .columns/id,status/.export/json
+	exportPath := filepath.Join(mountpoint, "orders", ".columns", "id,status", ".export", "json")
+	data, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("Failed to read columns export: %v", err)
+	}
+
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		t.Fatalf("Invalid JSON: %v\nContent: %s", err, string(data))
+	}
+
+	if len(rows) == 0 {
+		t.Fatal("Expected rows in export, got none")
+	}
+
+	// Each row should only have "id" and "status" keys
+	for i, row := range rows {
+		if _, ok := row["id"]; !ok {
+			t.Errorf("Row %d missing 'id' key", i)
+		}
+		if _, ok := row["status"]; !ok {
+			t.Errorf("Row %d missing 'status' key", i)
+		}
+		// Should NOT have other columns like amount, customer_id, etc.
+		if _, ok := row["amount"]; ok {
+			t.Errorf("Row %d should not have 'amount' key with .columns/id,status", i)
+		}
+		if _, ok := row["customer_id"]; ok {
+			t.Errorf("Row %d should not have 'customer_id' key with .columns/id,status", i)
+		}
+	}
+}
+
+// TestMount_ColumnsExportCSV tests .columns/ with CSV export.
+func TestMount_ColumnsExportCSV(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// .columns/id,amount/.export/.with-headers/csv
+	exportPath := filepath.Join(mountpoint, "orders", ".columns", "id,amount", ".export", ".with-headers", "csv")
+	data, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("Failed to read columns CSV export: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("Expected at least 2 lines (header + data), got %d", len(lines))
+	}
+
+	// Header should be exactly "id,amount"
+	header := lines[0]
+	if header != "id,amount" {
+		t.Errorf("CSV header = %q, want %q", header, "id,amount")
+	}
+
+	// Each data line should have exactly 2 fields
+	for i := 1; i < len(lines); i++ {
+		fields := strings.Split(lines[i], ",")
+		if len(fields) != 2 {
+			t.Errorf("Line %d has %d fields, want 2: %q", i, len(fields), lines[i])
+		}
+	}
+}
+
+// TestMount_ColumnsWithFilter tests .filter/ combined with .columns/.
+func TestMount_ColumnsWithFilter(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// .filter/status/pending/.columns/id,amount/.export/json
+	exportPath := filepath.Join(mountpoint, "orders", ".filter", "status", "pending",
+		".columns", "id,amount", ".export", "json")
+	data, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("Failed to read filtered columns export: %v", err)
+	}
+
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(data, &rows); err != nil {
+		t.Fatalf("Invalid JSON: %v\nContent: %s", err, string(data))
+	}
+
+	// Should have 10 pending orders
+	if len(rows) != 10 {
+		t.Errorf("Expected 10 pending orders, got %d", len(rows))
+	}
+
+	// Each row should only have "id" and "amount"
+	for i, row := range rows {
+		if len(row) != 2 {
+			t.Errorf("Row %d has %d keys, want 2 (id, amount): %v", i, len(row), row)
+		}
+	}
+}
+
+// TestMount_ColumnsInvalidColumn tests that nonexistent columns produce an error or empty result.
+func TestMount_ColumnsInvalidColumn(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// .columns/nonexistent/.export/json should either fail or return empty/error data.
+	// On FUSE, the lookup validates columns and returns ENOENT.
+	// On NFS, the path may resolve but the export read will fail.
+	exportPath := filepath.Join(mountpoint, "orders", ".columns", "nonexistent", ".export", "json")
+	data, err := os.ReadFile(exportPath)
+	if err == nil {
+		// If read succeeded (NFS may allow this), the data should be empty or invalid
+		if len(data) > 0 {
+			var rows []map[string]interface{}
+			if jsonErr := json.Unmarshal(data, &rows); jsonErr == nil && len(rows) > 0 {
+				t.Error("Expected empty result for nonexistent column, got valid data")
+			}
+		}
+	}
+	// If err != nil, that's the expected behavior (ENOENT from FUSE)
+}
+
+// TestMount_ColumnsLsDir tests listing available columns via ls .columns/.
+func TestMount_ColumnsLsDir(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// ls .columns/ should list all table columns
+	columnsDir := filepath.Join(mountpoint, "orders", ".columns")
+	entries, err := os.ReadDir(columnsDir)
+	if err != nil {
+		t.Fatalf("Failed to read .columns/: %v", err)
+	}
+
+	// orders table has: id, customer_id, status, amount, notes, created_at
+	expectedCols := map[string]bool{
+		"id": true, "customer_id": true, "status": true,
+		"amount": true, "notes": true, "created_at": true,
+	}
+
+	for _, e := range entries {
+		if !expectedCols[e.Name()] {
+			t.Errorf("Unexpected column in .columns/ listing: %q", e.Name())
+		}
+		delete(expectedCols, e.Name())
+	}
+
+	for col := range expectedCols {
+		t.Errorf("Missing column in .columns/ listing: %q", col)
+	}
+}
+
 // Helper functions
 
 func defaultTestConfig() *config.Config {

@@ -75,6 +75,14 @@ type FSContext struct {
 	// After ordering, no more filters or orders are allowed.
 	HasOrdered bool
 
+	// Columns lists column names to project (empty means SELECT *).
+	// Set via .columns/col1,col2,col3/ pipeline stage.
+	Columns []string
+
+	// HasColumns tracks whether .columns/ has been applied.
+	// After column projection, only .export/ is available.
+	HasColumns bool
+
 	// IsTerminal indicates this context has reached .export/ and no more
 	// capabilities can be added.
 	IsTerminal bool
@@ -112,6 +120,13 @@ func (ctx *FSContext) Clone() *FSContext {
 		copy(filters, ctx.Filters)
 	}
 
+	// Deep copy columns slice
+	var columns []string
+	if len(ctx.Columns) > 0 {
+		columns = make([]string, len(ctx.Columns))
+		copy(columns, ctx.Columns)
+	}
+
 	return &FSContext{
 		Schema:            ctx.Schema,
 		TableName:         ctx.TableName,
@@ -124,6 +139,8 @@ func (ctx *FSContext) Clone() *FSContext {
 		PreviousLimit:     ctx.PreviousLimit,
 		PreviousLimitType: ctx.PreviousLimitType,
 		HasOrdered:        ctx.HasOrdered,
+		Columns:           columns,
+		HasColumns:        ctx.HasColumns,
 		IsTerminal:        ctx.IsTerminal,
 	}
 }
@@ -195,6 +212,27 @@ func (ctx *FSContext) WithTerminal() *FSContext {
 	return clone
 }
 
+// WithColumns returns a new FSContext with column projection set.
+// After columns are set, only .export/ is available as a next step.
+//
+// Parameters:
+//   - columns: Column names to project in the query
+//
+// Returns a new FSContext with columns set and HasColumns=true.
+func (ctx *FSContext) WithColumns(columns []string) *FSContext {
+	clone := ctx.Clone()
+	clone.Columns = make([]string, len(columns))
+	copy(clone.Columns, columns)
+	clone.HasColumns = true
+	return clone
+}
+
+// CanAddColumns returns true if .columns/ can be added.
+// Columns are disallowed after terminal (.export/) or if already set.
+func (ctx *FSContext) CanAddColumns() bool {
+	return !ctx.IsTerminal && !ctx.HasColumns
+}
+
 // CanAddFilter returns true if filters can still be added.
 // Filters are disallowed after .order/ (must filter before ordering).
 func (ctx *FSContext) CanAddFilter() bool {
@@ -256,10 +294,11 @@ func (ctx *FSContext) HasFilters() bool {
 }
 
 // HasPipelineOperations returns true if any pipeline operations have been applied.
-// This includes filters (.by/, .filter/), ordering (.order/), or limits (.first/, .last/, .sample/).
+// This includes filters (.by/, .filter/), ordering (.order/), limits (.first/, .last/, .sample/),
+// or column projection (.columns/).
 // Used to determine whether to use pipeline-aware queries instead of simple table scans.
 func (ctx *FSContext) HasPipelineOperations() bool {
-	return ctx.HasFilters() || ctx.HasOrdered || ctx.LimitType != LimitNone
+	return ctx.HasFilters() || ctx.HasOrdered || ctx.LimitType != LimitNone || ctx.HasColumns
 }
 
 // HasLimit returns true if any limit has been applied.
@@ -281,10 +320,15 @@ func (ctx *FSContext) NeedsSubquery() bool {
 // AvailableCapabilities returns the list of capabilities that can be added next.
 // This is used to determine what to expose in directory listings.
 //
-// Returns a slice of capability names (e.g., ".by", ".filter", ".order", ".first", ".last", ".sample", ".export").
+// Returns a slice of capability names (e.g., ".by", ".columns", ".filter", ".order", ".first", ".last", ".sample", ".export").
 func (ctx *FSContext) AvailableCapabilities() []string {
 	if ctx.IsTerminal {
 		return nil
+	}
+
+	// After .columns/, only .export/ is available
+	if ctx.HasColumns {
+		return []string{".export"}
 	}
 
 	var caps []string
@@ -292,6 +336,11 @@ func (ctx *FSContext) AvailableCapabilities() []string {
 	// Filters (.by/ and .filter/) available unless after .order/
 	if ctx.CanAddFilter() {
 		caps = append(caps, ".by", ".filter")
+	}
+
+	// Columns available if not yet set
+	if ctx.CanAddColumns() {
+		caps = append(caps, ".columns")
 	}
 
 	// Order available unless already ordered
@@ -327,6 +376,13 @@ func (ctx *FSContext) ToQueryParams() QueryParams {
 		copy(filters, ctx.Filters)
 	}
 
+	// Copy columns to avoid sharing slice
+	var columns []string
+	if len(ctx.Columns) > 0 {
+		columns = make([]string, len(ctx.Columns))
+		copy(columns, ctx.Columns)
+	}
+
 	return QueryParams{
 		Schema:            ctx.Schema,
 		Table:             ctx.TableName,
@@ -338,5 +394,6 @@ func (ctx *FSContext) ToQueryParams() QueryParams {
 		LimitType:         ctx.LimitType,
 		PreviousLimit:     ctx.PreviousLimit,
 		PreviousLimitType: ctx.PreviousLimitType,
+		Columns:           columns,
 	}
 }

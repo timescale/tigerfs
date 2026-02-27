@@ -154,6 +154,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries = append(entries,
 		fuse.DirEntry{Name: DirAll, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirBy, Mode: syscall.S_IFDIR},
+		fuse.DirEntry{Name: DirColumns, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirDelete, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirExport, Mode: syscall.S_IFDIR},
 		fuse.DirEntry{Name: DirFilter, Mode: syscall.S_IFDIR},
@@ -196,6 +197,8 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		return t.lookupAllDirectory(ctx)
 	case DirBy:
 		return t.lookupByDirectory(ctx)
+	case DirColumns:
+		return t.lookupColumnsDirectory(ctx)
 	case DirDelete:
 		return t.lookupDeleteDirectory(ctx)
 	case DirExport:
@@ -746,6 +749,42 @@ func (t *TableNode) lookupByDirectory(ctx context.Context) (*fs.Inode, syscall.E
 
 	logging.Debug("Created directory node",
 		zap.String("directory", DirBy),
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	return child, 0
+}
+
+// lookupColumnsDirectory handles lookup for the .columns directory.
+func (t *TableNode) lookupColumnsDirectory(ctx context.Context) (*fs.Inode, syscall.Errno) {
+	logging.Debug("Looking up directory",
+		zap.String("directory", DirColumns),
+		zap.String("schema", t.schema),
+		zap.String("table", t.tableName))
+
+	// Get primary key for table to create pipeline context
+	pk, err := t.db.GetPrimaryKey(ctx, t.schema, t.tableName)
+	if err != nil {
+		logging.Error("Failed to get primary key for .columns directory",
+			zap.String("table", t.tableName),
+			zap.Error(err))
+		return nil, syscall.EIO
+	}
+
+	pkColumn := pk.Columns[0]
+
+	// Create initial pipeline context for table root
+	pipeline := NewPipelineContext(t.schema, t.tableName, pkColumn)
+
+	stableAttr := fs.StableAttr{
+		Mode: syscall.S_IFDIR,
+	}
+
+	columnsNode := NewPipelineColumnsDirNode(t.cfg, t.db, t.cache, t.schema, t.tableName, pipeline, t.partialRows)
+	child := t.NewPersistentInode(ctx, columnsNode, stableAttr)
+
+	logging.Debug("Created directory node",
+		zap.String("directory", DirColumns),
 		zap.String("schema", t.schema),
 		zap.String("table", t.tableName))
 

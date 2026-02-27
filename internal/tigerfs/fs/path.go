@@ -461,7 +461,7 @@ func processSegments(result *ParsedPath, segments []string) (*ParsedPath, *FSErr
 // capability segments from unknown dot-files.
 func isKnownCapability(seg string) bool {
 	switch seg {
-	case DirInfo, DirBy, DirFilter, DirOrder, DirFirst, DirLast, DirSample,
+	case DirInfo, DirBy, DirColumns, DirFilter, DirOrder, DirFirst, DirLast, DirSample,
 		DirExport, DirImport, DirAll, DirModify, DirDelete, DirIndexes,
 		DirFormat, DirHistory:
 		return true
@@ -478,6 +478,8 @@ func processCapability(result *ParsedPath, cap string, remaining []string) (int,
 		return processInfo(result, remaining)
 	case DirBy:
 		return processBy(result, remaining)
+	case DirColumns:
+		return processColumns(result, remaining)
 	case DirFilter:
 		return processFilter(result, remaining)
 	case DirOrder:
@@ -555,6 +557,46 @@ func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 	result.Context = result.Context.WithFilter(column, value, true)
 	result.Type = PathTable
 	return 3, nil
+}
+
+// processColumns handles .columns/ paths.
+// Supports:
+//   - .columns/ → PathCapability (list available columns)
+//   - .columns/col1,col2,col3 → PathTable with column projection applied
+func processColumns(result *ParsedPath, remaining []string) (int, *FSError) {
+	if !result.Context.CanAddColumns() {
+		return 0, &FSError{
+			Code:    ErrInvalidPath,
+			Message: "cannot add .columns/ here",
+			Hint:    ".columns/ is not allowed after .export/ or another .columns/",
+		}
+	}
+
+	if len(remaining) == 1 {
+		// Just .columns/ - list available columns
+		result.Type = PathCapability
+		result.CapabilityDir = DirColumns
+		return 1, nil
+	}
+
+	// .columns/col1,col2,col3
+	colArg := remaining[1]
+	columns := strings.Split(colArg, ",")
+
+	// Validate no empty column names
+	for _, col := range columns {
+		if col == "" {
+			return 0, &FSError{
+				Code:    ErrInvalidPath,
+				Message: "empty column name in .columns/ list",
+				Hint:    "column names must not be empty (check for consecutive commas)",
+			}
+		}
+	}
+
+	result.Context = result.Context.WithColumns(columns)
+	result.Type = PathTable
+	return 2, nil
 }
 
 // processFilter handles .filter/ paths.

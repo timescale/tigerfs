@@ -1819,7 +1819,7 @@ func TestReadDir_PipelineFilter_UsesQueryRowsPipeline(t *testing.T) {
 	// Count row entries (not capability directories)
 	rowEntries := []string{}
 	for _, e := range entries {
-		if !e.IsDir || (e.Name != ".by" && e.Name != ".filter" && e.Name != ".order" &&
+		if !e.IsDir || (e.Name != ".by" && e.Name != ".columns" && e.Name != ".filter" && e.Name != ".order" &&
 			e.Name != ".first" && e.Name != ".last" && e.Name != ".sample" &&
 			e.Name != ".export" && e.Name != ".info") {
 			rowEntries = append(rowEntries, e.Name)
