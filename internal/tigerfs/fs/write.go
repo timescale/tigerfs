@@ -149,6 +149,7 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
@@ -241,6 +242,7 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
@@ -292,6 +294,7 @@ func (o *Operations) writeImportFile(ctx context.Context, parsed *ParsedPath, da
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
@@ -582,6 +585,7 @@ func (o *Operations) Rename(ctx context.Context, oldPath, newPath string) *FSErr
 		}
 	}
 
+	o.statCache.invalidate(schema, table)
 	return nil
 }
 
@@ -714,6 +718,7 @@ func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
@@ -775,6 +780,7 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 		}
 	}
 
+	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
 
