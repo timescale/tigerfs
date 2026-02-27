@@ -1086,7 +1086,9 @@ type mockDBClient struct {
 	execInTxError   error
 
 	// Call counting for cache optimization tests
-	getRowCalls int
+	getRowCalls     int
+	getColumnsCalls int
+	getColumnCalls  int
 }
 
 type mockPK struct {
@@ -1159,6 +1161,7 @@ func (m *mockDBClient) IsViewUpdatable(ctx context.Context, schema, view string)
 }
 
 func (m *mockDBClient) GetColumns(ctx context.Context, schema, table string) ([]db.Column, error) {
+	m.getColumnsCalls++
 	key := schema + "." + table
 	if cols, ok := m.columns[key]; ok {
 		result := make([]db.Column, len(cols))
@@ -1211,6 +1214,7 @@ func (m *mockDBClient) GetRow(ctx context.Context, schema, table, pkColumn, pkVa
 }
 
 func (m *mockDBClient) GetColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+	m.getColumnCalls++
 	key := schema + "." + table + "." + pkValue + "." + columnName
 	if val, ok := m.columnData[key]; ok {
 		return val, nil
@@ -2662,4 +2666,188 @@ func TestStatRow_WriteInvalidatesCache(t *testing.T) {
 	assert.True(t, entry.IsDir)
 
 	assert.Equal(t, 1, mockDB.getRowCalls, "GetRow should be called after cache invalidation from write")
+}
+
+// TestStatRow_SelfPrime tests that a statRow cache miss primes the cache
+// so a second statRow for the same row doesn't call GetRow again.
+func TestStatRow_SelfPrime(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		rowData: map[string]*mockRow{
+			"public.users.1": {columns: []string{"id", "name"}, values: []interface{}{1, "Alice"}},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First Stat on row directory — cache miss, calls GetRow
+	entry, err := ops.Stat(ctx, "/users/1")
+	require.Nil(t, err)
+	assert.True(t, entry.IsDir)
+	assert.Equal(t, "1", entry.Name)
+	assert.Equal(t, 1, mockDB.getRowCalls, "first Stat should call GetRow")
+
+	// Second Stat on same row — should use self-primed cache
+	entry, err = ops.Stat(ctx, "/users/1")
+	require.Nil(t, err)
+	assert.True(t, entry.IsDir)
+	assert.Equal(t, "1", entry.Name)
+	assert.Equal(t, 1, mockDB.getRowCalls, "second Stat should use cache, not call GetRow again")
+}
+
+// TestMetaCache_GetColumns tests that MetadataCache.GetColumns caches results
+// so the second call doesn't hit the DB.
+func TestMetaCache_GetColumns(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
+	}
+
+	cache := NewMetadataCache(cfg, mockDB)
+	ctx := context.Background()
+
+	// First call — cache miss, should query DB
+	cols1, err := cache.GetColumns(ctx, "public", "users")
+	require.NoError(t, err)
+	assert.Len(t, cols1, 2)
+	assert.Equal(t, 1, mockDB.getColumnsCalls, "first GetColumns should hit DB")
+
+	// Second call — cache hit, should NOT query DB
+	cols2, err := cache.GetColumns(ctx, "public", "users")
+	require.NoError(t, err)
+	assert.Len(t, cols2, 2)
+	assert.Equal(t, 1, mockDB.getColumnsCalls, "second GetColumns should use cache")
+
+	// Different table — cache miss, should query DB again
+	_, err = cache.GetColumns(ctx, "public", "orders")
+	require.NoError(t, err)
+	assert.Equal(t, 2, mockDB.getColumnsCalls, "different table should hit DB")
+
+	// Invalidate and re-query — should hit DB
+	cache.Invalidate()
+	_, err = cache.GetColumns(ctx, "public", "users")
+	require.NoError(t, err)
+	assert.Equal(t, 3, mockDB.getColumnsCalls, "after Invalidate, should hit DB again")
+}
+
+// TestStatColumn_AfterReadDirRow tests that after ReadDir on a row directory,
+// Stat on a column file uses the cache and doesn't call GetColumn.
+func TestStatColumn_AfterReadDirRow(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		rowData: map[string]*mockRow{
+			"public.users.1": {
+				columns: []string{"id", "name"},
+				values:  []interface{}{1, "Alice"},
+			},
+		},
+		columnData: map[string]interface{}{
+			"public.users.1.id":   1,
+			"public.users.1.name": "Alice",
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// ReadDir on row directory should fetch row data and prime column cache
+	entries, fsErr := ops.ReadDir(ctx, "/users/1")
+	require.Nil(t, fsErr)
+
+	// Entries should have correct sizes (non-zero)
+	for _, e := range entries {
+		if e.Name == "name.txt" {
+			assert.Equal(t, int64(len("Alice")+1), e.Size, "column file should have correct size")
+		}
+	}
+
+	// Reset call counters
+	mockDB.getColumnCalls = 0
+
+	// Stat on column file should use cache, NOT call GetColumn
+	entry, fsErr := ops.Stat(ctx, "/users/1/name.txt")
+	require.Nil(t, fsErr)
+	assert.False(t, entry.IsDir)
+	assert.Equal(t, int64(len("Alice")+1), entry.Size, "cached size should match")
+	assert.Equal(t, 0, mockDB.getColumnCalls, "GetColumn should not be called when stat cache is primed")
+}
+
+// TestStatColumn_Invalidate tests that invalidating a table also clears
+// its row-level column caches.
+func TestStatColumn_Invalidate(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		rowData: map[string]*mockRow{
+			"public.users.1": {
+				columns: []string{"id", "name"},
+				values:  []interface{}{1, "Alice"},
+			},
+		},
+		columnData: map[string]interface{}{
+			"public.users.1.id":   1,
+			"public.users.1.name": "Alice",
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// ReadDir on row primes the column cache
+	_, fsErr := ops.ReadDir(ctx, "/users/1")
+	require.Nil(t, fsErr)
+
+	// Write to invalidate the table cache (should also clear row-level caches)
+	writeErr := ops.WriteFile(ctx, "/users/1/name", []byte("Updated\n"))
+	require.Nil(t, writeErr)
+	mockDB.getColumnCalls = 0
+
+	// Stat on column should now hit DB since cache was invalidated
+	_, fsErr = ops.Stat(ctx, "/users/1/name.txt")
+	require.Nil(t, fsErr)
+	assert.Equal(t, 1, mockDB.getColumnCalls, "GetColumn should be called after cache invalidation")
 }

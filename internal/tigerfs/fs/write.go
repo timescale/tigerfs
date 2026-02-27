@@ -171,7 +171,7 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 	}
 
 	// Get columns to resolve the filename
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -309,7 +309,7 @@ func (o *Operations) parseImportData(ctx context.Context, parsed *ParsedPath, da
 	// Handle no-headers mode for CSV/TSV
 	if parsed.ImportNoHeaders {
 		// Fetch column names from schema
-		cols, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		cols, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get columns from schema: %w", err)
 		}
@@ -740,7 +740,7 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 	}
 
 	// Get columns to resolve the filename
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -988,7 +988,7 @@ func (o *Operations) parseWriteDataNoHeaders(ctx context.Context, schema, table 
 	}
 
 	// Get columns from schema
-	tableColumns, err := o.db.GetColumns(ctx, schema, table)
+	tableColumns, err := o.metaCache.GetColumns(ctx, schema, table)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get table columns: %w", err)
 	}
