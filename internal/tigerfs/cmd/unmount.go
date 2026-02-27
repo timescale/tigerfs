@@ -73,6 +73,14 @@ Examples:
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 			defer cancel()
 
+			// Look up registry entry before unmount to check AutoCreated flag.
+			var autoCreated bool
+			if entry, err := lookupRegistryEntry(absMountpoint); err != nil {
+				logging.Debug("Could not look up registry entry", zap.Error(err))
+			} else if entry != nil {
+				autoCreated = entry.AutoCreated
+			}
+
 			// Try to unmount using the appropriate method
 			if err := unmountFilesystem(ctx, absMountpoint, force); err != nil {
 				return err
@@ -82,6 +90,17 @@ Examples:
 			if err := cleanupRegistryEntry(absMountpoint); err != nil {
 				// Log but don't fail - the unmount itself succeeded
 				logging.Warn("Failed to clean up registry entry", zap.Error(err))
+			}
+
+			// Clean up auto-created mountpoint directory (only succeeds if empty).
+			if autoCreated {
+				if err := os.Remove(absMountpoint); err != nil && !os.IsNotExist(err) {
+					logging.Warn("Could not remove auto-created mountpoint directory",
+						zap.String("mountpoint", absMountpoint), zap.Error(err))
+				} else if err == nil {
+					logging.Debug("Removed auto-created mountpoint directory",
+						zap.String("mountpoint", absMountpoint))
+				}
 			}
 
 			fmt.Printf("Successfully unmounted %s\n", absMountpoint)
@@ -271,6 +290,21 @@ func isNotMountedError(output string) bool {
 		}
 	}
 	return false
+}
+
+// lookupRegistryEntry retrieves the registry entry for a mountpoint.
+//
+// Parameters:
+//   - mountpoint: The mountpoint path to look up
+//
+// Returns the entry if found, nil if not found, or an error if the registry
+// cannot be accessed.
+func lookupRegistryEntry(mountpoint string) (*mount.Entry, error) {
+	registry, err := mount.NewRegistry("")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open registry: %w", err)
+	}
+	return registry.Get(mountpoint)
 }
 
 // cleanupRegistryEntry removes a mount from the registry after successful unmount.
