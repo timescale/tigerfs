@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2026-02-25
 
-**Cloud backends and versioned history — manage databases and travel through time from the filesystem.**
+**Cloud backends, versioned history, and CDN-based installs — manage cloud databases, travel through time, and install in seconds.**
 
 - **Cloud backend prefixes** — `tiger:ID` and `ghost:ID` prefix scheme for connecting to Tiger Cloud and Ghost databases without raw connection strings
 - **`tigerfs create` command** — provision new databases via `tigerfs create tiger:mydb` or `tigerfs create ghost:mydb`
@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Extension-aware table listing** — tables and views owned by extensions (like TimescaleDB internals) are excluded from directory listings
 - **Query reduction caching** — three-tier cache strategy reduces `ls -l` on synth views from ~37 SQL queries to 1, with targeted WHERE queries for single-file lookups
 - **SQL query tracing** — `--debug` mode now logs every SQL query with timing, statement text, and PostgreSQL backend PID
+- **CDN-based binary distribution** — `curl -fsSL https://install.tigerfs.io | sh` with S3/CloudFront CDN, split checksums, and fast version discovery via `latest.txt`
 
 ## [0.3.0] - 2026-02-13
 
