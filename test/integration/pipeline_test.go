@@ -891,7 +891,9 @@ func TestMount_ColumnsWithFilter(t *testing.T) {
 	}
 }
 
-// TestMount_ColumnsInvalidColumn tests that nonexistent columns produce an error or empty result.
+// TestMount_ColumnsInvalidColumn tests that nonexistent columns produce an error.
+// After column validation fix, stat on .columns/nonexistent/ returns ENOENT,
+// so the export path is unreachable.
 func TestMount_ColumnsInvalidColumn(t *testing.T) {
 	checkFUSEMountCapability(t)
 
@@ -922,21 +924,161 @@ func TestMount_ColumnsInvalidColumn(t *testing.T) {
 
 	time.Sleep(500 * time.Millisecond)
 
-	// .columns/nonexistent/.export/json should either fail or return empty/error data.
-	// On FUSE, the lookup validates columns and returns ENOENT.
-	// On NFS, the path may resolve but the export read will fail.
-	exportPath := filepath.Join(mountpoint, "orders", ".columns", "nonexistent", ".export", "json")
-	data, err := os.ReadFile(exportPath)
+	// .columns/nonexistent/ should fail at stat — the directory doesn't exist
+	colDir := filepath.Join(mountpoint, "orders", ".columns", "nonexistent")
+	_, err := os.Stat(colDir)
 	if err == nil {
-		// If read succeeded (NFS may allow this), the data should be empty or invalid
-		if len(data) > 0 {
-			var rows []map[string]interface{}
-			if jsonErr := json.Unmarshal(data, &rows); jsonErr == nil && len(rows) > 0 {
-				t.Error("Expected empty result for nonexistent column, got valid data")
-			}
+		t.Error("Expected error for .columns/nonexistent/, but stat succeeded")
+	}
+
+	// Export path should also fail since the parent doesn't exist
+	exportPath := filepath.Join(mountpoint, "orders", ".columns", "nonexistent", ".export", "json")
+	_, err = os.ReadFile(exportPath)
+	if err == nil {
+		t.Error("Expected error reading .columns/nonexistent/.export/json")
+	}
+}
+
+// TestMount_ColumnsInvalidColumnDir tests that stat on .columns/nonexistent/ fails
+// with a "not a directory" or "no such file" error because the invalid column name
+// is caught during validation.
+func TestMount_ColumnsInvalidColumnDir(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Valid columns should work
+	validDir := filepath.Join(mountpoint, "orders", ".columns", "id,status")
+	_, err := os.Stat(validDir)
+	if err != nil {
+		t.Errorf("Expected .columns/id,status/ to exist, got error: %v", err)
+	}
+
+	// Invalid column should fail
+	invalidDir := filepath.Join(mountpoint, "orders", ".columns", "id,bogus")
+	_, err = os.Stat(invalidDir)
+	if err == nil {
+		t.Error("Expected .columns/id,bogus/ to fail stat, but it succeeded")
+	}
+
+	// Mix of valid and invalid should also fail
+	mixedDir := filepath.Join(mountpoint, "orders", ".columns", "status,nonexistent,amount")
+	_, err = os.Stat(mixedDir)
+	if err == nil {
+		t.Error("Expected .columns/status,nonexistent,amount/ to fail stat, but it succeeded")
+	}
+}
+
+// TestMount_ColumnsRowDirFiltered tests that ls on a row directory under
+// .columns/id,status/ only shows the projected column files.
+func TestMount_ColumnsRowDirFiltered(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	if err := setupPipelineTestData(t, ctx, baseConnStr, schemaName); err != nil {
+		t.Fatalf("Failed to setup pipeline test data: %v", err)
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// First, get a row PK by listing the table
+	tablePath := filepath.Join(mountpoint, "orders")
+	tableEntries, err := os.ReadDir(tablePath)
+	if err != nil {
+		t.Fatalf("Failed to read orders table: %v", err)
+	}
+
+	// Find a numeric row PK (skip capability directories like .by, .export, etc.)
+	var rowPK string
+	for _, entry := range tableEntries {
+		name := entry.Name()
+		if len(name) > 0 && name[0] != '.' {
+			rowPK = name
+			break
 		}
 	}
-	// If err != nil, that's the expected behavior (ENOENT from FUSE)
+	if rowPK == "" {
+		t.Fatal("No row found in orders table")
+	}
+
+	// ls orders/.columns/id,status/<pk>/ should only show id and status column files
+	projectedRowDir := filepath.Join(mountpoint, "orders", ".columns", "id,status", rowPK)
+	entries, err := os.ReadDir(projectedRowDir)
+	if err != nil {
+		t.Fatalf("Failed to read projected row dir: %v", err)
+	}
+
+	names := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		names[e.Name()] = true
+	}
+
+	// Should have the projected columns
+	if !names["id"] {
+		t.Error("Expected 'id' column file in projected row dir")
+	}
+	if !names["status.txt"] {
+		t.Error("Expected 'status.txt' column file in projected row dir")
+	}
+
+	// Should NOT have non-projected columns
+	for _, unwanted := range []string{"customer_id", "amount", "notes.txt", "created_at"} {
+		if names[unwanted] {
+			t.Errorf("Did not expect %q in projected row dir, but found it", unwanted)
+		}
+	}
+
+	// Should still have row export format files
+	for _, exportFile := range []string{".json", ".tsv", ".csv", ".yaml"} {
+		if !names[exportFile] {
+			t.Errorf("Expected %q export file in projected row dir", exportFile)
+		}
+	}
 }
 
 // TestMount_ColumnsLsDir tests listing available columns via ls .columns/.
