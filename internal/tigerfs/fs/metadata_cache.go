@@ -42,6 +42,11 @@ type MetadataCache struct {
 	primaryKeys map[string][]string // cached PK column names
 	pkNegatives map[string]bool     // tables known to have no PK (views, tables without PK)
 
+	// Column cache — columns don't change during a mount session.
+	// Key: "schema\x00table"
+	colMu   sync.RWMutex
+	columns map[string][]db.Column
+
 	// defaultSchema is the PostgreSQL schema for root-level tables.
 	// Inherited from PostgreSQL's current_schema() if not explicitly configured.
 	defaultSchema string
@@ -75,6 +80,7 @@ func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 		tablePermissions:  make(map[string]*db.TablePermissions),
 		primaryKeys:       make(map[string][]string),
 		pkNegatives:       make(map[string]bool),
+		columns:           make(map[string][]db.Column),
 		schemas:           []string{},
 		schemaTables:      make(map[string][]string),
 		schemaViews:       make(map[string][]string),
@@ -278,6 +284,32 @@ func (c *MetadataCache) GetPrimaryKey(ctx context.Context, schema, table string)
 	c.pkMu.Unlock()
 
 	return pk, nil
+}
+
+// GetColumns returns the cached column metadata for a table.
+// On cache miss, queries the database and caches the result.
+// Column metadata doesn't change during a mount session.
+func (c *MetadataCache) GetColumns(ctx context.Context, schema, table string) ([]db.Column, error) {
+	key := pkKey(schema, table)
+
+	c.colMu.RLock()
+	if cols, ok := c.columns[key]; ok {
+		c.colMu.RUnlock()
+		return cols, nil
+	}
+	c.colMu.RUnlock()
+
+	// Cache miss — query the DB
+	cols, err := c.db.GetColumns(ctx, schema, table)
+	if err != nil {
+		return nil, err
+	}
+
+	c.colMu.Lock()
+	c.columns[key] = cols
+	c.colMu.Unlock()
+
+	return cols, nil
 }
 
 // InvalidatePrimaryKey removes a specific PK entry from the cache.
@@ -823,4 +855,9 @@ func (c *MetadataCache) Invalidate() {
 	c.primaryKeys = make(map[string][]string)
 	c.pkNegatives = make(map[string]bool)
 	c.pkMu.Unlock()
+
+	// Clear column cache
+	c.colMu.Lock()
+	c.columns = make(map[string][]db.Column)
+	c.colMu.Unlock()
 }

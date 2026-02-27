@@ -117,6 +117,14 @@ func buildRootCmd(ctx context.Context) *cobra.Command {
 
 **Full configuration options:** See `docs/spec.md` § Configuration System
 
+## Caching Rules
+
+Multiple TigerFS mounts may connect to the same database concurrently. Caching must not cause reads to return stale content.
+
+- **Cache metadata only:** sizes, permissions, modification times, directory entries, column names/types, primary keys, table lists
+- **Never cache content:** row values, export data, column values — anything returned by `ReadFile`/`cat`/`read()` must always query the DB fresh
+- **Pattern:** `Stat` may use caches. `ReadFile` must always hit the DB.
+
 ## Logging
 
 Uses zap with two modes:

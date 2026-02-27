@@ -109,7 +109,31 @@ func (c *statCache) prime(schema, table string, entries map[string]Entry) {
 	}
 }
 
+// set adds or updates a single entry in the cache.
+// Unlike prime() which replaces the whole table cache, set() adds one entry.
+// If the table cache doesn't exist or is expired, creates a new one with just this entry.
+func (c *statCache) set(schema, table, filename string, entry Entry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.tables == nil {
+		c.tables = make(map[string]*tableCache)
+	}
+
+	key := schema + "\x00" + table
+	tc := c.tables[key]
+	if tc == nil || time.Since(tc.created) > statCacheTTL {
+		c.tables[key] = &tableCache{
+			entries: map[string]Entry{filename: entry},
+			created: time.Now(),
+		}
+		return
+	}
+	tc.entries[filename] = entry
+}
+
 // invalidate clears cached entries for a table (called on writes).
+// Also clears any row-level column caches (keys with "table/" prefix).
 func (c *statCache) invalidate(schema, table string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -120,6 +144,14 @@ func (c *statCache) invalidate(schema, table string) {
 
 	key := schema + "\x00" + table
 	delete(c.tables, key)
+
+	// Also clear row-level column caches (e.g., "schema\x00table/rowPK")
+	prefix := key + "/"
+	for k := range c.tables {
+		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+			delete(c.tables, k)
+		}
+	}
 }
 
 // MetaCache returns the shared metadata cache.
@@ -508,7 +540,7 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		return o.readDirSynthHierarchical(ctx, parsed, info)
 	}
 
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -543,13 +575,43 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		{Name: ".yaml", IsDir: false, Mode: 0444, ModTime: now},
 	}
 
-	// Add column files with extensions based on data type
+	// Try to fetch row data for accurate column file sizes.
+	// This avoids per-column GetColumn queries during ls -l.
+	var valueMap map[string]interface{}
+	pk, pkErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	if pkErr == nil {
+		row, rowErr := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey)
+		if rowErr == nil && len(row.Columns) == len(row.Values) {
+			valueMap = make(map[string]interface{}, len(row.Columns))
+			for i, col := range row.Columns {
+				valueMap[col] = row.Values[i]
+			}
+		}
+	}
+
+	// Build column file entries, with sizes if row data is available
+	cacheEntries := make(map[string]Entry, len(columns))
 	for _, col := range columns {
 		filename := col.Name
 		if !o.config.NoFilenameExtensions {
 			filename = AddExtensionToColumn(col.Name, col.DataType)
 		}
-		entries = append(entries, Entry{Name: filename, IsDir: false, Mode: 0600, ModTime: now})
+		var size int64
+		if valueMap != nil {
+			if val, ok := valueMap[col.Name]; ok {
+				if str, fmtErr := format.ConvertValueToText(val); fmtErr == nil {
+					size = int64(len(str) + 1) // +1 for trailing newline
+				}
+			}
+		}
+		entry := Entry{Name: filename, IsDir: false, Size: size, Mode: 0600, ModTime: now}
+		entries = append(entries, entry)
+		cacheEntries[filename] = entry
+	}
+
+	// Prime row-level stat cache so statColumn can use it
+	if len(cacheEntries) > 0 {
+		o.statCache.prime(fsCtx.Schema, fsCtx.TableName+"/"+parsed.PrimaryKey, cacheEntries)
 	}
 
 	return entries, nil
@@ -641,7 +703,7 @@ func (o *Operations) readDirColumnsCapability(ctx context.Context, parsed *Parse
 		}
 	}
 
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -672,7 +734,7 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 
 	if parsed.CapabilityArg == "" {
 		// List all columns
-		columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 		if err != nil {
 			return nil, &FSError{
 				Code:    ErrIO,
@@ -741,7 +803,7 @@ func (o *Operations) readDirOrderCapability(ctx context.Context, parsed *ParsedP
 		}
 	}
 
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1084,7 +1146,7 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		// This makes `cd .columns/nonexistent/` fail with ENOENT immediately
 		// rather than silently succeeding and only failing at export time.
 		if fsCtx.HasColumns && len(fsCtx.Columns) > 0 {
-			columns, colErr := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+			columns, colErr := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 			if colErr != nil {
 				return nil, &FSError{
 					Code:    ErrIO,
@@ -1235,12 +1297,15 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 
 	// No format extension means this is a row directory (can cd into it)
 	if parsed.Format == "" {
-		return &Entry{
+		entry := Entry{
 			Name:    parsed.PrimaryKey,
 			IsDir:   true,
 			Mode:    os.ModeDir | 0755,
 			ModTime: now,
-		}, nil
+		}
+		// Self-prime cache so subsequent statRow calls hit cache
+		o.statCache.set(fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey, entry)
+		return &entry, nil
 	}
 
 	// With format extension, it's a file containing the row data
@@ -1274,10 +1339,16 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		}
 	}
 
+	// Check readDirRow-primed cache for this column file.
+	// This avoids per-column DB queries during ls -l in row directories.
+	if entry, ok := o.statCache.lookup(fsCtx.Schema, fsCtx.TableName+"/"+parsed.PrimaryKey, parsed.Column); ok {
+		return &entry, nil
+	}
+
 	now := time.Now()
 
 	// Get columns to resolve the filename
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1737,7 +1808,7 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 	}
 
 	// Get columns to resolve the filename
-	columns, err := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+	columns, err := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrIO,
@@ -1830,7 +1901,7 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 		data = ddl
 
 	case FileColumns: // "columns" - one column name per line (no types)
-		columns, dbErr := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		columns, dbErr := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 		if dbErr != nil {
 			return nil, &FSError{
 				Code:    ErrIO,
@@ -1907,7 +1978,7 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 
 	// Validate column names if column projection is specified
 	if len(fsCtx.Columns) > 0 {
-		tableColumns, colErr := o.db.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		tableColumns, colErr := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
 		if colErr != nil {
 			return nil, &FSError{
 				Code:    ErrIO,

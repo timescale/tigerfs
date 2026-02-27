@@ -88,7 +88,7 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 
 		// Fall back to suffix + column detection
 		if format == synth.FormatNative {
-			cols, err := o.db.GetColumns(ctx, schema, viewName)
+			cols, err := o.metaCache.GetColumns(ctx, schema, viewName)
 			if err != nil {
 				continue
 			}
@@ -105,7 +105,7 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 		}
 
 		// Get columns for role detection
-		cols, err := o.db.GetColumns(ctx, schema, viewName)
+		cols, err := o.metaCache.GetColumns(ctx, schema, viewName)
 		if err != nil {
 			continue
 		}
