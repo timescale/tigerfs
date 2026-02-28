@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-billy/v5"
 	nfs "github.com/willscott/go-nfs"
@@ -37,15 +38,37 @@ type StableHandler struct {
 	// This should be rare - most paths are short enough.
 	mu       sync.RWMutex
 	fallback map[[32]byte]string
+
+	// Readdir cache for NFS pagination consistency.
+	// go-nfs's READDIRPLUS handler uses conservative byte estimation (512 per entry)
+	// which causes pagination even for small directories. Without caching, each
+	// pagination request re-reads the directory. For non-deterministic listings
+	// (ORDER BY RANDOM() in .sample/), this produces different results each time,
+	// causing verifier mismatch → BadCookie → partial results.
+	readdirMu    sync.Mutex
+	readdirCache map[readdirCacheKey]*readdirCacheEntry
+}
+
+// readdirCacheKey identifies a cached readdir result.
+type readdirCacheKey struct {
+	path     string
+	verifier uint64
+}
+
+// readdirCacheEntry holds a cached directory listing.
+type readdirCacheEntry struct {
+	contents []fs.FileInfo
+	created  time.Time
 }
 
 // NewStableHandler creates a handler with stateless file handles.
 // It wraps a NullAuthHandler for proper delegation of base handler methods.
 func NewStableHandler(fs billy.Filesystem) *StableHandler {
 	return &StableHandler{
-		Handler:  nfshelper.NewNullAuthHandler(fs),
-		fs:       fs, // Store reference for FromHandle
-		fallback: make(map[[32]byte]string),
+		Handler:      nfshelper.NewNullAuthHandler(fs),
+		fs:           fs, // Store reference for FromHandle
+		fallback:     make(map[[32]byte]string),
+		readdirCache: make(map[readdirCacheKey]*readdirCacheEntry),
 	}
 }
 
@@ -209,24 +232,27 @@ func decompressPath(data []byte) (string, error) {
 
 // Verifier support for READDIRPLUS
 //
-// Verifiers are deterministic hashes of path+contents. We intentionally do NOT
-// cache directory listings here, even though it means re-querying the database
-// on each pagination request.
+// go-nfs's READDIRPLUS handler uses a conservative byte estimate (512 per entry)
+// to decide when to paginate. This over-estimates the actual XDR size (~200 bytes
+// per entry), causing pagination even for small directories (~10 entries).
 //
-// TODO: Consider adding a small MRU cache for directory listings to improve
-// pagination performance on large directories. Trade-offs to consider:
-//   - Pro: Avoids re-querying database on each READDIRPLUS continuation
-//   - Pro: Better performance for tables with 1000s of rows
-//   - Con: Cached listings become stale if concurrent writes occur
-//   - Con: Users may see inconsistent data mid-pagination
-//   - Con: Added complexity and memory usage
+// Without caching, each pagination request re-reads the directory via ReadDir.
+// For deterministic listings (ORDER BY pk), re-reads produce the same result.
+// But for non-deterministic listings (ORDER BY RANDOM() in .sample/), re-reads
+// produce different entries. The verifier (a hash of path+entry names) then
+// mismatches, go-nfs returns BadCookie, and the NFS client shows partial results.
 //
-// For now, we prioritize correctness over performance. The verifier hash
-// ensures clients detect when a directory has changed, triggering a re-read.
+// We cache directory listings briefly (5s) so pagination continuation requests
+// return the same entries as the initial request.
+
+// readdirCacheTTL is how long cached directory listings are kept.
+// Must be long enough for multi-page readdir to complete, short enough
+// to not serve stale data on the next user readdir.
+const readdirCacheTTL = 5 * time.Second
 
 // VerifierFor creates a verifier for directory listing pagination.
-// The verifier is a deterministic hash of path + contents, so it doesn't
-// need to be cached - the same inputs always produce the same verifier.
+// The verifier is a deterministic hash of path + contents.
+// Also caches the listing so DataForVerifier can return it for pagination.
 func (h *StableHandler) VerifierFor(path string, contents []fs.FileInfo) uint64 {
 	hash := sha256.New()
 	binary.Write(hash, binary.BigEndian, uint64(len(path)))
@@ -234,12 +260,41 @@ func (h *StableHandler) VerifierFor(path string, contents []fs.FileInfo) uint64 
 	for _, c := range contents {
 		hash.Write([]byte(c.Name()))
 	}
-	return binary.BigEndian.Uint64(hash.Sum(nil)[0:8])
+	verifier := binary.BigEndian.Uint64(hash.Sum(nil)[0:8])
+
+	// Cache the listing for pagination consistency.
+	h.readdirMu.Lock()
+	// Evict expired entries to bound memory.
+	now := time.Now()
+	for k, v := range h.readdirCache {
+		if now.Sub(v.created) > readdirCacheTTL {
+			delete(h.readdirCache, k)
+		}
+	}
+	h.readdirCache[readdirCacheKey{path: path, verifier: verifier}] = &readdirCacheEntry{
+		contents: contents,
+		created:  now,
+	}
+	h.readdirMu.Unlock()
+
+	return verifier
 }
 
 // DataForVerifier retrieves cached directory listing for pagination.
-// We don't cache listings - the verifier is just used to detect if the
-// directory changed. Return nil to signal caller should re-read.
+// Returns the cached listing if it exists and hasn't expired, or nil
+// to signal the caller should re-read.
 func (h *StableHandler) DataForVerifier(path string, id uint64) []fs.FileInfo {
-	return nil
+	h.readdirMu.Lock()
+	defer h.readdirMu.Unlock()
+
+	key := readdirCacheKey{path: path, verifier: id}
+	entry, ok := h.readdirCache[key]
+	if !ok {
+		return nil
+	}
+	if time.Since(entry.created) > readdirCacheTTL {
+		delete(h.readdirCache, key)
+		return nil
+	}
+	return entry.contents
 }

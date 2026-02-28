@@ -1,8 +1,11 @@
 package nfs
 
 import (
+	"io/fs"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/stretchr/testify/assert"
@@ -194,4 +197,91 @@ func TestInvalidateHandle(t *testing.T) {
 	var nfsErr *nfs.NFSStatusError
 	require.ErrorAs(t, err, &nfsErr)
 	assert.Equal(t, nfs.NFSStatusStale, nfsErr.NFSStatus)
+}
+
+// mockFileInfo implements fs.FileInfo for testing readdir cache.
+type mockFileInfo struct {
+	name string
+}
+
+func (m *mockFileInfo) Name() string       { return m.name }
+func (m *mockFileInfo) Size() int64        { return 0 }
+func (m *mockFileInfo) Mode() os.FileMode  { return os.ModeDir | 0755 }
+func (m *mockFileInfo) ModTime() time.Time { return time.Time{} }
+func (m *mockFileInfo) IsDir() bool        { return true }
+func (m *mockFileInfo) Sys() interface{}   { return nil }
+
+func makeContents(names ...string) []fs.FileInfo {
+	infos := make([]fs.FileInfo, len(names))
+	for i, n := range names {
+		infos[i] = &mockFileInfo{name: n}
+	}
+	return infos
+}
+
+// TestVerifierFor_CachesForPagination verifies that VerifierFor caches the
+// directory listing so DataForVerifier can return it for NFS pagination.
+func TestVerifierFor_CachesForPagination(t *testing.T) {
+	mfs := memfs.New()
+	h := NewStableHandler(mfs)
+
+	contents := makeContents(".by", ".info", "uuid-1", "uuid-2", "uuid-3")
+	path := "public/tasks/.sample/5"
+
+	verifier := h.VerifierFor(path, contents)
+
+	// DataForVerifier should return the cached listing
+	cached := h.DataForVerifier(path, verifier)
+	require.NotNil(t, cached, "expected cached listing for pagination")
+	assert.Len(t, cached, 5)
+	for i, c := range cached {
+		assert.Equal(t, contents[i].Name(), c.Name())
+	}
+}
+
+// TestDataForVerifier_MismatchReturnsNil verifies that a wrong verifier
+// returns nil, triggering a re-read.
+func TestDataForVerifier_MismatchReturnsNil(t *testing.T) {
+	mfs := memfs.New()
+	h := NewStableHandler(mfs)
+
+	contents := makeContents("a", "b", "c")
+	path := "public/tasks"
+
+	h.VerifierFor(path, contents)
+
+	// Wrong verifier should miss
+	cached := h.DataForVerifier(path, 99999)
+	assert.Nil(t, cached)
+
+	// Wrong path should miss
+	cached = h.DataForVerifier("wrong/path", 0)
+	assert.Nil(t, cached)
+}
+
+// TestVerifierFor_DeterministicHash verifies the same contents produce
+// the same verifier.
+func TestVerifierFor_DeterministicHash(t *testing.T) {
+	mfs := memfs.New()
+	h := NewStableHandler(mfs)
+
+	contents := makeContents("a", "b", "c")
+	path := "public/tasks"
+
+	v1 := h.VerifierFor(path, contents)
+	v2 := h.VerifierFor(path, contents)
+	assert.Equal(t, v1, v2, "same contents should produce same verifier")
+}
+
+// TestVerifierFor_DifferentContentsProduceDifferentVerifier verifies
+// different contents produce different verifiers (prevents cross-caching).
+func TestVerifierFor_DifferentContentsProduceDifferentVerifier(t *testing.T) {
+	mfs := memfs.New()
+	h := NewStableHandler(mfs)
+
+	path := "public/tasks/.sample/5"
+
+	v1 := h.VerifierFor(path, makeContents("uuid-1", "uuid-2"))
+	v2 := h.VerifierFor(path, makeContents("uuid-3", "uuid-4"))
+	assert.NotEqual(t, v1, v2, "different contents should produce different verifiers")
 }
