@@ -872,6 +872,52 @@ func TestSynth_HierarchicalStatFile(t *testing.T) {
 	assert.True(t, entry.IsDir, "should be a directory")
 }
 
+// TestSynth_HierarchicalStatNotFound tests stat on non-existent paths in a hierarchical view.
+// This covers the NFS stat amplification case (e.g., emacs probing foo.md~, .#foo.md, etc.)
+// where negative caching prevents repeated DB queries for the same missing path.
+func TestSynth_HierarchicalStatNotFound(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	require.Nil(t, fsErr, "build should succeed")
+
+	// Write one real file so the view isn't empty
+	content := "---\ntitle: Real File\n---\n\nReal content.\n"
+	fsErr = ops.WriteFile(ctx, "/memory/real-file.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFile should succeed")
+
+	// Stat a non-existent file — should return not-found
+	_, fsErr = ops.Stat(ctx, "/memory/nonexistent.md")
+	require.NotNil(t, fsErr, "Stat non-existent file should fail")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should be not-found error")
+
+	// Stat the same non-existent file again — should hit negative cache (no extra DB query)
+	_, fsErr = ops.Stat(ctx, "/memory/nonexistent.md")
+	require.NotNil(t, fsErr, "Second stat should also fail")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should still be not-found")
+
+	// Stat different non-existent files (backup/probe names that don't start with '.',
+	// since dot-prefix paths are parsed as control files by the path parser)
+	for _, name := range []string{"real-file.md~", "real-file.bak", "nonexistent2.md"} {
+		_, fsErr = ops.Stat(ctx, "/memory/"+name)
+		require.NotNil(t, fsErr, "Stat %s should fail", name)
+		assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should be not-found for %s", name)
+	}
+
+	// The real file should still be stat-able
+	entry, fsErr := ops.Stat(ctx, "/memory/real-file.md")
+	require.Nil(t, fsErr, "Stat real file should succeed")
+	assert.False(t, entry.IsDir, "should be a file")
+	assert.True(t, entry.Size > 0, "file should have content")
+}
+
 // TestSynth_HierarchicalDeleteFile tests deleting a file in a subdirectory.
 func TestSynth_HierarchicalDeleteFile(t *testing.T) {
 	result := GetTestDBEmpty(t)

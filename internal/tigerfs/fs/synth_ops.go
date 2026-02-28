@@ -331,36 +331,50 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 	// The PrimaryKey field contains the filename (e.g., "hello-world.md")
 	filename := parsed.PrimaryKey
 
+	schema := parsed.Context.Schema
+	table := parsed.Context.TableName
+
 	// Check ReadDir-primed cache first (0 DB queries on hit)
-	if entry, ok := o.statCache.lookup(parsed.Context.Schema, parsed.Context.TableName, filename); ok {
+	if entry, ok := o.statCache.lookup(schema, table, filename); ok {
 		return &entry, nil
 	}
 
-	// For hierarchical views, check for directory first (directory takes priority)
-	if info.SupportsHierarchy {
-		dirPath := filename
-
-		exists, fsErr := o.synthRowExists(ctx, parsed.Context.Schema, parsed.Context.TableName, info, dirPath, "directory")
-		if fsErr != nil {
-			return nil, fsErr
-		}
-		if exists {
-			return &Entry{
-				Name:    dirPath,
-				IsDir:   true,
-				Mode:    0755,
-				ModTime: info.CachedMountTime,
-			}, nil
+	// Check negative cache (file known to not exist)
+	if o.statCache.isNegative(schema, table, filename) {
+		return nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("file not found: %s (cached)", filename),
 		}
 	}
 
-	// Look up the row by filename to verify it exists and get content size
-	columns, row, fsErr := o.getSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
+	// Single query: look up by filename. For hierarchical views, this may return
+	// a directory row — we check filetype in the result rather than doing a
+	// separate existence query.
+	columns, row, fsErr := o.statSynthRowByFilename(ctx, schema, table, info, filename)
 	if fsErr != nil {
+		// Cache the negative result so subsequent stats don't re-query
+		if fsErr.Code == ErrNotExist {
+			o.statCache.setNegative(schema, table, filename)
+		}
 		return nil, fsErr
 	}
 
-	// Synthesize content to get size
+	// Check if this is a directory row (hierarchical views only)
+	if info.SupportsHierarchy {
+		filetypeIdx := findColIdx(columns, info.Roles.Filetype)
+		if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
+			entry := Entry{
+				Name:    filename,
+				IsDir:   true,
+				Mode:    0755,
+				ModTime: info.CachedMountTime,
+			}
+			o.statCache.set(schema, table, filename, entry)
+			return &entry, nil
+		}
+	}
+
+	// It's a file row — synthesize content to get size
 	content, err := o.synthesizeContent(columns, row, info)
 	if err != nil {
 		return nil, &FSError{
@@ -372,13 +386,15 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 
 	modTime := extractModTime(columns, row, info)
 
-	return &Entry{
+	entry := Entry{
 		Name:    filename,
 		IsDir:   false,
 		Mode:    0644,
 		Size:    int64(len(content)),
 		ModTime: modTime,
-	}, nil
+	}
+	o.statCache.set(schema, table, filename, entry)
+	return &entry, nil
 }
 
 // readFileSynthView reads synthesized file content.
@@ -596,6 +612,28 @@ func (o *Operations) getSynthRowPKByFiletype(ctx context.Context, schema, table 
 	return synth.ValueToString(row[pkIdx]), nil
 }
 
+// statSynthRowByFilename looks up any row (file or directory) by the filename column.
+// Used by statSynthFile to determine what exists at a path in a single query.
+// Unlike getSynthRow, this does NOT skip directory rows — the caller inspects filetype.
+func (o *Operations) statSynthRowByFilename(ctx context.Context, schema, table string, info *synth.ViewInfo, filename string) ([]string, []interface{}, *FSError) {
+	columns, row, err := o.db.GetRowByColumns(ctx, schema, table,
+		[]string{info.Roles.Filename}, []interface{}{filename})
+	if err != nil {
+		return nil, nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to query synth row",
+			Cause:   err,
+		}
+	}
+	if row == nil {
+		return nil, nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("file not found: %s", filename),
+		}
+	}
+	return columns, row, nil
+}
+
 // getSynthRow looks up a row in a synth view by the synthesized filename.
 // Returns the column names and row values, or an error if not found.
 // For hierarchical views, only matches file rows (skips directory rows).
@@ -617,19 +655,26 @@ func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info
 		}
 	}
 
-	if row != nil {
-		// For hierarchical views, verify it's not a directory row
-		if info.SupportsHierarchy {
-			filetypeIdx := findColIdx(columns, info.Roles.Filetype)
-			if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
-				// Got a directory row; there might still be a file row with the same name.
-				// Fall through to full scan below.
-				row = nil
-			}
+	// Targeted query returned no rows — file doesn't exist.
+	// No need for a full scan fallback since there's nothing to match.
+	if row == nil {
+		return nil, nil, &FSError{
+			Code:    ErrNotExist,
+			Message: fmt.Sprintf("file not found: %s", filename),
 		}
 	}
 
-	if row != nil {
+	// For hierarchical views, verify it's not a directory row
+	needsFullScan := false
+	if info.SupportsHierarchy {
+		filetypeIdx := findColIdx(columns, info.Roles.Filetype)
+		if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
+			// Got a directory row; there might still be a file row with the same name.
+			needsFullScan = true
+		}
+	}
+
+	if !needsFullScan {
 		// Verify the synthesized filename matches (handles sanitization edge cases)
 		var rowFilename string
 		switch info.Format {
@@ -644,9 +689,9 @@ func (o *Operations) getSynthRow(ctx context.Context, schema, table string, info
 		// Sanitized name differs from DB value; fall through to full scan
 	}
 
-	// Fallback: full scan for NULL-filename rows or sanitization mismatches.
-	// This is rare -- only happens when filename column is NULL (FS name derived
-	// from PK) or contains sanitized characters (\, \x00, :).
+	// Fallback: full scan for directory/file name collisions or sanitization mismatches.
+	// This is rare -- only happens when a directory and file share the same filename
+	// column value, or the filename contains sanitized characters (\, \x00, :).
 	return o.getSynthRowFullScan(ctx, schema, table, info, filename)
 }
 

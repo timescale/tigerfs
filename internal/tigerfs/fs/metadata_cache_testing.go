@@ -21,11 +21,12 @@ type TestMetadataCacheConfig struct {
 	Schemas []string
 
 	// Multi-schema data
-	SchemaTables      map[string][]string
-	SchemaViews       map[string][]string
-	SchemaRowCounts   map[string]map[string]int64
-	SchemaPermissions map[string]map[string]*db.TablePermissions
-	SchemaLastFetch   map[string]time.Time
+	SchemaTables              map[string][]string
+	SchemaViews               map[string][]string
+	SchemaRowCounts           map[string]map[string]int64
+	SchemaPermissions         map[string]map[string]*db.TablePermissions
+	SchemaLastFetch           map[string]time.Time
+	SchemaStructuralLastFetch map[string]time.Time
 }
 
 // NewTestMetadataCache creates a pre-populated MetadataCache for testing.
@@ -58,6 +59,9 @@ func NewTestMetadataCache(tc TestMetadataCacheConfig) *MetadataCache {
 	if tc.SchemaLastFetch == nil {
 		tc.SchemaLastFetch = make(map[string]time.Time)
 	}
+	if tc.SchemaStructuralLastFetch == nil {
+		tc.SchemaStructuralLastFetch = make(map[string]time.Time)
+	}
 
 	// Store Tables/Views in schema-specific maps for the default schema.
 	// This unifies default and non-default schema handling.
@@ -73,20 +77,25 @@ func NewTestMetadataCache(tc TestMetadataCacheConfig) *MetadataCache {
 	if _, ok := tc.SchemaLastFetch[defaultSchema]; !ok {
 		tc.SchemaLastFetch[defaultSchema] = time.Now()
 	}
+	if _, ok := tc.SchemaStructuralLastFetch[defaultSchema]; !ok {
+		tc.SchemaStructuralLastFetch[defaultSchema] = time.Now()
+	}
 
 	return &MetadataCache{
-		cfg:               tc.Cfg,
-		db:                tc.DB,
-		defaultSchema:     defaultSchema,
-		schemas:           tc.Schemas,
-		primaryKeys:       make(map[string][]string),
-		pkNegatives:       make(map[string]bool),
-		columns:           make(map[string][]db.Column),
-		schemaTables:      tc.SchemaTables,
-		schemaViews:       tc.SchemaViews,
-		schemaRowCounts:   tc.SchemaRowCounts,
-		schemaPermissions: tc.SchemaPermissions,
-		schemaLastFetch:   tc.SchemaLastFetch,
-		lastFetch:         time.Now(),
+		cfg:                       tc.Cfg,
+		db:                        tc.DB,
+		defaultSchema:             defaultSchema,
+		schemas:                   tc.Schemas,
+		primaryKeys:               make(map[string][]string),
+		pkNegatives:               make(map[string]bool),
+		columns:                   make(map[string][]db.Column),
+		schemaTables:              tc.SchemaTables,
+		schemaViews:               tc.SchemaViews,
+		schemaRowCounts:           tc.SchemaRowCounts,
+		schemaPermissions:         tc.SchemaPermissions,
+		schemaLastFetch:           tc.SchemaLastFetch,
+		schemaStructuralLastFetch: tc.SchemaStructuralLastFetch,
+		lastFetch:                 time.Now(),
+		structuralLastFetch:       time.Now(),
 	}
 }
