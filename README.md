@@ -393,7 +393,7 @@ For development guidelines, architecture details, and the full specification, se
 
 TigerFS is early, but the core idea is stable: transactional, concurrent files as the foundation for human-agent collaboration.
 
-**v0.4.0.** Cloud backends, versioned history, installer, and binary distribution.
+**v0.5.0.** Performance and observability — dramatically fewer SQL queries, flexible logging, and column projection.
 
 **Highlights:**
 - Markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
@@ -402,7 +402,7 @@ TigerFS is early, but the core idea is stable: transactional, concurrent files a
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
 - Full CRUD with multiple formats (TSV, CSV, JSON, YAML), index navigation, and PATCH semantics
 - Binary distribution via GoReleaser with install script (`curl -fsSL https://install.tigerfs.io | sh`)
-- Three-tier query caching for fast synth view operations over remote databases
+- Multi-tier stat caching and query reduction for fast operations over remote databases
 
 **Planned:**
 - Tables without primary keys (read-only via ctid)
