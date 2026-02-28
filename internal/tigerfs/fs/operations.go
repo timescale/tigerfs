@@ -1120,6 +1120,12 @@ func (o *Operations) ensureDDLSession(parsed *ParsedPath, op DDLOpType) *FSError
 
 // Stat returns metadata for a path.
 func (o *Operations) Stat(ctx context.Context, path string) (*Entry, *FSError) {
+	// TODO? Short-circuit known editor/VCS probe filenames (e.g., #file#, RCS,
+	// CVS, SCCS, .svn, file~, file,v, s.file) with ENOENT to avoid unnecessary
+	// DB queries. Editors like Emacs probe for these on every file open, causing
+	// ~6 extra round-trips per access. Would need to match only the filename
+	// component (last segment) and only for row-level paths.
+
 	parsed, err := o.parsePath(ctx, path)
 	if err != nil {
 		return nil, err
