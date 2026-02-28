@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1135,6 +1136,104 @@ func TestMount_ColumnsLsDir(t *testing.T) {
 	for col := range expectedCols {
 		t.Errorf("Missing column in .columns/ listing: %q", col)
 	}
+}
+
+// TestPipeline_SampleWithUUIDs tests .sample/N with UUID PKs and 54 rows.
+// This reproduces a user-reported bug where .sample/5 shows only 4 rows
+// when the table has UUID PKs and many rows.
+func TestPipeline_SampleWithUUIDs(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDB(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	schemaName := extractSchemaName(dbResult.ConnStr)
+	baseConnStr := stripSchemaFromConnStr(dbResult.ConnStr)
+
+	pool, err := pgxpool.New(ctx, baseConnStr)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer pool.Close()
+
+	// Create table with UUID PKs
+	_, err = pool.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE %s.uuid_items (
+			id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+			name text NOT NULL,
+			value int NOT NULL
+		)
+	`, schemaName))
+	if err != nil {
+		t.Fatalf("Failed to create uuid_items table: %v", err)
+	}
+
+	// Insert 54 rows (matching user scenario)
+	for i := 0; i < 54; i++ {
+		_, err = pool.Exec(ctx, fmt.Sprintf(`
+			INSERT INTO %s.uuid_items (name, value) VALUES ($1, $2)
+		`, schemaName), fmt.Sprintf("item_%d", i), i)
+		if err != nil {
+			t.Fatalf("Failed to insert row %d: %v", i, err)
+		}
+	}
+
+	cfg := defaultTestConfig()
+	mountpoint := t.TempDir()
+
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	for _, n := range []int{1, 2, 3, 4, 5, 6, 10} {
+		n := n
+		t.Run(fmt.Sprintf("Sample%d", n), func(t *testing.T) {
+			dir := filepath.Join(mountpoint, "uuid_items", ".sample", fmt.Sprintf("%d", n))
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("Failed to read .sample/%d/: %v", n, err)
+			}
+
+			rowCount := countNonDotEntries(entries)
+			if rowCount != n {
+				t.Errorf("Expected %d rows from .sample/%d, got %d", n, n, rowCount)
+				logEntries(t, entries)
+			}
+		})
+	}
+
+	// Also test via ls command (macOS uses different NFS path than Go's os.ReadDir)
+	t.Run("LsSample5", func(t *testing.T) {
+		dir := filepath.Join(mountpoint, "uuid_items", ".sample", "5")
+		out, err := exec.Command("ls", "-l", dir).Output()
+		if err != nil {
+			t.Fatalf("ls -l .sample/5 failed: %v", err)
+		}
+		// ls -l output has a "total" line first, then one line per entry
+		// Dotfiles are hidden by default
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		// First line is "total N" - skip it
+		rowLines := 0
+		for _, line := range lines {
+			if !strings.HasPrefix(line, "total ") {
+				rowLines++
+			}
+		}
+		if rowLines != 5 {
+			t.Errorf("Expected 5 rows from ls -l .sample/5, got %d", rowLines)
+			t.Logf("ls output:\n%s", string(out))
+		}
+	})
 }
 
 // Helper functions
