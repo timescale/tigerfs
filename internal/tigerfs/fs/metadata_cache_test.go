@@ -536,21 +536,26 @@ func TestMetadataCache_GetTablePermissions_WithMock(t *testing.T) {
 	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
 		return []string{"users", "other"}, nil
 	}
-	mock.MockSchemaReader.GetTablePermissionsFunc = func(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
-		if table == "users" {
-			return &db.TablePermissions{
-				CanSelect: true,
-				CanInsert: true,
-				CanUpdate: true,
-				CanDelete: false,
-			}, nil
+	mock.MockSchemaReader.GetTablePermissionsBatchFunc = func(ctx context.Context, schema string, tables []string) (map[string]*db.TablePermissions, error) {
+		result := make(map[string]*db.TablePermissions, len(tables))
+		for _, table := range tables {
+			if table == "users" {
+				result[table] = &db.TablePermissions{
+					CanSelect: true,
+					CanInsert: true,
+					CanUpdate: true,
+					CanDelete: false,
+				}
+			} else {
+				result[table] = &db.TablePermissions{
+					CanSelect: true,
+					CanInsert: false,
+					CanUpdate: false,
+					CanDelete: false,
+				}
+			}
 		}
-		return &db.TablePermissions{
-			CanSelect: true,
-			CanInsert: false,
-			CanUpdate: false,
-			CanDelete: false,
-		}, nil
+		return result, nil
 	}
 
 	cache := NewMetadataCache(cfg, mock)

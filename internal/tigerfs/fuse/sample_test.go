@@ -225,8 +225,12 @@ func TestSampleLimitNode_Readdir_WithMock_WithCache(t *testing.T) {
 	mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
 		return map[string]int64{"users": 1000000}, nil
 	}
-	mock.MockSchemaReader.GetTablePermissionsFunc = func(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
-		return &db.TablePermissions{CanSelect: true}, nil
+	mock.MockSchemaReader.GetTablePermissionsBatchFunc = func(ctx context.Context, schema string, tables []string) (map[string]*db.TablePermissions, error) {
+		result := make(map[string]*db.TablePermissions, len(tables))
+		for _, t := range tables {
+			result[t] = &db.TablePermissions{CanSelect: true}
+		}
+		return result, nil
 	}
 
 	cache := tigerfs.NewMetadataCache(cfg, mock)

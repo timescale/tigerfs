@@ -29,16 +29,17 @@ func (m *MockDDLExecutor) ExecInTransaction(ctx context.Context, sql string, arg
 
 // MockSchemaReader is a mock implementation of SchemaReader for testing.
 type MockSchemaReader struct {
-	GetCurrentSchemaFunc     func(ctx context.Context) (string, error)
-	GetSchemasFunc           func(ctx context.Context) ([]string, error)
-	GetTablesFunc            func(ctx context.Context, schema string) ([]string, error)
-	GetViewsFunc             func(ctx context.Context, schema string) ([]string, error)
-	IsViewUpdatableFunc      func(ctx context.Context, schema, view string) (bool, error)
-	GetColumnsFunc           func(ctx context.Context, schema, table string) ([]Column, error)
-	GetPrimaryKeyFunc        func(ctx context.Context, schema, table string) (*PrimaryKey, error)
-	GetTablePermissionsFunc  func(ctx context.Context, schema, table string) (*TablePermissions, error)
-	GetViewCommentFunc       func(ctx context.Context, schema, view string) (string, error)
-	GetViewCommentsBatchFunc func(ctx context.Context, schema string) (map[string]string, error)
+	GetCurrentSchemaFunc         func(ctx context.Context) (string, error)
+	GetSchemasFunc               func(ctx context.Context) ([]string, error)
+	GetTablesFunc                func(ctx context.Context, schema string) ([]string, error)
+	GetViewsFunc                 func(ctx context.Context, schema string) ([]string, error)
+	IsViewUpdatableFunc          func(ctx context.Context, schema, view string) (bool, error)
+	GetColumnsFunc               func(ctx context.Context, schema, table string) ([]Column, error)
+	GetPrimaryKeyFunc            func(ctx context.Context, schema, table string) (*PrimaryKey, error)
+	GetTablePermissionsFunc      func(ctx context.Context, schema, table string) (*TablePermissions, error)
+	GetTablePermissionsBatchFunc func(ctx context.Context, schema string, tables []string) (map[string]*TablePermissions, error)
+	GetViewCommentFunc           func(ctx context.Context, schema, view string) (string, error)
+	GetViewCommentsBatchFunc     func(ctx context.Context, schema string) (map[string]string, error)
 }
 
 var _ SchemaReader = (*MockSchemaReader)(nil)
@@ -97,6 +98,17 @@ func (m *MockSchemaReader) GetTablePermissions(ctx context.Context, schema, tabl
 		return m.GetTablePermissionsFunc(ctx, schema, table)
 	}
 	return &TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}, nil
+}
+
+func (m *MockSchemaReader) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (map[string]*TablePermissions, error) {
+	if m.GetTablePermissionsBatchFunc != nil {
+		return m.GetTablePermissionsBatchFunc(ctx, schema, tables)
+	}
+	result := make(map[string]*TablePermissions, len(tables))
+	for _, t := range tables {
+		result[t] = &TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}
+	}
+	return result, nil
 }
 
 func (m *MockSchemaReader) GetViewComment(ctx context.Context, schema, view string) (string, error) {

@@ -385,3 +385,86 @@ func TestClient_GetColumns_NilPool(t *testing.T) {
 		t.Errorf("Expected 'database connection not initialized', got: %v", err)
 	}
 }
+
+// TestFormatTableDDL verifies the pure DDL formatter produces correct output.
+func TestFormatTableDDL(t *testing.T) {
+	tests := []struct {
+		name     string
+		schema   string
+		table    string
+		columns  []Column
+		pk       *PrimaryKey
+		expected string
+	}{
+		{
+			name:   "basic table with PK",
+			schema: "public",
+			table:  "users",
+			columns: []Column{
+				{Name: "id", DataType: "integer", IsNullable: false},
+				{Name: "name", DataType: "text", IsNullable: false},
+				{Name: "email", DataType: "text", IsNullable: true},
+			},
+			pk: &PrimaryKey{Columns: []string{"id"}},
+			expected: "CREATE TABLE \"public\".\"users\" (\n" +
+				"  \"id\" integer NOT NULL,\n" +
+				"  \"name\" text NOT NULL,\n" +
+				"  \"email\" text,\n" +
+				"  PRIMARY KEY (id)\n" +
+				");\n",
+		},
+		{
+			name:   "table with varchar length",
+			schema: "public",
+			table:  "products",
+			columns: []Column{
+				{Name: "id", DataType: "integer", IsNullable: false},
+				{Name: "code", DataType: "character varying", MaxLength: 50, IsNullable: false},
+			},
+			pk: &PrimaryKey{Columns: []string{"id"}},
+			expected: "CREATE TABLE \"public\".\"products\" (\n" +
+				"  \"id\" integer NOT NULL,\n" +
+				"  \"code\" character varying(50) NOT NULL,\n" +
+				"  PRIMARY KEY (id)\n" +
+				");\n",
+		},
+		{
+			name:   "table with defaults",
+			schema: "public",
+			table:  "settings",
+			columns: []Column{
+				{Name: "id", DataType: "integer", IsNullable: false, Default: "nextval('settings_id_seq'::regclass)"},
+				{Name: "active", DataType: "boolean", IsNullable: true, Default: "true"},
+			},
+			pk: &PrimaryKey{Columns: []string{"id"}},
+			expected: "CREATE TABLE \"public\".\"settings\" (\n" +
+				"  \"id\" integer NOT NULL DEFAULT nextval('settings_id_seq'::regclass),\n" +
+				"  \"active\" boolean DEFAULT true,\n" +
+				"  PRIMARY KEY (id)\n" +
+				");\n",
+		},
+		{
+			name:   "table without PK",
+			schema: "myschema",
+			table:  "logs",
+			columns: []Column{
+				{Name: "ts", DataType: "timestamp with time zone", IsNullable: false},
+				{Name: "msg", DataType: "text", IsNullable: true},
+			},
+			pk: nil,
+			expected: "CREATE TABLE \"myschema\".\"logs\" (\n" +
+				"  \"ts\" timestamp with time zone NOT NULL,\n" +
+				"  \"msg\" text\n" +
+				");\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := FormatTableDDL(tt.schema, tt.table, tt.columns, tt.pk)
+			if result != tt.expected {
+				t.Errorf("FormatTableDDL() mismatch:\ngot:\n%s\nexpected:\n%s", result, tt.expected)
+			}
+		})
+	}
+}

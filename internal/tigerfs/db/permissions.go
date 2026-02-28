@@ -113,3 +113,67 @@ func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) 
 	}
 	return GetTablePermissions(ctx, c.pool, schema, table)
 }
+
+// GetTablePermissionsBatch queries PostgreSQL to determine privileges
+// for the current user on multiple tables in a single query.
+// This eliminates N serial round-trips when refreshing schema metadata.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - pool: PostgreSQL connection pool
+//   - schema: PostgreSQL schema name
+//   - tables: Table names to check permissions for
+//
+// Returns a map of table name to permissions, or error on database failure.
+func GetTablePermissionsBatch(ctx context.Context, pool *pgxpool.Pool, schema string, tables []string) (map[string]*TablePermissions, error) {
+	if len(tables) == 0 {
+		return make(map[string]*TablePermissions), nil
+	}
+
+	logging.Debug("Getting batch table permissions",
+		zap.String("schema", schema),
+		zap.Int("table_count", len(tables)))
+
+	query := `
+		SELECT t.table_name,
+		       has_table_privilege(format('"%s"."%s"', $1, t.table_name), 'SELECT'),
+		       has_table_privilege(format('"%s"."%s"', $1, t.table_name), 'INSERT'),
+		       has_table_privilege(format('"%s"."%s"', $1, t.table_name), 'UPDATE'),
+		       has_table_privilege(format('"%s"."%s"', $1, t.table_name), 'DELETE')
+		FROM unnest($2::text[]) AS t(table_name)
+	`
+
+	rows, err := pool.Query(ctx, query, schema, tables)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get batch table permissions: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]*TablePermissions, len(tables))
+	for rows.Next() {
+		var tableName string
+		var perms TablePermissions
+		if err := rows.Scan(&tableName, &perms.CanSelect, &perms.CanInsert, &perms.CanUpdate, &perms.CanDelete); err != nil {
+			return nil, fmt.Errorf("failed to scan batch permissions: %w", err)
+		}
+		result[tableName] = &perms
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating batch permissions: %w", err)
+	}
+
+	logging.Debug("Got batch table permissions",
+		zap.String("schema", schema),
+		zap.Int("table_count", len(result)))
+
+	return result, nil
+}
+
+// GetTablePermissionsBatch is a convenience wrapper for Client.
+func (c *Client) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (map[string]*TablePermissions, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetTablePermissionsBatch(ctx, c.pool, schema, tables)
+}

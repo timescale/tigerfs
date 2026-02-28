@@ -1432,20 +1432,45 @@ func (o *Operations) resolveColumn(columns []db.Column, filename string) (string
 
 // statInfoFile returns metadata for an info file.
 // Fetches the actual content to report accurate file size.
-func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
-	// Fetch actual content to get accurate size (required for NFS)
-	content, fsErr := o.readInfoFile(ctx, parsed)
+// cachedStat wraps a stat computation with cache check/set.
+// Stat functions that generate content just for file size use this
+// to avoid repeated expensive computation during NFS path resolution.
+func (o *Operations) cachedStat(schema, cacheTable, filename string, compute func() (*Entry, *FSError)) (*Entry, *FSError) {
+	if entry, ok := o.statCache.lookup(schema, cacheTable, filename); ok {
+		return &entry, nil
+	}
+	entry, fsErr := compute()
 	if fsErr != nil {
 		return nil, fsErr
 	}
+	o.statCache.set(schema, cacheTable, filename, *entry)
+	return entry, nil
+}
 
-	return &Entry{
-		Name:    parsed.InfoFile,
-		IsDir:   false,
-		Mode:    0444, // Read-only, matching FUSE behavior
-		Size:    int64(len(content.Data)),
-		ModTime: time.Now(),
-	}, nil
+func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+	fsCtx := parsed.Context
+	schema := ""
+	tableName := ""
+	if fsCtx != nil {
+		schema = fsCtx.Schema
+		tableName = fsCtx.TableName
+	}
+
+	return o.cachedStat(schema, tableName, parsed.InfoFile, func() (*Entry, *FSError) {
+		// Fetch actual content to get accurate size (required for NFS)
+		content, fsErr := o.readInfoFile(ctx, parsed)
+		if fsErr != nil {
+			return nil, fsErr
+		}
+
+		return &Entry{
+			Name:    parsed.InfoFile,
+			IsDir:   false,
+			Mode:    0444, // Read-only, matching FUSE behavior
+			Size:    int64(len(content.Data)),
+			ModTime: time.Now(),
+		}, nil
+	})
 }
 
 // statIndexEntry returns metadata for a specific index directory.
@@ -1589,27 +1614,37 @@ func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath) (*Entry
 
 	// If format is set, this is an export file (e.g., /table/.export/csv)
 	if parsed.Format != "" {
-		// Calculate actual file size by generating the export data
-		content, err := o.readExportFile(ctx, parsed)
-		if err != nil {
-			// If we can't read the file, return with size 0 but don't fail stat
+		fsCtx := parsed.Context
+		schema := ""
+		tableName := ""
+		if fsCtx != nil {
+			schema = fsCtx.Schema
+			tableName = fsCtx.TableName
+		}
+
+		return o.cachedStat(schema, tableName, ".export/"+parsed.Format, func() (*Entry, *FSError) {
+			// Calculate actual file size by generating the export data
+			content, err := o.readExportFile(ctx, parsed)
+			if err != nil {
+				// If we can't read the file, return with size 0 but don't fail stat
+				// Use 0600 for NFS compatibility (macOS requires owner read permission)
+				return &Entry{
+					Name:    parsed.Format,
+					IsDir:   false,
+					Mode:    0600,
+					ModTime: now,
+				}, nil
+			}
+
 			// Use 0600 for NFS compatibility (macOS requires owner read permission)
 			return &Entry{
 				Name:    parsed.Format,
 				IsDir:   false,
+				Size:    content.Size,
 				Mode:    0600,
 				ModTime: now,
 			}, nil
-		}
-
-		// Use 0600 for NFS compatibility (macOS requires owner read permission)
-		return &Entry{
-			Name:    parsed.Format,
-			IsDir:   false,
-			Size:    content.Size,
-			Mode:    0600,
-			ModTime: now,
-		}, nil
+		})
 	}
 
 	// If ExportWithHeaders is set but no format, it's the .with-headers directory
@@ -1913,16 +1948,17 @@ func (o *Operations) readInfoFile(ctx context.Context, parsed *ParsedPath) (*Fil
 			data += col.Name + "\n"
 		}
 
-	case FileSchema: // "schema" - basic CREATE TABLE DDL
-		ddl, dbErr := o.db.GetTableDDL(ctx, fsCtx.Schema, fsCtx.TableName)
-		if dbErr != nil {
+	case FileSchema: // "schema" - basic CREATE TABLE DDL (from cached metadata)
+		columns, colErr := o.metaCache.GetColumns(ctx, fsCtx.Schema, fsCtx.TableName)
+		if colErr != nil {
 			return nil, &FSError{
 				Code:    ErrIO,
-				Message: "failed to get schema",
-				Cause:   dbErr,
+				Message: "failed to get columns for schema DDL",
+				Cause:   colErr,
 			}
 		}
-		data = ddl
+		pk, _ := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+		data = db.FormatTableDDL(fsCtx.Schema, fsCtx.TableName, columns, pk)
 
 	case FileIndexes: // "indexes" - one index name per line
 		indexes, dbErr := o.db.GetIndexes(ctx, fsCtx.Schema, fsCtx.TableName)
