@@ -442,6 +442,30 @@ func (c *MetadataCache) RefreshCatalog(ctx context.Context) error {
 	return nil
 }
 
+// fetchSchemaStructural fetches row counts and permissions for a set of tables.
+// Shared by RefreshStructural (default schema) and RefreshSchema (other schemas).
+func (c *MetadataCache) fetchSchemaStructural(ctx context.Context, schema string, tables []string) (map[string]int64, map[string]*db.TablePermissions) {
+	// Query row count estimates for all tables in one batch
+	rowCounts, err := c.db.GetRowCountEstimates(ctx, schema, tables)
+	if err != nil {
+		logging.Warn("Failed to get row count estimates, continuing without",
+			zap.String("schema", schema),
+			zap.Error(err))
+		rowCounts = make(map[string]int64)
+	}
+
+	// Query permissions for all tables in one batch
+	permissions, err := c.db.GetTablePermissionsBatch(ctx, schema, tables)
+	if err != nil {
+		logging.Warn("Failed to get batch permissions, continuing without",
+			zap.String("schema", schema),
+			zap.Error(err))
+		permissions = make(map[string]*db.TablePermissions)
+	}
+
+	return rowCounts, permissions
+}
+
 // RefreshStructural refreshes the structural tier: row counts, permissions.
 // This is the slow tier, called infrequently (default every 5m).
 func (c *MetadataCache) RefreshStructural(ctx context.Context) error {
@@ -458,26 +482,7 @@ func (c *MetadataCache) RefreshStructural(ctx context.Context) error {
 
 	logging.Debug("Refreshing metadata cache (structural)", zap.String("schema", schema))
 
-	// Query row count estimates for all tables
-	rowCounts, err := c.db.GetRowCountEstimates(ctx, schema, tables)
-	if err != nil {
-		logging.Warn("Failed to get row count estimates, continuing without",
-			zap.Error(err))
-		rowCounts = make(map[string]int64)
-	}
-
-	// Query permissions for all tables
-	permissions := make(map[string]*db.TablePermissions)
-	for _, table := range tables {
-		perms, err := c.db.GetTablePermissions(ctx, schema, table)
-		if err != nil {
-			logging.Warn("Failed to get permissions for table, continuing without",
-				zap.String("table", table),
-				zap.Error(err))
-			continue
-		}
-		permissions[table] = perms
-	}
+	rowCounts, permissions := c.fetchSchemaStructural(ctx, schema, tables)
 
 	c.mu.Lock()
 	c.tableRowCounts = rowCounts
@@ -717,28 +722,8 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 		views = []string{}
 	}
 
-	// Query row count estimates
-	rowCounts, err := c.db.GetRowCountEstimates(ctx, schemaName, tables)
-	if err != nil {
-		logging.Warn("Failed to get row count estimates for schema",
-			zap.String("schema", schemaName),
-			zap.Error(err))
-		rowCounts = make(map[string]int64)
-	}
-
-	// Query permissions for all tables
-	permissions := make(map[string]*db.TablePermissions)
-	for _, table := range tables {
-		perms, err := c.db.GetTablePermissions(ctx, schemaName, table)
-		if err != nil {
-			logging.Warn("Failed to get permissions for table in schema",
-				zap.String("schema", schemaName),
-				zap.String("table", table),
-				zap.Error(err))
-			continue
-		}
-		permissions[table] = perms
-	}
+	// Fetch row counts + permissions in batch (shared with RefreshStructural)
+	rowCounts, permissions := c.fetchSchemaStructural(ctx, schemaName, tables)
 
 	c.mu.Lock()
 	c.schemaTables[schemaName] = tables

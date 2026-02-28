@@ -1086,9 +1086,11 @@ type mockDBClient struct {
 	execInTxError   error
 
 	// Call counting for cache optimization tests
-	getRowCalls     int
-	getColumnsCalls int
-	getColumnCalls  int
+	getRowCalls      int
+	getColumnsCalls  int
+	getColumnCalls   int
+	getTableDDLCalls int
+	getFullDDLCalls  int
 }
 
 type mockPK struct {
@@ -1189,6 +1191,14 @@ func (m *mockDBClient) GetTablePermissions(ctx context.Context, schema, table st
 	return &db.TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}, nil
 }
 
+func (m *mockDBClient) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (map[string]*db.TablePermissions, error) {
+	result := make(map[string]*db.TablePermissions, len(tables))
+	for _, t := range tables {
+		result[t] = &db.TablePermissions{CanSelect: true, CanInsert: true, CanUpdate: true, CanDelete: true}
+	}
+	return result, nil
+}
+
 func (m *mockDBClient) GetViewComment(ctx context.Context, schema, view string) (string, error) {
 	return "", nil
 }
@@ -1273,6 +1283,7 @@ func (m *mockDBClient) GetTableRowCountEstimate(ctx context.Context, schema, tab
 // Implement db.DDLReader
 
 func (m *mockDBClient) GetTableDDL(ctx context.Context, schema, table string) (string, error) {
+	m.getTableDDLCalls++
 	key := schema + "." + table
 	if ddl, ok := m.tableDDL[key]; ok {
 		return ddl, nil
@@ -1281,6 +1292,7 @@ func (m *mockDBClient) GetTableDDL(ctx context.Context, schema, table string) (s
 }
 
 func (m *mockDBClient) GetFullDDL(ctx context.Context, schema, table string) (string, error) {
+	m.getFullDDLCalls++
 	return m.GetTableDDL(ctx, schema, table)
 }
 
@@ -2850,4 +2862,88 @@ func TestStatColumn_Invalidate(t *testing.T) {
 	_, fsErr = ops.Stat(ctx, "/users/1/name.txt")
 	require.Nil(t, fsErr)
 	assert.Equal(t, 1, mockDB.getColumnCalls, "GetColumn should be called after cache invalidation")
+}
+
+// TestStatInfoFile_CachedStat tests that stat-ing an info file twice only
+// generates the content once (the second call uses the stat cache).
+func TestStatInfoFile_CachedStat(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		tableDDL: map[string]string{
+			"public.users": "CREATE TABLE \"public\".\"users\" (\n  \"id\" integer NOT NULL\n);\n",
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First Stat on schema info file — should generate content (uses FormatTableDDL with cached columns)
+	entry1, fsErr := ops.Stat(ctx, "/users/.info/schema")
+	require.Nil(t, fsErr)
+	assert.False(t, entry1.IsDir)
+	assert.True(t, entry1.Size > 0, "schema file should have non-zero size")
+	// readInfoFile("schema") now uses metaCache.GetColumns + FormatTableDDL, not GetTableDDL
+	assert.Equal(t, 1, mockDB.getColumnsCalls, "first Stat should call GetColumns")
+	assert.Equal(t, 0, mockDB.getTableDDLCalls, "should use FormatTableDDL, not GetTableDDL")
+
+	// Second Stat on same file — should use cached stat, NOT regenerate
+	entry2, fsErr := ops.Stat(ctx, "/users/.info/schema")
+	require.Nil(t, fsErr)
+	assert.Equal(t, entry1.Size, entry2.Size, "cached size should match")
+	assert.Equal(t, 1, mockDB.getColumnsCalls, "second Stat should use stat cache, not call GetColumns again")
+}
+
+// TestStatExportFile_CachedStat tests that stat-ing an export file twice only
+// generates the export data once.
+func TestStatExportFile_CachedStat(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+			},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.users": {
+				columns: []string{"id", "name"},
+				rows:    [][]interface{}{{1, "Alice"}, {2, "Bob"}},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First Stat on .export/csv — should generate content
+	entry1, fsErr := ops.Stat(ctx, "/users/.export/csv")
+	require.Nil(t, fsErr)
+	assert.False(t, entry1.IsDir)
+	assert.True(t, entry1.Size > 0, "export file should have non-zero size")
+
+	// Second Stat — should use cached stat
+	entry2, fsErr := ops.Stat(ctx, "/users/.export/csv")
+	require.Nil(t, fsErr)
+	assert.Equal(t, entry1.Size, entry2.Size, "cached size should match")
 }

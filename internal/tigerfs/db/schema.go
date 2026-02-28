@@ -242,18 +242,23 @@ func (c *Client) IsViewUpdatable(ctx context.Context, schema, view string) (bool
 type Column struct {
 	Name       string
 	DataType   string
+	MaxLength  int // character_maximum_length (0 if not applicable)
 	IsNullable bool
 	Default    string // Column default value (empty string if no default)
 }
 
-// GetColumns returns all columns for a table in schema order
+// GetColumns returns all columns for a table in schema order.
+// Fetches column_default and character_maximum_length so callers
+// can generate DDL without a separate query.
 func GetColumns(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Column, error) {
 	logging.Debug("Querying columns from information_schema",
 		zap.String("schema", schema),
 		zap.String("table", table))
 
 	query := `
-		SELECT column_name, data_type, is_nullable
+		SELECT column_name, data_type, is_nullable,
+		       COALESCE(character_maximum_length, 0),
+		       COALESCE(column_default, '')
 		FROM information_schema.columns
 		WHERE table_schema = $1 AND table_name = $2
 		ORDER BY ordinal_position
@@ -269,7 +274,7 @@ func GetColumns(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	for rows.Next() {
 		var col Column
 		var isNullableStr string
-		if err := rows.Scan(&col.Name, &col.DataType, &isNullableStr); err != nil {
+		if err := rows.Scan(&col.Name, &col.DataType, &isNullableStr, &col.MaxLength, &col.Default); err != nil {
 			return nil, fmt.Errorf("failed to scan column: %w", err)
 		}
 		col.IsNullable = (isNullableStr == "YES")
@@ -610,6 +615,54 @@ func (c *Client) GetTableDDL(ctx context.Context, schema, table string) (string,
 		return "", fmt.Errorf("database connection not initialized")
 	}
 	return GetTableDDL(ctx, c.pool, schema, table)
+}
+
+// FormatTableDDL generates a CREATE TABLE DDL statement from pre-fetched metadata.
+// Uses cached columns and PK — no DB queries needed. This produces the same output
+// as GetTableDDL but without requiring a database connection.
+//
+// Parameters:
+//   - schema: PostgreSQL schema name
+//   - table: Table name
+//   - columns: Column metadata (from GetColumns or MetadataCache.GetColumns)
+//   - pk: Primary key info (nil if table has no PK)
+//
+// Returns the DDL string.
+func FormatTableDDL(schema, table string, columns []Column, pk *PrimaryKey) string {
+	var ddl strings.Builder
+	ddl.WriteString(fmt.Sprintf("CREATE TABLE \"%s\".\"%s\" (\n", schema, table))
+
+	columnDefs := make([]string, 0, len(columns))
+	for _, col := range columns {
+		colDef := fmt.Sprintf("  \"%s\" %s", col.Name, col.DataType)
+
+		// Add length for character types
+		if col.MaxLength > 0 {
+			colDef += fmt.Sprintf("(%d)", col.MaxLength)
+		}
+
+		// Add NOT NULL constraint
+		if !col.IsNullable {
+			colDef += " NOT NULL"
+		}
+
+		// Add DEFAULT
+		if col.Default != "" {
+			colDef += fmt.Sprintf(" DEFAULT %s", col.Default)
+		}
+
+		columnDefs = append(columnDefs, colDef)
+	}
+
+	ddl.WriteString(strings.Join(columnDefs, ",\n"))
+
+	if pk != nil && len(pk.Columns) > 0 {
+		ddl.WriteString(fmt.Sprintf(",\n  PRIMARY KEY (%s)", strings.Join(pk.Columns, ", ")))
+	}
+
+	ddl.WriteString("\n);\n")
+
+	return ddl.String()
 }
 
 // GetIndexDDL returns CREATE INDEX statements for a table.

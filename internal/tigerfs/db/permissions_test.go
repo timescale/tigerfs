@@ -175,3 +175,107 @@ func TestClient_GetTablePermissions_NilPool(t *testing.T) {
 		t.Errorf("Expected 'database connection not initialized', got: %v", err)
 	}
 }
+
+// TestGetTablePermissionsBatch tests batch permission fetching for multiple tables.
+func TestGetTablePermissionsBatch(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create test tables
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_batch_perms_1 (id serial PRIMARY KEY);
+		CREATE TABLE IF NOT EXISTS test_batch_perms_2 (id serial PRIMARY KEY);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test tables: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_batch_perms_1, test_batch_perms_2")
+	}()
+
+	// Batch fetch permissions for both tables
+	perms, err := client.GetTablePermissionsBatch(ctx, "public", []string{"test_batch_perms_1", "test_batch_perms_2"})
+	if err != nil {
+		t.Fatalf("GetTablePermissionsBatch() failed: %v", err)
+	}
+
+	// Should have entries for both tables
+	if len(perms) != 2 {
+		t.Fatalf("Expected permissions for 2 tables, got %d", len(perms))
+	}
+
+	// Both should have all permissions (owner/superuser)
+	for _, name := range []string{"test_batch_perms_1", "test_batch_perms_2"} {
+		p, ok := perms[name]
+		if !ok {
+			t.Errorf("Missing permissions for %s", name)
+			continue
+		}
+		if !p.CanSelect || !p.CanInsert || !p.CanUpdate || !p.CanDelete {
+			t.Errorf("Expected full permissions for %s, got: %+v", name, p)
+		}
+	}
+}
+
+// TestGetTablePermissionsBatch_Empty tests batch with empty table list.
+func TestGetTablePermissionsBatch_Empty(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Empty list should return empty map, not error
+	perms, err := client.GetTablePermissionsBatch(ctx, "public", []string{})
+	if err != nil {
+		t.Fatalf("GetTablePermissionsBatch() failed: %v", err)
+	}
+	if len(perms) != 0 {
+		t.Errorf("Expected empty map, got %d entries", len(perms))
+	}
+}
+
+func TestClient_GetTablePermissionsBatch_NilPool(t *testing.T) {
+	client := &Client{
+		cfg: &config.Config{},
+	}
+
+	ctx := context.Background()
+
+	_, err := client.GetTablePermissionsBatch(ctx, "public", []string{"t1"})
+	if err == nil {
+		t.Error("Expected error for nil pool, got nil")
+	}
+	if err.Error() != "database connection not initialized" {
+		t.Errorf("Expected 'database connection not initialized', got: %v", err)
+	}
+}

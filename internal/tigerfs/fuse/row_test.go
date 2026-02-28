@@ -1198,13 +1198,17 @@ func TestRowFileNode_getFileMode_WithMock(t *testing.T) {
 			mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
 				return map[string]int64{"users": 100}, nil
 			}
-			mock.MockSchemaReader.GetTablePermissionsFunc = func(ctx context.Context, schema, table string) (*db.TablePermissions, error) {
-				return &db.TablePermissions{
-					CanSelect: tc.select_,
-					CanUpdate: tc.update,
-					CanInsert: tc.insert,
-					CanDelete: tc.delete_,
-				}, nil
+			mock.MockSchemaReader.GetTablePermissionsBatchFunc = func(ctx context.Context, schema string, tables []string) (map[string]*db.TablePermissions, error) {
+				result := make(map[string]*db.TablePermissions, len(tables))
+				for _, t := range tables {
+					result[t] = &db.TablePermissions{
+						CanSelect: tc.select_,
+						CanUpdate: tc.update,
+						CanInsert: tc.insert,
+						CanDelete: tc.delete_,
+					}
+				}
+				return result, nil
 			}
 
 			cache := tigerfs.NewMetadataCache(cfg, mock)
