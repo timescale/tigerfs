@@ -63,8 +63,9 @@ type statCache struct {
 
 // tableCache holds cached entries for a single table.
 type tableCache struct {
-	entries map[string]Entry // key: filename (matches parsed.PrimaryKey)
-	created time.Time
+	entries   map[string]Entry // key: filename (matches parsed.PrimaryKey)
+	negatives map[string]bool  // filenames known to not exist (negative cache)
+	created   time.Time
 }
 
 // statCacheTTL is the maximum age of cached entries before they expire.
@@ -130,6 +131,55 @@ func (c *statCache) set(schema, table, filename string, entry Entry) {
 		return
 	}
 	tc.entries[filename] = entry
+}
+
+// setNegative records that a filename does not exist in a table.
+// Subsequent isNegative() calls return true, avoiding redundant DB queries.
+// Cleared by invalidate() and prime() (which replace the whole tableCache).
+func (c *statCache) setNegative(schema, table, filename string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.tables == nil {
+		c.tables = make(map[string]*tableCache)
+	}
+
+	key := schema + "\x00" + table
+	tc := c.tables[key]
+	if tc == nil || time.Since(tc.created) > statCacheTTL {
+		c.tables[key] = &tableCache{
+			entries:   make(map[string]Entry),
+			negatives: map[string]bool{filename: true},
+			created:   time.Now(),
+		}
+		return
+	}
+	if tc.negatives == nil {
+		tc.negatives = make(map[string]bool)
+	}
+	tc.negatives[filename] = true
+}
+
+// isNegative returns true if the filename is cached as not-existing.
+func (c *statCache) isNegative(schema, table, filename string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.tables == nil {
+		return false
+	}
+
+	key := schema + "\x00" + table
+	tc := c.tables[key]
+	if tc == nil {
+		return false
+	}
+
+	if time.Since(tc.created) > statCacheTTL {
+		return false
+	}
+
+	return tc.negatives[filename]
 }
 
 // invalidate clears cached entries for a table (called on writes).

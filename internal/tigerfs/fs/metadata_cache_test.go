@@ -116,6 +116,7 @@ func TestMetadataCache_Invalidate(t *testing.T) {
 	// Set some data
 	cache.schemaTables["public"] = []string{"table1", "table2"}
 	cache.schemaLastFetch["public"] = time.Now()
+	cache.schemaStructuralLastFetch["public"] = time.Now()
 	cache.lastFetch = time.Now()
 	cache.structuralLastFetch = time.Now()
 
@@ -584,6 +585,7 @@ func TestMetadataCache_InvalidateSchemas(t *testing.T) {
 	cache.schemas = []string{"public", "analytics"}
 	cache.schemaTables["analytics"] = []string{"reports"}
 	cache.schemaLastFetch["analytics"] = time.Now()
+	cache.schemaStructuralLastFetch["analytics"] = time.Now()
 
 	// Invalidate
 	cache.Invalidate()
@@ -600,4 +602,134 @@ func TestMetadataCache_InvalidateSchemas(t *testing.T) {
 	if len(cache.schemaLastFetch) != 0 {
 		t.Error("Expected schemaLastFetch to be empty after invalidate")
 	}
+
+	if len(cache.schemaStructuralLastFetch) != 0 {
+		t.Error("Expected schemaStructuralLastFetch to be empty after invalidate")
+	}
+}
+
+func TestMetadataCache_CatalogRefreshSkipsStructural(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:                     "public",
+		MetadataRefreshInterval:           100 * time.Millisecond,
+		StructuralMetadataRefreshInterval: 5 * time.Minute,
+	}
+
+	structuralCalls := 0
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return []string{"users", "orders"}, nil
+	}
+	mock.MockSchemaReader.GetViewsFunc = func(ctx context.Context, schema string) ([]string, error) {
+		return []string{"user_summary"}, nil
+	}
+	mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+		structuralCalls++
+		return map[string]int64{"users": 100}, nil
+	}
+	mock.MockSchemaReader.GetTablePermissionsBatchFunc = func(ctx context.Context, schema string, tables []string) (map[string]*db.TablePermissions, error) {
+		structuralCalls++
+		return make(map[string]*db.TablePermissions), nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// First call: loads both catalog and structural (fresh cache)
+	tables, err := cache.GetTablesForSchema(context.Background(), "analytics")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema error: %v", err)
+	}
+	if len(tables) != 2 {
+		t.Errorf("Expected 2 tables, got %d", len(tables))
+	}
+	if structuralCalls != 0 {
+		t.Errorf("Expected 0 structural calls after catalog-only refresh, got %d", structuralCalls)
+	}
+
+	// Wait for catalog to expire
+	time.Sleep(150 * time.Millisecond)
+
+	// Second call: catalog stale, but structural should NOT be fetched
+	structuralCalls = 0
+	tables, err = cache.GetTablesForSchema(context.Background(), "analytics")
+	if err != nil {
+		t.Fatalf("Second GetTablesForSchema error: %v", err)
+	}
+	if len(tables) != 2 {
+		t.Errorf("Expected 2 tables, got %d", len(tables))
+	}
+	if structuralCalls != 0 {
+		t.Errorf("Expected 0 structural calls on catalog-only refresh, got %d", structuralCalls)
+	}
+}
+
+func TestMetadataCache_StructuralRefreshIndependent(t *testing.T) {
+	cfg := &config.Config{
+		DefaultSchema:                     "public",
+		MetadataRefreshInterval:           30 * time.Second,
+		StructuralMetadataRefreshInterval: 100 * time.Millisecond,
+	}
+
+	catalogCalls := 0
+	structuralCalls := 0
+	mock := db.NewMockDBClient()
+	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
+		catalogCalls++
+		return []string{"users"}, nil
+	}
+	mock.MockSchemaReader.GetViewsFunc = func(ctx context.Context, schema string) ([]string, error) {
+		catalogCalls++
+		return []string{}, nil
+	}
+	mock.MockCountReader.GetRowCountEstimatesFunc = func(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
+		structuralCalls++
+		return map[string]int64{"users": 500}, nil
+	}
+	mock.MockSchemaReader.GetTablePermissionsBatchFunc = func(ctx context.Context, schema string, tables []string) (map[string]*db.TablePermissions, error) {
+		structuralCalls++
+		return make(map[string]*db.TablePermissions), nil
+	}
+
+	cache := NewMetadataCache(cfg, mock)
+
+	// Load catalog first (this primes GetTablesForSchema)
+	_, err := cache.GetTablesForSchema(context.Background(), "analytics")
+	if err != nil {
+		t.Fatalf("GetTablesForSchema error: %v", err)
+	}
+	initialCatalogCalls := catalogCalls
+
+	// Request structural data — first time, so it should trigger structural refresh
+	count, err := cache.GetRowCountEstimateForSchema(context.Background(), "analytics", "users")
+	if err != nil {
+		t.Fatalf("GetRowCountEstimateForSchema error: %v", err)
+	}
+	if count != 500 {
+		t.Errorf("Expected count=500, got %d", count)
+	}
+	if structuralCalls != 2 { // GetRowCountEstimates + GetTablePermissionsBatch
+		t.Errorf("Expected 2 structural calls, got %d", structuralCalls)
+	}
+
+	// Wait for structural TTL to expire
+	time.Sleep(150 * time.Millisecond)
+	catalogCalls = 0
+	structuralCalls = 0
+
+	// Request structural data again — structural stale, but catalog should NOT re-fetch
+	count, err = cache.GetRowCountEstimateForSchema(context.Background(), "analytics", "users")
+	if err != nil {
+		t.Fatalf("Second GetRowCountEstimateForSchema error: %v", err)
+	}
+	if count != 500 {
+		t.Errorf("Expected count=500, got %d", count)
+	}
+	if catalogCalls != 0 {
+		t.Errorf("Expected 0 catalog calls (catalog still fresh), got %d", catalogCalls)
+	}
+	if structuralCalls != 2 {
+		t.Errorf("Expected 2 structural calls (structural expired), got %d", structuralCalls)
+	}
+
+	_ = initialCatalogCalls // used for documentation, not assertion
 }

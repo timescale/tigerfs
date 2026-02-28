@@ -48,12 +48,13 @@ type MetadataCache struct {
 	defaultSchema string
 
 	// Multi-schema support (for .schemas/ directory)
-	schemas           []string                                   // All user-defined schemas
-	schemaTables      map[string][]string                        // schema -> table names
-	schemaViews       map[string][]string                        // schema -> view names
-	schemaRowCounts   map[string]map[string]int64                // schema -> table -> count
-	schemaPermissions map[string]map[string]*db.TablePermissions // schema -> table -> permissions
-	schemaLastFetch   map[string]time.Time                       // schema -> last fetch time
+	schemas                   []string                                   // All user-defined schemas
+	schemaTables              map[string][]string                        // schema -> table names
+	schemaViews               map[string][]string                        // schema -> view names
+	schemaRowCounts           map[string]map[string]int64                // schema -> table -> count
+	schemaPermissions         map[string]map[string]*db.TablePermissions // schema -> table -> permissions
+	schemaLastFetch           map[string]time.Time                       // schema -> last catalog fetch time
+	schemaStructuralLastFetch map[string]time.Time                       // schema -> last structural fetch time
 }
 
 // NewMetadataCache creates a new metadata cache.
@@ -67,18 +68,19 @@ type MetadataCache struct {
 // current_schema() on first refresh.
 func NewMetadataCache(cfg *config.Config, dbClient db.DBClient) *MetadataCache {
 	return &MetadataCache{
-		cfg:               cfg,
-		db:                dbClient,
-		defaultSchema:     cfg.DefaultSchema,
-		primaryKeys:       make(map[string][]string),
-		pkNegatives:       make(map[string]bool),
-		columns:           make(map[string][]db.Column),
-		schemas:           []string{},
-		schemaTables:      make(map[string][]string),
-		schemaViews:       make(map[string][]string),
-		schemaRowCounts:   make(map[string]map[string]int64),
-		schemaPermissions: make(map[string]map[string]*db.TablePermissions),
-		schemaLastFetch:   make(map[string]time.Time),
+		cfg:                       cfg,
+		db:                        dbClient,
+		defaultSchema:             cfg.DefaultSchema,
+		primaryKeys:               make(map[string][]string),
+		pkNegatives:               make(map[string]bool),
+		columns:                   make(map[string][]db.Column),
+		schemas:                   []string{},
+		schemaTables:              make(map[string][]string),
+		schemaViews:               make(map[string][]string),
+		schemaRowCounts:           make(map[string]map[string]int64),
+		schemaPermissions:         make(map[string]map[string]*db.TablePermissions),
+		schemaLastFetch:           make(map[string]time.Time),
+		schemaStructuralLastFetch: make(map[string]time.Time),
 	}
 }
 
@@ -330,6 +332,20 @@ func (c *MetadataCache) needsStructuralRefresh() bool {
 	return time.Since(c.structuralLastFetch) > interval
 }
 
+// needsSchemaStructuralRefresh checks if the structural tier for a specific schema has expired.
+// IMPORTANT: Must be called with at least read lock held.
+func (c *MetadataCache) needsSchemaStructuralRefresh(schemaName string) bool {
+	lastFetch, ok := c.schemaStructuralLastFetch[schemaName]
+	if !ok || lastFetch.IsZero() {
+		return true
+	}
+	interval := c.cfg.StructuralMetadataRefreshInterval
+	if interval == 0 {
+		interval = 5 * time.Minute // fallback default
+	}
+	return time.Since(lastFetch) > interval
+}
+
 // RefreshCatalog refreshes the catalog tier: schemas, tables, views.
 // This is the fast tier, called frequently (default every 10s).
 func (c *MetadataCache) RefreshCatalog(ctx context.Context) error {
@@ -572,8 +588,8 @@ func (c *MetadataCache) GetTablesForSchema(ctx context.Context, schemaName strin
 	}
 	c.mu.RUnlock()
 
-	// Lazy-load tables for this schema
-	return c.RefreshSchema(ctx, schemaName)
+	// Lazy-load tables for this schema (catalog-only — no row counts/permissions)
+	return c.refreshSchemaCatalog(ctx, schemaName)
 }
 
 // GetViewsForSchema returns the list of views for a specific schema.
@@ -603,8 +619,8 @@ func (c *MetadataCache) GetViewsForSchema(ctx context.Context, schemaName string
 	}
 	c.mu.RUnlock()
 
-	// Lazy-load data for this schema (also loads views)
-	_, err := c.RefreshSchema(ctx, schemaName)
+	// Lazy-load data for this schema (catalog-only — no row counts/permissions)
+	_, err := c.refreshSchemaCatalog(ctx, schemaName)
 	if err != nil {
 		return nil, err
 	}
@@ -618,16 +634,11 @@ func (c *MetadataCache) GetViewsForSchema(ctx context.Context, schemaName string
 	return viewsCopy, nil
 }
 
-// RefreshSchema loads (or refreshes) cached data for a specific schema.
-// Called automatically by GetTablesForSchema when cache is stale.
-//
-// Parameters:
-//   - ctx: Context for cancellation
-//   - schemaName: Name of the schema to refresh
-//
-// Returns the table list for the schema.
-func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([]string, error) {
-	logging.Debug("Refreshing schema cache", zap.String("schema", schemaName))
+// refreshSchemaCatalog refreshes only the catalog tier (tables + views) for a specific schema.
+// This is the lightweight path — only 2 queries. Called by GetTablesForSchema/GetViewsForSchema
+// when the catalog TTL expires.
+func (c *MetadataCache) refreshSchemaCatalog(ctx context.Context, schemaName string) ([]string, error) {
+	logging.Debug("Refreshing schema catalog cache", zap.String("schema", schemaName))
 
 	// Query tables for this schema
 	tables, err := c.db.GetTables(ctx, schemaName)
@@ -644,18 +655,14 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 		views = []string{}
 	}
 
-	// Fetch row counts + permissions in batch (shared with RefreshStructural)
-	rowCounts, permissions := c.fetchSchemaStructural(ctx, schemaName, tables)
-
 	c.mu.Lock()
 	c.schemaTables[schemaName] = tables
 	c.schemaViews[schemaName] = views
-	c.schemaRowCounts[schemaName] = rowCounts
-	c.schemaPermissions[schemaName] = permissions
 	c.schemaLastFetch[schemaName] = time.Now()
+	// Does NOT touch schemaStructuralLastFetch — structural data refreshes independently
 	c.mu.Unlock()
 
-	logging.Debug("Schema cache refreshed",
+	logging.Debug("Schema catalog cache refreshed",
 		zap.String("schema", schemaName),
 		zap.Int("table_count", len(tables)),
 		zap.Int("view_count", len(views)))
@@ -666,7 +673,48 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 	return tablesCopy, nil
 }
 
+// refreshSchemaStructural refreshes only the structural tier (row counts + permissions) for a specific schema.
+// Uses the already-cached table list. Called by structural getters when the structural TTL expires.
+func (c *MetadataCache) refreshSchemaStructural(ctx context.Context, schemaName string) {
+	c.mu.RLock()
+	tables := c.schemaTables[schemaName]
+	c.mu.RUnlock()
+
+	if tables == nil {
+		return // No catalog data yet — structural refresh is a no-op
+	}
+
+	logging.Debug("Refreshing schema structural cache", zap.String("schema", schemaName))
+
+	rowCounts, permissions := c.fetchSchemaStructural(ctx, schemaName, tables)
+
+	c.mu.Lock()
+	c.schemaRowCounts[schemaName] = rowCounts
+	c.schemaPermissions[schemaName] = permissions
+	c.schemaStructuralLastFetch[schemaName] = time.Now()
+	c.mu.Unlock()
+}
+
+// RefreshSchema loads (or refreshes) all cached data for a specific schema.
+// Composes catalog + structural refresh. Called by Invalidate() path and
+// any code that needs a full refresh.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - schemaName: Name of the schema to refresh
+//
+// Returns the table list for the schema.
+func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([]string, error) {
+	tables, err := c.refreshSchemaCatalog(ctx, schemaName)
+	if err != nil {
+		return nil, err
+	}
+	c.refreshSchemaStructural(ctx, schemaName)
+	return tables, nil
+}
+
 // GetRowCountEstimateForSchema returns the cached row count estimate for a table in a specific schema.
+// Ensures catalog is fresh (lightweight), then checks structural staleness independently.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -675,10 +723,19 @@ func (c *MetadataCache) RefreshSchema(ctx context.Context, schemaName string) ([
 //
 // Returns the estimated row count, or -1 if not in cache.
 func (c *MetadataCache) GetRowCountEstimateForSchema(ctx context.Context, schemaName, tableName string) (int64, error) {
-	// Ensure schema data is loaded
+	// Ensure catalog is fresh (need table list for structural queries)
 	_, err := c.GetTablesForSchema(ctx, schemaName)
 	if err != nil {
 		return -1, err
+	}
+
+	// Check if structural data needs refresh for this schema
+	c.mu.RLock()
+	needsStructural := c.needsSchemaStructuralRefresh(schemaName)
+	c.mu.RUnlock()
+
+	if needsStructural {
+		c.refreshSchemaStructural(ctx, schemaName)
 	}
 
 	c.mu.RLock()
@@ -693,6 +750,7 @@ func (c *MetadataCache) GetRowCountEstimateForSchema(ctx context.Context, schema
 }
 
 // GetTablePermissionsForSchema returns the cached permissions for a table in a specific schema.
+// Ensures catalog is fresh (lightweight), then checks structural staleness independently.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -701,10 +759,19 @@ func (c *MetadataCache) GetRowCountEstimateForSchema(ctx context.Context, schema
 //
 // Returns the cached permissions, or nil if not available.
 func (c *MetadataCache) GetTablePermissionsForSchema(ctx context.Context, schemaName, tableName string) (*db.TablePermissions, error) {
-	// Ensure schema data is loaded
+	// Ensure catalog is fresh (need table list for structural queries)
 	_, err := c.GetTablesForSchema(ctx, schemaName)
 	if err != nil {
 		return nil, err
+	}
+
+	// Check if structural data needs refresh for this schema
+	c.mu.RLock()
+	needsStructural := c.needsSchemaStructuralRefresh(schemaName)
+	c.mu.RUnlock()
+
+	if needsStructural {
+		c.refreshSchemaStructural(ctx, schemaName)
 	}
 
 	c.mu.RLock()
@@ -733,6 +800,7 @@ func (c *MetadataCache) Invalidate() {
 	c.schemaRowCounts = make(map[string]map[string]int64)
 	c.schemaPermissions = make(map[string]map[string]*db.TablePermissions)
 	c.schemaLastFetch = make(map[string]time.Time)
+	c.schemaStructuralLastFetch = make(map[string]time.Time)
 	c.mu.Unlock()
 
 	// Clear PK caches
