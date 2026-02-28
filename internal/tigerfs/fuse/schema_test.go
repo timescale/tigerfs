@@ -209,8 +209,8 @@ func TestSchemaNode_DifferentSchemas(t *testing.T) {
 		schema string
 		tables []string
 	}{
-		// Note: "public" is the default schema, so we use a non-default schema
-		// for consistent testing. The default schema uses cache.tables directly.
+		// Note: we use non-default schemas here since they're set up via
+		// schema-specific cache in setupTestSchemaNode.
 		{"analytics", []string{"reports", "metrics"}},
 		{"staging", []string{"temp_data"}},
 		{"myschema", []string{"users", "orders"}},

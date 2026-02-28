@@ -25,8 +25,8 @@ func TestNewMetadataCache(t *testing.T) {
 		t.Errorf("Expected defaultSchema='public', got '%s'", cache.defaultSchema)
 	}
 
-	if len(cache.tables) != 0 {
-		t.Error("Expected tables to be empty initially")
+	if len(cache.schemaTables) != 0 {
+		t.Error("Expected schemaTables to be empty initially")
 	}
 
 	if !cache.lastFetch.IsZero() {
@@ -114,7 +114,8 @@ func TestMetadataCache_Invalidate(t *testing.T) {
 	cache := NewMetadataCache(cfg, nil)
 
 	// Set some data
-	cache.tables = []string{"table1", "table2"}
+	cache.schemaTables["public"] = []string{"table1", "table2"}
+	cache.schemaLastFetch["public"] = time.Now()
 	cache.lastFetch = time.Now()
 	cache.structuralLastFetch = time.Now()
 
@@ -126,8 +127,8 @@ func TestMetadataCache_Invalidate(t *testing.T) {
 	cache.Invalidate()
 
 	// Check data is cleared
-	if len(cache.tables) != 0 {
-		t.Error("Expected tables to be empty after invalidate")
+	if len(cache.schemaTables) != 0 {
+		t.Error("Expected schemaTables to be empty after invalidate")
 	}
 
 	if !cache.lastFetch.IsZero() {
@@ -395,10 +396,6 @@ func TestMetadataCache_CatalogRefreshClearsPKNegatives(t *testing.T) {
 	}
 
 	mock := db.NewMockDBClient()
-	mock.MockSchemaReader.GetTablesFunc = func(ctx context.Context, schema string) ([]string, error) {
-		return []string{"users"}, nil
-	}
-
 	cache := NewMetadataCache(cfg, mock)
 
 	// Set a PK negative
@@ -469,9 +466,9 @@ func TestMetadataCache_Refresh_WithMock(t *testing.T) {
 		t.Errorf("Expected defaultSchema='myschema', got %q", cache.GetDefaultSchema())
 	}
 
-	// Check that tables were fetched
-	if len(cache.tables) != 2 {
-		t.Errorf("Expected 2 tables, got %d", len(cache.tables))
+	// Check that tables were fetched into schema-specific cache
+	if len(cache.schemaTables["myschema"]) != 2 {
+		t.Errorf("Expected 2 tables in schemaTables['myschema'], got %d", len(cache.schemaTables["myschema"]))
 	}
 
 	// Check that lastFetch was updated
