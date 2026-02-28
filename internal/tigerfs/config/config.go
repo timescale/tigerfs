@@ -55,9 +55,10 @@ type Config struct {
 	DDLGracePeriod time.Duration `mapstructure:"ddl_grace_period"` // How long completed DDL sessions stay visible (default: 30s)
 
 	// Logging
-	LogLevel  string `mapstructure:"log_level"`
-	LogFile   string `mapstructure:"log_file"`
-	LogFormat string `mapstructure:"log_format"`
+	LogLevel     string `mapstructure:"log_level"`
+	LogFile      string `mapstructure:"log_file"`
+	LogFormat    string `mapstructure:"log_format"`
+	LogSQLParams bool   `mapstructure:"log_sql_params"`
 
 	// Formats
 	DefaultFormat  string `mapstructure:"default_format"`
@@ -93,6 +94,7 @@ func Init() error {
 	viper.SetDefault("ddl_grace_period", 30*time.Second)
 	viper.SetDefault("log_level", "warn")
 	viper.SetDefault("log_format", "text")
+	viper.SetDefault("log_sql_params", false)
 	viper.SetDefault("default_format", "tsv")
 	viper.SetDefault("binary_encoding", "raw")
 	viper.SetDefault("legacy_fuse", false)

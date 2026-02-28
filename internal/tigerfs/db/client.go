@@ -92,7 +92,7 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 	poolConfig.MinConns = int32(cfg.PoolMaxIdle)
 
 	// Enable SQL query tracing (logs SQL text, timing, and backend PID at debug level)
-	poolConfig.ConnConfig.Tracer = &dbTracer{}
+	poolConfig.ConnConfig.Tracer = &dbTracer{logParams: cfg.LogSQLParams}
 
 	// Log when a new TCP connection is created and set statement_timeout
 	timeoutMs := 0

@@ -12,24 +12,31 @@ import (
 // traceStartKey is the context key for storing query trace data.
 type traceStartKey struct{}
 
-// traceData holds the start time and SQL text for a traced query.
+// traceData holds the start time, SQL text, and query arguments for a traced query.
 type traceData struct {
 	start time.Time
 	sql   string
+	args  []any
 }
 
 // dbTracer implements pgx.QueryTracer to log SQL queries with timing
 // and connection identity at debug level.
-type dbTracer struct{}
+//
+// When logParams is true, query arguments are included in log output.
+// Default off because parameters may contain sensitive data.
+type dbTracer struct {
+	logParams bool
+}
 
 // Compile-time interface check.
 var _ pgx.QueryTracer = (*dbTracer)(nil)
 
-// TraceQueryStart records the start time and SQL text in the context.
+// TraceQueryStart records the start time, SQL text, and arguments in the context.
 func (t *dbTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	return context.WithValue(ctx, traceStartKey{}, &traceData{
 		start: time.Now(),
 		sql:   data.SQL,
+		args:  data.Args,
 	})
 }
 
@@ -42,6 +49,9 @@ func (t *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.T
 		zap.String("sql", td.sql),
 		zap.String("command_tag", data.CommandTag.String()),
 		zap.Uint32("pg_pid", conn.PgConn().PID()),
+	}
+	if t.logParams && len(td.args) > 0 {
+		fields = append(fields, zap.Any("params", td.args))
 	}
 	if data.Err != nil {
 		fields = append(fields, zap.Error(data.Err))

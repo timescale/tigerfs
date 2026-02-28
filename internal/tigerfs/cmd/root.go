@@ -22,6 +22,7 @@ func buildRootCmd(ctx context.Context) *cobra.Command {
 	var logLevel string
 	var logFile string
 	var logFormat string
+	var logSQLParams bool
 
 	cmd := &cobra.Command{
 		Use:   "tigerfs",
@@ -38,6 +39,7 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 				viper.BindPFlag("log_level", cmd.Flags().Lookup("log-level")),
 				viper.BindPFlag("log_file", cmd.Flags().Lookup("log-file")),
 				viper.BindPFlag("log_format", cmd.Flags().Lookup("log-format")),
+				viper.BindPFlag("log_sql_params", cmd.Flags().Lookup("log-sql-params")),
 			); err != nil {
 				return fmt.Errorf("failed to bind flags: %w", err)
 			}
@@ -61,6 +63,7 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 	cmd.PersistentFlags().StringVar(&logLevel, "log-level", "warn", "log level (debug, info, warn, error)")
 	cmd.PersistentFlags().StringVar(&logFile, "log-file", "", "log file path (default: stderr)")
 	cmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log format (text, json)")
+	cmd.PersistentFlags().BoolVar(&logSQLParams, "log-sql-params", false, "log SQL query parameters (may contain sensitive data)")
 
 	// Add all subcommands (complete tree building)
 	cmd.AddCommand(buildMountCmd(ctx))

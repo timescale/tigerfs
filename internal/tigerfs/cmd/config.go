@@ -97,6 +97,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		LogLevel                string `yaml:"log_level"`
 		LogFile                 string `yaml:"log_file,omitempty"`
 		LogFormat               string `yaml:"log_format"`
+		LogSQLParams            bool   `yaml:"log_sql_params"`
 		DefaultFormat           string `yaml:"default_format"`
 		BinaryEncoding          string `yaml:"binary_encoding"`
 		ConfigDir               string `yaml:"config_dir"`
@@ -120,6 +121,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		LogLevel:                cfg.LogLevel,
 		LogFile:                 cfg.LogFile,
 		LogFormat:               cfg.LogFormat,
+		LogSQLParams:            cfg.LogSQLParams,
 		DefaultFormat:           cfg.DefaultFormat,
 		BinaryEncoding:          cfg.BinaryEncoding,
 		ConfigDir:               cfg.ConfigDir,
