@@ -5,6 +5,21 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-02-28
+
+**Performance and observability — dramatically fewer SQL queries, flexible logging, and column projection.**
+
+- **Column projection** — `.columns/col1,col2/` pipeline stage selects only the columns you need, reducing data transfer for wide tables
+- **Stat caching** — multi-tier stat cache with row-level priming eliminates redundant queries; `ls -l` on a table directory now issues one query instead of 1+N
+- **Schema cache unification** — default schema and per-schema metadata share a single cache, cutting duplicate catalog lookups
+- **Synth query reduction** — synth file operations skip unnecessary table/view list queries when the table context is already resolved
+- **Configurable log levels** — `--log-level debug|info|warn|error` replaces the binary `--debug` flag for fine-grained control
+- **SQL parameter logging** — `--log-sql-params` flag optionally includes bind parameter values in SQL query traces
+- **Grouped `config show`** — `tigerfs config show` now displays all configuration fields organized into logical sections (connection, filesystem, nfs, logging, etc.)
+- **Mountpoint cleanup** — auto-created mountpoint directories are removed on unmount when empty
+- **NFS pagination fix** — readdir cache handles READDIRPLUS pagination correctly for non-deterministic query results
+- **Permission query fix** — schema parameter now uses explicit text cast, fixing errors on some PostgreSQL configurations
+
 ## [0.4.0] - 2026-02-25
 
 **Cloud backends, versioned history, and CDN-based installs — manage cloud databases, travel through time, and install in seconds.**
@@ -67,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI** — mount, unmount, status, list, config commands
 - **Install script** — `curl -fsSL https://tigerfs.tigerdata.com | sh`
 
+[0.5.0]: https://github.com/timescale/tigerfs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/timescale/tigerfs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/timescale/tigerfs/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/timescale/tigerfs/compare/v0.1.0...v0.2.0
