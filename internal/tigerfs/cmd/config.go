@@ -53,7 +53,7 @@ Shows the effective configuration after merging:
   2. Config file (~/.config/tigerfs/config.yaml)
   3. Environment variables (TIGERFS_*, PGHOST, etc.)
 
-Output is YAML format. Sensitive values (passwords) are masked.`,
+Output is YAML format. Sensitive values (passwords, keys) are omitted.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
@@ -68,64 +68,126 @@ Output is YAML format. Sensitive values (passwords) are masked.`,
 	}
 }
 
-// showConfig displays the configuration in YAML format.
+// showConfig displays the configuration in YAML format with grouped sections.
 //
 // Parameters:
 //   - w: Writer for output
 //   - cfg: Configuration to display
 //
-// Sensitive fields (password) are masked with asterisks.
+// Sensitive fields (password, tiger keys) are omitted entirely.
 func showConfig(w io.Writer, cfg *config.Config) error {
-	// Create a display-safe copy with masked password
 	display := struct {
-		Host                    string `yaml:"host,omitempty"`
-		Port                    int    `yaml:"port"`
-		User                    string `yaml:"user,omitempty"`
-		Database                string `yaml:"database,omitempty"`
-		Password                string `yaml:"password,omitempty"`
-		DefaultSchema           string `yaml:"default_schema"`
-		PoolSize                int    `yaml:"pool_size"`
-		PoolMaxIdle             int    `yaml:"pool_max_idle"`
-		PasswordCommand         string `yaml:"password_command,omitempty"`
-		TigerCloudServiceID     string `yaml:"tiger_service_id,omitempty"`
-		TigerCloudProjectID     string `yaml:"tiger_project_id,omitempty"`
-		DirListingLimit         int    `yaml:"dir_listing_limit"`
-		TrailingNewlines        bool   `yaml:"trailing_newlines"`
-		AttrTimeout             string `yaml:"attr_timeout"`
-		EntryTimeout            string `yaml:"entry_timeout"`
-		MetadataRefreshInterval string `yaml:"metadata_refresh_interval"`
-		LogLevel                string `yaml:"log_level"`
-		LogFile                 string `yaml:"log_file,omitempty"`
-		LogFormat               string `yaml:"log_format"`
-		LogSQLParams            bool   `yaml:"log_sql_params"`
-		DefaultFormat           string `yaml:"default_format"`
-		BinaryEncoding          string `yaml:"binary_encoding"`
-		ConfigDir               string `yaml:"config_dir"`
-	}{
-		Host:                    cfg.Host,
-		Port:                    cfg.Port,
-		User:                    cfg.User,
-		Database:                cfg.Database,
-		Password:                maskPassword(cfg.Password),
-		DefaultSchema:           cfg.DefaultSchema,
-		PoolSize:                cfg.PoolSize,
-		PoolMaxIdle:             cfg.PoolMaxIdle,
-		PasswordCommand:         cfg.PasswordCommand,
-		TigerCloudServiceID:     cfg.TigerCloudServiceID,
-		TigerCloudProjectID:     cfg.TigerCloudProjectID,
-		DirListingLimit:         cfg.DirListingLimit,
-		TrailingNewlines:        cfg.TrailingNewlines,
-		AttrTimeout:             cfg.AttrTimeout.String(),
-		EntryTimeout:            cfg.EntryTimeout.String(),
-		MetadataRefreshInterval: cfg.MetadataRefreshInterval.String(),
-		LogLevel:                cfg.LogLevel,
-		LogFile:                 cfg.LogFile,
-		LogFormat:               cfg.LogFormat,
-		LogSQLParams:            cfg.LogSQLParams,
-		DefaultFormat:           cfg.DefaultFormat,
-		BinaryEncoding:          cfg.BinaryEncoding,
-		ConfigDir:               cfg.ConfigDir,
-	}
+		Connection struct {
+			Host            string `yaml:"host,omitempty"`
+			Port            int    `yaml:"port"`
+			User            string `yaml:"user,omitempty"`
+			Database        string `yaml:"database,omitempty"`
+			DefaultSchema   string `yaml:"default_schema"`
+			PasswordCommand string `yaml:"password_command,omitempty"`
+			PoolSize        int    `yaml:"pool_size"`
+			PoolMaxIdle     int    `yaml:"pool_max_idle"`
+		} `yaml:"connection"`
+		TigerCloud struct {
+			ServiceID string `yaml:"service_id,omitempty"`
+			ProjectID string `yaml:"project_id,omitempty"`
+		} `yaml:"tiger_cloud"`
+		Backend struct {
+			DefaultBackend  string `yaml:"default_backend"`
+			DefaultMountDir string `yaml:"default_mount_dir"`
+		} `yaml:"backend"`
+		Filesystem struct {
+			DirListingLimit      int    `yaml:"dir_listing_limit"`
+			DirWritingLimit      int    `yaml:"dir_writing_limit"`
+			TrailingNewlines     bool   `yaml:"trailing_newlines"`
+			NoFilenameExtensions bool   `yaml:"no_filename_extensions"`
+			AttrTimeout          string `yaml:"attr_timeout"`
+			EntryTimeout         string `yaml:"entry_timeout"`
+			DefaultFormat        string `yaml:"default_format"`
+			BinaryEncoding       string `yaml:"binary_encoding"`
+		} `yaml:"filesystem"`
+		Query struct {
+			QueryTimeout   string `yaml:"query_timeout"`
+			DirFilterLimit int    `yaml:"dir_filter_limit"`
+		} `yaml:"query"`
+		Metadata struct {
+			MetadataRefreshInterval           string `yaml:"metadata_refresh_interval"`
+			StructuralMetadataRefreshInterval string `yaml:"structural_metadata_refresh_interval"`
+		} `yaml:"metadata"`
+		NFS struct {
+			StreamingThreshold  int64  `yaml:"streaming_threshold"`
+			MaxRandomWriteSize  int64  `yaml:"max_random_write_size"`
+			CacheReaperInterval string `yaml:"cache_reaper_interval"`
+			CacheIdleTimeout    string `yaml:"cache_idle_timeout"`
+		} `yaml:"nfs"`
+		DDL struct {
+			GracePeriod string `yaml:"grace_period"`
+		} `yaml:"ddl"`
+		Logging struct {
+			LogLevel     string `yaml:"log_level"`
+			LogFile      string `yaml:"log_file,omitempty"`
+			LogFormat    string `yaml:"log_format"`
+			LogSQLParams bool   `yaml:"log_sql_params"`
+		} `yaml:"logging"`
+		Advanced struct {
+			LegacyFuse bool   `yaml:"legacy_fuse"`
+			ConfigDir  string `yaml:"config_dir"`
+		} `yaml:"advanced"`
+	}{}
+
+	// Connection
+	display.Connection.Host = cfg.Host
+	display.Connection.Port = cfg.Port
+	display.Connection.User = cfg.User
+	display.Connection.Database = cfg.Database
+	display.Connection.DefaultSchema = cfg.DefaultSchema
+	display.Connection.PasswordCommand = cfg.PasswordCommand
+	display.Connection.PoolSize = cfg.PoolSize
+	display.Connection.PoolMaxIdle = cfg.PoolMaxIdle
+
+	// Tiger Cloud
+	display.TigerCloud.ServiceID = cfg.TigerCloudServiceID
+	display.TigerCloud.ProjectID = cfg.TigerCloudProjectID
+
+	// Backend
+	display.Backend.DefaultBackend = cfg.DefaultBackend
+	display.Backend.DefaultMountDir = cfg.DefaultMountDir
+
+	// Filesystem
+	display.Filesystem.DirListingLimit = cfg.DirListingLimit
+	display.Filesystem.DirWritingLimit = cfg.DirWritingLimit
+	display.Filesystem.TrailingNewlines = cfg.TrailingNewlines
+	display.Filesystem.NoFilenameExtensions = cfg.NoFilenameExtensions
+	display.Filesystem.AttrTimeout = cfg.AttrTimeout.String()
+	display.Filesystem.EntryTimeout = cfg.EntryTimeout.String()
+	display.Filesystem.DefaultFormat = cfg.DefaultFormat
+	display.Filesystem.BinaryEncoding = cfg.BinaryEncoding
+
+	// Query
+	display.Query.QueryTimeout = cfg.QueryTimeout.String()
+	display.Query.DirFilterLimit = cfg.DirFilterLimit
+
+	// Metadata
+	display.Metadata.MetadataRefreshInterval = cfg.MetadataRefreshInterval.String()
+	display.Metadata.StructuralMetadataRefreshInterval = cfg.StructuralMetadataRefreshInterval.String()
+
+	// NFS
+	display.NFS.StreamingThreshold = cfg.NFSStreamingThreshold
+	display.NFS.MaxRandomWriteSize = cfg.NFSMaxRandomWriteSize
+	display.NFS.CacheReaperInterval = cfg.NFSCacheReaperInterval.String()
+	display.NFS.CacheIdleTimeout = cfg.NFSCacheIdleTimeout.String()
+
+	// DDL
+	display.DDL.GracePeriod = cfg.DDLGracePeriod.String()
+
+	// Logging
+	display.Logging.LogLevel = cfg.LogLevel
+	display.Logging.LogFile = cfg.LogFile
+	display.Logging.LogFormat = cfg.LogFormat
+	display.Logging.LogSQLParams = cfg.LogSQLParams
+
+	// Advanced
+	display.Advanced.LegacyFuse = cfg.LegacyFuse
+	display.Advanced.ConfigDir = cfg.ConfigDir
 
 	encoder := yaml.NewEncoder(w)
 	encoder.SetIndent(2)
@@ -134,15 +196,6 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 	}
 
 	return nil
-}
-
-// maskPassword returns a masked version of the password for display.
-// Returns empty string if password is empty, otherwise returns asterisks.
-func maskPassword(password string) string {
-	if password == "" {
-		return ""
-	}
-	return "********"
 }
 
 // buildConfigValidateCmd creates the config validate subcommand.

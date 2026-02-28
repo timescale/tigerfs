@@ -1,42 +1,97 @@
 package cmd
 
 import (
+	"bytes"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 )
 
-// TestMaskPassword verifies password masking for display.
-func TestMaskPassword(t *testing.T) {
-	tests := []struct {
-		name     string
-		password string
-		want     string
-	}{
-		{
-			name:     "empty password",
-			password: "",
-			want:     "",
-		},
-		{
-			name:     "short password",
-			password: "abc",
-			want:     "********",
-		},
-		{
-			name:     "long password",
-			password: "verylongsecretpassword123!@#",
-			want:     "********",
-		},
+// TestShowConfig verifies that showConfig outputs all fields in grouped YAML sections.
+func TestShowConfig(t *testing.T) {
+	cfg := &config.Config{
+		Host:                              "localhost",
+		Port:                              5432,
+		User:                              "postgres",
+		Database:                          "testdb",
+		Password:                          "secret",
+		DefaultSchema:                     "public",
+		PasswordCommand:                   "pass show db",
+		PoolSize:                          10,
+		PoolMaxIdle:                       5,
+		TigerCloudServiceID:               "svc123",
+		TigerCloudPublicKey:               "pub-should-not-appear",
+		TigerCloudSecretKey:               "sec-should-not-appear",
+		TigerCloudProjectID:               "proj456",
+		DefaultBackend:                    "tiger",
+		DefaultMountDir:                   "/tmp",
+		DirListingLimit:                   10000,
+		DirWritingLimit:                   100000,
+		TrailingNewlines:                  true,
+		NoFilenameExtensions:              false,
+		AttrTimeout:                       1 * time.Second,
+		EntryTimeout:                      1 * time.Second,
+		QueryTimeout:                      30 * time.Second,
+		DirFilterLimit:                    100000,
+		MetadataRefreshInterval:           10 * time.Second,
+		StructuralMetadataRefreshInterval: 5 * time.Minute,
+		NFSStreamingThreshold:             10485760,
+		NFSMaxRandomWriteSize:             104857600,
+		NFSCacheReaperInterval:            30 * time.Second,
+		NFSCacheIdleTimeout:               5 * time.Minute,
+		DDLGracePeriod:                    30 * time.Second,
+		LogLevel:                          "warn",
+		LogFile:                           "/tmp/tigerfs.log",
+		LogFormat:                         "text",
+		LogSQLParams:                      false,
+		DefaultFormat:                     "tsv",
+		BinaryEncoding:                    "raw",
+		LegacyFuse:                        false,
+		ConfigDir:                         "/home/user/.config/tigerfs",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := maskPassword(tt.password)
-			if got != tt.want {
-				t.Errorf("maskPassword(%q) = %q, want %q", tt.password, got, tt.want)
-			}
-		})
+	var buf bytes.Buffer
+	if err := showConfig(&buf, cfg); err != nil {
+		t.Fatalf("showConfig() error: %v", err)
+	}
+	output := buf.String()
+
+	// Verify section headers
+	for _, section := range []string{
+		"connection:", "tiger_cloud:", "backend:", "filesystem:",
+		"query:", "metadata:", "nfs:", "ddl:", "logging:", "advanced:",
+	} {
+		if !strings.Contains(output, section) {
+			t.Errorf("missing section %q in output", section)
+		}
+	}
+
+	// Verify sensitive fields are NOT present
+	for _, sensitive := range []string{"secret", "pub-should-not-appear", "sec-should-not-appear"} {
+		if strings.Contains(output, sensitive) {
+			t.Errorf("sensitive value %q should not appear in output", sensitive)
+		}
+	}
+
+	// Verify key fields are present
+	for _, field := range []string{
+		"host: localhost", "port: 5432", "user: postgres", "database: testdb",
+		"service_id: svc123", "project_id: proj456",
+		"default_backend: tiger", "default_mount_dir: /tmp",
+		"dir_listing_limit: 10000", "dir_writing_limit: 100000",
+		"trailing_newlines: true", "no_filename_extensions: false",
+		"query_timeout: 30s", "dir_filter_limit: 100000",
+		"structural_metadata_refresh_interval: 5m0s",
+		"streaming_threshold: 10485760", "max_random_write_size: 104857600",
+		"grace_period: 30s",
+		"log_level: warn", "log_format: text",
+		"legacy_fuse: false", "config_dir: /home/user/.config/tigerfs",
+	} {
+		if !strings.Contains(output, field) {
+			t.Errorf("missing field %q in output", field)
+		}
 	}
 }
 
