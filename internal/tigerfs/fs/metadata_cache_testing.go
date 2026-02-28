@@ -59,17 +59,29 @@ func NewTestMetadataCache(tc TestMetadataCacheConfig) *MetadataCache {
 		tc.SchemaLastFetch = make(map[string]time.Time)
 	}
 
+	// Store Tables/Views in schema-specific maps for the default schema.
+	// This unifies default and non-default schema handling.
+	// Always populate, even for empty slices — prevents fallthrough to RefreshSchema
+	// which would need a real DB client.
+	defaultSchema := tc.DefaultSchema
+	if _, ok := tc.SchemaTables[defaultSchema]; !ok {
+		tc.SchemaTables[defaultSchema] = tc.Tables
+	}
+	if _, ok := tc.SchemaViews[defaultSchema]; !ok {
+		tc.SchemaViews[defaultSchema] = tc.Views
+	}
+	if _, ok := tc.SchemaLastFetch[defaultSchema]; !ok {
+		tc.SchemaLastFetch[defaultSchema] = time.Now()
+	}
+
 	return &MetadataCache{
 		cfg:               tc.Cfg,
 		db:                tc.DB,
-		defaultSchema:     tc.DefaultSchema,
-		tables:            tc.Tables,
-		views:             tc.Views,
+		defaultSchema:     defaultSchema,
 		schemas:           tc.Schemas,
-		tableRowCounts:    make(map[string]int64),
-		tablePermissions:  make(map[string]*db.TablePermissions),
 		primaryKeys:       make(map[string][]string),
 		pkNegatives:       make(map[string]bool),
+		columns:           make(map[string][]db.Column),
 		schemaTables:      tc.SchemaTables,
 		schemaViews:       tc.SchemaViews,
 		schemaRowCounts:   tc.SchemaRowCounts,
