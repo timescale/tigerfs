@@ -286,6 +286,14 @@ cat /mnt/db/orders/.filter/status/shipped/.columns/id,total,created_at/.export/c
 
 Capabilities: `.by/` (indexed filter), `.filter/` (any column), `.order/`, `.columns/col,...` (projection), `.first/N/`, `.last/N/`, `.sample/N/`, `.export/csv|json|tsv`
 
+### Ingest
+
+Bulk-load data from CSV, JSON, or YAML. The write mode is part of the path — `.append/` adds rows, `.sync/` upserts by primary key, `.overwrite/` replaces the table:
+
+```bash
+cat data.csv > /mnt/db/orders/.import/.append/csv
+```
+
 ### Schema Management
 
 Create, modify, and delete tables through a staging pattern:
