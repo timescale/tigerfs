@@ -3,7 +3,7 @@ module github.com/timescale/tigerfs
 go 1.25.1
 
 require (
-	github.com/go-git/go-billy/v5 v5.7.0
+	github.com/go-git/go-billy/v5 v5.8.0
 	github.com/google/uuid v1.6.0
 	github.com/hanwen/go-fuse/v2 v2.9.0
 	github.com/jackc/pgx/v5 v5.8.0
