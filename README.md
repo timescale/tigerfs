@@ -1,44 +1,46 @@
 # TigerFS
 
-TigerFS is a shared, transactional workspace for humans and AI agents, exposed as a native filesystem.
+A filesystem backed by PostgreSQL, and a filesystem interface to PostgreSQL.
 
-Every file is a real PostgreSQL row. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No coordination layer.
-
-The filesystem is the API.
-
-Write a markdown file with YAML frontmatter and TigerFS stores it as structured data with automatic version history. Directories map to tables. Rows map to files. Columns map to file contents. Every tool that works with files (`cat`, `grep`, your editor, Claude Code, Cursor) works out of the box.  Search with `grep`. Organize with `mv` and `mkdir`. Recover past versions from `.history/`.
+Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No coordination layer.  The filesystem is the API.
 
 You can use TigerFS in two ways:
 
-- As an app layer, working with Markdown and other higher-level file formats.
+* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, and everything is auto-versioned.  Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight apps via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
 
-- As a native table layer, navigating PostgreSQL tables, rows, and indexes directly through the filesystem.
+* **Data-first**: Mount any Postgres database and explore it with `ls`, `cat`, `grep`, and other unix tools. For
+large databases, chain filters into paths that push down to SQL:
+`.by/customer_id/123/.order/created_at/.last/10/.export/json`. No database client or SQL needed, and ships with agent skills.
 
-Both are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux or NFS on macOS.
+Both modes are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. 
+
+TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
+
+| Mode | You have... | You want to... |
+|------|------------|----------------|
+| File-first | A new project or workflow | Store markdown or other files, and build simple apps via the file system (e.g., task queues, agent workspaces, collaborative docs). |
+| Data-first | An existing Postgres database | Explore and operate on it with `ls`, `cat`, `grep` instead of SQL. |
 
 ## Quick Start
-
-In under 60 seconds, you can mount a live PostgreSQL database as a collaborative workspace.
 
 ```bash
 # Install (macOS requires no dependencies; Linux needs fuse3)
 curl -fsSL https://install.tigerfs.io | sh
+```
 
-# Mount a local database
+### File-first
+
+```bash
+# Mount a database and create a markdown app
 tigerfs mount postgres://localhost/mydb /mnt/db
-
-# Mount cloud services by ID
-tigerfs mount tiger:e6ue9697jf /mnt/db
-
-# Create a markdown app and start writing
 echo "markdown" > /mnt/db/.build/notes
 
+# Write a file — frontmatter becomes columns, body becomes text
 cat > /mnt/db/notes/hello.md << 'EOF'
 ---
 title: Hello World
 author: alice
 ---
-
 # Hello World
 EOF
 
@@ -48,38 +50,80 @@ ls /mnt/db/notes/
 tigerfs unmount /mnt/db
 ```
 
+### Data-first
 
+```bash
+# Mount an existing database
+tigerfs mount postgres://localhost/mydb /mnt/db
 
-## Why TigerFS
+ls /mnt/db/                                    # list tables
+ls /mnt/db/users/                              # list rows
+cat /mnt/db/users/1.json                       # read a row
+cat /mnt/db/users/.by/email/alice@co.com.json  # index lookup
 
-Agents are concurrent. Traditional filesystems are not.
+# Chain filters, ordering, pagination — pushed down as one SQL query
+cat /mnt/db/orders/.by/customer_id/1/.order/created_at/.last/5/.export/json
+```
 
-Today, agents coordinate through:
+## File-First: Transactional Workspace
 
-- Local files that do not sync
-- Git workflows that require pull, push, and merge
-- APIs that require custom coordination logic
-- Object storage that is not transactional
+### Apps
 
-None of these were designed for multiple autonomous writers operating in real time.
+Apps tell TigerFS how to present a table as a native file format. Write "markdown" to `.build/` and the table becomes a directory of .md files with YAML frontmatter:
 
-TigerFS makes files shared and transactional by backing them with PostgreSQL. Every read and write runs inside a real database transaction.
+```bash
+# Create a markdown app
+echo "markdown" > /mnt/db/.build/blog
 
-That changes the model:
+# Write a post. Frontmatter becomes columns, body becomes text
+cat > /mnt/db/blog/hello-world.md << 'EOF'
+---
+title: Hello World
+author: alice
+tags: [intro]
+---
 
-- **vs. local files:** Instead of a single-writer assumption, TigerFS supports real concurrent access with isolation guarantees.
+# Hello World
 
-- **vs. git:** Instead of asynchronous collaboration and merges, TigerFS provides immediate visibility with automatic version history.
+Welcome to my blog...
+EOF
 
-- **vs. object storage (S3):** Instead of blobs, you get structured rows, ACID transactions, and query pushdown.
+# Search, edit, and manage content with standard tools
+grep -l "author: alice" /mnt/db/blog/*.md
+```
 
-- **vs. using a database directly:** Instead of clients and schemas, you use files. Every tool and every agent already understands the interface.
+Organize files into directories. `mkdir` creates folders, `mv` moves files between them:
 
-The result is simple: you delete coordination code from your application.
+```bash
+mkdir /mnt/db/blog/tutorials
+mv /mnt/db/blog/hello-world.md /mnt/db/blog/tutorials/
+```
 
-## Use Cases
+See [docs/markdown-app.md](docs/markdown-app.md) for column mapping, frontmatter handling, and use cases.
 
-TigerFS turns a database into a live, shared workspace.
+### Version History
+
+Any app can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
+
+To enable automatic versioning, write "history" to `.build/` when creating the app:
+
+```bash
+# Create an app with history enabled
+echo "markdown,history" > /mnt/db/.build/notes
+
+# Browse past versions of a file
+ls /mnt/db/notes/.history/hello.md/
+# .id  2026-02-24T150000Z  2026-02-12T013000Z
+
+# Read a past version
+cat /mnt/db/notes/.history/hello.md/2026-02-12T013000Z
+```
+
+History tracks files across renames via stable row UUIDs and uses TimescaleDB hypertables for compressed storage.
+
+See [docs/history.md](docs/history.md) for cross-rename tracking, subdirectory scoping, and recovery workflows.
+
+### Use Cases
 
 **Shared agent workspace.**
 Multiple agents and humans operate on the same knowledge base concurrently.
@@ -144,64 +188,87 @@ ls /mnt/db/docs/.history/proposal.md/
 cat /mnt/db/docs/.history/proposal.md/2026-02-25T100000Z  # see previous version
 ```
 
+## Data-First: Database as Filesystem
 
-## Apps
+Mount any Postgres database and explore it with `ls`, `cat`, `grep`. Every path resolves to optimized SQL pushed down to the database.
 
-Apps present database tables as higher-level file formats. Instead of navigating row directories and column files, you work with files that feel native to their domain.
+**Explore an unfamiliar database.** Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
 
-### Markdown
+**Quick data fixes.** Update a customer's email, toggle a feature flag, delete a test record. One shell command instead of opening a SQL client, remembering the table schema, and writing a `WHERE` clause.
 
-The markdown app presents database rows as `.md` files with YAML frontmatter. Create one with a single command:
+**Export and analyze.** Chain filters, ordering, and pagination into a single path, then pipe the result into `jq`, `awk`, or export as CSV for a spreadsheet.
 
-```bash
-# Create a markdown app
-echo "markdown" > /mnt/db/.build/blog
-
-# Write a post. Frontmatter becomes columns, body becomes text
-cat > /mnt/db/blog/hello-world.md << 'EOF'
----
-title: Hello World
-author: alice
-tags: [intro]
----
-
-# Hello World
-
-Welcome to my blog...
-EOF
-
-# Search, edit, and manage content with standard tools
-grep -l "author: alice" /mnt/db/blog/*.md
-```
-
-Organize files into directories. `mkdir` creates folders, `mv` moves files between them:
+### Explore
 
 ```bash
-mkdir /mnt/db/blog/tutorials
-mv /mnt/db/blog/hello-world.md /mnt/db/blog/tutorials/
+ls /mnt/db/                                      # List tables
+ls /mnt/db/users/                                # List rows (by primary key)
+cat /mnt/db/users/123.json                       # Row as JSON
+cat /mnt/db/users/123/email.txt                  # Single column
+cat /mnt/db/users/.by/email/foo@example.com.json # Index lookup
 ```
 
-See [docs/markdown-app.md](docs/markdown-app.md) for column mapping, frontmatter handling, and use cases.
-
-### History
-
-Any app can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
+### Modify
 
 ```bash
-# Create an app with history enabled
-echo "markdown,history" > /mnt/db/.build/notes
-
-# Browse past versions of a file
-ls /mnt/db/notes/.history/hello.md/
-# .id  2026-02-24T150000Z  2026-02-12T013000Z
-
-# Read a past version
-cat /mnt/db/notes/.history/hello.md/2026-02-12T013000Z
+echo 'new@example.com' > /mnt/db/users/123/email.txt            # Update column
+echo '{"email":"a@b.com","name":"A"}' > /mnt/db/users/ 123.json # Update via JSON (PATCH)
+mkdir /mnt/db/users/456                                         # Create row
+rm -r /mnt/db/users/456/                                        # Delete row
 ```
 
-History tracks files across renames via stable row UUIDs and uses TimescaleDB hypertables for compressed storage.
+### Pipeline Queries
 
-See [docs/history.md](docs/history.md) for cross-rename tracking, subdirectory scoping, and recovery workflows.
+Chain filters, ordering, and pagination in a single path. The database executes it as one query:
+
+```bash
+cat /mnt/db/orders/.by/customer_id/123/.order/created_at/.last/10/.export/json
+
+# Select specific columns from a filtered query
+cat /mnt/db/orders/.filter/status/shipped/.columns/id,total,created_at/.export/csv
+```
+
+Pipeline segments can be chained in any order. Available segments: `.by/` (indexed filter), `.filter/` (any column), `.order/` (sort), `.columns/col1,...`  (projection), `.first/N/`, `.last/N/`, `.sample/N/` (pagination), and `.export/csv|json|tsv` (output format). 
+ 
+
+### Ingest
+
+Bulk-load data from CSV, JSON, or YAML. The write mode is part of the path: `.append/` adds rows, `.sync/` upserts by primary key, `.overwrite/` replaces the table.
+
+```bash
+cat data.csv > /mnt/db/orders/.import/.append/csv
+```
+
+### Schema Management
+
+Create, modify, and delete tables through a staging pattern:
+
+```bash
+mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (...)" > /mnt/db/.create/orders/sql
+touch /mnt/db/.create/orders/.commit
+```
+
+See [docs/native-tables.md](docs/native-tables.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
+
+## Why TigerFS
+
+### If you're building on files (file-first)
+
+- **vs. local files:** Instead of a single-writer assumption, TigerFS supports real concurrent access with isolation guarantees.
+
+- **vs. git:** Instead of asynchronous collaboration and merges, TigerFS provides immediate visibility with automatic version history.
+
+- **vs. object storage (S3):** Instead of blobs, you get structured rows, ACID transactions, and query pushdown.
+
+### If you're querying data (data-first)
+
+- **vs. database clients / psql:** No SQL to learn. Every agent already speaks files.
+
+- **vs. ORMs and APIs:** No schemas to define, no SDK to install. Mount and go.
+
+- **vs. using a database directly:** Instead of clients and schemas, you use files. Every tool and every agent already understands the interface.
+
+The result is simple: you delete coordination code from your application.
 
 ## Cloud Backends
 
@@ -242,76 +309,13 @@ tigerfs info /mnt/db
 tigerfs info --json /mnt/db           # JSON output for scripting
 ```
 
-## Native Table Access
-
-Agents excel at manipulating files. TigerFS lets them operate on structured data using the tools they already understand.
-
-Below the app layer, every table is a directory of rows. Read columns, write JSON, navigate indexes, and chain pipeline queries, all pushed down to the database as optimized SQL.
-
-**Explore an unfamiliar database.** Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
-
-**Quick data fixes.** Update a customer's email, toggle a feature flag, delete a test record. One shell command instead of opening a SQL client, remembering the table schema, and writing a `WHERE` clause.
-
-**Export and analyze.** Chain filters, ordering, and pagination into a single path, then pipe the result into `jq`, `awk`, or export as CSV for a spreadsheet.
-
-### Explore
-
-```bash
-ls /mnt/db/                                      # List tables
-ls /mnt/db/users/                                # List rows (by primary key)
-cat /mnt/db/users/123.json                       # Row as JSON
-cat /mnt/db/users/123/email.txt                  # Single column
-cat /mnt/db/users/.by/email/foo@example.com.json # Index lookup
-```
-
-### Modify
-
-```bash
-echo 'new@example.com' > /mnt/db/users/123/email.txt           # Update column
-echo '{"email":"a@b.com","name":"A"}' > /mnt/db/users/123.json # Update via JSON (PATCH)
-mkdir /mnt/db/users/456                                         # Create row
-rm -r /mnt/db/users/456/                                        # Delete row
-```
-
-### Pipeline Queries
-
-Chain filters, ordering, and pagination in a single path. The database executes it as one query:
-
-```bash
-cat /mnt/db/orders/.by/customer_id/123/.order/created_at/.last/10/.export/json
-
-# Select specific columns from a filtered query
-cat /mnt/db/orders/.filter/status/shipped/.columns/id,total,created_at/.export/csv
-```
-
-Capabilities: `.by/` (indexed filter), `.filter/` (any column), `.order/`, `.columns/col,...` (projection), `.first/N/`, `.last/N/`, `.sample/N/`, `.export/csv|json|tsv`
-
-### Ingest
-
-Bulk-load data from CSV, JSON, or YAML. The write mode is part of the path — `.append/` adds rows, `.sync/` upserts by primary key, `.overwrite/` replaces the table:
-
-```bash
-cat data.csv > /mnt/db/orders/.import/.append/csv
-```
-
-### Schema Management
-
-Create, modify, and delete tables through a staging pattern:
-
-```bash
-mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (...)" > /mnt/db/.create/orders/sql
-touch /mnt/db/.create/orders/.commit
-```
-
-See [docs/native-tables.md](docs/native-tables.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
-
 ## Architecture
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │  Unix Tools  │────▶│  Filesystem  │────▶│   TigerFS    │────▶│  PostgreSQL  │
 │  ls, cat,    │     │   Backend    │     │   Daemon     │     │   Database   │
-│  echo, rm    │◀────│ (FUSE/NFS)   │◀────│              │◀────│              │
+│  echo, rm    │◀────│  (FUSE/NFS)  │◀────│              │◀────│              │
 └──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
 ```
 
@@ -349,7 +353,7 @@ cd scripts/docker-demo
 ./demo.sh stop
 ```
 
-### macOS Demo (native)
+### macOS Demo
 
 ```bash
 cd scripts/mac-demo
@@ -361,21 +365,7 @@ cat /tmp/tigerfs-demo/users/1.json
 
 ## Configuration
 
-Config file: `~/.config/tigerfs/config.yaml`
-
-```yaml
-connection:
-  default_schema: public
-  pool_size: 10
-default_backend: tiger            # skip tiger: prefix on mount
-filesystem:
-  dir_listing_limit: 10000        # max rows in directory listing
-  no_filename_extensions: false   # disable .txt/.json/.bin extensions
-logging:
-  level: info
-```
-
-All options support environment variables with `TIGERFS_` prefix (e.g., `TIGERFS_DIR_LISTING_LIMIT=50000`). PostgreSQL standard variables (`PGHOST`, `PGUSER`, `PGDATABASE`) are also supported.
+Config file: `~/.config/tigerfs/config.yaml`. Run `tigerfs config show` to see all options and their current values. All options support environment variables with `TIGERFS_` prefix. See [docs/spec.md](docs/spec.md) for the full reference.
 
 ## Documentation
 
