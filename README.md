@@ -2,7 +2,7 @@
 
 A filesystem backed by PostgreSQL, and a filesystem interface to PostgreSQL.
 
-Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No coordination layer.  The filesystem is the API.
+Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No coordination layer.  **The filesystem is the API.**
 
 You can use TigerFS in two ways:
 
@@ -33,7 +33,7 @@ curl -fsSL https://install.tigerfs.io | sh
 ```bash
 # Mount a database and create a markdown app
 tigerfs mount postgres://localhost/mydb /mnt/db
-echo "markdown" > /mnt/db/.build/notes
+echo "markdown,history" > /mnt/db/.build/notes
 
 # Write a file — frontmatter becomes columns, body becomes text
 cat > /mnt/db/notes/hello.md << 'EOF'
