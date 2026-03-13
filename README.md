@@ -16,17 +16,17 @@ Both modes are backed by the same transactional database. You get real transacti
 
 TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
 
-| Mode | You have... | You want to... |
-|------|------------|----------------|
-| File-first | A new project or workflow | Store markdown or other files, and build simple apps via the file system (e.g., task queues, agent workspaces, collaborative docs). |
-| Data-first | An existing Postgres database | Explore and operate on it with `ls`, `cat`, `grep` instead of SQL. |
-
 ## Quick Start
 
 ```bash
 # Install (macOS requires no dependencies; Linux needs fuse3)
 curl -fsSL https://install.tigerfs.io | sh
 ```
+
+| Mode | You have... | You want to... |
+|------|------------|----------------|
+| File-first | A new project or workflow | Store markdown or other files, and build simple apps via the file system (e.g., task queues, agent workspaces, collaborative docs). |
+| Data-first | An existing Postgres database | Explore and operate on it with `ls`, `cat`, `grep` instead of SQL. |
 
 ### File-first
 
