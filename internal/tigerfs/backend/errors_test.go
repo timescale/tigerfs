@@ -13,7 +13,7 @@ func TestCLINotFoundError(t *testing.T) {
 		contains string
 	}{
 		{"tiger", "tiger CLI from https://github.com/timescale/tiger-cli"},
-		{"ghost", "ghost CLI from https://ghost.dev"},
+		{"ghost", "ghost CLI from https://ghost.build"},
 		{"unknown", "unknown"},
 	}
 

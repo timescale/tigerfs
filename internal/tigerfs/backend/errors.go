@@ -22,7 +22,7 @@ func CLINotFoundError(cli string) error {
 	case "tiger":
 		return fmt.Errorf("%w: install tiger CLI from https://github.com/timescale/tiger-cli", ErrCLINotFound)
 	case "ghost":
-		return fmt.Errorf("%w: install ghost CLI from https://ghost.dev", ErrCLINotFound)
+		return fmt.Errorf("%w: install ghost CLI from https://ghost.build", ErrCLINotFound)
 	default:
 		return fmt.Errorf("%w: %s", ErrCLINotFound, cli)
 	}

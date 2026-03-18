@@ -3696,12 +3696,12 @@ make test
 
 **Unix/Linux/macOS:**
 ```bash
-curl -fsSL https://tigerfs.tigerdata.com | sh
+curl -fsSL https://install.tigerfs.io | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-irm https://tigerfs.tigerdata.com/install.ps1 | iex
+irm https://install.tigerfs.io/install.ps1 | iex
 ```
 
 ### Install Script Features
@@ -3736,7 +3736,7 @@ irm https://tigerfs.tigerdata.com/install.ps1 | iex
 
 **3. S3 + CloudFront CDN:**
 - Hosts install scripts and binaries
-- Domain: `https://tigerfs.tigerdata.com`
+- Domain: `https://install.tigerfs.io`
 - Files:
   - `/install.sh` - Unix install script
   - `/install.ps1` - Windows install script
@@ -3794,7 +3794,7 @@ go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 - **Quick Start:**
   ```bash
   # Install
-  curl -fsSL https://tigerfs.tigerdata.com | sh
+  curl -fsSL https://install.tigerfs.io | sh
 
   # Mount
   tigerfs postgres://localhost/mydb /mnt/db
