@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-02-05
-**Author:** [Author]
+**Author:** Mike Freedman
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-02-25
-**Author:** [Author]
+**Author:** Mike Freedman
 
 ## Context
 

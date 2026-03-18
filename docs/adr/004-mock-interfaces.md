@@ -2,7 +2,7 @@
 
 **Date:** 2026-01-27
 **Status:** Accepted
-**Deciders:** Mike Freedman
+**Author:** Mike Freedman
 
 ## Context
 

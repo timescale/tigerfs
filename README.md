@@ -272,7 +272,7 @@ The result is simple: you delete coordination code from your application.
 
 ## Cloud Backends
 
-TigerFS works with any PostgreSQL database. Just pass a connection string. It also integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.dev) through their CLIs for credential-free mounting. Use a prefix to specify the backend:
+TigerFS works with any PostgreSQL database. Just pass a connection string. It also integrates with [Tiger Cloud](https://www.timescale.com/cloud) and [Ghost](https://ghost.build) through their CLIs for credential-free mounting. Use a prefix to specify the backend:
 
 ```bash
 # Mount any Postgres database

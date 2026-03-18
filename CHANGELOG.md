@@ -80,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux** — FUSE backend
 - **Tiger Cloud integration** — `--tiger-service-id` for managed databases
 - **CLI** — mount, unmount, status, list, config commands
-- **Install script** — `curl -fsSL https://tigerfs.tigerdata.com | sh`
+- **Install script** — `curl -fsSL https://install.tigerfs.io | sh`
 
 [0.5.0]: https://github.com/timescale/tigerfs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/timescale/tigerfs/compare/v0.3.0...v0.4.0

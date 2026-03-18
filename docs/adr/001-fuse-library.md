@@ -2,7 +2,7 @@
 
 **Date:** 2026-01-23
 **Status:** Accepted
-**Deciders:** Mike Freedman
+**Author:** Mike Freedman
 **Decision:** Use `github.com/hanwen/go-fuse/v2`
 
 ## Summary
