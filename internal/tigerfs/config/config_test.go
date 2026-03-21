@@ -321,7 +321,7 @@ func TestConfig_TigerCloudServiceIDEnv(t *testing.T) {
 		}
 	}()
 
-	_ = os.Setenv("TIGER_SERVICE_ID", "e6ue9697jf")
+	_ = os.Setenv("TIGER_SERVICE_ID", "abcde12345")
 
 	err := Init()
 	if err != nil {
@@ -333,8 +333,8 @@ func TestConfig_TigerCloudServiceIDEnv(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.TigerCloudServiceID != "e6ue9697jf" {
-		t.Errorf("Expected TigerCloudServiceID='e6ue9697jf' from env, got %q", cfg.TigerCloudServiceID)
+	if cfg.TigerCloudServiceID != "abcde12345" {
+		t.Errorf("Expected TigerCloudServiceID='abcde12345' from env, got %q", cfg.TigerCloudServiceID)
 	}
 }
 

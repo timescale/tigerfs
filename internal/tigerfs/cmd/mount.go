@@ -63,16 +63,16 @@ When omitted, the mountpoint defaults to <default_mount_dir>/<ID>.
 
 Examples:
   # Mount Tiger Cloud service (auto-derived mountpoint)
-  tigerfs mount tiger:e6ue9697jf
+  tigerfs mount tiger:abcde12345
 
   # Mount Ghost database with explicit mountpoint
-  tigerfs mount ghost:a2x6xoj0oz /mnt/db
+  tigerfs mount ghost:fghij67890 /mnt/db
 
   # Mount using connection string (mountpoint required)
   tigerfs mount postgres://user@host/db /mnt/db
 
   # Mount read-only
-  tigerfs mount --read-only tiger:e6ue9697jf /mnt/db
+  tigerfs mount --read-only tiger:abcde12345 /mnt/db
 
   # Run in foreground with debug logging
   tigerfs mount --foreground --log-level debug postgres://host/db /mnt/db`,

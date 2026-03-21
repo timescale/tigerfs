@@ -279,8 +279,8 @@ TigerFS works with any PostgreSQL database. Just pass a connection string. It al
 tigerfs mount postgres://user:pass@host/mydb /mnt/db
 
 # Or mount cloud services by ID
-tigerfs mount tiger:e6ue9697jf /mnt/db
-tigerfs mount ghost:a2x6xoj0oz /mnt/db
+tigerfs mount tiger:abcde12345 /mnt/db
+tigerfs mount ghost:fghij67890 /mnt/db
 ```
 
 TigerFS calls the backend CLI to retrieve credentials, so there are no passwords in your config. Authenticate once with `tiger auth login` or `ghost login`.
@@ -289,7 +289,7 @@ Set a default backend to skip the prefix:
 
 ```bash
 # In ~/.config/tigerfs/config.yaml: default_backend: tiger
-tigerfs mount e6ue9697jf /mnt/db    # uses tiger: implicitly
+tigerfs mount abcde12345 /mnt/db    # uses tiger: implicitly
 ```
 
 ### Create and Fork
@@ -302,7 +302,7 @@ tigerfs create ghost:my-db --no-mount  # create without mounting
 
 # Fork (clone) for safe experimentation
 tigerfs fork /mnt/db my-experiment
-tigerfs fork tiger:e6ue9697jf my-experiment
+tigerfs fork tiger:abcde12345 my-experiment
 
 # Inspect a mount
 tigerfs info /mnt/db

@@ -1541,8 +1541,8 @@ tigerfs [mount] [OPTIONS] [CONNECTION] MOUNTPOINT
 tigerfs postgres://localhost/mydb /mnt/db
 
 # Tiger Cloud / Ghost (prefix scheme)
-tigerfs tiger:e6ue9697jf /mnt/db
-tigerfs ghost:a2x6xoj0oz /mnt/db
+tigerfs tiger:abcde12345 /mnt/db
+tigerfs ghost:fghij67890 /mnt/db
 
 # With options
 tigerfs --read-only --max-ls-rows=50000 postgres://host/db /mnt/db
@@ -1617,8 +1617,8 @@ tigerfs [mount] [OPTIONS] [CONNECTION] MOUNTPOINT
 **Examples:**
 ```bash
 tigerfs mount postgres://user@host/db /mnt/db
-tigerfs mount tiger:e6ue9697jf /mnt/db
-tigerfs mount ghost:a2x6xoj0oz /mnt/db
+tigerfs mount tiger:abcde12345 /mnt/db
+tigerfs mount ghost:fghij67890 /mnt/db
 tigerfs mount /mnt/db   # uses PGHOST/PGDATABASE env vars
 ```
 
@@ -1852,7 +1852,7 @@ tigerfs info --json /mnt/db
 Mountpoint:   /mnt/db
 Database:     postgres://host:5432/tsdb (password hidden)
 Backend:      tiger
-Service ID:   e6ue9697jf
+Service ID:   abcde12345
 Service Name: my-db
 Region:       us-east-1
 Status:       Running
@@ -1914,7 +1914,7 @@ tigerfs fork SOURCE [DEST] [--name NAME] [--no-mount] [--json]
 
 SOURCE can be:
 - A mountpoint path (`/mnt/db`) — looks up service ID from mount registry
-- A prefixed ID (`tiger:e6ue9697jf`) — uses the specified backend
+- A prefixed ID (`tiger:abcde12345`) — uses the specified backend
 - A bare name — resolved via `default_backend` config
 
 DEST can be:
@@ -1927,7 +1927,7 @@ DEST can be:
 tigerfs fork /mnt/db my-experiment
 
 # Fork by service ID
-tigerfs fork tiger:e6ue9697jf my-experiment
+tigerfs fork tiger:abcde12345 my-experiment
 
 # Fork to a specific mount path
 tigerfs fork /mnt/db /mnt/experiment
@@ -1985,8 +1985,8 @@ connection:
 
 **4. Cloud Backend Prefix (Tiger Cloud / Ghost):**
 ```bash
-tigerfs tiger:e6ue9697jf /mnt/db
-tigerfs ghost:a2x6xoj0oz /mnt/db
+tigerfs tiger:abcde12345 /mnt/db
+tigerfs ghost:fghij67890 /mnt/db
 ```
 
 Connection credentials are retrieved automatically from the backend CLI. See [Cloud Backend Integration](#cloud-backend-integration).
@@ -2133,8 +2133,8 @@ See [ADR-013](adr/013-backend-prefix-scheme.md) for the full design rationale.
 
 | Prefix | Backend | Example |
 |--------|---------|---------|
-| `tiger:` | Tiger Cloud | `tiger:e6ue9697jf` |
-| `ghost:` | Ghost | `ghost:a2x6xoj0oz` |
+| `tiger:` | Tiger Cloud | `tiger:abcde12345` |
+| `ghost:` | Ghost | `ghost:fghij67890` |
 | `postgres://` | Direct PostgreSQL | `postgres://user@host/db` |
 | (none) | Environment/config | (uses `PGHOST`, etc.) |
 
@@ -2225,8 +2225,8 @@ cat /tmp/my-db/users/1.json
 
 ```bash
 # Mount multiple services
-tigerfs mount tiger:e6ue9697jf /mnt/prod
-tigerfs mount tiger:u8me885b93 /mnt/staging
+tigerfs mount tiger:abcde12345 /mnt/prod
+tigerfs mount tiger:klmno54321 /mnt/staging
 
 # Access each independently
 cat /mnt/prod/users/123/email
