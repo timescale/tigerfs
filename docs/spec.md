@@ -1447,6 +1447,13 @@ connection:
   password_command: "..."      # Command to retrieve password
   default_backend: tiger       # Default cloud backend for bare names (tiger or ghost)
   default_mount_dir: /tmp      # Base directory for auto-generated mountpoints
+  insecure_no_ssl: false       # Skip TLS enforcement for remote connections
+
+# Security note: TigerFS enforces sslmode=require for all non-localhost
+# database connections. This ensures connections to remote databases are
+# always encrypted. To disable this enforcement (not recommended), use
+# --insecure-no-ssl or set insecure_no_ssl: true above.
+# Localhost connections (127.0.0.1, ::1, Unix sockets) are exempt.
 
 # Filesystem behavior
 filesystem:
@@ -1506,6 +1513,7 @@ debug: false                   # Enable debug mode (verbose logging)
 - `TIGERFS_DEBUG` - Enable debug mode
 - `TIGERFS_DEFAULT_BACKEND` - Default cloud backend for bare names (`tiger` or `ghost`)
 - `TIGERFS_DEFAULT_MOUNT_DIR` - Base directory for auto-generated mountpoints (default: `/tmp`)
+- `TIGERFS_INSECURE_NO_SSL` - Skip TLS enforcement for remote connections (default: `false`)
 - `TIGER_PUBLIC_KEY` - Tiger Cloud client credential public key (for headless auth)
 - `TIGER_SECRET_KEY` - Tiger Cloud client credential secret key (for headless auth)
 - `TIGER_PROJECT_ID` - Tiger Cloud project ID (for headless auth)

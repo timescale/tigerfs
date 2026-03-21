@@ -44,6 +44,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var queryTimeout time.Duration
 	var dirFilterLimit int
 	var legacyFuse bool
+	var insecureNoSSL bool
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] [MOUNTPOINT]",
@@ -154,6 +155,9 @@ Examples:
 			if legacyFuse {
 				cfg.LegacyFuse = true
 			}
+			if insecureNoSSL {
+				cfg.InsecureNoSSL = true
+			}
 
 			// Mount the filesystem using platform-specific method
 			// (NFS on macOS, FUSE on Linux).
@@ -210,6 +214,7 @@ Examples:
 	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
+	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
 
 	return cmd
 }

@@ -129,6 +129,8 @@ func buildRootCmd(ctx context.Context) *cobra.Command {
 
 **Precedence (low to high):** Defaults → Config file (`~/.config/tigerfs/config.yaml`) → Environment (`TIGERFS_*`) → Flags
 
+**TLS enforcement:** TigerFS enforces `sslmode=require` for non-localhost connections. The `--insecure-no-ssl` flag or `InsecureNoSSL` config disables this. Localhost (127.0.0.1, ::1, Unix sockets) is exempt.
+
 **Rules:**
 1. Always use the `Config` struct - never read from viper directly
 2. Load config once at command start, pass down to functions

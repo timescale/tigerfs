@@ -81,6 +81,9 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 		}
 	}
 
+	// Enforce TLS for non-localhost connections
+	connStr = enforceSSLMode(connStr, cfg.InsecureNoSSL)
+
 	// Parse connection string
 	poolConfig, err := pgxpool.ParseConfig(connStr)
 	if err != nil {

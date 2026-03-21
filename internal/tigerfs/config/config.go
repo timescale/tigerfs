@@ -25,6 +25,9 @@ type Config struct {
 	TigerCloudSecretKey string `mapstructure:"tiger_secret_key"`
 	TigerCloudProjectID string `mapstructure:"tiger_project_id"`
 
+	// TLS
+	InsecureNoSSL bool `mapstructure:"insecure_no_ssl"` // Skip TLS enforcement for remote connections
+
 	// Backend
 	DefaultBackend  string `mapstructure:"default_backend"`   // "tiger", "ghost", or "" (none)
 	DefaultMountDir string `mapstructure:"default_mount_dir"` // Base directory for auto-generated mountpoints (default: /tmp)
