@@ -76,7 +76,7 @@ Examples:
 				return err
 			}
 
-			logging.Debug("Testing database connection", zap.String("connection", connStr))
+			logging.Debug("Testing database connection", zap.String("connection", db.SanitizeConnectionString(connStr)))
 
 			// Attempt connection (this also pings the database)
 			client, err := db.NewClient(ctx, cfg, connStr)

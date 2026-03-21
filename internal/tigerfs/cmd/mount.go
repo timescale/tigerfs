@@ -8,7 +8,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/timescale/tigerfs/internal/tigerfs/backend"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/mount"
 	"go.uber.org/zap"
@@ -265,7 +265,7 @@ func registerMount(mountpoint, connStr, serviceID, cliBackend string, autoCreate
 	entry := mount.Entry{
 		Mountpoint:  mountpoint,
 		PID:         os.Getpid(),
-		Database:    sanitizeConnectionString(connStr),
+		Database:    db.SanitizeConnectionString(connStr),
 		StartTime:   time.Now(),
 		ServiceID:   serviceID,
 		CLIBackend:  cliBackend,
@@ -303,28 +303,4 @@ func unregisterMount(mountpoint string) error {
 
 	logging.Debug("Unregistered mount from registry", zap.String("mountpoint", mountpoint))
 	return nil
-}
-
-// sanitizeConnectionString removes the password from a connection string
-// for safe storage and display.
-//
-// Parameters:
-//   - connStr: The original connection string (postgres:// URL format)
-//
-// Returns the connection string with the password removed, or the original
-// string if it can't be parsed as a URL.
-func sanitizeConnectionString(connStr string) string {
-	if connStr == "" {
-		return "(from environment)"
-	}
-
-	u, err := url.Parse(connStr)
-	if err != nil || u.User == nil {
-		return connStr
-	}
-
-	if _, hasPassword := u.User.Password(); hasPassword {
-		u.User = url.User(u.User.Username())
-	}
-	return u.String()
 }

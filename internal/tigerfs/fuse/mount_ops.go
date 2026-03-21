@@ -30,7 +30,7 @@ type OpsFS struct {
 func MountOps(ctx context.Context, cfg *config.Config, connStr, mountpoint string) (*OpsFS, error) {
 	logging.Debug("MountOps: mounting filesystem via Operations",
 		zap.String("mountpoint", mountpoint),
-		zap.String("connection", connStr),
+		zap.String("connection", db.SanitizeConnectionString(connStr)),
 	)
 
 	// 1. Connect to database

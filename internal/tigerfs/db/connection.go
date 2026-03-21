@@ -3,12 +3,48 @@ package db
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/backend"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
+
+// kvPasswordRegexp matches password=<value> in key-value connection strings.
+// Value is a non-whitespace sequence ending at the next space or end of string.
+var kvPasswordRegexp = regexp.MustCompile(`password=\S+`)
+
+// SanitizeConnectionString removes the password from a connection string
+// for safe logging and display. Handles both URL format
+// (postgres://user:pass@host/db) and key-value format
+// (host=... password=secret dbname=...).
+//
+// Returns "(from environment)" for empty strings, indicating the connection
+// was resolved from environment variables or config files.
+func SanitizeConnectionString(connStr string) string {
+	if connStr == "" {
+		return "(from environment)"
+	}
+
+	// Handle URL format: postgres://user:password@host/db
+	u, err := url.Parse(connStr)
+	if err == nil && u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			u.User = url.User(u.User.Username())
+		}
+		return u.String()
+	}
+
+	// Handle key-value format: host=... password=secret dbname=...
+	if strings.Contains(connStr, "password=") {
+		return kvPasswordRegexp.ReplaceAllString(connStr, "password=***")
+	}
+
+	return connStr
+}
 
 // ResolveConnectionString determines the database connection string from
 // multiple sources in the following precedence order:
