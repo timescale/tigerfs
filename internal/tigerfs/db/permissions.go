@@ -136,10 +136,10 @@ func GetTablePermissionsBatch(ctx context.Context, pool *pgxpool.Pool, schema st
 
 	query := `
 		SELECT t.table_name,
-		       has_table_privilege(format('"%s"."%s"', $1::text, t.table_name), 'SELECT'),
-		       has_table_privilege(format('"%s"."%s"', $1::text, t.table_name), 'INSERT'),
-		       has_table_privilege(format('"%s"."%s"', $1::text, t.table_name), 'UPDATE'),
-		       has_table_privilege(format('"%s"."%s"', $1::text, t.table_name), 'DELETE')
+		       has_table_privilege(format('%I.%I', $1::text, t.table_name), 'SELECT'),
+		       has_table_privilege(format('%I.%I', $1::text, t.table_name), 'INSERT'),
+		       has_table_privilege(format('%I.%I', $1::text, t.table_name), 'UPDATE'),
+		       has_table_privilege(format('%I.%I', $1::text, t.table_name), 'DELETE')
 		FROM unnest($2::text[]) AS t(table_name)
 	`
 
