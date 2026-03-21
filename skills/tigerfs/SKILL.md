@@ -59,7 +59,7 @@ Bash "echo 'markdown,history' > mount/.build/notes"    # with versioned history
 Bash "echo 'plaintext' > mount/.build/snippets"         # body-only, no frontmatter
 ```
 
-See [apps.md](apps.md) for full details on schemas, column roles, and plain text.
+See [files.md](files.md) for full details on schemas, column roles, and plain text.
 
 ### Read and Write
 
@@ -116,7 +116,7 @@ Read an old version:
 Read "mount/notes/.history/hello.md/2026-02-12T013000Z"
 ```
 
-To answer "what changed recently?" — read the latest history version + current, compare the two. See [history.md](history.md) for version browsing, diff workflows, and recovery.
+To answer "what changed recently?" — read the latest history version + current, compare the two. See [files.md](files.md) for version browsing, diff workflows, and recovery.
 
 ## Native Table Access (Escape Hatch)
 
@@ -130,7 +130,7 @@ Read "mount/_notes/1/author"        # Single column value
 Glob "mount/users/.by/email/alice@example.com/*"   # Index lookup
 ```
 
-See [native-ops.md](native-ops.md) for the full reference.
+See [data.md](data.md) for the full reference.
 
 ## Quick Reference
 
@@ -178,7 +178,6 @@ See [native-ops.md](native-ops.md) for the full reference.
 
 ## Detailed References
 
-- [apps.md](apps.md) — Creating and using markdown + plain text apps
-- [history.md](history.md) — Browsing past versions, diffs, and recovery
-- [native-ops.md](native-ops.md) — Row-as-directory/row-as-file interface, metadata, indexes, pipeline queries
+- [files.md](files.md) — Markdown apps, plain text apps, directories, and history
+- [data.md](data.md) — Row-as-directory/row-as-file interface, metadata, indexes, pipeline queries
 - [recipes.md](recipes.md) — Kanban boards, knowledge bases, session context, snippets
