@@ -458,10 +458,10 @@ TigerFS enables database queries using standard Unix tools:
 
 ```bash
 # Mount Tiger Cloud service by ID
-tigerfs mount tiger:e6ue9697jf /mnt/cloud
+tigerfs mount tiger:abcde12345 /mnt/cloud
 
 # Mount Ghost database by ID
-tigerfs mount ghost:a2x6xoj0oz /mnt/cloud
+tigerfs mount ghost:fghij67890 /mnt/cloud
 
 # Explore your database
 ls /mnt/cloud
@@ -487,7 +487,7 @@ tigerfs create tiger:my-db --no-mount
 tigerfs fork /mnt/cloud my-experiment
 
 # Fork by service ID
-tigerfs fork tiger:e6ue9697jf my-experiment
+tigerfs fork tiger:abcde12345 my-experiment
 
 # Fork without mounting
 tigerfs fork /mnt/cloud --no-mount

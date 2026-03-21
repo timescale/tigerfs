@@ -3,6 +3,8 @@ package synth
 import (
 	"strings"
 	"testing"
+
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
 func TestGenerateMarkdownTableSQL(t *testing.T) {
@@ -306,7 +308,7 @@ func TestSynth_GenerateHistoryOnlySQL(t *testing.T) {
 	}
 }
 
-func TestQuoteIdent(t *testing.T) {
+func TestSynth_QuoteIdent(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected string
@@ -317,9 +319,9 @@ func TestQuoteIdent(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := quoteIdent(tt.input)
+		got := db.QuoteIdent(tt.input)
 		if got != tt.expected {
-			t.Errorf("quoteIdent(%q) = %q, want %q", tt.input, got, tt.expected)
+			t.Errorf("db.QuoteIdent(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }

@@ -549,15 +549,21 @@ func (n *IndexCreateDirNode) createStagingNode(ctx context.Context, name string,
 // generateIndexTemplate generates a CREATE INDEX template.
 // Attempts to infer the column name from the index name.
 func (n *IndexCreateDirNode) generateIndexTemplate(ctx context.Context, indexName string) string {
-	qualifiedTable := n.tableName
+	// Human-readable table reference for comments
+	commentTable := n.tableName
 	if n.schema != "" && n.schema != "public" {
-		qualifiedTable = fmt.Sprintf("%s.%s", n.schema, n.tableName)
+		commentTable = fmt.Sprintf("%s.%s", n.schema, n.tableName)
 	}
+
+	// Properly quoted references for SQL statements
+	quotedTable := db.QuoteTable(n.schema, n.tableName)
+	quotedIndex := db.QuoteIdent(indexName)
 
 	// Try to infer column from index name
 	inferredColumn := n.inferColumnFromIndexName(ctx, indexName)
 
 	if inferredColumn != "" {
+		quotedColumn := db.QuoteIdent(inferredColumn)
 		// Column inferred - leave CREATE INDEX uncommented
 		return fmt.Sprintf(`-- Create index: %s
 -- Table: %s
@@ -575,12 +581,12 @@ func (n *IndexCreateDirNode) generateIndexTemplate(ctx context.Context, indexNam
 --
 CREATE INDEX %s ON %s (%s);
 `,
-			indexName, qualifiedTable, inferredColumn,
-			indexName, qualifiedTable, inferredColumn,
-			indexName, qualifiedTable, inferredColumn,
-			indexName, qualifiedTable,
-			indexName, qualifiedTable,
-			indexName, qualifiedTable, inferredColumn,
+			indexName, commentTable, inferredColumn,
+			quotedIndex, quotedTable, quotedColumn,
+			quotedIndex, quotedTable, quotedColumn,
+			quotedIndex, quotedTable,
+			quotedIndex, quotedTable,
+			quotedIndex, quotedTable, quotedColumn,
 		)
 	}
 
@@ -601,12 +607,12 @@ CREATE INDEX %s ON %s (%s);
 -- Uncomment and replace column_name with your column:
 -- CREATE INDEX %s ON %s (column_name);
 `,
-		indexName, qualifiedTable,
-		indexName, qualifiedTable,
-		indexName, qualifiedTable,
-		indexName, qualifiedTable,
-		indexName, qualifiedTable,
-		indexName, qualifiedTable,
+		indexName, commentTable,
+		quotedIndex, quotedTable,
+		quotedIndex, quotedTable,
+		quotedIndex, quotedTable,
+		quotedIndex, quotedTable,
+		quotedIndex, quotedTable,
 	)
 }
 

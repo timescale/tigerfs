@@ -243,7 +243,7 @@ func buildPipelineSQL(params QueryParams, selectPKOnly bool) (string, []interfac
 	selectClause := buildSelectClause(params, selectPKOnly)
 
 	// Base table reference
-	tableRef := fmt.Sprintf(`"%s"."%s"`, params.Schema, params.Table)
+	tableRef := qt(params.Schema, params.Table)
 
 	// Check if we need subqueries for nested operations
 	if params.NeedsSubquery() {
@@ -258,12 +258,12 @@ func buildPipelineSQL(params QueryParams, selectPKOnly bool) (string, []interfac
 // Priority: selectPKOnly > params.Columns > *.
 func buildSelectClause(params QueryParams, selectPKOnly bool) string {
 	if selectPKOnly {
-		return fmt.Sprintf(`"%s"`, params.PKColumn)
+		return qi(params.PKColumn)
 	}
 	if len(params.Columns) > 0 {
 		quoted := make([]string, len(params.Columns))
 		for i, col := range params.Columns {
-			quoted[i] = fmt.Sprintf(`"%s"`, col)
+			quoted[i] = qi(col)
 		}
 		return strings.Join(quoted, ", ")
 	}
@@ -280,7 +280,7 @@ func buildSimplePipelineSQL(params QueryParams, selectClause, tableRef string) (
 	if len(params.Filters) > 0 {
 		whereParts := make([]string, len(params.Filters))
 		for i, f := range params.Filters {
-			whereParts[i] = fmt.Sprintf(`"%s" = $%d`, f.Column, paramIndex)
+			whereParts[i] = fmt.Sprintf(`%s = $%d`, qi(f.Column), paramIndex)
 			queryParams = append(queryParams, f.Value)
 			paramIndex++
 		}
@@ -329,7 +329,7 @@ func buildNestedPipelineSQL(params QueryParams, selectPKOnly bool) (string, []in
 	if len(params.Filters) > 0 {
 		whereParts := make([]string, len(params.Filters))
 		for i, f := range params.Filters {
-			whereParts[i] = fmt.Sprintf(`"%s" = $%d`, f.Column, paramIndex)
+			whereParts[i] = fmt.Sprintf(`%s = $%d`, qi(f.Column), paramIndex)
 			queryParams = append(queryParams, f.Value)
 			paramIndex++
 		}
@@ -362,7 +362,7 @@ func buildNestedPipelineSQL(params QueryParams, selectPKOnly bool) (string, []in
 func buildInnerLimitQuery(params QueryParams, paramIndex *int) (string, []interface{}) {
 	var queryParams []interface{}
 
-	tableRef := fmt.Sprintf(`"%s"."%s"`, params.Schema, params.Table)
+	tableRef := qt(params.Schema, params.Table)
 
 	// Order clause for the previous limit type
 	orderClause := buildOrderClauseForLimitType(params.PreviousLimitType, params.PKColumn, "", false)
@@ -387,8 +387,8 @@ func buildOrderClause(params QueryParams) string {
 			direction = "DESC"
 		}
 		// Add PK as secondary sort for stability
-		return fmt.Sprintf(` ORDER BY "%s" %s NULLS LAST, "%s" %s`,
-			params.OrderBy, direction, params.PKColumn, direction)
+		return fmt.Sprintf(` ORDER BY %s %s NULLS LAST, %s %s`,
+			qi(params.OrderBy), direction, qi(params.PKColumn), direction)
 	}
 
 	// Default ordering based on limit type
@@ -403,16 +403,16 @@ func buildOrderClauseForLimitType(lt LimitType, pkColumn, orderBy string, orderD
 		if orderDesc {
 			direction = "DESC"
 		}
-		return fmt.Sprintf(` ORDER BY "%s" %s NULLS LAST, "%s" %s`,
-			orderBy, direction, pkColumn, direction)
+		return fmt.Sprintf(` ORDER BY %s %s NULLS LAST, %s %s`,
+			qi(orderBy), direction, qi(pkColumn), direction)
 	}
 
 	// Default ordering based on limit type
 	switch lt {
 	case LimitFirst:
-		return fmt.Sprintf(` ORDER BY "%s" ASC`, pkColumn)
+		return fmt.Sprintf(` ORDER BY %s ASC`, qi(pkColumn))
 	case LimitLast:
-		return fmt.Sprintf(` ORDER BY "%s" DESC`, pkColumn)
+		return fmt.Sprintf(` ORDER BY %s DESC`, qi(pkColumn))
 	case LimitSample:
 		return " ORDER BY RANDOM()"
 	default:

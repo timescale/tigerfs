@@ -48,6 +48,25 @@ This is primarily a Go codebase. Follow Go idioms: error handling with explicit 
 | `internal/tigerfs/logging/` | Zap structured logging |
 | `internal/tigerfs/format/` | Data serialization (TSV, CSV, JSON) |
 
+### SQL Identifier Quoting
+
+**Always use `db.QuoteIdent()` and `db.QuoteTable()` when interpolating identifiers into SQL strings.** Never use `fmt.Sprintf` with `"%s"` to quote identifiers -- it does not escape embedded double quotes, which can cause SQL syntax errors or injection. Within the `db` package, use the short aliases `qi()` and `qt()`.
+
+| Helper | Purpose | Example |
+|--------|---------|---------|
+| `db.QuoteIdent(name)` / `qi(name)` | Quote a single identifier (column, table, or schema) | `QuoteIdent("email")` -> `"email"` |
+| `db.QuoteTable(schema, table)` / `qt(schema, table)` | Quote a schema-qualified table reference | `QuoteTable("public", "users")` -> `"public"."users"` |
+
+**When to use:**
+- Any column, table, or schema name interpolated into SQL via `fmt.Sprintf`
+- From outside the `db` package, use the exported `db.QuoteIdent()`/`db.QuoteTable()` names
+
+**When NOT to use:**
+- SQL keywords or direction strings (`"ASC"`, `"DESC"`)
+- Pre-built clause strings already assembled from quoted parts
+- Parameterized values (`$1`, `$2`) -- handled by pgx
+- Hardcoded column name literals written directly in SQL strings
+
 ### Command Architecture: Pure Functional Builder Pattern
 
 **Critical pattern:** All commands use functional builders with zero global state. This ensures test isolation and clean dependency management.
@@ -109,6 +128,8 @@ func buildRootCmd(ctx context.Context) *cobra.Command {
 ## Configuration
 
 **Precedence (low to high):** Defaults → Config file (`~/.config/tigerfs/config.yaml`) → Environment (`TIGERFS_*`) → Flags
+
+**TLS enforcement:** TigerFS enforces `sslmode=require` for non-localhost connections. The `--insecure-no-ssl` flag or `InsecureNoSSL` config disables this. Localhost (127.0.0.1, ::1, Unix sockets) is exempt.
 
 **Rules:**
 1. Always use the `Config` struct - never read from viper directly

@@ -32,7 +32,7 @@ func (t *CreateTableTemplate) Generate(ctx context.Context) (string, error) {
 	return fmt.Sprintf(`-- Create table: %s.%s
 -- Modify this template and save, then touch .commit to execute
 
-CREATE TABLE "%s"."%s" (
+CREATE TABLE %s (
     -- Primary key (choose one pattern):
     -- id SERIAL PRIMARY KEY,
     -- id BIGSERIAL PRIMARY KEY,
@@ -44,7 +44,7 @@ CREATE TABLE "%s"."%s" (
     -- created_at TIMESTAMPTZ DEFAULT now(),
     -- updated_at TIMESTAMPTZ DEFAULT now()
 );
-`, t.Schema, t.TableName, t.Schema, t.TableName), nil
+`, t.Schema, t.TableName, db.QuoteTable(t.Schema, t.TableName)), nil
 }
 
 // ModifyTableTemplate generates a template for modifying an existing table.
@@ -92,7 +92,7 @@ func (t *ModifyTableTemplate) Generate(ctx context.Context) (string, error) {
 	sb.WriteString("-- ADD CONSTRAINT name CHECK (condition)\n")
 	sb.WriteString("-- DROP CONSTRAINT name\n")
 
-	sb.WriteString(fmt.Sprintf("\nALTER TABLE \"%s\".\"%s\"\n", t.Schema, t.TableName))
+	sb.WriteString(fmt.Sprintf("\nALTER TABLE %s\n", db.QuoteTable(t.Schema, t.TableName)))
 	sb.WriteString("    -- ADD COLUMN new_column TEXT;\n")
 
 	return sb.String(), nil
@@ -154,12 +154,12 @@ func (t *DeleteTableTemplate) Generate(ctx context.Context) (string, error) {
 				ref.EstimatedRows))
 		}
 		sb.WriteString("\n-- Uncomment ONE of the following:\n")
-		sb.WriteString(fmt.Sprintf("-- DROP TABLE \"%s\".\"%s\" RESTRICT;  -- Fail if dependencies exist\n", t.Schema, t.TableName))
-		sb.WriteString(fmt.Sprintf("-- DROP TABLE \"%s\".\"%s\" CASCADE;   -- Drop dependent objects too\n", t.Schema, t.TableName))
+		sb.WriteString(fmt.Sprintf("-- DROP TABLE %s RESTRICT;  -- Fail if dependencies exist\n", db.QuoteTable(t.Schema, t.TableName)))
+		sb.WriteString(fmt.Sprintf("-- DROP TABLE %s CASCADE;   -- Drop dependent objects too\n", db.QuoteTable(t.Schema, t.TableName)))
 	} else {
 		sb.WriteString("\n-- No foreign keys reference this table.\n")
 		sb.WriteString("\n-- Uncomment to delete:\n")
-		sb.WriteString(fmt.Sprintf("-- DROP TABLE \"%s\".\"%s\";\n", t.Schema, t.TableName))
+		sb.WriteString(fmt.Sprintf("-- DROP TABLE %s;\n", db.QuoteTable(t.Schema, t.TableName)))
 	}
 
 	return sb.String(), nil
@@ -198,7 +198,7 @@ func (t *CreateIndexTemplate) Generate(ctx context.Context) (string, error) {
 -- Expression index:
 -- CREATE INDEX idx_%s_lower_email ON "%s"."%s" (lower(email));
 
-CREATE INDEX idx_%s_COLUMNNAME ON "%s"."%s" (
+CREATE INDEX %s ON %s (
     -- column(s) here
 );
 `, t.Schema, t.TableName,
@@ -207,7 +207,7 @@ CREATE INDEX idx_%s_COLUMNNAME ON "%s"."%s" (
 		t.TableName, t.Schema, t.TableName,
 		t.TableName, t.Schema, t.TableName,
 		t.TableName, t.Schema, t.TableName,
-		t.TableName, t.Schema, t.TableName), nil
+		db.QuoteIdent("idx_"+t.TableName+"_COLUMNNAME"), db.QuoteTable(t.Schema, t.TableName)), nil
 }
 
 // DeleteIndexTemplate generates a template for dropping an index.
@@ -232,7 +232,7 @@ func (t *DeleteIndexTemplate) Generate(ctx context.Context) (string, error) {
 	sb.WriteString(fmt.Sprintf("-- Index: %s\n", t.IndexName))
 	sb.WriteString(fmt.Sprintf("-- Schema: %s\n", t.Schema))
 	sb.WriteString("\n-- Uncomment to delete:\n")
-	sb.WriteString(fmt.Sprintf("-- DROP INDEX \"%s\".\"%s\";\n", t.Schema, t.IndexName))
+	sb.WriteString(fmt.Sprintf("-- DROP INDEX %s;\n", db.QuoteTable(t.Schema, t.IndexName)))
 
 	return sb.String(), nil
 }
@@ -253,15 +253,15 @@ func (t *CreateSchemaTemplate) Generate(ctx context.Context) (string, error) {
 	return fmt.Sprintf(`-- Create schema: %s
 -- Edit this template and save, then touch .commit to execute
 
-CREATE SCHEMA "%s";
+CREATE SCHEMA %s;
 
 -- Optional: Set schema owner
--- ALTER SCHEMA "%s" OWNER TO role_name;
+-- ALTER SCHEMA %s OWNER TO role_name;
 
 -- Optional: Grant permissions
--- GRANT USAGE ON SCHEMA "%s" TO role_name;
--- GRANT ALL ON SCHEMA "%s" TO role_name;
-`, t.SchemaName, t.SchemaName, t.SchemaName, t.SchemaName, t.SchemaName), nil
+-- GRANT USAGE ON SCHEMA %s TO role_name;
+-- GRANT ALL ON SCHEMA %s TO role_name;
+`, t.SchemaName, db.QuoteIdent(t.SchemaName), db.QuoteIdent(t.SchemaName), db.QuoteIdent(t.SchemaName), db.QuoteIdent(t.SchemaName)), nil
 }
 
 // DeleteSchemaTemplate generates a template for dropping a schema.
@@ -292,12 +292,12 @@ func (t *DeleteSchemaTemplate) Generate(ctx context.Context) (string, error) {
 	if tableCount > 0 {
 		sb.WriteString("\n-- WARNING: Schema is not empty!\n")
 		sb.WriteString("\n-- Uncomment ONE of the following:\n")
-		sb.WriteString(fmt.Sprintf("-- DROP SCHEMA \"%s\" RESTRICT;  -- Fail if schema contains objects\n", t.SchemaName))
-		sb.WriteString(fmt.Sprintf("-- DROP SCHEMA \"%s\" CASCADE;   -- Drop all contained objects\n", t.SchemaName))
+		sb.WriteString(fmt.Sprintf("-- DROP SCHEMA %s RESTRICT;  -- Fail if schema contains objects\n", db.QuoteIdent(t.SchemaName)))
+		sb.WriteString(fmt.Sprintf("-- DROP SCHEMA %s CASCADE;   -- Drop all contained objects\n", db.QuoteIdent(t.SchemaName)))
 	} else {
 		sb.WriteString("\n-- Schema is empty.\n")
 		sb.WriteString("\n-- Uncomment to delete:\n")
-		sb.WriteString(fmt.Sprintf("-- DROP SCHEMA \"%s\";\n", t.SchemaName))
+		sb.WriteString(fmt.Sprintf("-- DROP SCHEMA %s;\n", db.QuoteIdent(t.SchemaName)))
 	}
 
 	return sb.String(), nil
@@ -321,7 +321,7 @@ func (t *CreateViewTemplate) Generate(ctx context.Context) (string, error) {
 	return fmt.Sprintf(`-- Create view: %s.%s
 -- Edit this template and save, then touch .commit to execute
 
-CREATE VIEW "%s"."%s" AS
+CREATE VIEW %s AS
 SELECT
     -- columns here
     -- col1,
@@ -336,10 +336,10 @@ WHERE
 ;
 
 -- Optional: Create as materialized view for better performance
--- CREATE MATERIALIZED VIEW "%s"."%s" AS
+-- CREATE MATERIALIZED VIEW %s AS
 -- SELECT ...
 -- WITH DATA;
-`, t.Schema, t.ViewName, t.Schema, t.ViewName, t.Schema, t.ViewName), nil
+`, t.Schema, t.ViewName, db.QuoteTable(t.Schema, t.ViewName), db.QuoteTable(t.Schema, t.ViewName)), nil
 }
 
 // DeleteViewTemplate generates a template for dropping a view.
@@ -385,11 +385,11 @@ func (t *DeleteViewTemplate) Generate(ctx context.Context) (string, error) {
 			sb.WriteString(fmt.Sprintf("--   %s\n", v))
 		}
 		sb.WriteString("\n-- Uncomment ONE of the following:\n")
-		sb.WriteString(fmt.Sprintf("-- DROP VIEW \"%s\".\"%s\" RESTRICT;  -- Fail if dependencies exist\n", t.Schema, t.ViewName))
-		sb.WriteString(fmt.Sprintf("-- DROP VIEW \"%s\".\"%s\" CASCADE;   -- Drop dependent views too\n", t.Schema, t.ViewName))
+		sb.WriteString(fmt.Sprintf("-- DROP VIEW %s RESTRICT;  -- Fail if dependencies exist\n", db.QuoteTable(t.Schema, t.ViewName)))
+		sb.WriteString(fmt.Sprintf("-- DROP VIEW %s CASCADE;   -- Drop dependent views too\n", db.QuoteTable(t.Schema, t.ViewName)))
 	} else {
 		sb.WriteString("\n-- Uncomment to delete:\n")
-		sb.WriteString(fmt.Sprintf("-- DROP VIEW \"%s\".\"%s\";\n", t.Schema, t.ViewName))
+		sb.WriteString(fmt.Sprintf("-- DROP VIEW %s;\n", db.QuoteTable(t.Schema, t.ViewName)))
 	}
 
 	return sb.String(), nil

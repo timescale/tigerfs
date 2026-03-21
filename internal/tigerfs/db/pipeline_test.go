@@ -217,6 +217,31 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			wantSQL:      `SELECT * FROM "public"."users"`,
 			wantParams:   1,
 		},
+		{
+			name: "identifiers with embedded double quotes",
+			params: QueryParams{
+				Schema:   `my"schema`,
+				Table:    `my"table`,
+				PKColumn: `my"id`,
+			},
+			selectPKOnly: true,
+			wantSQL:      `SELECT "my""id" FROM "my""schema"."my""table"`,
+			wantParams:   0,
+		},
+		{
+			name: "filter column with embedded double quote",
+			params: QueryParams{
+				Schema:   "public",
+				Table:    "users",
+				PKColumn: "id",
+				Filters: []FilterCondition{
+					{Column: `sta"tus`, Value: "active"},
+				},
+			},
+			selectPKOnly: true,
+			wantSQL:      `WHERE "sta""tus" = $1`,
+			wantParams:   1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -372,29 +397,117 @@ func TestBuildPipelineSQL_ParameterValues(t *testing.T) {
 
 // TestBuildPipelineSQL_SQLInjectionPrevention tests that identifiers are properly quoted.
 func TestBuildPipelineSQL_SQLInjectionPrevention(t *testing.T) {
-	// These should be safely quoted
-	params := QueryParams{
-		Schema:   "public; DROP TABLE users;--",
-		Table:    "users\"; DROP TABLE users;--",
-		PKColumn: "id\"; DROP TABLE users;--",
-		Filters: []FilterCondition{
-			{Column: "status\"; DROP TABLE users;--", Value: "active"},
+	t.Run("semicolon injection", func(t *testing.T) {
+		params := QueryParams{
+			Schema:   "public; DROP TABLE users;--",
+			Table:    "users\"; DROP TABLE users;--",
+			PKColumn: "id\"; DROP TABLE users;--",
+			Filters: []FilterCondition{
+				{Column: "status\"; DROP TABLE users;--", Value: "active"},
+			},
+			Limit:     100,
+			LimitType: LimitFirst,
+		}
+
+		sql, _ := BuildPipelineSQLForTest(params, true)
+
+		// The dangerous parts should be quoted as identifiers, not executed
+		if strings.Contains(sql, "DROP TABLE") && !strings.Contains(sql, `"`) {
+			t.Errorf("SQL may be vulnerable to injection: %s", sql)
+		}
+
+		// Values are parameterized, so "active" should be $N, not inline
+		if strings.Contains(sql, "'active'") {
+			t.Errorf("Filter value should be parameterized, not inline: %s", sql)
+		}
+	})
+
+	t.Run("embedded double quote injection", func(t *testing.T) {
+		// A table/schema with " in its name must have quotes properly escaped
+		params := QueryParams{
+			Schema:   `my"schema`,
+			Table:    `my"table`,
+			PKColumn: `my"pk`,
+		}
+
+		sql, _ := BuildPipelineSQLForTest(params, true)
+
+		// Verify proper escaping: embedded " must be doubled
+		if !strings.Contains(sql, `"my""schema"."my""table"`) {
+			t.Errorf("Schema.table not properly escaped:\n  got: %s\n  want to contain: %s",
+				sql, `"my""schema"."my""table"`)
+		}
+		if !strings.Contains(sql, `"my""pk"`) {
+			t.Errorf("PK column not properly escaped:\n  got: %s\n  want to contain: %s",
+				sql, `"my""pk"`)
+		}
+	})
+
+	t.Run("filter column with embedded quote", func(t *testing.T) {
+		params := QueryParams{
+			Schema:   "public",
+			Table:    "users",
+			PKColumn: "id",
+			Filters: []FilterCondition{
+				{Column: `col"name`, Value: "val"},
+			},
+		}
+
+		sql, _ := BuildPipelineSQLForTest(params, true)
+
+		if !strings.Contains(sql, `"col""name" = $1`) {
+			t.Errorf("Filter column not properly escaped:\n  got: %s\n  want to contain: %s",
+				sql, `"col""name" = $1`)
+		}
+	})
+}
+
+// TestBuildPipelineSQL_NonIdentifierValues verifies that SQL keywords and
+// direction strings are NOT wrapped in identifier quotes. This catches
+// accidental over-application of qi().
+func TestBuildPipelineSQL_NonIdentifierValues(t *testing.T) {
+	// Strings that must NEVER appear quoted as identifiers in the output
+	forbiddenQuoted := []string{`"ASC"`, `"DESC"`, `"NULLS"`, `"LAST"`, `"RANDOM()"`, `"LIMIT"`}
+
+	tests := []struct {
+		name   string
+		params QueryParams
+	}{
+		{
+			name: "ascending order",
+			params: QueryParams{
+				Schema: "public", Table: "users", PKColumn: "id",
+				OrderBy: "name", OrderDesc: false,
+				Limit: 10, LimitType: LimitFirst,
+			},
 		},
-		Limit:     100,
-		LimitType: LimitFirst,
+		{
+			name: "descending order",
+			params: QueryParams{
+				Schema: "public", Table: "users", PKColumn: "id",
+				OrderBy: "created_at", OrderDesc: true,
+				Limit: 10, LimitType: LimitLast,
+			},
+		},
+		{
+			name: "random sample",
+			params: QueryParams{
+				Schema: "public", Table: "users", PKColumn: "id",
+				Limit: 10, LimitType: LimitSample,
+			},
+		},
 	}
 
-	sql, _ := BuildPipelineSQLForTest(params, true)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, _ := BuildPipelineSQLForTest(tt.params, true)
 
-	// The dangerous parts should be quoted as identifiers, not executed
-	// The actual SQL will have double quotes around identifiers
-	if strings.Contains(sql, "DROP TABLE") && !strings.Contains(sql, `"`) {
-		t.Errorf("SQL may be vulnerable to injection: %s", sql)
-	}
-
-	// Values are parameterized, so "active" should be $N, not inline
-	if strings.Contains(sql, "'active'") {
-		t.Errorf("Filter value should be parameterized, not inline: %s", sql)
+			for _, forbidden := range forbiddenQuoted {
+				if strings.Contains(sql, forbidden) {
+					t.Errorf("SQL contains quoted keyword %s (should be bare):\n  got: %s", forbidden, sql)
+				}
+			}
+		})
 	}
 }
 

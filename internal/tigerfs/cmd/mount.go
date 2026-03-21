@@ -8,7 +8,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/timescale/tigerfs/internal/tigerfs/backend"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"github.com/timescale/tigerfs/internal/tigerfs/mount"
 	"go.uber.org/zap"
@@ -44,6 +44,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var queryTimeout time.Duration
 	var dirFilterLimit int
 	var legacyFuse bool
+	var insecureNoSSL bool
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] [MOUNTPOINT]",
@@ -62,16 +63,16 @@ When omitted, the mountpoint defaults to <default_mount_dir>/<ID>.
 
 Examples:
   # Mount Tiger Cloud service (auto-derived mountpoint)
-  tigerfs mount tiger:e6ue9697jf
+  tigerfs mount tiger:abcde12345
 
   # Mount Ghost database with explicit mountpoint
-  tigerfs mount ghost:a2x6xoj0oz /mnt/db
+  tigerfs mount ghost:fghij67890 /mnt/db
 
   # Mount using connection string (mountpoint required)
   tigerfs mount postgres://user@host/db /mnt/db
 
   # Mount read-only
-  tigerfs mount --read-only tiger:e6ue9697jf /mnt/db
+  tigerfs mount --read-only tiger:abcde12345 /mnt/db
 
   # Run in foreground with debug logging
   tigerfs mount --foreground --log-level debug postgres://host/db /mnt/db`,
@@ -154,6 +155,9 @@ Examples:
 			if legacyFuse {
 				cfg.LegacyFuse = true
 			}
+			if insecureNoSSL {
+				cfg.InsecureNoSSL = true
+			}
 
 			// Mount the filesystem using platform-specific method
 			// (NFS on macOS, FUSE on Linux).
@@ -210,6 +214,7 @@ Examples:
 	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
+	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
 
 	return cmd
 }
@@ -265,7 +270,7 @@ func registerMount(mountpoint, connStr, serviceID, cliBackend string, autoCreate
 	entry := mount.Entry{
 		Mountpoint:  mountpoint,
 		PID:         os.Getpid(),
-		Database:    sanitizeConnectionString(connStr),
+		Database:    db.SanitizeConnectionString(connStr),
 		StartTime:   time.Now(),
 		ServiceID:   serviceID,
 		CLIBackend:  cliBackend,
@@ -303,28 +308,4 @@ func unregisterMount(mountpoint string) error {
 
 	logging.Debug("Unregistered mount from registry", zap.String("mountpoint", mountpoint))
 	return nil
-}
-
-// sanitizeConnectionString removes the password from a connection string
-// for safe storage and display.
-//
-// Parameters:
-//   - connStr: The original connection string (postgres:// URL format)
-//
-// Returns the connection string with the password removed, or the original
-// string if it can't be parsed as a URL.
-func sanitizeConnectionString(connStr string) string {
-	if connStr == "" {
-		return "(from environment)"
-	}
-
-	u, err := url.Parse(connStr)
-	if err != nil || u.User == nil {
-		return connStr
-	}
-
-	if _, hasPassword := u.User.Password(); hasPassword {
-		u.User = url.User(u.User.Username())
-	}
-	return u.String()
 }

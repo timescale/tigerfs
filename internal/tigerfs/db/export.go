@@ -30,8 +30,8 @@ func GetAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, l
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" LIMIT $1`,
-		schema, table,
+		`SELECT * FROM %s LIMIT $1`,
+		qt(schema, table),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -88,8 +88,8 @@ func GetFirstNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, tabl
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" ORDER BY "%s" ASC LIMIT $1`,
-		schema, table, pkColumn,
+		`SELECT * FROM %s ORDER BY %s ASC LIMIT $1`,
+		qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -146,8 +146,8 @@ func GetLastNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" ORDER BY "%s" DESC LIMIT $1`,
-		schema, table, pkColumn,
+		`SELECT * FROM %s ORDER BY %s DESC LIMIT $1`,
+		qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -203,12 +203,12 @@ func (c *Client) RowExistsByColumns(ctx context.Context, schema, table string, c
 	// Build WHERE clause
 	var whereParts []string
 	for i, col := range columns {
-		whereParts = append(whereParts, fmt.Sprintf(`"%s" = $%d`, col, i+1))
+		whereParts = append(whereParts, fmt.Sprintf(`%s = $%d`, qi(col), i+1))
 	}
 
 	query := fmt.Sprintf(
-		`SELECT 1 FROM "%s"."%s" WHERE %s LIMIT 1`,
-		schema, table, strings.Join(whereParts, " AND "),
+		`SELECT 1 FROM %s WHERE %s LIMIT 1`,
+		qt(schema, table), strings.Join(whereParts, " AND "),
 	)
 
 	logging.Debug("Checking row existence by columns",
@@ -239,12 +239,12 @@ func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, colu
 	// Build WHERE clause
 	var whereParts []string
 	for i, col := range columns {
-		whereParts = append(whereParts, fmt.Sprintf(`"%s" = $%d`, col, i+1))
+		whereParts = append(whereParts, fmt.Sprintf(`%s = $%d`, qi(col), i+1))
 	}
 
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" WHERE %s LIMIT 1`,
-		schema, table, strings.Join(whereParts, " AND "),
+		`SELECT * FROM %s WHERE %s LIMIT 1`,
+		qt(schema, table), strings.Join(whereParts, " AND "),
 	)
 
 	logging.Debug("Getting row by columns",

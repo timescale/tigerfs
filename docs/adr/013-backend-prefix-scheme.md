@@ -33,8 +33,8 @@ path — we need a consistent rule to disambiguate.
 All commands use a prefix scheme to identify the backend and argument type:
 
 ```
-tiger:qz9smvlqrw          # Tiger Cloud service (ID or name)
-ghost:a2x6xoj0oz          # Ghost database (ID or name)
+tiger:abcde12345          # Tiger Cloud service (ID or name)
+ghost:fghij67890          # Ghost database (ID or name)
 postgres://user@host/db    # Direct connection string
 ```
 

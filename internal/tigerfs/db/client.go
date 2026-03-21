@@ -64,7 +64,7 @@ func IsTimeoutError(err error) bool {
 
 // NewClient creates a new database client
 func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client, error) {
-	logging.Debug("Creating database client", zap.String("connection", connStr))
+	logging.Debug("Creating database client", zap.String("connection", SanitizeConnectionString(connStr)))
 
 	// Resolve password from multiple sources (env vars, password_command)
 	// Note: .pgpass file is handled automatically by pgx
@@ -80,6 +80,9 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 			return nil, fmt.Errorf("failed to inject password: %w", err)
 		}
 	}
+
+	// Enforce TLS for non-localhost connections
+	connStr = enforceSSLMode(connStr, cfg.InsecureNoSSL)
 
 	// Parse connection string
 	poolConfig, err := pgxpool.ParseConfig(connStr)

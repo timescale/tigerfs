@@ -83,8 +83,8 @@ func ListRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn s
 
 	// Build query with proper quoting for identifiers
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" LIMIT $1`,
-		pkColumn, schema, table, pkColumn,
+		`SELECT %s FROM %s ORDER BY %s LIMIT $1`,
+		qi(pkColumn), qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -147,8 +147,8 @@ func ListAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColum
 
 	// Build query without LIMIT
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s"`,
-		pkColumn, schema, table, pkColumn,
+		`SELECT %s FROM %s ORDER BY %s`,
+		qi(pkColumn), qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query)

@@ -30,7 +30,7 @@ type FS struct {
 func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) (*FS, error) {
 	logging.Debug("Mounting filesystem",
 		zap.String("mountpoint", mountpoint),
-		zap.String("connection", connStr),
+		zap.String("connection", db.SanitizeConnectionString(connStr)),
 	)
 
 	// 1. Connect to database

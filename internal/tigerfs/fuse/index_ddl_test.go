@@ -231,8 +231,8 @@ func TestIndexCreateDirNode_GenerateTemplate_ColumnInference(t *testing.T) {
 				if !contains(template, "Inferred column: "+tt.expectColumn) {
 					t.Errorf("Expected 'Inferred column: %s' in template", tt.expectColumn)
 				}
-				// Should have uncommented CREATE INDEX with the column
-				expected := "CREATE INDEX " + tt.indexName + " ON users (" + tt.expectColumn + ");"
+				// Should have uncommented CREATE INDEX with the column (properly quoted)
+				expected := "CREATE INDEX " + db.QuoteIdent(tt.indexName) + " ON " + db.QuoteTable("public", "users") + " (" + db.QuoteIdent(tt.expectColumn) + ");"
 				if !contains(template, expected) {
 					t.Errorf("Expected uncommented '%s' in template, got:\n%s", expected, template)
 				}

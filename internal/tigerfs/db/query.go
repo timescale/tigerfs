@@ -28,8 +28,8 @@ func GetRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pk
 	// Build query with proper quoting for identifiers
 	// SELECT * FROM "schema"."table" WHERE "pk_column" = $1
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" WHERE "%s" = $1`,
-		schema, table, pkColumn,
+		`SELECT * FROM %s WHERE %s = $1`,
+		qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, pkValue)
@@ -102,8 +102,8 @@ func GetColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 	// Build query with proper quoting for identifiers
 	// SELECT "column" FROM "schema"."table" WHERE "pk_column" = $1
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" WHERE "%s" = $1`,
-		columnName, schema, table, pkColumn,
+		`SELECT %s FROM %s WHERE %s = $1`,
+		qi(columnName), qt(schema, table), qi(pkColumn),
 	)
 
 	var value interface{}
@@ -143,8 +143,8 @@ func UpdateColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColu
 	// Build UPDATE query with proper quoting for identifiers
 	// UPDATE "schema"."table" SET "column" = $1 WHERE "pk_column" = $2
 	query := fmt.Sprintf(
-		`UPDATE "%s"."%s" SET "%s" = $1 WHERE "%s" = $2`,
-		schema, table, columnName, pkColumn,
+		`UPDATE %s SET %s = $1 WHERE %s = $2`,
+		qt(schema, table), qi(columnName), qi(pkColumn),
 	)
 
 	// Convert empty string to NULL
@@ -201,8 +201,8 @@ func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, p
 
 	// UPDATE "schema"."table" SET "setColumn" = $1 WHERE "pkColumn" = $2 AND "whereColumn" = $3
 	query := fmt.Sprintf(
-		`UPDATE "%s"."%s" SET "%s" = $1 WHERE "%s" = $2 AND "%s" = $3`,
-		schema, table, setColumn, pkColumn, whereColumn,
+		`UPDATE %s SET %s = $1 WHERE %s = $2 AND %s = $3`,
+		qt(schema, table), qi(setColumn), qi(pkColumn), qi(whereColumn),
 	)
 
 	cmdTag, err := c.pool.Exec(ctx, query, newValue, pkValue, whereValue)
@@ -236,7 +236,7 @@ func InsertRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, co
 	// Build column list: ("col1", "col2", "col3")
 	quotedColumns := make([]string, len(columns))
 	for i, col := range columns {
-		quotedColumns[i] = fmt.Sprintf(`"%s"`, col)
+		quotedColumns[i] = qi(col)
 	}
 	columnList := strings.Join(quotedColumns, ", ")
 
@@ -249,8 +249,8 @@ func InsertRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, co
 
 	// Build INSERT query with RETURNING for primary key
 	query := fmt.Sprintf(
-		`INSERT INTO "%s"."%s" (%s) VALUES (%s) RETURNING *`,
-		schema, table, columnList, placeholderList,
+		`INSERT INTO %s (%s) VALUES (%s) RETURNING *`,
+		qt(schema, table), columnList, placeholderList,
 	)
 
 	// Execute insert
@@ -321,15 +321,15 @@ func UpdateRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 	// Build SET clause: "col1" = $1, "col2" = $2, ...
 	setClauses := make([]string, len(columns))
 	for i, col := range columns {
-		setClauses[i] = fmt.Sprintf(`"%s" = $%d`, col, i+1)
+		setClauses[i] = fmt.Sprintf(`%s = $%d`, qi(col), i+1)
 	}
 	setClause := strings.Join(setClauses, ", ")
 
 	// Build UPDATE query
 	// UPDATE "schema"."table" SET "col1" = $1, "col2" = $2 WHERE "pk_column" = $N
 	query := fmt.Sprintf(
-		`UPDATE "%s"."%s" SET %s WHERE "%s" = $%d`,
-		schema, table, setClause, pkColumn, len(values)+1,
+		`UPDATE %s SET %s WHERE %s = $%d`,
+		qt(schema, table), setClause, qi(pkColumn), len(values)+1,
 	)
 
 	// Append PK value to values list
@@ -373,8 +373,8 @@ func DeleteRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 	// Build DELETE query with proper quoting for identifiers
 	// DELETE FROM "schema"."table" WHERE "pk_column" = $1
 	query := fmt.Sprintf(
-		`DELETE FROM "%s"."%s" WHERE "%s" = $1`,
-		schema, table, pkColumn,
+		`DELETE FROM %s WHERE %s = $1`,
+		qt(schema, table), qi(pkColumn),
 	)
 
 	// Execute delete
@@ -422,8 +422,8 @@ func GetFirstNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkCol
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" ASC LIMIT $1`,
-		pkColumn, schema, table, pkColumn,
+		`SELECT %s FROM %s ORDER BY %s ASC LIMIT $1`,
+		qi(pkColumn), qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -483,8 +483,8 @@ func GetLastNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColu
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" DESC LIMIT $1`,
-		pkColumn, schema, table, pkColumn,
+		`SELECT %s FROM %s ORDER BY %s DESC LIMIT $1`,
+		qi(pkColumn), qt(schema, table), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -566,14 +566,14 @@ func GetRandomSampleRows(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		}
 
 		query = fmt.Sprintf(
-			`SELECT "%s" FROM "%s"."%s" TABLESAMPLE BERNOULLI(%f) LIMIT $1`,
-			pkColumn, schema, table, percentage,
+			`SELECT %s FROM %s TABLESAMPLE BERNOULLI(%f) LIMIT $1`,
+			qi(pkColumn), qt(schema, table), percentage,
 		)
 	} else {
 		// For small tables or unknown size, use ORDER BY RANDOM()
 		query = fmt.Sprintf(
-			`SELECT "%s" FROM "%s"."%s" ORDER BY RANDOM() LIMIT $1`,
-			pkColumn, schema, table,
+			`SELECT %s FROM %s ORDER BY RANDOM() LIMIT $1`,
+			qi(pkColumn), qt(schema, table),
 		)
 	}
 
@@ -637,8 +637,8 @@ func GetFirstNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" ASC NULLS LAST, "%s" ASC LIMIT $1`,
-		pkColumn, schema, table, orderColumn, pkColumn,
+		`SELECT %s FROM %s ORDER BY %s ASC NULLS LAST, %s ASC LIMIT $1`,
+		qi(pkColumn), qt(schema, table), qi(orderColumn), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -701,8 +701,8 @@ func GetLastNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" ORDER BY "%s" DESC NULLS LAST, "%s" DESC LIMIT $1`,
-		pkColumn, schema, table, orderColumn, pkColumn,
+		`SELECT %s FROM %s ORDER BY %s DESC NULLS LAST, %s DESC LIMIT $1`,
+		qi(pkColumn), qt(schema, table), qi(orderColumn), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -756,8 +756,8 @@ func (c *Client) RenameByPrefix(ctx context.Context, schema, table, column, oldP
 	// UPDATE "schema"."table" SET "column" = $1 || substr("column", length($2) + 1)
 	// WHERE "column" = $2 OR "column" LIKE $2 || '/%'
 	query := fmt.Sprintf(
-		`UPDATE "%s"."%s" SET "%s" = $1 || substr("%s", length($2) + 1) WHERE "%s" = $2 OR "%s" LIKE $2 || '/%%'`,
-		schema, table, column, column, column, column,
+		`UPDATE %s SET %s = $1 || substr(%s, length($2) + 1) WHERE %s = $2 OR %s LIKE $2 || '/%%'`,
+		qt(schema, table), qi(column), qi(column), qi(column), qi(column),
 	)
 
 	cmdTag, err := c.pool.Exec(ctx, query, newPrefix, oldPrefix)
@@ -776,8 +776,8 @@ func (c *Client) HasChildrenWithPrefix(ctx context.Context, schema, table, colum
 	}
 
 	query := fmt.Sprintf(
-		`SELECT EXISTS(SELECT 1 FROM "%s"."%s" WHERE "%s" LIKE $1 || '/%%')`,
-		schema, table, column,
+		`SELECT EXISTS(SELECT 1 FROM %s WHERE %s LIKE $1 || '/%%')`,
+		qt(schema, table), qi(column),
 	)
 
 	var exists bool
@@ -804,13 +804,13 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 	quotedCols := make([]string, len(columns))
 	placeholders := make([]string, len(columns))
 	for i, col := range columns {
-		quotedCols[i] = fmt.Sprintf(`"%s"`, col)
+		quotedCols[i] = qi(col)
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
 
 	query := fmt.Sprintf(
-		`INSERT INTO "%s"."%s" (%s) VALUES (%s) ON CONFLICT DO NOTHING`,
-		schema, table, strings.Join(quotedCols, ", "), strings.Join(placeholders, ", "),
+		`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING`,
+		qt(schema, table), strings.Join(quotedCols, ", "), strings.Join(placeholders, ", "),
 	)
 
 	_, err := c.pool.Exec(ctx, query, values...)
@@ -854,8 +854,8 @@ func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, e
 // Returns columns and rows ordered by _history_id DESC (most recent first).
 func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" WHERE "filename" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
-		schema, historyTable, limit,
+		`SELECT * FROM %s WHERE "filename" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, filename)
 }
@@ -864,8 +864,8 @@ func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTabl
 // Returns columns and rows ordered by _history_id DESC (most recent first).
 func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
-		schema, historyTable, limit,
+		`SELECT * FROM %s WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, rowID)
 }
@@ -873,8 +873,8 @@ func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, row
 // QueryHistoryDistinctFilenames returns distinct filenames from the history table.
 func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "filename" FROM "%s"."%s" ORDER BY "filename" LIMIT %d`,
-		schema, historyTable, limit,
+		`SELECT DISTINCT "filename" FROM %s ORDER BY "filename" LIMIT %d`,
+		qt(schema, historyTable), limit,
 	)
 	rows, err := c.pool.Query(ctx, query)
 	if err != nil {
@@ -896,8 +896,8 @@ func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, hist
 // QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
 func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "id"::text FROM "%s"."%s" ORDER BY "id" LIMIT %d`,
-		schema, historyTable, limit,
+		`SELECT DISTINCT "id"::text FROM %s ORDER BY "id" LIMIT %d`,
+		qt(schema, historyTable), limit,
 	)
 	rows, err := c.pool.Query(ctx, query)
 	if err != nil {
@@ -921,8 +921,8 @@ func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTab
 // with a 1-second window around the target timestamp plus filename or id filter.
 func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM "%s"."%s" WHERE "%s" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
-		schema, historyTable, filterColumn, limit,
+		`SELECT * FROM %s WHERE %s = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		qt(schema, historyTable), qi(filterColumn), limit,
 	)
 	return c.queryRows(ctx, query, filterValue)
 }
