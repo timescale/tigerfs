@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-BASE_URL="https://install.tigerfs.io"
+BASE_URL="${BASE_URL:-https://install.tigerfs.io}"
 BINARY="tigerfs"
 MAX_RETRIES=3
 
@@ -9,13 +9,14 @@ MAX_RETRIES=3
 
 if [ -t 1 ]; then
   BOLD='\033[1m'
+  DIM='\033[2m'
   GREEN='\033[32m'
   RED='\033[31m'
   YELLOW='\033[33m'
   CYAN='\033[36m'
   RESET='\033[0m'
 else
-  BOLD='' GREEN='' RED='' YELLOW='' CYAN='' RESET=''
+  BOLD='' DIM='' GREEN='' RED='' YELLOW='' CYAN='' RESET=''
 fi
 
 main() {
@@ -75,6 +76,12 @@ main() {
   fi
 
   success "Installed to ${BOLD}${dest}${RESET}"
+
+  # Install skills
+  skills_src="$tmp_dir/skills/tigerfs"
+  if [ -d "$skills_src" ]; then
+    install_skills "$skills_src"
+  fi
 
   if ! echo "$PATH" | tr ':' '\n' | grep -qx "$install_dir"; then
     warn "Add ${BOLD}${install_dir}${RESET} to your PATH:"
@@ -203,6 +210,160 @@ verify_checksum() {
   fi
 
   success "Checksum verified"
+}
+
+# --- Skills installation ---
+
+# Agent name:skills path (relative to $HOME):detection dir (relative to $HOME)
+AGENT_COUNT=7
+AGENT_1_NAME="Claude Code"    AGENT_1_PATH=".claude/skills"              AGENT_1_DETECT=".claude"
+AGENT_2_NAME="Cursor"         AGENT_2_PATH=".cursor/skills"              AGENT_2_DETECT=".cursor"
+AGENT_3_NAME="Codex CLI"      AGENT_3_PATH=".agents/skills"              AGENT_3_DETECT=".codex"
+AGENT_4_NAME="Gemini CLI"     AGENT_4_PATH=".gemini/skills"              AGENT_4_DETECT=".gemini"
+AGENT_5_NAME="Windsurf"       AGENT_5_PATH=".codeium/windsurf/skills"    AGENT_5_DETECT=".codeium/windsurf"
+AGENT_6_NAME="Antigravity"    AGENT_6_PATH=".gemini/antigravity/skills"  AGENT_6_DETECT=".gemini/antigravity"
+AGENT_7_NAME="Kiro"           AGENT_7_PATH=".kiro/steering"              AGENT_7_DETECT=".kiro"
+
+# Helper to get agent field by index
+agent_name()   { eval echo "\$AGENT_${1}_NAME"; }
+agent_path()   { eval echo "\$AGENT_${1}_PATH"; }
+agent_detect() { eval echo "\$AGENT_${1}_DETECT"; }
+
+is_agent_detected() {
+  detect_dir="$(agent_detect "$1")"
+  [ -d "$HOME/$detect_dir" ]
+}
+
+install_skills() {
+  skills_src="$1"
+
+  # Prompt if a human is watching (stdout is a terminal) or forced interactive.
+  # This works even with `curl | sh` because we read from /dev/tty, not stdin.
+  if [ -t 1 ] || [ "${TIGERFS_INTERACTIVE:-}" = "1" ]; then
+    interactive_install_skills "$skills_src"
+  else
+    stage_skills "$skills_src"
+  fi
+}
+
+interactive_install_skills() {
+  skills_src="$1"
+
+  # Build list of detected agents and display menu
+  detected=""
+  num=1
+  printf "\n"
+  info "Install TigerFS skills for your coding agent(s):"
+
+  i=1
+  while [ "$i" -le "$AGENT_COUNT" ]; do
+    name="$(agent_name "$i")"
+    path="$(agent_path "$i")"
+    if is_agent_detected "$i"; then
+      printf "   ${BOLD}%d)${RESET} %-16s (~/%s/)\n" "$num" "$name" "$path"
+      detected="${detected}${i}:${num} "
+      num=$((num + 1))
+    else
+      printf "   ${DIM}-  %-16s (not detected)${RESET}\n" "$name"
+    fi
+    i=$((i + 1))
+  done
+
+  max_choice=$((num - 1))
+
+  if [ "$max_choice" -eq 0 ]; then
+    info "No coding agents detected. Staging skills for later."
+    stage_skills "$skills_src"
+    return
+  fi
+
+  printf "   ${BOLD}a)${RESET} All detected\n"
+  printf "   ${BOLD}s)${RESET} Skip\n"
+  printf "\n"
+
+  if [ "$max_choice" -eq 1 ]; then
+    printf "Choice [1, a, s] (default: a): "
+  else
+    printf "Choice [1-%d, a, s] (default: a): " "$max_choice"
+  fi
+  # Read from /dev/tty (works with `curl | sh`), fall back to stdin for tests
+  if [ -e /dev/tty ] && [ "${TIGERFS_INTERACTIVE:-}" != "1" ]; then
+    read -r choice </dev/tty || choice="s"
+  else
+    read -r choice || choice="s"
+  fi
+  [ -z "$choice" ] && choice="a"
+
+  case "$choice" in
+    s|S)
+      stage_skills "$skills_src"
+      ;;
+    a|A)
+      for pair in $detected; do
+        agent_idx="${pair%%:*}"
+        copy_skills_to_agent "$skills_src" "$(agent_name "$agent_idx")" "$HOME/$(agent_path "$agent_idx")"
+      done
+      ;;
+    *)
+      # Map display number back to agent index
+      found=""
+      for pair in $detected; do
+        agent_idx="${pair%%:*}"
+        display_num="${pair##*:}"
+        if [ "$display_num" = "$choice" ]; then
+          found="$agent_idx"
+          break
+        fi
+      done
+      if [ -n "$found" ]; then
+        copy_skills_to_agent "$skills_src" "$(agent_name "$found")" "$HOME/$(agent_path "$found")"
+      else
+        warn "Invalid choice, skipping skills installation"
+        stage_skills "$skills_src"
+      fi
+      ;;
+  esac
+}
+
+copy_skills_to_agent() {
+  src="$1"
+  agent_name="$2"
+  agent_skills_dir="$3"
+
+  rm -rf "$agent_skills_dir/tigerfs"
+  mkdir -p "$agent_skills_dir"
+  cp -r "$src" "$agent_skills_dir/tigerfs"
+  success "Skills installed for ${BOLD}${agent_name}${RESET} at ${agent_skills_dir}/tigerfs/"
+}
+
+stage_skills() {
+  src="$1"
+  stage_dir="$HOME/.config/tigerfs/skills"
+
+  rm -rf "$stage_dir/tigerfs"
+  mkdir -p "$stage_dir"
+  cp -r "$src" "$stage_dir/tigerfs"
+  info "Skills staged to ${BOLD}${stage_dir}/tigerfs/${RESET}"
+
+  # Detect installed agents and print specific copy commands
+  found_any=""
+  i=1
+  while [ "$i" -le "$AGENT_COUNT" ]; do
+    if is_agent_detected "$i"; then
+      if [ -z "$found_any" ]; then
+        printf "   Install for your detected agent(s):\n"
+        found_any="1"
+      fi
+      printf "     cp -r %s/tigerfs ~/%s/tigerfs\n" "$stage_dir" "$(agent_path "$i")"
+    fi
+    i=$((i + 1))
+  done
+
+  if [ -z "$found_any" ]; then
+    printf "   Copy to your agent's skills directory, e.g.:\n"
+    printf "     cp -r %s/tigerfs ~/.claude/skills/\n" "$stage_dir"
+  fi
+  printf "\n"
 }
 
 # --- Output ---

@@ -252,6 +252,14 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
+## Phase 11: Skills
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ✅ | 11.1 | Auto-install skills on binary install | ~8200 |
+
+---
+
 ## Summary
 
 | Phase | Complete | Total | Progress |
@@ -270,4 +278,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 8: Distribution | 5 | 9 | 56% |
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
-| **Total** | **104** | **121** | **86%** |
+| Phase 11: Skills | 1 | 1 | 100% |
+| **Total** | **105** | **122** | **86%** |

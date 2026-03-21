@@ -8467,6 +8467,42 @@ This would give O(n) writes with correct durability semantics.
 
 ---
 
+## Phase 11: Skills
+
+### Task 11.1: Auto-install Skills on Binary Install
+
+**Objective:** Bundle agent skills in the release archive and install them to the user's coding agent during `curl | sh` binary install.
+
+**Background:**
+TigerFS ships skills (reusable instruction packages in the open `SKILL.md` standard) that teach coding agents how to interact with TigerFS-mounted databases. Users who install via `go install` or clone the repo get skills automatically, but binary-install users don't. This task adds skills to the release archive and prompts users to install them for their agent(s).
+
+**Steps:**
+1. Add `skills/tigerfs/*` to `.goreleaser.yaml` archives files list
+2. Update `scripts/install.sh` to detect installed coding agents and prompt the user to select where to install skills
+3. Support 7 agents: Claude Code, Cursor, Codex CLI, Gemini CLI, Windsurf, Antigravity, Kiro
+4. For non-interactive installs (piped stdin), stage skills to `~/.config/tigerfs/skills/tigerfs/` with copy instructions
+5. Write `scripts/test-install.sh` to verify the full install flow using `file://` URLs
+
+**Files to Modify:**
+- `.goreleaser.yaml`
+- `scripts/install.sh`
+- `scripts/test-install.sh` (new)
+
+**Verification:**
+```bash
+./scripts/test-install.sh
+goreleaser release --snapshot --clean
+```
+
+**Completion Criteria:**
+- Skills included in release archive
+- Interactive install prompts for agent selection with detection
+- Non-interactive install stages skills with copy instructions
+- Upgrade install removes stale skill files
+- All test-install.sh tests pass
+
+---
+
 ## Task Execution Guidelines
 
 ### Before Starting Each Task

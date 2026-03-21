@@ -1,6 +1,6 @@
 ---
 name: tigerfs
-description: How to discover, read, write, and search data in a TigerFS-mounted PostgreSQL database using Claude Code file tools.
+description: How to discover, read, write, and search data in a TigerFS-mounted PostgreSQL database using file tools.
 ---
 
 # Using TigerFS

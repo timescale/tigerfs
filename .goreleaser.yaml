@@ -38,6 +38,7 @@ archives:
     files:
       - README.md
       - docs/spec.md
+      - skills/tigerfs/*
 
 checksum:
   split: true
