@@ -66,7 +66,7 @@ func GetTablePermissions(ctx context.Context, pool *pgxpool.Pool, schema, table 
 	// Use schema-qualified table name for accurate privilege check.
 	// The has_table_privilege function accepts various formats; we use
 	// the fully qualified name to avoid ambiguity.
-	qualifiedName := fmt.Sprintf(`"%s"."%s"`, schema, table)
+	qualifiedName := qt(schema, table)
 
 	query := `
 		SELECT

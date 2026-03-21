@@ -32,9 +32,8 @@ func (c *Client) ImportOverwrite(ctx context.Context, schema, table string, colu
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Truncate table
-	truncateSQL := fmt.Sprintf("TRUNCATE %s.%s",
-		pgx.Identifier{schema}.Sanitize(),
-		pgx.Identifier{table}.Sanitize())
+	truncateSQL := fmt.Sprintf("TRUNCATE %s",
+		qt(schema, table))
 	if _, err := tx.Exec(ctx, truncateSQL); err != nil {
 		return fmt.Errorf("failed to truncate table: %w", err)
 	}
@@ -138,9 +137,8 @@ func (c *Client) ImportAppend(ctx context.Context, schema, table string, columns
 
 // truncateTable truncates a table in its own transaction.
 func (c *Client) truncateTable(ctx context.Context, schema, table string) error {
-	truncateSQL := fmt.Sprintf("TRUNCATE %s.%s",
-		pgx.Identifier{schema}.Sanitize(),
-		pgx.Identifier{table}.Sanitize())
+	truncateSQL := fmt.Sprintf("TRUNCATE %s",
+		qt(schema, table))
 	_, err := c.pool.Exec(ctx, truncateSQL)
 	if err != nil {
 		return fmt.Errorf("failed to truncate table: %w", err)
@@ -155,13 +153,12 @@ func (c *Client) bulkInsert(ctx context.Context, tx pgx.Tx, schema, table string
 	// Build COPY command with text format
 	quotedColumns := make([]string, len(columns))
 	for i, col := range columns {
-		quotedColumns[i] = pgx.Identifier{col}.Sanitize()
+		quotedColumns[i] = qi(col)
 	}
 	columnList := strings.Join(quotedColumns, ", ")
 
-	copySQL := fmt.Sprintf("COPY %s.%s (%s) FROM STDIN WITH (FORMAT text, NULL '')",
-		pgx.Identifier{schema}.Sanitize(),
-		pgx.Identifier{table}.Sanitize(),
+	copySQL := fmt.Sprintf("COPY %s (%s) FROM STDIN WITH (FORMAT text, NULL '')",
+		qt(schema, table),
 		columnList)
 
 	// Build text data for COPY
@@ -224,7 +221,7 @@ func (c *Client) bulkUpsert(ctx context.Context, tx pgx.Tx, schema, table string
 	// Build column list
 	quotedColumns := make([]string, len(columns))
 	for i, col := range columns {
-		quotedColumns[i] = pgx.Identifier{col}.Sanitize()
+		quotedColumns[i] = qi(col)
 	}
 	columnList := strings.Join(quotedColumns, ", ")
 
@@ -238,7 +235,7 @@ func (c *Client) bulkUpsert(ctx context.Context, tx pgx.Tx, schema, table string
 	// Build conflict target (primary key columns)
 	quotedPKColumns := make([]string, len(pkColumns))
 	for i, col := range pkColumns {
-		quotedPKColumns[i] = pgx.Identifier{col}.Sanitize()
+		quotedPKColumns[i] = qi(col)
 	}
 	conflictTarget := strings.Join(quotedPKColumns, ", ")
 
@@ -254,7 +251,7 @@ func (c *Client) bulkUpsert(ctx context.Context, tx pgx.Tx, schema, table string
 			}
 		}
 		if !isPK {
-			quotedCol := pgx.Identifier{col}.Sanitize()
+			quotedCol := qi(col)
 			updateClauses = append(updateClauses, fmt.Sprintf("%s = EXCLUDED.%s", quotedCol, quotedCol))
 		}
 	}
@@ -263,9 +260,8 @@ func (c *Client) bulkUpsert(ctx context.Context, tx pgx.Tx, schema, table string
 	if len(updateClauses) > 0 {
 		updateSet := strings.Join(updateClauses, ", ")
 		upsertSQL = fmt.Sprintf(
-			"INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s",
-			pgx.Identifier{schema}.Sanitize(),
-			pgx.Identifier{table}.Sanitize(),
+			"INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s",
+			qt(schema, table),
 			columnList,
 			placeholderList,
 			conflictTarget,
@@ -274,9 +270,8 @@ func (c *Client) bulkUpsert(ctx context.Context, tx pgx.Tx, schema, table string
 	} else {
 		// All columns are PK columns - just do nothing on conflict
 		upsertSQL = fmt.Sprintf(
-			"INSERT INTO %s.%s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING",
-			pgx.Identifier{schema}.Sanitize(),
-			pgx.Identifier{table}.Sanitize(),
+			"INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO NOTHING",
+			qt(schema, table),
 			columnList,
 			placeholderList,
 			conflictTarget,

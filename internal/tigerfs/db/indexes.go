@@ -246,8 +246,8 @@ func GetDistinctValues(ctx context.Context, pool *pgxpool.Pool, schema, table, c
 
 	// Query distinct non-null values, ordered for consistent listings
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE "%s" IS NOT NULL ORDER BY "%s" LIMIT $1`,
-		column, schema, table, column, column,
+		`SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL ORDER BY %s LIMIT $1`,
+		qi(column), qt(schema, table), qi(column), qi(column),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -312,8 +312,8 @@ func GetDistinctValuesOrdered(ctx context.Context, pool *pgxpool.Pool, schema, t
 	}
 
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE "%s" IS NOT NULL ORDER BY "%s" %s LIMIT $1`,
-		column, schema, table, column, column, order,
+		`SELECT DISTINCT %s FROM %s WHERE %s IS NOT NULL ORDER BY %s %s LIMIT $1`,
+		qi(column), qt(schema, table), qi(column), qi(column), order,
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -375,8 +375,8 @@ func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table,
 
 	// Query rows matching the index value, returning PKs
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" WHERE "%s" = $1 ORDER BY "%s" LIMIT $2`,
-		pkColumn, schema, table, column, pkColumn,
+		`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s LIMIT $2`,
+		qi(pkColumn), qt(schema, table), qi(column), qi(pkColumn),
 	)
 
 	rows, err := pool.Query(ctx, query, value, limit)
@@ -440,8 +440,8 @@ func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema,
 	}
 
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" WHERE "%s" = $1 ORDER BY "%s" %s LIMIT $2`,
-		pkColumn, schema, table, column, pkColumn, order,
+		`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s %s LIMIT $2`,
+		qi(pkColumn), qt(schema, table), qi(column), qi(pkColumn), order,
 	)
 
 	rows, err := pool.Query(ctx, query, value, limit)
@@ -513,20 +513,20 @@ func GetDistinctValuesFiltered(ctx context.Context, pool *pgxpool.Pool, schema, 
 
 	// Build WHERE clause with conditions for each filter column
 	// Start with the target column IS NOT NULL condition
-	whereParts := []string{fmt.Sprintf(`"%s" IS NOT NULL`, targetColumn)}
+	whereParts := []string{fmt.Sprintf(`%s IS NOT NULL`, qi(targetColumn))}
 	args := make([]interface{}, 0, len(filterValues)+1)
 
 	for i, col := range filterColumns {
-		whereParts = append(whereParts, fmt.Sprintf(`"%s" = $%d`, col, i+1))
+		whereParts = append(whereParts, fmt.Sprintf(`%s = $%d`, qi(col), i+1))
 		args = append(args, filterValues[i])
 	}
 	args = append(args, limit)
 
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "%s" FROM "%s"."%s" WHERE %s ORDER BY "%s" LIMIT $%d`,
-		targetColumn, schema, table,
+		`SELECT DISTINCT %s FROM %s WHERE %s ORDER BY %s LIMIT $%d`,
+		qi(targetColumn), qt(schema, table),
 		joinStrings(whereParts, " AND "),
-		targetColumn, len(args),
+		qi(targetColumn), len(args),
 	)
 
 	rows, err := pool.Query(ctx, query, args...)
@@ -608,16 +608,16 @@ func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, ta
 	args := make([]interface{}, 0, len(values)+1)
 
 	for i, col := range columns {
-		whereParts[i] = fmt.Sprintf(`"%s" = $%d`, col, i+1)
+		whereParts[i] = fmt.Sprintf(`%s = $%d`, qi(col), i+1)
 		args = append(args, values[i])
 	}
 	args = append(args, limit)
 
 	query := fmt.Sprintf(
-		`SELECT "%s" FROM "%s"."%s" WHERE %s ORDER BY "%s" LIMIT $%d`,
-		pkColumn, schema, table,
+		`SELECT %s FROM %s WHERE %s ORDER BY %s LIMIT $%d`,
+		qi(pkColumn), qt(schema, table),
 		joinStrings(whereParts, " AND "),
-		pkColumn, len(args),
+		qi(pkColumn), len(args),
 	)
 
 	rows, err := pool.Query(ctx, query, args...)

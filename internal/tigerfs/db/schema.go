@@ -308,8 +308,8 @@ func GetRowCount(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 		zap.String("table", table))
 
 	query := fmt.Sprintf(
-		`SELECT COUNT(*) FROM "%s"."%s"`,
-		schema, table,
+		`SELECT COUNT(*) FROM %s`,
+		qt(schema, table),
 	)
 
 	var count int64
@@ -540,7 +540,7 @@ func GetTableDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 	defer rows.Close()
 
 	var ddl strings.Builder
-	ddl.WriteString(fmt.Sprintf("CREATE TABLE \"%s\".\"%s\" (\n", schema, table))
+	ddl.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", qt(schema, table)))
 
 	columnDefs := []string{}
 	for rows.Next() {
@@ -552,7 +552,7 @@ func GetTableDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 			return "", fmt.Errorf("failed to scan column definition: %w", err)
 		}
 
-		colDef := fmt.Sprintf("  \"%s\" %s", colName, dataType)
+		colDef := fmt.Sprintf("  %s %s", qi(colName), dataType)
 
 		// Add length for character types
 		if maxLength != nil && *maxLength > 0 {
@@ -630,11 +630,11 @@ func (c *Client) GetTableDDL(ctx context.Context, schema, table string) (string,
 // Returns the DDL string.
 func FormatTableDDL(schema, table string, columns []Column, pk *PrimaryKey) string {
 	var ddl strings.Builder
-	ddl.WriteString(fmt.Sprintf("CREATE TABLE \"%s\".\"%s\" (\n", schema, table))
+	ddl.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", qt(schema, table)))
 
 	columnDefs := make([]string, 0, len(columns))
 	for _, col := range columns {
-		colDef := fmt.Sprintf("  \"%s\" %s", col.Name, col.DataType)
+		colDef := fmt.Sprintf("  %s %s", qi(col.Name), col.DataType)
 
 		// Add length for character types
 		if col.MaxLength > 0 {
@@ -885,8 +885,8 @@ func GetTableComments(ctx context.Context, pool *pgxpool.Pool, schema, table str
 	}
 
 	if tableComment != nil && *tableComment != "" {
-		ddl.WriteString(fmt.Sprintf("COMMENT ON TABLE \"%s\".\"%s\" IS '%s';\n",
-			schema, table, strings.ReplaceAll(*tableComment, "'", "''")))
+		ddl.WriteString(fmt.Sprintf("COMMENT ON TABLE %s IS '%s';\n",
+			qt(schema, table), strings.ReplaceAll(*tableComment, "'", "''")))
 	}
 
 	// Get column comments
@@ -914,8 +914,8 @@ func GetTableComments(ctx context.Context, pool *pgxpool.Pool, schema, table str
 		if err := rows.Scan(&colName, &comment); err != nil {
 			return "", fmt.Errorf("failed to scan column comment: %w", err)
 		}
-		ddl.WriteString(fmt.Sprintf("COMMENT ON COLUMN \"%s\".\"%s\".\"%s\" IS '%s';\n",
-			schema, table, colName, strings.ReplaceAll(comment, "'", "''")))
+		ddl.WriteString(fmt.Sprintf("COMMENT ON COLUMN %s.%s IS '%s';\n",
+			qt(schema, table), qi(colName), strings.ReplaceAll(comment, "'", "''")))
 	}
 
 	if err := rows.Err(); err != nil {

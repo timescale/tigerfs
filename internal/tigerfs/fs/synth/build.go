@@ -1,6 +1,10 @@
 package synth
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
+)
 
 // GenerateMarkdownTableSQL returns the CREATE TABLE statement for a markdown app.
 // The table name is prefixed with underscore (backing table convention).
@@ -27,7 +31,7 @@ func GenerateMarkdownTableSQL(schema, name string) string {
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
-)`, quoteIdent(schema), quoteIdent("_"+name))
+)`, db.QuoteIdent(schema), db.QuoteIdent("_"+name))
 }
 
 // GeneratePlainTextTableSQL returns the CREATE TABLE statement for a plain text app.
@@ -50,7 +54,7 @@ func GeneratePlainTextTableSQL(schema, name string) string {
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
-)`, quoteIdent(schema), quoteIdent("_"+name))
+)`, db.QuoteIdent(schema), db.QuoteIdent("_"+name))
 }
 
 // GenerateViewSQL returns a CREATE VIEW statement that selects all columns
@@ -58,8 +62,8 @@ func GeneratePlainTextTableSQL(schema, name string) string {
 // the backing table is prefixed with underscore.
 func GenerateViewSQL(schema, viewName, tableName string) string {
 	return fmt.Sprintf(`CREATE VIEW %s.%s AS SELECT * FROM %s.%s`,
-		quoteIdent(schema), quoteIdent(viewName),
-		quoteIdent(schema), quoteIdent(tableName))
+		db.QuoteIdent(schema), db.QuoteIdent(viewName),
+		db.QuoteIdent(schema), db.QuoteIdent(tableName))
 }
 
 // GenerateViewCommentSQL returns a COMMENT ON VIEW statement that sets the
@@ -67,7 +71,7 @@ func GenerateViewSQL(schema, viewName, tableName string) string {
 func GenerateViewCommentSQL(schema, viewName string, format SynthFormat) string {
 	comment := FormatComment(format)
 	return fmt.Sprintf(`COMMENT ON VIEW %s.%s IS '%s'`,
-		quoteIdent(schema), quoteIdent(viewName), comment)
+		db.QuoteIdent(schema), db.QuoteIdent(viewName), comment)
 }
 
 // GenerateViewCommentSQLWithFeatures returns a COMMENT ON VIEW statement
@@ -75,7 +79,7 @@ func GenerateViewCommentSQL(schema, viewName string, format SynthFormat) string 
 func GenerateViewCommentSQLWithFeatures(schema, viewName string, features FeatureSet) string {
 	comment := FeatureComment(features)
 	return fmt.Sprintf(`COMMENT ON VIEW %s.%s IS '%s'`,
-		quoteIdent(schema), quoteIdent(viewName), comment)
+		db.QuoteIdent(schema), db.QuoteIdent(viewName), comment)
 }
 
 // GenerateModifiedAtTriggerSQL returns two SQL statements to create a trigger function
@@ -84,9 +88,9 @@ func GenerateViewCommentSQLWithFeatures(schema, viewName string, features Featur
 // inside $$ dollar-quoting, which prevents simple delimiter-based splitting.
 func GenerateModifiedAtTriggerSQL(schema, tableName string) []string {
 	// Build the full function and trigger names, then quote as single identifiers.
-	// Cannot embed quoteIdent() inside a name — "set_"_posts"_modified_at" is invalid SQL.
-	funcName := fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent("set_"+tableName+"_modified_at"))
-	triggerName := quoteIdent("trg_" + tableName + "_modified_at")
+	// Cannot embed QuoteIdent() inside a name — "set_"_posts"_modified_at" is invalid SQL.
+	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent("set_"+tableName+"_modified_at"))
+	triggerName := db.QuoteIdent("trg_" + tableName + "_modified_at")
 
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s()
 RETURNS TRIGGER AS $$
@@ -100,7 +104,7 @@ $$ LANGUAGE plpgsql`, funcName)
     BEFORE UPDATE ON %s.%s
     FOR EACH ROW EXECUTE FUNCTION %s()`,
 		triggerName,
-		quoteIdent(schema), quoteIdent(tableName),
+		db.QuoteIdent(schema), db.QuoteIdent(tableName),
 		funcName)
 
 	return []string{createFunc, createTrigger}
@@ -159,8 +163,8 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 func GenerateHistorySQL(schema, appName string) []string {
 	tableName := "_" + appName
 	historyTable := "_" + appName + "_history"
-	qualifiedTable := fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent(tableName))
-	qualifiedHistory := fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent(historyTable))
+	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent(tableName))
+	qualifiedHistory := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent(historyTable))
 
 	// The columns mirror the markdown table schema. Using the same columns
 	// for all synth formats works because plain text tables are a subset
@@ -183,18 +187,18 @@ func GenerateHistorySQL(schema, appName string) []string {
 
 	createIndexFilename := fmt.Sprintf(
 		`CREATE INDEX %s ON %s (filename, _history_id DESC)`,
-		quoteIdent("idx_"+historyTable+"_by_filename"),
+		db.QuoteIdent("idx_"+historyTable+"_by_filename"),
 		qualifiedHistory,
 	)
 
 	createIndexID := fmt.Sprintf(
 		`CREATE INDEX %s ON %s (id, _history_id DESC)`,
-		quoteIdent("idx_"+historyTable+"_by_id"),
+		db.QuoteIdent("idx_"+historyTable+"_by_id"),
 		qualifiedHistory,
 	)
 
 	// Archive trigger function — copies OLD row to history table on UPDATE or DELETE
-	funcName := fmt.Sprintf("%s.%s", quoteIdent(schema), quoteIdent("archive_"+historyTable))
+	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent("archive_"+historyTable))
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO %s
@@ -211,7 +215,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql`, funcName, qualifiedHistory)
 
-	triggerName := quoteIdent("trg_" + historyTable + "_archive")
+	triggerName := db.QuoteIdent("trg_" + historyTable + "_archive")
 	createTrigger := fmt.Sprintf(`CREATE TRIGGER %s
     BEFORE UPDATE OR DELETE ON %s
     FOR EACH ROW EXECUTE FUNCTION %s()`,
@@ -259,19 +263,4 @@ func GenerateHistoryOnlySQL(schema, appName string, existingFeatures FeatureSet)
 	stmts := []string{commentSQL}
 	stmts = append(stmts, historyStmts...)
 	return stmts
-}
-
-// quoteIdent quotes a PostgreSQL identifier to prevent SQL injection.
-// Uses double-quote escaping per PostgreSQL standard.
-func quoteIdent(name string) string {
-	// Simple quoting: double any existing double-quotes and wrap in quotes
-	escaped := ""
-	for _, r := range name {
-		if r == '"' {
-			escaped += `""`
-		} else {
-			escaped += string(r)
-		}
-	}
-	return `"` + escaped + `"`
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
@@ -174,9 +173,9 @@ func checkUniqueConstraint(ctx context.Context, pool *pgxpool.Pool, schema, tabl
 	// Check if this value already exists in the table
 	query := fmt.Sprintf(`
 		SELECT EXISTS(
-			SELECT 1 FROM %s.%s WHERE %s = $1
+			SELECT 1 FROM %s WHERE %s = $1
 		)
-	`, pgx.Identifier{schema}.Sanitize(), pgx.Identifier{table}.Sanitize(), pgx.Identifier{column}.Sanitize())
+	`, qt(schema, table), qi(column))
 
 	var exists bool
 	err := pool.QueryRow(ctx, query, value).Scan(&exists)
