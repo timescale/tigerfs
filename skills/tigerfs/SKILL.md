@@ -5,53 +5,37 @@ description: How to discover, read, write, and search data in a TigerFS-mounted 
 
 # Using TigerFS
 
-TigerFS mounts PostgreSQL databases as directories. You interact with data using Read, Write, Glob, and Grep — no SQL needed.
+TigerFS mounts PostgreSQL databases as directories. You interact with data using Read, Write, Glob, and Grep -- no SQL needed. **File-first** mode gives you a transactional, shareable filesystem backed by a database. **Data-first** mode lets you explore and manipulate an existing database using file tools. Most work uses file-first.
 
-## Iron Law
+## Which Mode?
 
-**Never `ls` a table directory without checking `.info/count` first.**
+Each directory in a TigerFS mount is either file-first or data-first:
 
-Tables with more than 10,000 rows will return an error on `ls`. Always check the size, then use `.first/N/`, `.sample/N/`, or `.by/column/value/` for large tables.
+- **File-first:** Contains `.md` or `.txt` files. Read and write files normally. See [files.md](files.md).
+- **Data-first:** Contains `.info/` directory. Access rows as files or directories. See [data.md](data.md).
+- **Underscore prefix** (e.g., `_notes/`): Data-first backing table for a file-first app.
 
-## Common Workflows
-
-When asked to create a **task list, kanban board, todo, or project tracker**:
-→ Read [recipes.md](recipes.md) Recipe 1 and follow it exactly.
-  Core principle: **directories = states** (`todo/`, `doing/`, `done/`), **`mv` = transitions**. Do NOT use `status` frontmatter fields.
-
-When asked to create a **knowledge base, wiki, or documentation store**:
-→ Read [recipes.md](recipes.md) Recipe 2 and follow it exactly.
-
-When asked to **save or resume session context**:
-→ Read [recipes.md](recipes.md) Recipe 3 and follow it exactly.
-
-## Detecting a TigerFS Mount
-
-Look for `.md`/`.txt` files (synth apps) or `.info/` in subdirectories (native tables):
+## Directory Structure
 
 ```
 mount/
-├── notes/                  # Markdown app (synth)
+├── notes/                  # File-first (markdown app)
 │   ├── hello.md
 │   ├── tutorials/
-│   │   └── intro.md
 │   └── .history/           # Versioned history (if enabled)
-├── snippets/               # Plain text app (synth)
+├── snippets/               # File-first (plain text app)
 │   └── bash-loop.txt
-├── _notes/                 # Native table backing notes/
-│   ├── .info/
-│   ├── .by/
-│   └── 1/  2/  3/ ...
-├── users/                  # Native table (no synth)
+├── _notes/                 # Data-first (backing table for notes/)
+├── users/                  # Data-first (standalone table)
 │   ├── .info/
 │   ├── .by/
 │   └── 1/  2/  3/ ...
 └── .build/                 # Create new apps
 ```
 
-## Markdown Apps (Primary Interface)
+## File-First
 
-### Create an App
+A transactional, shareable filesystem backed by a database. Multiple users and agents can read and write concurrently. Create apps with `.build/`:
 
 ```bash
 Bash "echo 'markdown' > mount/.build/notes"
@@ -59,110 +43,71 @@ Bash "echo 'markdown,history' > mount/.build/notes"    # with versioned history
 Bash "echo 'plaintext' > mount/.build/snippets"         # body-only, no frontmatter
 ```
 
-See [apps.md](apps.md) for full details on schemas, column roles, and plain text.
+See [files.md](files.md) for full details on schemas, column roles, directories, and history.
 
-### Read and Write
+### What you can build
 
-```
-Glob "mount/notes/*.md"
-Read "mount/notes/hello.md"
-```
+Because the filesystem is transactional and shared, it can implement collaborative workflows:
 
-```
-Write "mount/notes/hello.md" with content:
----
-title: Hello World
-author: alice
----
+When asked to create a **task list, kanban board, todo, or project tracker**:
+> Read [recipes.md](recipes.md) Recipe 1 and follow it exactly.
+  Core principle: **directories = states** (`todo/`, `doing/`, `done/`), **`mv` = transitions**. Do NOT use `status` frontmatter fields.
 
-Welcome to TigerFS.
-```
+When asked to create a **knowledge base, wiki, or documentation store**:
+> Read [recipes.md](recipes.md) Recipe 2 and follow it exactly.
 
-```bash
-Bash "rm mount/notes/old.md"
-```
+When asked to **save or resume session context**:
+> Read [recipes.md](recipes.md) Recipe 3 and follow it exactly.
 
-### Organize with Directories
+When asked to **keep a log of what you do**:
+> Read [recipes.md](recipes.md) Recipe 4 and follow it exactly.
 
-```bash
-Bash "mkdir mount/notes/tutorials"
-Bash "mv mount/notes/draft.md mount/notes/published/draft.md"
-```
+## Data-First
+
+Direct access to database rows as files and directories. Use when you need column-level access, index lookups, bulk export, or structured data processing.
 
 ```
-Glob "mount/notes/**/*.md"
+Read "mount/users/.info/count"                          # Row count
+Read "mount/users/1.json"                               # Row as JSON
+Read "mount/users/1/email"                              # Single column
+Glob "mount/users/.by/email/alice@example.com/*"        # Index lookup
+Read "mount/users/.by/status/active/.export/json"       # Filtered export
 ```
 
-Auto-parent creation: writing `mount/notes/a/b/file.md` auto-creates `a/` and `a/b/`.
+### Access Strategy by Table Size
 
-### Search
+| Size | Strategy |
+|------|----------|
+| **~100 rows or less** | Glob patterns and row-as-directory access are fine |
+| **100 - 10,000 rows** | Prefer `.export/` over reading individual rows to avoid 1 query per row. Use `.by/`, `.filter/`, `.first/`, `.last/`, `.sample/` for selective access when possible |
+| **10,000+ rows** | Large tables are limited to 10,000 rows by default; use `.all/` if you actually need all rows. Strongly prefer `.export/` over reading individual rows. Use `.by/`, `.filter/`, `.first/`, `.last/`, `.sample/` for selective access whenever possible |
 
-```
-Grep pattern="TODO" path="mount/notes/"
-Grep pattern="author: alice" path="mount/notes/" glob="*.md"
-```
+Always check `.info/count` first to choose the right strategy.
 
-### History (if enabled)
-
-List past versions of a file:
-
-```
-Glob "mount/notes/.history/hello.md/*"
-```
-
-Read an old version:
-
-```
-Read "mount/notes/.history/hello.md/2026-02-12T013000Z"
-```
-
-To answer "what changed recently?" — read the latest history version + current, compare the two. See [history.md](history.md) for version browsing, diff workflows, and recovery.
-
-## Native Table Access (Escape Hatch)
-
-For `.info/` metadata, `.by/` index lookups, JSON format, and column-level reads. Native tables expose the underlying database rows directly:
-
-```
-Read "mount/_notes/.info/count"     # Row count
-Read "mount/_notes/.info/schema"    # CREATE TABLE DDL
-Read "mount/_notes/1.json"          # Row as JSON
-Read "mount/_notes/1/author"        # Single column value
-Glob "mount/users/.by/email/alice@example.com/*"   # Index lookup
-```
-
-See [native-ops.md](native-ops.md) for the full reference.
+See [data.md](data.md) for the full reference.
 
 ## Quick Reference
 
 | Goal | Tool Call |
 |------|-----------|
-| **Markdown Apps** | |
-| Create markdown app | `Bash "echo 'markdown' > mount/.build/name"` |
-| Create with history | `Bash "echo 'markdown,history' > mount/.build/name"` |
-| Create plain text app | `Bash "echo 'plaintext' > mount/.build/name"` |
-| List files | `Glob "mount/app/*.md"` |
-| List all (recursive) | `Glob "mount/app/**/*.md"` |
+| **File-First** | |
+| List files | `Glob "mount/app/*.md"` or `Glob "mount/app/**/*.md"` (recursive) |
 | Read file | `Read "mount/app/file.md"` |
 | Write file | `Write "mount/app/file.md"` with content |
 | Delete file | `Bash "rm mount/app/file.md"` |
-| Create directory | `Bash "mkdir mount/app/subdir"` |
-| Move file/directory | `Bash "mv mount/app/old mount/app/new"` |
-| Search content | `Grep pattern="term" path="mount/app/"` |
-| Search frontmatter | `Grep pattern="key: val" path="mount/app/" glob="*.md"` |
-| List history versions | `Glob "mount/app/.history/file.md/*"` |
+| Search | `Grep pattern="term" path="mount/app/"` |
+| History versions | `Glob "mount/app/.history/file.md/*"` |
 | Read old version | `Read "mount/app/.history/file.md/<timestamp>"` |
-| **Native Tables** | |
+| **Data-First** | |
 | Row count | `Read "mount/t/.info/count"` |
-| Table schema | `Read "mount/t/.info/schema"` |
-| Column names | `Read "mount/t/.info/columns"` |
-| Read row (JSON) | `Read "mount/t/pk.json"` |
-| Read column | `Read "mount/t/pk/column"` |
-| First N rows | `Glob "mount/t/.first/N/*"` |
-| Last N rows | `Glob "mount/t/.last/N/*"` |
-| Random sample | `Glob "mount/t/.sample/N/*"` |
+| Schema / columns | `Read "mount/t/.info/schema"` or `.info/columns` |
+| Read row | `Read "mount/t/pk.json"` or `Read "mount/t/pk/column"` |
+| Read multiple rows (small) | `Glob "mount/t/*.json"` then read individually |
+| Read multiple rows (medium/large) | `Read "mount/t/.export/tsv"` (also `.export/json`, `.csv`, `.yaml`) |
+| Navigate rows | `Glob "mount/t/.first/N/*"`, `.last/N/*`, or `.sample/N/*` |
 | Index lookup | `Glob "mount/t/.by/col/val/*"` |
-| Update column | `Write "mount/t/pk/col"` with value |
-| Update row (PATCH) | `Write "mount/t/pk.json"` with JSON |
+| Filtered export | `Read "mount/t/.by/col/val/.export/json"` |
+| Update | `Write "mount/t/pk/col"` or `Write "mount/t/pk.json"` (PATCH) |
 | Insert row | `Write "mount/t/new.json"` with JSON |
 | Delete row | `Bash "rm mount/t/pk"` |
 
@@ -170,15 +115,21 @@ See [native-ops.md](native-ops.md) for the full reference.
 
 | Don't | Do Instead |
 |-------|------------|
-| `Glob` on a large native table directory | Check `.info/count` first, use `.first/`, `.sample/`, `.by/` |
-| Write full row JSON expecting replace semantics | JSON/CSV/TSV writes are **PATCH** — only specified keys update |
-| `Grep` across all rows of a large native table | Use `.by/` index lookups for indexed columns |
-| `ls` a table directory without checking size | Read `.info/count` first — large tables return EIO on `ls` |
+| **File-First** | |
 | Put `status:` in frontmatter to track state | Use directories as states (`todo/`, `doing/`, `done/`), `mv` to transition |
+| **Data-First** | |
+| Read individual rows in a loop for large tables | Use `.export/json` or `.export/csv` for bulk access |
+| Write full row JSON expecting replace semantics | JSON/CSV/TSV writes are **PATCH** -- only specified keys update |
+| `Grep` across all rows of a large table | Use `.by/` index lookups for indexed columns |
+| Glob a data-first directory without checking size | Read `.info/count` first, choose strategy based on table size |
+
+## Database Management
+
+When asked to **create, mount, fork, or manage a database or filesystem**, see [ops.md](ops.md) for tigerfs CLI commands.
 
 ## Detailed References
 
-- [apps.md](apps.md) — Creating and using markdown + plain text apps
-- [history.md](history.md) — Browsing past versions, diffs, and recovery
-- [native-ops.md](native-ops.md) — Row-as-directory/row-as-file interface, metadata, indexes, pipeline queries
-- [recipes.md](recipes.md) — Kanban boards, knowledge bases, session context, snippets
+- [files.md](files.md) -- File-first: markdown apps, plain text apps, directories, and history
+- [data.md](data.md) -- Data-first: row-as-file, row-as-directory, metadata, indexes, pipeline queries
+- [recipes.md](recipes.md) -- Recipes: kanban boards, knowledge bases, session context, snippets
+- [ops.md](ops.md) -- Operations: mount, create, fork, status, unmount
