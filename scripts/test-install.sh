@@ -68,6 +68,7 @@ setup() {
   printf 'files content\n'   > "$staging/skills/tigerfs/files.md"
   printf 'data content\n'    > "$staging/skills/tigerfs/data.md"
   printf 'recipes content\n' > "$staging/skills/tigerfs/recipes.md"
+  printf 'ops content\n'     > "$staging/skills/tigerfs/ops.md"
 
   # Create the archive
   tar -czf "$TEST_DIR/$archive_name" -C "$staging" tigerfs skills
@@ -144,7 +145,8 @@ assert_skill_files() {
   assert_file_exists "$dir/SKILL.md" &&
   assert_file_exists "$dir/files.md" &&
   assert_file_exists "$dir/data.md" &&
-  assert_file_exists "$dir/recipes.md"
+  assert_file_exists "$dir/recipes.md" &&
+  assert_file_exists "$dir/ops.md"
 }
 
 run_test() {

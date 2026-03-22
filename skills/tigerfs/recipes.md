@@ -1,6 +1,6 @@
 # Recipes
 
-Practical patterns for real workflows. All recipes use markdown apps.
+Practical patterns for file-first workflows.
 
 ## Recipe 1: Task Board
 
@@ -27,19 +27,11 @@ The login endpoint returns 500 when session cookie is expired.
 
 ### Claim a Task
 
-Move it to `doing/` and set yourself as author:
-
 ```bash
 Bash "mv mount/tasks/todo/fix-auth-bug.md mount/tasks/doing/fix-auth-bug.md"
 ```
 
-Then update to set ownership:
-
-```
-Read "mount/tasks/doing/fix-auth-bug.md"
-```
-
-Write back with `author: your-name` added to frontmatter.
+Optionally update the file to set `author: your-name` for ownership tracking.
 
 ### Complete a Task
 
@@ -82,8 +74,6 @@ Shows when the task was moved, who edited it, previous content.
 
 Use any directory names: `backlog/`, `sprint/`, `review/`, `shipped/`. The directory IS the state. `mv` IS the transition. No status columns needed.
 
----
-
 ## Recipe 2: Knowledge Base with History
 
 ### Setup
@@ -107,7 +97,7 @@ confidence: high
 Use JWT tokens instead of server-side sessions.
 
 ## Reasoning
-- Stateless — no session store
+- Stateless -- no session store
 - Works across multiple server instances
 ```
 
@@ -141,8 +131,6 @@ Read old version vs current to see what evolved.
 | `confidence` | `high`, `medium`, `low` | How certain |
 | `source` | free text | Where you learned this |
 | `supersedes` | filename | If this replaces an older fact |
-
----
 
 ## Recipe 3: Session Context (Resuming Work)
 
@@ -181,32 +169,35 @@ Read "mount/sessions/2026-02-24-auth-refactor.md"
 
 Date + topic: `2026-02-24-auth-refactor.md`. Use `status` frontmatter for filtering.
 
----
+## Recipe 4: Activity Log
 
-## Recipe 4: Plain Text Snippets
+Append-only log of what agents and users have done. One file per activity, immutable once written. Multiple agents can write simultaneously without conflicts.
 
 ### Setup
 
 ```bash
-Bash "echo 'plaintext' > mount/.build/snippets"
+Bash "echo 'markdown' > mount/.build/activity"
 ```
 
-### Store a Snippet
+### Log an Activity
 
 ```
-Write "mount/snippets/bash-loop.txt" with body content only (no frontmatter).
+Write "mount/activity/2026-03-21T150000.000Z-fixed-auth-bug.md" with content:
+---
+author: agent-a
+type: fix
+---
+
+Fixed the auth bug in login endpoint. Changed session cookie handling to check expiry before validating.
 ```
 
-### Organize
+Use timestamp + description as filename: `YYYY-MM-DDTHHMMSS.mmmZ-short-description.md`. Timestamps ensure chronological ordering.
 
-```bash
-Bash "mkdir mount/snippets/bash mount/snippets/sql"
-Bash "mv mount/snippets/bash-loop.txt mount/snippets/bash/bash-loop.txt"
-```
-
-### Search
+### Review Recent Activity
 
 ```
-Grep pattern="for.*in" path="mount/snippets/"
-Glob "mount/snippets/sql/*.txt"
+Glob "mount/activity/*.md"
+Glob "mount/activity/2026-03-21*"                              # Today's activity
+Grep pattern="author: agent-a" path="mount/activity/" glob="*.md"  # By agent
+Grep pattern="type: fix" path="mount/activity/" glob="*.md"        # By type
 ```
