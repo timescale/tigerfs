@@ -5,6 +5,19 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**Dedicated tigerfs schema for backing tables -- cleaner namespacing, migration support, and .tables/ directory.**
+
+- **Backing table schema** -- synth backing tables, triggers, functions, and history tables now live in a dedicated `tigerfs` schema instead of using underscore-prefixed names in the user's schema. Before: `public._blog` + `public.blog` (view). After: `tigerfs.blog` + `public.blog` (view).
+- **`.tables/` directory** -- new `/.tables/` directory lists all backing tables in the `tigerfs` schema with full pipeline support (filters, export, etc.)
+- **`tigerfs migrate` command** -- general migration framework with `--describe` and `--dry-run` flags. First migration moves legacy `_name` tables to the `tigerfs` schema.
+- **Legacy convention warning** -- logs a warning when old-style `_name` backing tables are detected, directing users to run `tigerfs migrate`
+
+### Breaking Changes
+
+- Backing tables are no longer created with underscore prefix in the user's schema. Existing databases need `tigerfs migrate` to update.
+
 ## [0.5.0] - 2026-02-28
 
 **Performance and observability — dramatically fewer SQL queries, flexible logging, and column projection.**

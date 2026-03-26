@@ -13,7 +13,7 @@ Each directory in a TigerFS mount is either file-first or data-first:
 
 - **File-first:** Contains `.md` or `.txt` files. Read and write files normally. See [files.md](files.md).
 - **Data-first:** Contains `.info/` directory. Access rows as files or directories. See [data.md](data.md).
-- **Underscore prefix** (e.g., `_notes/`): Data-first backing table for a file-first app.
+- **`.tables/` directory** (e.g., `.tables/notes/`): Data-first access to backing tables in the `tigerfs` schema.
 
 ## Directory Structure
 
@@ -25,7 +25,8 @@ mount/
 │   └── .history/           # Versioned history (if enabled)
 ├── snippets/               # File-first (plain text app)
 │   └── bash-loop.txt
-├── _notes/                 # Data-first (backing table for notes/)
+├── .tables/                # Backing tables in tigerfs schema
+│   └── notes/              # Data-first access to notes backing table
 ├── users/                  # Data-first (standalone table)
 │   ├── .info/
 │   ├── .by/

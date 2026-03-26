@@ -13,7 +13,7 @@ Bash "echo 'plaintext' > mount/.build/snippets"      # Plain text, no frontmatte
 Bash "echo 'history' > mount/.build/notes"           # Add history to existing app
 ```
 
-Each app creates two directories: `mount/notes/` (file-first) and `mount/_notes/` (backing table for data-first access). To add file-first access to an existing data-first table: `echo 'markdown' > mount/posts/.format/markdown`
+Each app creates a file-first directory (`mount/notes/`) backed by a table in the `tigerfs` schema. Access the backing table via `mount/.tables/notes/`. To add file-first access to an existing data-first table: `echo 'markdown' > mount/posts/.format/markdown`
 
 ## File Structure
 
@@ -54,7 +54,7 @@ Frontmatter fields map to database columns. The write behavior depends on the co
 - **Body**: Always replaced with what you write.
 - **Timestamps** (`created_at`, `modified_at`): File times only -- they don't appear in frontmatter and can't be set via writes.
 
-To see which columns a table has, use `Read "mount/_appname/.info/columns"`.
+To see which columns a table has, use `Read "mount/.tables/appname/.info/columns"`.
 
 ## Writing Files
 
@@ -87,13 +87,13 @@ Writing `mount/notes/a/b/file.md` auto-creates `a/` and `a/b/`. No need to `mkdi
 
 ## Backing Table
 
-Every file-first app has a backing table accessible for data-first operations. The backing table name is the app name with an underscore prefix (e.g., `_notes/` for `notes/`).
+Every file-first app has a backing table in the `tigerfs` schema, accessible via the `.tables/` directory.
 
 ```
-Read "mount/_notes/.info/schema"       # Table schema
-Read "mount/_notes/.info/count"        # Row count
-Read "mount/_notes/.info/columns"      # Column names
-Glob "mount/_notes/.by/author/alice/*" # Index lookup
+Read "mount/.tables/notes/.info/schema"       # Table schema
+Read "mount/.tables/notes/.info/count"        # Row count
+Read "mount/.tables/notes/.info/columns"      # Column names
+Glob "mount/.tables/notes/.by/author/alice/*" # Index lookup
 ```
 
 See [data.md](data.md) for the full data-first reference.
