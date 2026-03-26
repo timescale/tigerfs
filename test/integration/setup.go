@@ -387,6 +387,25 @@ func setupLocalTestDBEmpty(t *testing.T, connStr string) *TestDBResult {
 	}
 }
 
+// cleanupTigerFSTables drops specified tables from the tigerfs schema during test cleanup.
+func cleanupTigerFSTables(t *testing.T, connStr string, tableNames ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		pool, err := pgxpool.New(ctx, connStr)
+		if err != nil {
+			t.Logf("Failed to connect for tigerfs cleanup: %v", err)
+			return
+		}
+		defer pool.Close()
+		for _, name := range tableNames {
+			pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS tigerfs.%s CASCADE", name))
+			pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS tigerfs.%s_history CASCADE", name))
+		}
+	})
+}
+
 // isFUSEAvailable checks if FUSE is available on the system.
 // On macOS, FUSE (macFUSE) is no longer supported; use NFS instead.
 // On Linux, checks for /dev/fuse.
