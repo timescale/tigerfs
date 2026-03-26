@@ -75,6 +75,7 @@ without writing SQL queries. Perfect for exploration, scripting, and AI assistan
 	cmd.AddCommand(buildForkCmd())
 	cmd.AddCommand(buildListCmd())
 	cmd.AddCommand(buildTestConnectionCmd())
+	cmd.AddCommand(buildMigrateCmd())
 	cmd.AddCommand(buildVersionCmd())
 	cmd.AddCommand(buildConfigCmd())
 
