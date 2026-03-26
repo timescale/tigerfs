@@ -143,7 +143,7 @@ func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, dat
 		zap.String("app", appName),
 		zap.String("schema", schema),
 		zap.String("format", features.Format.String()+historyStr),
-		zap.String("table", "_"+appName),
+		zap.String("table", synth.TigerFSSchema+"."+appName),
 		zap.String("view", appName))
 
 	return nil
@@ -152,9 +152,8 @@ func (o *Operations) writeBuildFile(ctx context.Context, parsed *ParsedPath, dat
 // writeBuildAddHistory adds versioned history to an existing synth app.
 // Called when the .build/ content is just "history" (no format).
 func (o *Operations) writeBuildAddHistory(ctx context.Context, schema, appName string) *FSError {
-	// Check that the app (backing table) exists
-	tableName := "_" + appName
-	exists, err := o.db.TableExists(ctx, schema, tableName)
+	// Check that the app (backing table) exists in the tigerfs schema
+	exists, err := o.db.TableExists(ctx, synth.TigerFSSchema, appName)
 	if err != nil {
 		return &FSError{Code: ErrIO, Message: "failed to check table existence", Cause: err}
 	}
@@ -198,7 +197,7 @@ func (o *Operations) writeBuildAddHistory(ctx context.Context, schema, appName s
 	logging.Info("versioned history added",
 		zap.String("app", appName),
 		zap.String("schema", schema),
-		zap.String("history_table", tableName+"_history"))
+		zap.String("history_table", synth.TigerFSSchema+"."+appName+"_history"))
 
 	return nil
 }
