@@ -41,12 +41,29 @@ This is primarily a Go codebase. Follow Go idioms: error handling with explicit 
 |---------|---------|
 | `cmd/tigerfs/` | Entry point with signal handling |
 | `internal/tigerfs/cmd/` | Cobra commands (pure functional builders) |
-| `internal/tigerfs/fuse/` | FUSE filesystem operations |
+| `internal/tigerfs/fs/` | Shared filesystem logic (path parsing, operations, stat cache) |
+| `internal/tigerfs/fuse/` | Linux FUSE adapter |
+| `internal/tigerfs/nfs/` | macOS NFS adapter |
 | `internal/tigerfs/db/` | PostgreSQL client and queries |
+| `internal/tigerfs/backend/` | Cloud backend resolution (Tiger, Ghost, postgres://) |
 | `internal/tigerfs/mount/` | Mount registry for tracking active mounts |
 | `internal/tigerfs/config/` | Viper-based configuration |
 | `internal/tigerfs/logging/` | Zap structured logging |
 | `internal/tigerfs/format/` | Data serialization (TSV, CSV, JSON) |
+
+### Mount Backends
+
+macOS uses an in-process NFS v3 server (`go-nfs`); Linux uses FUSE (`go-fuse`). Both delegate to `fs.Operations` for all filesystem logic -- adapters are thin translation layers. New filesystem behavior goes in `fs/`, not in the adapters. Note: `fuse/` still contains legacy direct-to-DB code paths; the active default path routes through `fs/`.
+
+**go-nfs write model:** NFS v3 is stateless -- `go-nfs` fabricates Open/Write/Close per WRITE RPC. Each Close commits the buffer to the DB. Multi-chunk writes cause repeated commits until the final Close. Stat must return accurate file sizes for NFS reads (GETATTR before READ).
+
+### Pipeline Paths
+
+Capability directories (`.filter`, `.order`, `.first`, `.last`, `.export`, `.columns`) accumulate query state as users navigate deeper. The path `products/.filter/in_stock/true/.order/price/.first/10/.export/json` builds a single SQL query. State is tracked in `FSContext` and parsed by `fs/path.go`.
+
+### Synth Apps
+
+Tables whose names start with `_` (e.g., `_blog`, `_docs`) can be exposed as synthesized views -- markdown files, task lists, or plain text snippets. The synth layer (`fs/synth/`) maps filesystem operations to table rows using format-specific conventions. See `docs/markdown-app.md` and `docs/tasks-app.md`.
 
 ### SQL Identifier Quoting
 
@@ -57,19 +74,11 @@ This is primarily a Go codebase. Follow Go idioms: error handling with explicit 
 | `db.QuoteIdent(name)` / `qi(name)` | Quote a single identifier (column, table, or schema) | `QuoteIdent("email")` -> `"email"` |
 | `db.QuoteTable(schema, table)` / `qt(schema, table)` | Quote a schema-qualified table reference | `QuoteTable("public", "users")` -> `"public"."users"` |
 
-**When to use:**
-- Any column, table, or schema name interpolated into SQL via `fmt.Sprintf`
-- From outside the `db` package, use the exported `db.QuoteIdent()`/`db.QuoteTable()` names
-
-**When NOT to use:**
-- SQL keywords or direction strings (`"ASC"`, `"DESC"`)
-- Pre-built clause strings already assembled from quoted parts
-- Parameterized values (`$1`, `$2`) -- handled by pgx
-- Hardcoded column name literals written directly in SQL strings
+**When to use:** Any column, table, or schema name interpolated into SQL via `fmt.Sprintf`. From outside the `db` package, use the exported names. Do not use for SQL keywords, parameterized values (`$1`), or pre-built clause strings.
 
 ### Command Architecture: Pure Functional Builder Pattern
 
-**Critical pattern:** All commands use functional builders with zero global state. This ensures test isolation and clean dependency management.
+**Critical pattern:** All commands use functional builders with zero global state. See any existing `buildXxxCmd()` function for the pattern.
 
 **Rules:**
 - No global variables for commands, flags, or state
@@ -77,59 +86,11 @@ This is primarily a Go codebase. Follow Go idioms: error handling with explicit 
 - Flag variables declared locally within builder functions
 - Bind flags to viper in `PersistentPreRunE`/`PreRunE`, not at build time
 
-**Consolidated example:**
-
-```go
-func buildMountCmd(ctx context.Context) *cobra.Command {
-    // Declare flag variables locally (NEVER globally)
-    var readOnly bool
-    var maxLsRows int
-
-    cmd := &cobra.Command{
-        Use:   "mount [CONNECTION] MOUNTPOINT",
-        Short: "Mount a PostgreSQL database as a filesystem",
-        Args:  cobra.RangeArgs(1, 2),
-        RunE: func(cmd *cobra.Command, args []string) error {
-            cmd.SilenceUsage = true
-
-            // Load config once, pass to functions that need it
-            cfg, err := config.Load()
-            if err != nil {
-                return err
-            }
-
-            // Use flag variables - they're in scope via closure
-            if readOnly {
-                cfg.ReadOnly = true
-            }
-
-            return doMount(ctx, cfg, args)
-        },
-    }
-
-    // Flags bound to local variables
-    cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount as read-only")
-    cmd.Flags().IntVar(&maxLsRows, "max-ls-rows", 10000, "large table threshold")
-
-    return cmd
-}
-
-// In root.go - build complete tree
-func buildRootCmd(ctx context.Context) *cobra.Command {
-    cmd := &cobra.Command{Use: "tigerfs"}
-    cmd.AddCommand(buildMountCmd(ctx))
-    cmd.AddCommand(buildUnmountCmd())
-    cmd.AddCommand(buildStatusCmd())
-    // ... all subcommands added here
-    return cmd
-}
-```
-
 ## Configuration
 
 **Precedence (low to high):** Defaults → Config file (`~/.config/tigerfs/config.yaml`) → Environment (`TIGERFS_*`) → Flags
 
-**TLS enforcement:** TigerFS enforces `sslmode=require` for non-localhost connections. The `--insecure-no-ssl` flag or `InsecureNoSSL` config disables this. Localhost (127.0.0.1, ::1, Unix sockets) is exempt.
+**TLS enforcement:** TigerFS enforces `sslmode=require` for non-localhost connections. The `--insecure-no-ssl` flag or `InsecureNoSSL` config disables this. Localhost (127.0.0.1, ::1, Unix sockets) defaults to `sslmode=disable` when no sslmode is specified; users can override with an explicit `?sslmode=require`.
 
 **Rules:**
 1. Always use the `Config` struct - never read from viper directly
@@ -138,12 +99,15 @@ func buildRootCmd(ctx context.Context) *cobra.Command {
 
 **Full configuration options:** See `docs/spec.md` § Configuration System
 
-## Caching Rules
+## Consistency Model
 
-Multiple TigerFS mounts may connect to the same database concurrently. Caching must not cause reads to return stale content.
+**Design principle:** A write on one mount must be immediately visible to reads on any other mount of the same database. PostgreSQL is the single source of truth.
 
-- **Cache metadata only:** sizes, permissions, modification times, directory entries, column names/types, primary keys, table lists
-- **Never cache content:** row values, export data, column values — anything returned by `ReadFile`/`cat`/`read()` must always query the DB fresh
+Multiple TigerFS mounts may connect to the same database concurrently. This means:
+
+- **Never cache content:** Row values, export data, column values -- anything returned by `ReadFile`/`cat`/`read()` must always query the DB fresh.
+- **Cache metadata only:** Sizes, permissions, directory entries, column names/types, primary keys, table lists. These change rarely and have short TTLs.
+- **Stat cache keys must be unique per path:** Different pipeline paths (e.g., `.export/json` vs `.filter/active/true/.export/json`) must not share cache entries, even on the same table.
 - **Pattern:** `Stat` may use caches. `ReadFile` must always hit the DB.
 
 ## Logging
@@ -212,43 +176,10 @@ go test -run "^TestSynth_" ./internal/tigerfs/fs/... ./test/integration/...
 
 ## Code Documentation Standards
 
-### Comment Levels
-
-| Level | Use For | What to Include |
-|-------|---------|-----------------|
-| **Level 2** | Tests, simple utilities | Brief function comment, minimal inline |
-| **Level 3** | Most production code | Full function docs with params/returns, field comments, "why" explanations |
-| **Level 4** | Core packages | Package overview with examples, design rationale, edge cases |
-
-### Level Assignment
-
-| Code Type | Level |
-|-----------|-------|
-| Core packages (`db`, `fuse`, `mount`) | 3-4 |
-| Commands, config, utilities | 3 |
-| Tests | 2 |
-
-### Comment-Code Consistency
-
-**Always check for mismatches** between comments and code. Stale comments mislead. When found:
-1. Flag to user before changing
-2. Propose fixing either comment or code
-3. Ask if unclear which is correct
-
-### Documentation Checklist
-
-When writing new code, ensure:
-- [ ] Package has doc comment explaining its purpose (Level 3+)
-- [ ] All exported types have doc comments
-- [ ] All exported functions document parameters and return values (Level 3+)
-- [ ] All struct fields have comments explaining their purpose (Level 3+)
-- [ ] Non-obvious logic has inline comments explaining "why"
-- [ ] Error conditions are documented
-- [ ] Edge cases and assumptions are noted (Level 4)
-
-### Note on Existing Code
-
-Existing code may not meet these standards. When modifying files, update comments for code you touch but don't document the entire file.
+- **Core packages** (`db`, `fs`, `fuse`, `nfs`): Full function docs, field comments, "why" explanations, edge cases
+- **Commands, config, utilities**: Function docs with params/returns
+- **Tests**: Brief function comments only
+- **Comment-code consistency:** Always check for mismatches between comments and code. Stale comments mislead -- flag to user before changing. When modifying files, update comments for code you touch but don't document the entire file.
 
 ## Development Workflow
 
@@ -283,6 +214,10 @@ Before implementing any feature, confirm the spec/requirements with me first. As
 - **No complex git operations** - avoid `git rebase`, `git commit --amend`, `git reset`, `git push --force`, or any destructive commands
 - **If commits need fixing**, let the user handle it manually
 
+## Plan File Naming
+
+After exiting plan mode, rename the plan file from its auto-generated name to a short descriptive name (e.g., `stat-cache-pipeline-isolation.md`). Do this before starting implementation. Periodically delete completed plan files to avoid clutter.
+
 ## Commit Guidelines
 
 ```bash
@@ -300,53 +235,7 @@ test: add integration tests for index navigation
 
 ## Releasing a New Version
 
-### 1. Run all tests
-
-```bash
-go fmt ./... && go vet ./... && go mod tidy
-go test ./internal/tigerfs/...                        # Unit tests
-go test -v -timeout 300s ./test/integration/...       # Integration tests
-./scripts/test-docker.sh -v -timeout 300s             # Docker FUSE tests
-```
-
-### 2. Update CHANGELOG.md
-
-Add a new version section to `CHANGELOG.md`. Follow the existing format:
-
-- **One-line bold tagline** describing the release theme
-- **Bullet list** of user-facing changes — each bullet has a **bold short name**, em dash, one-sentence description
-- Focus on what users can now do, not implementation details
-- Omit internal changes (refactors, test infrastructure) unless they affect users
-- Match the tone of previous releases (see v0.1.0 and v0.2.0 in CHANGELOG.md for examples)
-
-The CHANGELOG entry is also used as the GitHub release body — write it for that audience.
-
-### 3. Update implementation checklist
-
-Mark the release task complete in `docs/implementation/implementation-tasks-checklist.md` and update the Summary table.
-
-### 4. Snapshot build
-
-```bash
-goreleaser release --snapshot --clean
-./dist/tigerfs_darwin_arm64_v8.0/tigerfs version
-```
-
-### 5. Commit, tag, and push
-
-```bash
-git add CHANGELOG.md README.md docs/implementation/implementation-tasks-checklist.md
-git commit -m "docs: prepare vX.Y.Z release"
-git tag vX.Y.Z
-git push origin main
-git push origin vX.Y.Z
-```
-
-The `v*.*.*` tag triggers `.github/workflows/release.yml` which runs GoReleaser to build and publish binaries. GoReleaser auto-generates a changelog from commit messages, but **you should edit the release on GitHub** to replace it with the CHANGELOG.md entry for a clean, curated summary.
-
-### 6. Edit release notes on GitHub
-
-After the release workflow completes, edit the release at `https://github.com/timescale/tigerfs/releases/tag/vX.Y.Z` and replace the auto-generated changelog with the CHANGELOG.md entry.
+See `docs/release-process.md` for the full release checklist (tests, CHANGELOG, goreleaser, tagging, GitHub release notes).
 
 ## Reference Documentation
 
