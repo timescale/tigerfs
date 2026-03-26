@@ -11,7 +11,7 @@ func TestPathType(t *testing.T) {
 		PathRoot, PathSchemaList, PathSchema, PathTable,
 		PathCapability, PathRow, PathColumn, PathInfo,
 		PathExport, PathImport, PathDDL, PathViewList, PathBuild, PathFormat,
-		PathHistory,
+		PathHistory, PathTablesList,
 	}
 	seen := make(map[PathType]bool)
 	for _, pt := range types {
@@ -1554,4 +1554,148 @@ func TestParsePathColumns(t *testing.T) {
 			t.Error("Expected error for leading comma, got nil")
 		}
 	})
+}
+
+// TestParsePathTablesList verifies /.tables/ path parsing.
+func TestParsePathTablesList(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantType   PathType
+		wantSchema string
+		wantTable  string
+		wantPK     string
+		wantFormat string
+	}{
+		{
+			name:     "tables directory",
+			path:     "/.tables",
+			wantType: PathTablesList,
+		},
+		{
+			name:     "tables directory with trailing slash",
+			path:     "/.tables/",
+			wantType: PathTablesList,
+		},
+		{
+			name:       "table in tigerfs schema",
+			path:       "/.tables/blog",
+			wantType:   PathTable,
+			wantSchema: "tigerfs",
+			wantTable:  "blog",
+		},
+		{
+			name:       "table in tigerfs schema with trailing slash",
+			path:       "/.tables/notes/",
+			wantType:   PathTable,
+			wantSchema: "tigerfs",
+			wantTable:  "notes",
+		},
+		{
+			name:       "row in tigerfs table",
+			path:       "/.tables/blog/42",
+			wantType:   PathRow,
+			wantSchema: "tigerfs",
+			wantTable:  "blog",
+			wantPK:     "42",
+		},
+		{
+			name:       "row with format in tigerfs table",
+			path:       "/.tables/blog/1.json",
+			wantType:   PathRow,
+			wantSchema: "tigerfs",
+			wantTable:  "blog",
+			wantPK:     "1",
+			wantFormat: "json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if tt.wantSchema != "" {
+				if result.Context == nil {
+					t.Fatal("Context is nil, expected non-nil")
+				}
+				if result.Context.Schema != tt.wantSchema {
+					t.Errorf("Schema = %q, want %q", result.Context.Schema, tt.wantSchema)
+				}
+			}
+			if tt.wantTable != "" && result.Context != nil {
+				if result.Context.TableName != tt.wantTable {
+					t.Errorf("TableName = %q, want %q", result.Context.TableName, tt.wantTable)
+				}
+			}
+			if tt.wantPK != "" {
+				if result.PrimaryKey != tt.wantPK {
+					t.Errorf("PrimaryKey = %q, want %q", result.PrimaryKey, tt.wantPK)
+				}
+			}
+			if tt.wantFormat != "" {
+				if result.Format != tt.wantFormat {
+					t.Errorf("Format = %q, want %q", result.Format, tt.wantFormat)
+				}
+			}
+		})
+	}
+}
+
+// TestParsePathTablesCapabilities verifies capability chaining on /.tables/ paths.
+func TestParsePathTablesCapabilities(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		wantType   PathType
+		wantSchema string
+		wantTable  string
+	}{
+		{
+			name:       "filter on tigerfs table",
+			path:       "/.tables/blog/.filter/status/published",
+			wantType:   PathTable,
+			wantSchema: "tigerfs",
+			wantTable:  "blog",
+		},
+		{
+			name:       "export on tigerfs table",
+			path:       "/.tables/blog/.export/json",
+			wantType:   PathExport,
+			wantSchema: "tigerfs",
+			wantTable:  "blog",
+		},
+		{
+			name:       "info on tigerfs table",
+			path:       "/.tables/blog/.info/count",
+			wantType:   PathInfo,
+			wantSchema: "tigerfs",
+			wantTable:  "blog",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Type != tt.wantType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
+			}
+			if result.Context == nil {
+				t.Fatal("Context is nil, expected non-nil")
+			}
+			if result.Context.Schema != tt.wantSchema {
+				t.Errorf("Schema = %q, want %q", result.Context.Schema, tt.wantSchema)
+			}
+			if result.Context.TableName != tt.wantTable {
+				t.Errorf("TableName = %q, want %q", result.Context.TableName, tt.wantTable)
+			}
+		})
+	}
 }
