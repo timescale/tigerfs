@@ -2716,6 +2716,72 @@ func TestStatRow_SelfPrime(t *testing.T) {
 	assert.Equal(t, 1, mockDB.getRowCalls, "second Stat should use cache, not call GetRow again")
 }
 
+// TestStatExport_PipelineCacheKeyIsolation verifies that stat on export files
+// through different pipeline paths returns distinct sizes. Previously, the cache
+// key was just ".export/json" which caused collisions between plain and filtered
+// exports on the same table.
+func TestStatExport_PipelineCacheKeyIsolation(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"products"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.products": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.products": {
+				{name: "id", dataType: "integer"},
+				{name: "name", dataType: "text"},
+				{name: "active", dataType: "boolean"},
+			},
+		},
+		// Plain export (GetAllRows) returns 3 rows
+		allRowsData: map[string]*mockAllRows{
+			"public.products": {
+				columns: []string{"id", "name", "active"},
+				rows: [][]interface{}{
+					{1, "Widget", true},
+					{2, "Gadget", false},
+					{3, "Sprocket", true},
+				},
+			},
+		},
+		// Pipeline export (QueryRowsWithDataPipeline) returns 1 row
+		pipelineRows: [][]interface{}{
+			{3, "Sprocket", true},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// Stat plain export
+	plainEntry, err := ops.Stat(ctx, "/products/.export/json")
+	require.Nil(t, err)
+	assert.False(t, plainEntry.IsDir)
+	assert.True(t, plainEntry.Size > 0, "plain export should have non-zero size")
+
+	// Stat filtered export (different pipeline path, different data)
+	filteredEntry, err := ops.Stat(ctx, "/products/.filter/active/true/.export/json")
+	require.Nil(t, err)
+	assert.False(t, filteredEntry.IsDir)
+	assert.True(t, filteredEntry.Size > 0, "filtered export should have non-zero size")
+
+	// The two exports return different row counts, so sizes must differ
+	assert.NotEqual(t, plainEntry.Size, filteredEntry.Size,
+		"plain export (%d bytes) and filtered export (%d bytes) should have different sizes",
+		plainEntry.Size, filteredEntry.Size)
+
+	// Stat plain export again -- should return cached size, not the filtered size
+	plainEntry2, err := ops.Stat(ctx, "/products/.export/json")
+	require.Nil(t, err)
+	assert.Equal(t, plainEntry.Size, plainEntry2.Size,
+		"repeated stat on plain export should return same size (from cache)")
+}
+
 // TestMetaCache_GetColumns tests that MetadataCache.GetColumns caches results
 // so the second call doesn't hit the DB.
 func TestMetaCache_GetColumns(t *testing.T) {

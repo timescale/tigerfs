@@ -383,6 +383,39 @@ var ReadTestCases = []CommandTestCase{
 		},
 	},
 
+	// === Pipeline Cache Isolation ===
+	// These tests verify that export stat cache keys include the full pipeline
+	// path, not just the format. Plain and filtered exports on the same table
+	// must return independently correct sizes. Run in sequence: plain first,
+	// then filtered, then plain again to detect cache key collisions.
+	{
+		Name:     "ExportAllProductsJSON",
+		Category: "read/export",
+		Input:    CommandInput{Op: "cat", Path: "products/.export/json"},
+		Expected: ExpectedOutput{
+			JSONArray: true,
+			// All products (seeded count varies, but more than 5)
+		},
+	},
+	{
+		Name:     "ExportInStockProductsJSON",
+		Category: "read/export",
+		Input:    CommandInput{Op: "cat", Path: "products/.filter/in_stock/true/.export/json"},
+		Expected: ExpectedOutput{
+			JSONArray: true,
+			// Subset of products -- must be valid JSON (not truncated by stale cache size)
+		},
+	},
+	{
+		Name:     "ExportAllProductsJSON_AfterFiltered",
+		Category: "read/export",
+		Input:    CommandInput{Op: "cat", Path: "products/.export/json"},
+		Expected: ExpectedOutput{
+			JSONArray: true,
+			// Same as ExportAllProductsJSON -- cache must not be corrupted by filtered export
+		},
+	},
+
 	// === Pipeline Combinations ===
 	// Note: Pipeline directories contain both row IDs and pipeline operators (.by, .filter, etc.)
 	{

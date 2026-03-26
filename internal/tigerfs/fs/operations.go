@@ -1251,7 +1251,7 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		if parsed.InfoFile == "" {
 			return &Entry{Name: ".info", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 		}
-		return o.statInfoFile(ctx, parsed)
+		return o.statInfoFile(ctx, parsed, originalPath)
 
 	case PathCapability:
 		// For specific resources (e.g., /table/.indexes/idx_name), verify they exist
@@ -1261,7 +1261,7 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return &Entry{Name: parsed.CapabilityDir, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathExport:
-		return o.statExport(ctx, parsed)
+		return o.statExport(ctx, parsed, originalPath)
 
 	case PathImport:
 		return o.statImport(ctx, parsed)
@@ -1503,7 +1503,7 @@ func (o *Operations) cachedStat(schema, cacheTable, filename string, compute fun
 	return entry, nil
 }
 
-func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath, originalPath string) (*Entry, *FSError) {
 	fsCtx := parsed.Context
 	schema := ""
 	tableName := ""
@@ -1512,7 +1512,10 @@ func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Ent
 		tableName = fsCtx.TableName
 	}
 
-	return o.cachedStat(schema, tableName, parsed.InfoFile, func() (*Entry, *FSError) {
+	// Use the full original path as the cache key so that pipeline-scoped
+	// info files (e.g., .filter/active/true/.info/count) don't collide with
+	// plain info files (e.g., .info/count).
+	compute := func() (*Entry, *FSError) {
 		// Fetch actual content to get accurate size (required for NFS)
 		content, fsErr := o.readInfoFile(ctx, parsed)
 		if fsErr != nil {
@@ -1526,7 +1529,15 @@ func (o *Operations) statInfoFile(ctx context.Context, parsed *ParsedPath) (*Ent
 			Size:    int64(len(content.Data)),
 			ModTime: time.Now(),
 		}, nil
-	})
+	}
+
+	if originalPath == "" {
+		logging.Error("statInfoFile called with empty originalPath, bypassing cache",
+			zap.String("infoFile", parsed.InfoFile),
+			zap.String("hint", "StatWithContext creates PathTable so this path should be unreachable"))
+		return compute()
+	}
+	return o.cachedStat(schema, tableName, originalPath, compute)
 }
 
 // statIndexEntry returns metadata for a specific index directory.
@@ -1665,7 +1676,7 @@ func (o *Operations) statDDLFile(ctx context.Context, parsed *ParsedPath) (*Entr
 }
 
 // statExport returns metadata for an export path (directory or file).
-func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath, originalPath string) (*Entry, *FSError) {
 	now := time.Now()
 
 	// If format is set, this is an export file (e.g., /table/.export/csv)
@@ -1678,7 +1689,10 @@ func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath) (*Entry
 			tableName = fsCtx.TableName
 		}
 
-		return o.cachedStat(schema, tableName, ".export/"+parsed.Format, func() (*Entry, *FSError) {
+		// Use the full original path as the cache key so that pipeline-scoped
+		// exports (e.g., .filter/in_stock/true/.export/json) don't collide with
+		// plain exports (e.g., .export/json).
+		compute := func() (*Entry, *FSError) {
 			// Calculate actual file size by generating the export data
 			content, err := o.readExportFile(ctx, parsed)
 			if err != nil {
@@ -1700,7 +1714,15 @@ func (o *Operations) statExport(ctx context.Context, parsed *ParsedPath) (*Entry
 				Mode:    0600,
 				ModTime: now,
 			}, nil
-		})
+		}
+
+		if originalPath == "" {
+			logging.Error("statExport called with empty originalPath, bypassing cache",
+				zap.String("format", parsed.Format),
+				zap.String("hint", "StatWithContext creates PathTable so this path should be unreachable"))
+			return compute()
+		}
+		return o.cachedStat(schema, tableName, originalPath, compute)
 	}
 
 	// If ExportWithHeaders is set but no format, it's the .with-headers directory
