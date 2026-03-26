@@ -5,6 +5,9 @@
 -- Enable TimescaleDB extension (required for history hypertable support)
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
+-- Dedicated schema for TigerFS backing tables
+CREATE SCHEMA IF NOT EXISTS tigerfs;
+
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -200,7 +203,7 @@ JOIN categories c ON p.category = c.slug;
 --             /mountpoint/blog/tutorials/getting-started-with-sql.md, etc.
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE "_blog" (
+CREATE TABLE tigerfs.blog (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -214,10 +217,10 @@ CREATE TABLE "_blog" (
     UNIQUE(filename, filetype)
 );
 
-CREATE VIEW "blog" AS SELECT * FROM "_blog";
+CREATE VIEW "blog" AS SELECT * FROM tigerfs.blog;
 COMMENT ON VIEW "blog" IS 'tigerfs:md,history';
 
-CREATE OR REPLACE FUNCTION "set__blog_modified_at"()
+CREATE OR REPLACE FUNCTION tigerfs."set_blog_modified_at"()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.modified_at = now();
@@ -225,17 +228,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER "trg__blog_modified_at"
-    BEFORE UPDATE ON "_blog"
-    FOR EACH ROW EXECUTE FUNCTION "set__blog_modified_at"();
+CREATE TRIGGER "trg_blog_modified_at"
+    BEFORE UPDATE ON tigerfs.blog
+    FOR EACH ROW EXECUTE FUNCTION tigerfs."set_blog_modified_at"();
 
 -- Directory rows (no title/body — just structural containers)
-INSERT INTO "_blog" (filename, filetype) VALUES
+INSERT INTO tigerfs.blog (filename, filetype) VALUES
 ('tutorials', 'directory'),
 ('deep-dives', 'directory');
 
 -- File rows
-INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modified_at) VALUES
+INSERT INTO tigerfs.blog (filename, title, author, headers, body, created_at, modified_at) VALUES
 (
     'hello-world.md',
     'Hello, World!',
@@ -283,7 +286,7 @@ INSERT INTO "_blog" (filename, title, author, headers, body, created_at, modifie
 );
 
 -- History table for blog — captures every UPDATE and DELETE
-CREATE TABLE "_blog_history" (
+CREATE TABLE tigerfs."blog_history" (
     id UUID,
     filename TEXT NOT NULL,
     filetype TEXT,
@@ -298,15 +301,15 @@ CREATE TABLE "_blog_history" (
     _operation TEXT NOT NULL
 );
 
-CREATE INDEX idx__blog_history_by_filename
-    ON "_blog_history" (filename, _history_id DESC);
+CREATE INDEX idx_blog_history_by_filename
+    ON tigerfs."blog_history" (filename, _history_id DESC);
 
-CREATE INDEX idx__blog_history_by_id
-    ON "_blog_history" (id, _history_id DESC);
+CREATE INDEX idx_blog_history_by_id
+    ON tigerfs."blog_history" (id, _history_id DESC);
 
-CREATE OR REPLACE FUNCTION "archive__blog_history"() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION tigerfs."archive_blog_history"() RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO "_blog_history"
+    INSERT INTO tigerfs."blog_history"
         (id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
@@ -320,32 +323,32 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER "trg__blog_history_archive"
-    BEFORE UPDATE OR DELETE ON "_blog"
-    FOR EACH ROW EXECUTE FUNCTION "archive__blog_history"();
+CREATE TRIGGER "trg_blog_history_archive"
+    BEFORE UPDATE OR DELETE ON tigerfs.blog
+    FOR EACH ROW EXECUTE FUNCTION tigerfs."archive_blog_history"();
 
 -- Convert to TimescaleDB hypertable for time-partitioned storage
-SELECT create_hypertable('_blog_history', '_history_id',
+SELECT create_hypertable('tigerfs.blog_history', '_history_id',
     chunk_time_interval => INTERVAL '1 month');
 
-ALTER TABLE "_blog_history" SET (
+ALTER TABLE tigerfs."blog_history" SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'filename',
     timescaledb.compress_orderby = '_history_id DESC'
 );
 
-SELECT add_compression_policy('_blog_history',
+SELECT add_compression_policy('tigerfs.blog_history',
     compress_after => INTERVAL '1 day');
 
 -- Seed some history entries by updating blog posts — simulates real editing
 -- Update hello-world to capture the original as a history entry
-UPDATE "_blog"
+UPDATE tigerfs.blog
 SET body = E'Welcome to our blog! This is the first post on our new platform.\n\nWe''re excited to share ideas about databases, filesystems, and the\nintersection of Unix tooling with modern data infrastructure.\n\n## What to Expect\n\n- Tutorials on SQL and PostgreSQL\n- Tips for working with markdown\n- Deep dives into filesystem design\n- Guides for AI-powered workflows\n\nStay tuned for more posts!\n\n## Recent Updates\n\nWe''ve added synthesized app support — create markdown-backed directories\nwith a single command.',
     title = 'Hello, World!'
 WHERE filename = 'hello-world.md';
 
 -- Update getting-started-with-sql to capture the original
-UPDATE "_blog"
+UPDATE tigerfs.blog
 SET body = E'SQL is the lingua franca of data. Whether you''re building an app or\nanalyzing a dataset, knowing SQL is essential.\n\n## Your First Query\n\n```sql\nSELECT * FROM users WHERE active = true;\n```\n\nThis returns all active users from the `users` table.\n\n## Filtering Results\n\nUse `WHERE` clauses to narrow your results:\n\n```sql\nSELECT name, email\nFROM users\nWHERE age > 25\nORDER BY name;\n```\n\n## Joining Tables\n\nCombine related data with `JOIN`:\n\n```sql\nSELECT u.name, o.total\nFROM users u\nJOIN orders o ON o.user_id = u.id\nWHERE o.status = ''completed'';\n```\n\n## Next Steps\n\nTry creating views to simplify complex queries.',
     title = 'Getting Started with SQL'
 WHERE filename = 'tutorials/getting-started-with-sql.md';
@@ -356,7 +359,7 @@ WHERE filename = 'tutorials/getting-started-with-sql.md';
 --             /mountpoint/docs/reference/configuration.md, etc.
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE "_docs" (
+CREATE TABLE tigerfs.docs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -370,10 +373,10 @@ CREATE TABLE "_docs" (
     UNIQUE(filename, filetype)
 );
 
-CREATE VIEW "docs" AS SELECT * FROM "_docs";
+CREATE VIEW "docs" AS SELECT * FROM tigerfs.docs;
 COMMENT ON VIEW "docs" IS 'tigerfs:md,history';
 
-CREATE OR REPLACE FUNCTION "set__docs_modified_at"()
+CREATE OR REPLACE FUNCTION tigerfs."set_docs_modified_at"()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.modified_at = now();
@@ -381,17 +384,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER "trg__docs_modified_at"
-    BEFORE UPDATE ON "_docs"
-    FOR EACH ROW EXECUTE FUNCTION "set__docs_modified_at"();
+CREATE TRIGGER "trg_docs_modified_at"
+    BEFORE UPDATE ON tigerfs.docs
+    FOR EACH ROW EXECUTE FUNCTION tigerfs."set_docs_modified_at"();
 
 -- Directory rows
-INSERT INTO "_docs" (filename, filetype) VALUES
+INSERT INTO tigerfs.docs (filename, filetype) VALUES
 ('getting-started', 'directory'),
 ('reference', 'directory');
 
 -- File rows
-INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modified_at) VALUES
+INSERT INTO tigerfs.docs (filename, title, author, headers, body, created_at, modified_at) VALUES
 (
     'getting-started/installation.md',
     'Installation Guide',
@@ -430,7 +433,7 @@ INSERT INTO "_docs" (filename, title, author, headers, body, created_at, modifie
 );
 
 -- History table for docs — captures every UPDATE and DELETE
-CREATE TABLE "_docs_history" (
+CREATE TABLE tigerfs."docs_history" (
     id UUID,
     filename TEXT NOT NULL,
     filetype TEXT,
@@ -445,15 +448,15 @@ CREATE TABLE "_docs_history" (
     _operation TEXT NOT NULL
 );
 
-CREATE INDEX idx__docs_history_by_filename
-    ON "_docs_history" (filename, _history_id DESC);
+CREATE INDEX idx_docs_history_by_filename
+    ON tigerfs."docs_history" (filename, _history_id DESC);
 
-CREATE INDEX idx__docs_history_by_id
-    ON "_docs_history" (id, _history_id DESC);
+CREATE INDEX idx_docs_history_by_id
+    ON tigerfs."docs_history" (id, _history_id DESC);
 
-CREATE OR REPLACE FUNCTION "archive__docs_history"() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION tigerfs."archive_docs_history"() RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO "_docs_history"
+    INSERT INTO tigerfs."docs_history"
         (id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
@@ -467,32 +470,32 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER "trg__docs_history_archive"
-    BEFORE UPDATE OR DELETE ON "_docs"
-    FOR EACH ROW EXECUTE FUNCTION "archive__docs_history"();
+CREATE TRIGGER "trg_docs_history_archive"
+    BEFORE UPDATE OR DELETE ON tigerfs.docs
+    FOR EACH ROW EXECUTE FUNCTION tigerfs."archive_docs_history"();
 
 -- Convert to TimescaleDB hypertable for time-partitioned storage
-SELECT create_hypertable('_docs_history', '_history_id',
+SELECT create_hypertable('tigerfs.docs_history', '_history_id',
     chunk_time_interval => INTERVAL '1 month');
 
-ALTER TABLE "_docs_history" SET (
+ALTER TABLE tigerfs."docs_history" SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'filename',
     timescaledb.compress_orderby = '_history_id DESC'
 );
 
-SELECT add_compression_policy('_docs_history',
+SELECT add_compression_policy('tigerfs.docs_history',
     compress_after => INTERVAL '1 day');
 
 -- Seed some history entries by updating docs — simulates real editing
 -- Update the installation guide to capture the original as a history entry
-UPDATE "_docs"
+UPDATE tigerfs.docs
 SET body = E'# Installation\n\nTigerFS runs on macOS and Linux. Choose your platform below.\n\n## macOS (Homebrew)\n\n```bash\nbrew install tigerfs\n```\n\nTigerFS uses NFS on macOS — no kernel extensions required.\n\n## Linux\n\nDownload the latest release from GitHub:\n\n```bash\ncurl -L https://github.com/timescale/tigerfs/releases/latest/download/tigerfs_linux_amd64.tar.gz | tar xz\nsudo mv tigerfs /usr/local/bin/\n```\n\nEnsure FUSE is available:\n\n```bash\nsudo apt install fuse3   # Debian/Ubuntu\nsudo dnf install fuse3   # Fedora\n```\n\n## Verify Installation\n\n```bash\ntigerfs version\n```\n\n## Upgrading\n\nTo upgrade an existing installation:\n\n```bash\nbrew upgrade tigerfs     # macOS\n# or re-download the latest release for Linux\n```',
     title = 'Installation Guide'
 WHERE filename = 'getting-started/installation.md';
 
 -- Update the quick start guide to capture the original
-UPDATE "_docs"
+UPDATE tigerfs.docs
 SET body = E'# Quick Start\n\nGet up and running with TigerFS in under 5 minutes.\n\n## 1. Start a Database\n\nIf you don''t have a PostgreSQL instance, start one with Docker:\n\n```bash\ndocker run -d --name pg -p 5432:5432 \\\n  -e POSTGRES_PASSWORD=secret postgres:18\n```\n\n## 2. Mount the Database\n\n```bash\nmkdir -p /tmp/mydb\ntigerfs mount postgres://postgres:secret@localhost/postgres /tmp/mydb\n```\n\n## 3. Browse Your Data\n\n```bash\nls /tmp/mydb/              # List tables\nls /tmp/mydb/users/        # List rows\ncat /tmp/mydb/users/1.json # Read a row\n```\n\n## 4. Make Changes\n\n```bash\n# Edit a row (opens in $EDITOR)\nvim /tmp/mydb/users/1.json\n\n# Delete a row\nrm /tmp/mydb/users/42.json\n```\n\n## 5. Synthesized Apps\n\nCreate markdown-backed directories:\n\n```bash\necho "markdown" > /tmp/mydb/.build/notes\necho "---\ntitle: Hello\n---\nContent" > /tmp/mydb/notes/hello.md\n```\n\n## Next Steps\n\nSee the [Configuration](configuration.md) guide for customization options.',
     title = 'Quick Start'
 WHERE filename = 'getting-started/quick-start.md';
@@ -503,7 +506,7 @@ WHERE filename = 'getting-started/quick-start.md';
 --             /mountpoint/snippets/meetings/meeting-notes.txt, etc.
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE "_snippets" (
+CREATE TABLE tigerfs.snippets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -514,10 +517,10 @@ CREATE TABLE "_snippets" (
     UNIQUE(filename, filetype)
 );
 
-CREATE VIEW "snippets" AS SELECT * FROM "_snippets";
+CREATE VIEW "snippets" AS SELECT * FROM tigerfs.snippets;
 COMMENT ON VIEW "snippets" IS 'tigerfs:txt,history';
 
-CREATE OR REPLACE FUNCTION "set__snippets_modified_at"()
+CREATE OR REPLACE FUNCTION tigerfs."set_snippets_modified_at"()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.modified_at = now();
@@ -525,16 +528,16 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER "trg__snippets_modified_at"
-    BEFORE UPDATE ON "_snippets"
-    FOR EACH ROW EXECUTE FUNCTION "set__snippets_modified_at"();
+CREATE TRIGGER "trg_snippets_modified_at"
+    BEFORE UPDATE ON tigerfs.snippets
+    FOR EACH ROW EXECUTE FUNCTION tigerfs."set_snippets_modified_at"();
 
 -- Directory rows
-INSERT INTO "_snippets" (filename, filetype) VALUES
+INSERT INTO tigerfs.snippets (filename, filetype) VALUES
 ('meetings', 'directory');
 
 -- File rows
-INSERT INTO "_snippets" (filename, body, created_at, modified_at) VALUES
+INSERT INTO tigerfs.snippets (filename, body, created_at, modified_at) VALUES
 (
     'todo.txt',
     E'TODO List\n=========\n\n[ ] Set up CI/CD pipeline\n[ ] Write integration tests for FUSE adapter\n[ ] Add CSV export support\n[x] Implement JSON row format\n[x] Create demo data script\n[ ] Update README with examples\n[ ] Benchmark large table performance\n[x] Add index-based navigation',
@@ -555,7 +558,7 @@ INSERT INTO "_snippets" (filename, body, created_at, modified_at) VALUES
 );
 
 -- History table for snippets — captures every UPDATE and DELETE
-CREATE TABLE "_snippets_history" (
+CREATE TABLE tigerfs."snippets_history" (
     id UUID,
     filename TEXT NOT NULL,
     filetype TEXT,
@@ -567,15 +570,15 @@ CREATE TABLE "_snippets_history" (
     _operation TEXT NOT NULL
 );
 
-CREATE INDEX idx__snippets_history_by_filename
-    ON "_snippets_history" (filename, _history_id DESC);
+CREATE INDEX idx_snippets_history_by_filename
+    ON tigerfs."snippets_history" (filename, _history_id DESC);
 
-CREATE INDEX idx__snippets_history_by_id
-    ON "_snippets_history" (id, _history_id DESC);
+CREATE INDEX idx_snippets_history_by_id
+    ON tigerfs."snippets_history" (id, _history_id DESC);
 
-CREATE OR REPLACE FUNCTION "archive__snippets_history"() RETURNS TRIGGER AS $$
+CREATE OR REPLACE FUNCTION tigerfs."archive_snippets_history"() RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO "_snippets_history"
+    INSERT INTO tigerfs."snippets_history"
         (id, filename, filetype, body, encoding, created_at, modified_at,
          _history_id, _operation)
     VALUES
@@ -589,30 +592,30 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER "trg__snippets_history_archive"
-    BEFORE UPDATE OR DELETE ON "_snippets"
-    FOR EACH ROW EXECUTE FUNCTION "archive__snippets_history"();
+CREATE TRIGGER "trg_snippets_history_archive"
+    BEFORE UPDATE OR DELETE ON tigerfs.snippets
+    FOR EACH ROW EXECUTE FUNCTION tigerfs."archive_snippets_history"();
 
 -- Convert to TimescaleDB hypertable for time-partitioned storage
-SELECT create_hypertable('_snippets_history', '_history_id',
+SELECT create_hypertable('tigerfs.snippets_history', '_history_id',
     chunk_time_interval => INTERVAL '1 month');
 
-ALTER TABLE "_snippets_history" SET (
+ALTER TABLE tigerfs."snippets_history" SET (
     timescaledb.compress,
     timescaledb.compress_segmentby = 'filename',
     timescaledb.compress_orderby = '_history_id DESC'
 );
 
-SELECT add_compression_policy('_snippets_history',
+SELECT add_compression_policy('tigerfs.snippets_history',
     compress_after => INTERVAL '1 day');
 
 -- Seed some history entries by updating snippets — simulates real editing
 -- Update todo list to capture the original as a history entry
-UPDATE "_snippets"
+UPDATE tigerfs.snippets
 SET body = E'TODO List\n=========\n\n[ ] Set up CI/CD pipeline\n[ ] Write integration tests for FUSE adapter\n[x] Add CSV export support\n[x] Implement JSON row format\n[x] Create demo data script\n[ ] Update README with examples\n[ ] Benchmark large table performance\n[x] Add index-based navigation\n[x] Add synthesized markdown apps\n[ ] Add history browsing support'
 WHERE filename = 'todo.txt';
 
 -- Update scratch pad to capture the original
-UPDATE "_snippets"
+UPDATE tigerfs.snippets
 SET body = E'Random notes and scratch pad\n----------------------------\n\nUseful psql commands:\n  \\dt          list tables\n  \\dv          list views\n  \\d+ table    describe table with details\n  \\x           toggle expanded output\n  \\di          list indexes\n\nConnection string format:\n  postgres://user:pass@host:port/dbname?sslmode=disable\n\nQuick test:\n  SELECT version();\n  SELECT current_database();\n  SELECT current_user;\n\nTimescaleDB:\n  SELECT * FROM timescaledb_information.hypertables;'
 WHERE filename = 'scratch.txt';
