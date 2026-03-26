@@ -12,6 +12,7 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -305,6 +306,8 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirImport(ctx, parsed)
 	case PathDDL:
 		return o.readDirDDL(ctx, parsed)
+	case PathTablesList:
+		return o.readDirTablesList(ctx)
 	case PathBuild:
 		return o.readDirBuild(ctx, parsed)
 	case PathFormat:
@@ -366,6 +369,7 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 		Entry{Name: ".build", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: ".tables", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 	)
 
@@ -417,6 +421,25 @@ func (o *Operations) readDirViews(ctx context.Context) ([]Entry, *FSError) {
 	now := time.Now()
 	entries := []Entry{
 		{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+	}
+	return entries, nil
+}
+
+// readDirTablesList lists tables in the tigerfs schema (/.tables/).
+func (o *Operations) readDirTablesList(ctx context.Context) ([]Entry, *FSError) {
+	tables, err := o.metaCache.GetTablesForSchema(ctx, synth.TigerFSSchema)
+	if err != nil {
+		return nil, &FSError{
+			Code:    ErrIO,
+			Message: "failed to list tigerfs tables",
+			Cause:   err,
+		}
+	}
+
+	now := time.Now()
+	entries := make([]Entry, 0, len(tables))
+	for _, t := range tables {
+		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
 	return entries, nil
 }
@@ -1172,6 +1195,9 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 
 	case PathViewList:
 		return &Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
+	case PathTablesList:
+		return &Entry{Name: ".tables", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathTable:
 		fsCtx := parsed.Context

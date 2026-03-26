@@ -59,6 +59,9 @@ const (
 	// PathHistory is the /{table}/.history/ read-only directory for versioned history.
 	// Shows past versions of synth app files captured by PostgreSQL triggers.
 	PathHistory
+
+	// PathTablesList is the /.tables/ directory listing backing tables in tigerfs schema.
+	PathTablesList
 )
 
 // ParsedPath holds the result of parsing a filesystem path.
@@ -202,6 +205,8 @@ func ParsePath(path string) (*ParsedPath, *FSError) {
 		return parseViewPath(segments)
 	case ".build":
 		return parseBuildPath(segments)
+	case ".tables":
+		return parseTablesPath(segments)
 	}
 
 	// Otherwise, it's a table path (possibly with schema prefix)
@@ -383,6 +388,28 @@ func parseBuildPath(segments []string) (*ParsedPath, *FSError) {
 	}
 
 	return result, nil
+}
+
+// parseTablesPath handles /.tables/ paths.
+// Maps /.tables/<name>/... to table path with schema=tigerfs.
+// Supports:
+//   - /.tables/ -> list tables in tigerfs schema (PathTablesList)
+//   - /.tables/<name>/... -> table path with schema="tigerfs"
+func parseTablesPath(segments []string) (*ParsedPath, *FSError) {
+	if len(segments) == 1 {
+		return &ParsedPath{Type: PathTablesList}, nil
+	}
+
+	// /.tables/<table>/... - parse as table path with tigerfs schema
+	table := segments[1]
+	ctx := NewFSContext("tigerfs", table, "")
+
+	result := &ParsedPath{
+		Type:    PathTable,
+		Context: ctx,
+	}
+
+	return processSegments(result, segments[2:])
 }
 
 // parseTablePath handles table paths and capability chains.
