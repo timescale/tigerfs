@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MOUNTPOINT="/tmp/tigerfs-demo"
-CONN_STR="postgres://demo:demo@localhost:5432/demo?sslmode=disable"
+CONN_STR="postgres://demo:demo@localhost:5432/demo"
 
 # Colors for output
 RED='\033[0;31m'
@@ -48,9 +48,23 @@ start_demo() {
     info "Starting PostgreSQL container..."
     docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
 
-    # Wait for PostgreSQL to be ready
+    # Wait for PostgreSQL and init scripts to fully complete.
+    # The TimescaleDB-HA entrypoint runs init scripts then restarts PostgreSQL,
+    # so we wait for "init process complete" in the logs (which appears after
+    # the restart), then confirm with pg_isready.
     info "Waiting for PostgreSQL to be ready..."
-    until docker compose -f "$SCRIPT_DIR/docker-compose.yml" exec -T postgres pg_isready -U demo -d demo &> /dev/null; do
+    RETRIES=0
+    until docker compose -f "$SCRIPT_DIR/docker-compose.yml" logs postgres 2>&1 | \
+        grep -q "PostgreSQL init process complete"; do
+        RETRIES=$((RETRIES + 1))
+        if [[ $RETRIES -ge 30 ]]; then
+            error "PostgreSQL init did not complete after 30 seconds"
+            exit 1
+        fi
+        sleep 1
+    done
+    until docker compose -f "$SCRIPT_DIR/docker-compose.yml" exec -T postgres \
+        pg_isready -U demo -d demo &> /dev/null; do
         sleep 1
     done
     info "PostgreSQL is ready"

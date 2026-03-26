@@ -33,6 +33,16 @@ var secureModes = map[string]bool{
 func enforceSSLMode(connStr string, insecureNoSSL bool) string {
 	host := extractHost(connStr)
 	if isLocalhost(host) {
+		// For localhost, default to sslmode=disable if not specified.
+		// pgx defaults to sslmode=prefer which attempts TLS first; some
+		// PostgreSQL configurations (e.g. ssl=off) reset the connection
+		// during the TLS handshake instead of cleanly rejecting it,
+		// causing pgx's prefer fallback to fail. TLS on localhost adds
+		// no security value, so we skip it. Users can still override
+		// with an explicit sslmode in their connection string.
+		if extractSSLMode(connStr) == "" {
+			return addSSLMode(connStr, "disable")
+		}
 		return connStr
 	}
 

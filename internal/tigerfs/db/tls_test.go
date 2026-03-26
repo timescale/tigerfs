@@ -126,25 +126,32 @@ func TestEnforceSSLMode(t *testing.T) {
 			wantUnchanged: true,
 		},
 
-		// Localhost -> unchanged regardless of sslmode
+		// Localhost without sslmode -> adds sslmode=disable
 		{
-			name:          "localhost no sslmode unchanged",
-			connStr:       "postgres://localhost/db",
-			wantUnchanged: true,
+			name:         "localhost no sslmode adds disable",
+			connStr:      "postgres://localhost/db",
+			wantContains: "sslmode=disable",
 		},
+		{
+			name:         "key-value localhost no sslmode adds disable",
+			connStr:      "host=localhost dbname=db",
+			wantContains: "sslmode=disable",
+		},
+		{
+			name:         "empty host (unix socket) no sslmode adds disable",
+			connStr:      "dbname=mydb",
+			wantContains: "sslmode=disable",
+		},
+
+		// Localhost with explicit sslmode -> unchanged
 		{
 			name:          "127.0.0.1 sslmode=disable unchanged",
 			connStr:       "postgres://127.0.0.1/db?sslmode=disable",
 			wantUnchanged: true,
 		},
 		{
-			name:          "key-value localhost unchanged",
-			connStr:       "host=localhost dbname=db",
-			wantUnchanged: true,
-		},
-		{
-			name:          "empty host (unix socket) unchanged",
-			connStr:       "dbname=mydb",
+			name:          "localhost sslmode=require unchanged",
+			connStr:       "postgres://localhost/db?sslmode=require",
 			wantUnchanged: true,
 		},
 
