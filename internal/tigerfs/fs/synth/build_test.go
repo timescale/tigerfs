@@ -10,8 +10,8 @@ import (
 func TestGenerateMarkdownTableSQL(t *testing.T) {
 	sql := GenerateMarkdownTableSQL("public", "posts")
 
-	if !strings.Contains(sql, `"public"."_posts"`) {
-		t.Errorf("should reference _posts table, got:\n%s", sql)
+	if !strings.Contains(sql, `"tigerfs"."posts"`) {
+		t.Errorf("should reference tigerfs.posts table, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "id UUID PRIMARY KEY") {
 		t.Errorf("should have UUID primary key, got:\n%s", sql)
@@ -51,8 +51,8 @@ func TestGenerateMarkdownTableSQL(t *testing.T) {
 func TestGeneratePlainTextTableSQL(t *testing.T) {
 	sql := GeneratePlainTextTableSQL("public", "snippets")
 
-	if !strings.Contains(sql, `"public"."_snippets"`) {
-		t.Errorf("should reference _snippets table, got:\n%s", sql)
+	if !strings.Contains(sql, `"tigerfs"."snippets"`) {
+		t.Errorf("should reference tigerfs.snippets table, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "filename TEXT NOT NULL") {
 		t.Errorf("should have filename column, got:\n%s", sql)
@@ -79,16 +79,16 @@ func TestGeneratePlainTextTableSQL(t *testing.T) {
 }
 
 func TestGenerateViewSQL(t *testing.T) {
-	sql := GenerateViewSQL("public", "posts", "_posts")
+	sql := GenerateViewSQL("public", "posts", TigerFSSchema, "posts")
 
 	if !strings.Contains(sql, "CREATE VIEW") {
 		t.Errorf("should be CREATE VIEW, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, `"public"."posts"`) {
-		t.Errorf("should reference posts view, got:\n%s", sql)
+		t.Errorf("should reference posts view in user schema, got:\n%s", sql)
 	}
-	if !strings.Contains(sql, `"public"."_posts"`) {
-		t.Errorf("should SELECT FROM _posts, got:\n%s", sql)
+	if !strings.Contains(sql, `"tigerfs"."posts"`) {
+		t.Errorf("should SELECT FROM tigerfs.posts, got:\n%s", sql)
 	}
 }
 
@@ -109,7 +109,7 @@ func TestGenerateViewCommentSQL(t *testing.T) {
 }
 
 func TestGenerateModifiedAtTriggerSQL(t *testing.T) {
-	stmts := GenerateModifiedAtTriggerSQL("public", "_posts")
+	stmts := GenerateModifiedAtTriggerSQL("public", "posts")
 	if len(stmts) != 2 {
 		t.Fatalf("expected 2 statements, got %d", len(stmts))
 	}
@@ -128,12 +128,16 @@ func TestGenerateModifiedAtTriggerSQL(t *testing.T) {
 	if !strings.Contains(allSQL, "NEW.modified_at = now()") {
 		t.Errorf("should set modified_at to now(), got:\n%s", allSQL)
 	}
-	// Function and trigger names should be properly quoted as single identifiers
-	if !strings.Contains(allSQL, `"set__posts_modified_at"`) {
-		t.Errorf("function name should be a single quoted identifier, got:\n%s", allSQL)
+	// Function should be in tigerfs schema with clean name (no underscore)
+	if !strings.Contains(allSQL, `"tigerfs"."set_posts_modified_at"`) {
+		t.Errorf("function should be in tigerfs schema, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, `"trg__posts_modified_at"`) {
-		t.Errorf("trigger name should be a single quoted identifier, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, `"trg_posts_modified_at"`) {
+		t.Errorf("trigger name should use clean name, got:\n%s", allSQL)
+	}
+	// Trigger should reference tigerfs schema table
+	if !strings.Contains(allSQL, `"tigerfs"."posts"`) {
+		t.Errorf("trigger should reference tigerfs.posts, got:\n%s", allSQL)
 	}
 }
 
@@ -145,7 +149,11 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 
 	allSQL := strings.Join(stmts, "\n")
 
-	// Should contain all four parts
+	// First statement should create the tigerfs schema
+	if !strings.Contains(stmts[0], `CREATE SCHEMA IF NOT EXISTS "tigerfs"`) {
+		t.Errorf("first statement should create tigerfs schema, got: %s", stmts[0])
+	}
+	// Should contain all parts
 	if !strings.Contains(allSQL, "CREATE TABLE") {
 		t.Errorf("should contain CREATE TABLE, got:\n%s", allSQL)
 	}
@@ -161,9 +169,16 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, `encoding TEXT NOT NULL DEFAULT 'utf8'`) {
 		t.Errorf("should contain encoding column, got:\n%s", allSQL)
 	}
-	// Should have 5 statements: table, view, comment, function, trigger
-	if len(stmts) != 5 {
-		t.Errorf("expected 5 statements, got %d", len(stmts))
+	// Table in tigerfs schema, view in user schema
+	if !strings.Contains(allSQL, `"tigerfs"."posts"`) {
+		t.Errorf("table should be in tigerfs schema, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, `"public"."posts" AS SELECT * FROM "tigerfs"."posts"`) {
+		t.Errorf("view should be in public schema referencing tigerfs, got:\n%s", allSQL)
+	}
+	// Should have 6 statements: schema, table, view, comment, function, trigger
+	if len(stmts) != 6 {
+		t.Errorf("expected 6 statements, got %d", len(stmts))
 	}
 }
 
@@ -195,9 +210,9 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 	stmts := GenerateHistorySQL("public", "memory")
 	allSQL := strings.Join(stmts, "\n")
 
-	// History table
-	if !strings.Contains(allSQL, `"public"."_memory_history"`) {
-		t.Errorf("should reference _memory_history table, got:\n%s", allSQL)
+	// History table in tigerfs schema with clean name
+	if !strings.Contains(allSQL, `"tigerfs"."memory_history"`) {
+		t.Errorf("should reference tigerfs.memory_history table, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "_history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
 		t.Errorf("should have _history_id column, got:\n%s", allSQL)
@@ -206,12 +221,12 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 		t.Errorf("should have _operation column, got:\n%s", allSQL)
 	}
 
-	// Indexes
-	if !strings.Contains(allSQL, "idx__memory_history_by_filename") {
-		t.Errorf("should create filename index, got:\n%s", allSQL)
+	// Indexes with clean names
+	if !strings.Contains(allSQL, `"idx_memory_history_by_filename"`) {
+		t.Errorf("should create filename index with clean name, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "idx__memory_history_by_id") {
-		t.Errorf("should create id index, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, `"idx_memory_history_by_id"`) {
+		t.Errorf("should create id index with clean name, got:\n%s", allSQL)
 	}
 
 	// Encoding column in history table
@@ -219,9 +234,12 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 		t.Errorf("history table should contain encoding column, got:\n%s", allSQL)
 	}
 
-	// Trigger
+	// Trigger on tigerfs schema table
 	if !strings.Contains(allSQL, "BEFORE UPDATE OR DELETE") {
 		t.Errorf("should create BEFORE UPDATE OR DELETE trigger, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, `ON "tigerfs"."memory"`) {
+		t.Errorf("trigger should be on tigerfs.memory, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "TG_OP::text") {
 		t.Errorf("should record TG_OP as _operation, got:\n%s", allSQL)
@@ -231,17 +249,22 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
 	}
 
-	// Hypertable
-	if !strings.Contains(allSQL, "create_hypertable") {
-		t.Errorf("should create hypertable, got:\n%s", allSQL)
+	// Archive function in tigerfs schema
+	if !strings.Contains(allSQL, `"tigerfs"."archive_memory_history"`) {
+		t.Errorf("archive function should be in tigerfs schema, got:\n%s", allSQL)
+	}
+
+	// Hypertable uses tigerfs schema
+	if !strings.Contains(allSQL, "create_hypertable('tigerfs.memory_history'") {
+		t.Errorf("hypertable should use tigerfs schema, got:\n%s", allSQL)
 	}
 
 	// Compression
 	if !strings.Contains(allSQL, "timescaledb.compress") {
 		t.Errorf("should enable compression, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "add_compression_policy") {
-		t.Errorf("should add compression policy, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "add_compression_policy('tigerfs.memory_history'") {
+		t.Errorf("compression policy should use tigerfs schema, got:\n%s", allSQL)
 	}
 
 	// Should be 8 statements: table, 2 indexes, func, trigger, hypertable, compression, policy
@@ -259,9 +282,14 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 
 	allSQL := strings.Join(stmts, "\n")
 
-	// Should have base (5) + history (8) = 13 statements
-	if len(stmts) != 13 {
-		t.Errorf("expected 13 statements, got %d", len(stmts))
+	// Should have base (6: schema+table+view+comment+func+trigger) + history (8) = 14 statements
+	if len(stmts) != 14 {
+		t.Errorf("expected 14 statements, got %d", len(stmts))
+	}
+
+	// First statement should create tigerfs schema
+	if !strings.Contains(stmts[0], "CREATE SCHEMA IF NOT EXISTS") {
+		t.Errorf("first statement should create schema, got: %s", stmts[0])
 	}
 
 	// View comment should include history
@@ -269,9 +297,9 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 		t.Errorf("comment should include history flag, got:\n%s", allSQL)
 	}
 
-	// History table should exist
-	if !strings.Contains(allSQL, "_memory_history") {
-		t.Errorf("should create history table, got:\n%s", allSQL)
+	// History table in tigerfs schema with clean name
+	if !strings.Contains(allSQL, `"tigerfs"."memory_history"`) {
+		t.Errorf("should create history table in tigerfs schema, got:\n%s", allSQL)
 	}
 
 	// History trigger should copy encoding column
@@ -302,9 +330,9 @@ func TestSynth_GenerateHistoryOnlySQL(t *testing.T) {
 		t.Errorf("expected 9 statements, got %d", len(stmts))
 	}
 
-	// History infrastructure
-	if !strings.Contains(allSQL, "_memory_history") {
-		t.Errorf("should create history table, got:\n%s", allSQL)
+	// History infrastructure in tigerfs schema
+	if !strings.Contains(allSQL, `"tigerfs"."memory_history"`) {
+		t.Errorf("should create history table in tigerfs schema, got:\n%s", allSQL)
 	}
 }
 

@@ -6,8 +6,13 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
+// TigerFSSchema is the dedicated PostgreSQL schema for TigerFS backing tables,
+// triggers, functions, and history tables.
+const TigerFSSchema = "tigerfs"
+
 // GenerateMarkdownTableSQL returns the CREATE TABLE statement for a markdown app.
-// The table name is prefixed with underscore (backing table convention).
+// The backing table is created in the tigerfs schema with the clean app name
+// (no underscore prefix).
 //
 // Schema:
 //   - id: UUID primary key with auto-generation
@@ -31,11 +36,12 @@ func GenerateMarkdownTableSQL(schema, name string) string {
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
-)`, db.QuoteIdent(schema), db.QuoteIdent("_"+name))
+)`, db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
 }
 
 // GeneratePlainTextTableSQL returns the CREATE TABLE statement for a plain text app.
-// The table name is prefixed with underscore (backing table convention).
+// The backing table is created in the tigerfs schema with the clean app name
+// (no underscore prefix).
 //
 // Schema:
 //   - id: UUID primary key with auto-generation
@@ -54,16 +60,18 @@ func GeneratePlainTextTableSQL(schema, name string) string {
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(filename, filetype)
-)`, db.QuoteIdent(schema), db.QuoteIdent("_"+name))
+)`, db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
 }
 
 // GenerateViewSQL returns a CREATE VIEW statement that selects all columns
-// from the backing table. The view name is the user-facing app name;
-// the backing table is prefixed with underscore.
-func GenerateViewSQL(schema, viewName, tableName string) string {
+// from the backing table. The view is created in viewSchema, and references
+// the table in tableSchema. For build apps, the view lives in the user's
+// schema while the table lives in the tigerfs schema. For synthesized views
+// on existing tables, both schemas may be the same.
+func GenerateViewSQL(viewSchema, viewName, tableSchema, tableName string) string {
 	return fmt.Sprintf(`CREATE VIEW %s.%s AS SELECT * FROM %s.%s`,
-		db.QuoteIdent(schema), db.QuoteIdent(viewName),
-		db.QuoteIdent(schema), db.QuoteIdent(tableName))
+		db.QuoteIdent(viewSchema), db.QuoteIdent(viewName),
+		db.QuoteIdent(tableSchema), db.QuoteIdent(tableName))
 }
 
 // GenerateViewCommentSQL returns a COMMENT ON VIEW statement that sets the
@@ -84,12 +92,15 @@ func GenerateViewCommentSQLWithFeatures(schema, viewName string, features Featur
 
 // GenerateModifiedAtTriggerSQL returns two SQL statements to create a trigger function
 // and trigger that auto-updates the modified_at column on UPDATE.
+// The function and trigger are created in the tigerfs schema, operating on the
+// backing table (also in tigerfs schema). The tableName should be the clean
+// app name without underscore prefix.
 // Returns two separate statements because the function body contains semicolons
 // inside $$ dollar-quoting, which prevents simple delimiter-based splitting.
 func GenerateModifiedAtTriggerSQL(schema, tableName string) []string {
 	// Build the full function and trigger names, then quote as single identifiers.
-	// Cannot embed QuoteIdent() inside a name — "set_"_posts"_modified_at" is invalid SQL.
-	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent("set_"+tableName+"_modified_at"))
+	// Cannot embed QuoteIdent() inside a name — "set_"posts"_modified_at" is invalid SQL.
+	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent("set_"+tableName+"_modified_at"))
 	triggerName := db.QuoteIdent("trg_" + tableName + "_modified_at")
 
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s()
@@ -104,7 +115,7 @@ $$ LANGUAGE plpgsql`, funcName)
     BEFORE UPDATE ON %s.%s
     FOR EACH ROW EXECUTE FUNCTION %s()`,
 		triggerName,
-		db.QuoteIdent(schema), db.QuoteIdent(tableName),
+		db.QuoteIdent(TigerFSSchema), db.QuoteIdent(tableName),
 		funcName)
 
 	return []string{createFunc, createTrigger}
@@ -119,11 +130,11 @@ func GenerateBuildSQL(schema, appName string, format SynthFormat) ([]string, err
 }
 
 // GenerateBuildSQLWithFeatures returns SQL statements to create a synthesized app
-// with optional features like versioned history. When features.History is true,
+// with optional features like versioned history. The first statement creates the
+// tigerfs schema. The backing table, triggers, and functions are in the tigerfs
+// schema; the view is in the user's schema. When features.History is true,
 // appends history table, trigger, hypertable, and compression statements.
 func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) ([]string, error) {
-	tableName := "_" + appName
-
 	var tableSQL string
 	switch features.Format {
 	case FormatMarkdown:
@@ -134,11 +145,12 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 		return nil, fmt.Errorf("unsupported format for .build: %s", features.Format.String())
 	}
 
-	viewSQL := GenerateViewSQL(schema, appName, tableName)
+	createSchema := fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS %s`, db.QuoteIdent(TigerFSSchema))
+	viewSQL := GenerateViewSQL(schema, appName, TigerFSSchema, appName)
 	commentSQL := GenerateViewCommentSQLWithFeatures(schema, appName, features)
-	triggerStmts := GenerateModifiedAtTriggerSQL(schema, tableName)
+	triggerStmts := GenerateModifiedAtTriggerSQL(schema, appName)
 
-	stmts := []string{tableSQL, viewSQL, commentSQL}
+	stmts := []string{createSchema, tableSQL, viewSQL, commentSQL}
 	stmts = append(stmts, triggerStmts...)
 
 	if features.History {
@@ -150,7 +162,9 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 }
 
 // GenerateHistorySQL returns SQL statements to create versioned history
-// infrastructure for an existing synth app. This includes:
+// infrastructure for an existing synth app. All history infrastructure
+// (table, indexes, functions, triggers) lives in the tigerfs schema.
+// This includes:
 //   - History table mirroring the source table columns plus metadata
 //   - Index on (filename, _history_id DESC) for by-filename queries
 //   - Index on (id, _history_id DESC) for by-UUID queries
@@ -161,10 +175,10 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 // The column list is based on the markdown table schema (the most common case).
 // For apps with different schemas, the trigger dynamically copies OLD.* values.
 func GenerateHistorySQL(schema, appName string) []string {
-	tableName := "_" + appName
-	historyTable := "_" + appName + "_history"
-	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent(tableName))
-	qualifiedHistory := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent(historyTable))
+	tableName := appName
+	historyTable := appName + "_history"
+	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(tableName))
+	qualifiedHistory := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(historyTable))
 
 	// The columns mirror the markdown table schema. Using the same columns
 	// for all synth formats works because plain text tables are a subset
@@ -198,7 +212,7 @@ func GenerateHistorySQL(schema, appName string) []string {
 	)
 
 	// Archive trigger function — copies OLD row to history table on UPDATE or DELETE
-	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(schema), db.QuoteIdent("archive_"+historyTable))
+	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent("archive_"+historyTable))
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO %s
@@ -224,7 +238,7 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory)
 	// TimescaleDB hypertable conversion — UUIDv7 as partition column
 	createHypertable := fmt.Sprintf(
 		`SELECT create_hypertable('%s.%s', '_history_id', chunk_time_interval => INTERVAL '1 month')`,
-		schema, historyTable,
+		TigerFSSchema, historyTable,
 	)
 
 	// Compression policy — segment by filename, order by _history_id DESC
@@ -235,7 +249,7 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory)
 
 	addCompressionPolicy := fmt.Sprintf(
 		`SELECT add_compression_policy('%s.%s', compress_after => INTERVAL '1 day')`,
-		schema, historyTable,
+		TigerFSSchema, historyTable,
 	)
 
 	return []string{

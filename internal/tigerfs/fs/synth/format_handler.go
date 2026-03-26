@@ -22,7 +22,7 @@ func GenerateSynthesizedViewSQL(schema, table string, format SynthFormat) (strin
 		return "", err
 	}
 
-	viewSQL := GenerateViewSQL(schema, viewName, table)
+	viewSQL := GenerateViewSQL(schema, viewName, schema, table)
 	commentSQL := GenerateViewCommentSQL(schema, viewName, format)
 
 	return viewSQL + ";\n" + commentSQL, nil
