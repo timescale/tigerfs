@@ -231,7 +231,6 @@ func splitPath(path string) []string {
 //   - /.schemas/.create/{name}/ → create schema DDL
 //   - /.schemas/<schema> → list tables in schema
 //   - /.schemas/<schema>/.delete/ → delete schema DDL
-//   - /.schemas/<schema>/.build/{name} → create synthesized app in schema
 //   - /.schemas/<schema>/<table> → table path
 //   - /.schemas/<schema>/<table>/<row> → row path
 func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
@@ -282,18 +281,14 @@ func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 		return result, nil
 	}
 
-	// Handle /.schemas/{schema}/.build/{name}
+	// .build/ is not supported in non-default schemas (see ADR-015).
+	// Backing tables go to the tigerfs schema, which would collide across user schemas.
 	if segments[2] == ".build" {
-		result := &ParsedPath{
-			Type: PathBuild,
-			Context: &FSContext{
-				Schema: schema,
-			},
+		return nil, &FSError{
+			Code:    ErrInvalidPath,
+			Message: ".build/ is only supported in the default schema",
+			Hint:    "use /.build/ at root level instead of /.schemas/<schema>/.build/",
 		}
-		if len(segments) >= 4 {
-			result.BuildName = segments[3]
-		}
-		return result, nil
 	}
 
 	// /.schemas/<schema>/<table>/... - parse as table path with explicit schema

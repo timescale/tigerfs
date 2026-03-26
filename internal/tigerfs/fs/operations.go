@@ -502,8 +502,9 @@ func (o *Operations) readDirSchema(ctx context.Context, schema string) ([]Entry,
 	entries := make([]Entry, 0, len(tables)+len(views)+2)
 
 	// Add special directories for schema
+	// Note: .build/ is intentionally not listed here (see ADR-015).
+	// File-first apps are only supported in the default schema.
 	entries = append(entries,
-		Entry{Name: ".build", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".delete", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 	)
 
