@@ -194,11 +194,11 @@ func moveBackingTablesMigration() migration {
 	}
 }
 
-// buildMigrateCmd creates the migrate command.
+// BuildMigrateCmd creates the migrate command. Exported for integration testing.
 //
 // The migrate command detects and runs pending database migrations. It supports
 // three modes: --describe (list pending), --dry-run (show SQL), or execute.
-func buildMigrateCmd() *cobra.Command {
+func BuildMigrateCmd() *cobra.Command {
 	var describe bool
 	var dryRun bool
 	var schemaFlag string
