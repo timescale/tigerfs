@@ -977,47 +977,30 @@ func TestParsePathBuild(t *testing.T) {
 	}
 }
 
-// TestParsePathBuildInSchema verifies /.schemas/<schema>/.build/ path parsing.
+// TestParsePathBuildInSchema verifies that .build/ is rejected in non-default schemas (ADR-015).
 func TestParsePathBuildInSchema(t *testing.T) {
 	tests := []struct {
-		name       string
-		path       string
-		wantType   PathType
-		wantBuild  string
-		wantSchema string
+		name string
+		path string
 	}{
 		{
-			name:       "schema build directory",
-			path:       "/.schemas/myschema/.build",
-			wantType:   PathBuild,
-			wantSchema: "myschema",
+			name: "schema build directory",
+			path: "/.schemas/myschema/.build",
 		},
 		{
-			name:       "schema build with name",
-			path:       "/.schemas/myschema/.build/posts",
-			wantType:   PathBuild,
-			wantBuild:  "posts",
-			wantSchema: "myschema",
+			name: "schema build with name",
+			path: "/.schemas/myschema/.build/posts",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParsePath(tt.path)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			_, err := ParsePath(tt.path)
+			if err == nil {
+				t.Fatal("expected error for .build/ in non-default schema")
 			}
-			if result.Type != tt.wantType {
-				t.Errorf("Type = %v, want %v", result.Type, tt.wantType)
-			}
-			if result.BuildName != tt.wantBuild {
-				t.Errorf("BuildName = %q, want %q", result.BuildName, tt.wantBuild)
-			}
-			if result.Context == nil {
-				t.Fatal("Context should not be nil for schema-level build")
-			}
-			if result.Context.Schema != tt.wantSchema {
-				t.Errorf("Schema = %q, want %q", result.Context.Schema, tt.wantSchema)
+			if err.Code != ErrInvalidPath {
+				t.Errorf("error code = %v, want ErrInvalidPath", err.Code)
 			}
 		})
 	}
