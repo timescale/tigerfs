@@ -127,10 +127,10 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 			continue
 		}
 
-		// Fallback history detection: check if companion _<view>_history table exists
+		// Fallback history detection: check if companion history table exists in tigerfs schema
 		if !hasHistory {
-			historyTable := "_" + viewName + "_history"
-			exists, tblErr := o.db.TableExists(ctx, schema, historyTable)
+			historyTable := viewName + "_history"
+			exists, tblErr := o.db.TableExists(ctx, synth.TigerFSSchema, historyTable)
 			if tblErr == nil && exists {
 				hasHistory = true
 			}

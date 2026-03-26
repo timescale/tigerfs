@@ -57,8 +57,8 @@ func (o *Operations) readHistoryFileDispatch(ctx context.Context, parsed *Parsed
 // Branches on HistoryByID to support by-filename and by-UUID navigation.
 func (o *Operations) readDirHistory(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
-	schema := fsCtx.Schema
-	historyTable := "_" + fsCtx.TableName + "_history"
+	schema := synth.TigerFSSchema
+	historyTable := fsCtx.TableName + "_history"
 	now := time.Now()
 
 	limit := o.config.DirListingLimit
@@ -178,8 +178,8 @@ func (o *Operations) readDirHistoryByID(ctx context.Context, schema, historyTabl
 // statHistory returns metadata for .history/ paths.
 func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) (*Entry, *FSError) {
 	now := time.Now()
-	schema := parsed.Context.Schema
-	historyTable := "_" + parsed.Context.TableName + "_history"
+	schema := synth.TigerFSSchema
+	historyTable := parsed.Context.TableName + "_history"
 
 	// .history/ directory itself
 	if parsed.HistoryFile == "" && !parsed.HistoryByID {
@@ -259,8 +259,8 @@ func (o *Operations) statHistoryVersion(ctx context.Context, schema, historyTabl
 
 // readHistoryFile reads a file within .history/.
 func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]byte, *FSError) {
-	schema := parsed.Context.Schema
-	historyTable := "_" + parsed.Context.TableName + "_history"
+	schema := synth.TigerFSSchema
+	historyTable := parsed.Context.TableName + "_history"
 
 	// .id file: return the row UUID for this filename
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID == ".id" {
