@@ -15,13 +15,14 @@ import (
 )
 
 // TestSynth_BuildMarkdown tests the .build/ scaffolding for markdown apps.
-// echo "markdown" > /.build/posts → creates _posts table + posts view with COMMENT 'tigerfs:md'
+// echo "markdown" > /.build/posts → creates tigerfs.posts table + posts view with COMMENT 'tigerfs:md'
 func TestSynth_BuildMarkdown(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -30,23 +31,18 @@ func TestSynth_BuildMarkdown(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "WriteFile to .build/posts should succeed: %v", fsErr)
 
-	// Root should now list both _posts (backing table) and posts (synth view)
+	// Root should list posts (synth view) and .tables (backing table access)
 	entries, fsErr := ops.ReadDir(ctx, "/")
 	require.Nil(t, fsErr, "ReadDir root should succeed")
 
 	names := fsEntryNames(entries)
-	assert.Contains(t, names, "_posts", "root should contain backing table _posts")
 	assert.Contains(t, names, "posts", "root should contain view posts")
+	assert.Contains(t, names, ".tables", "root should contain .tables directory")
 
 	// The posts view should be a directory
 	entry, fsErr := ops.Stat(ctx, "/posts")
 	require.Nil(t, fsErr, "Stat /posts should succeed")
 	assert.True(t, entry.IsDir, "posts view should be a directory")
-
-	// The backing table should also be a directory (native access)
-	entry, fsErr = ops.Stat(ctx, "/_posts")
-	require.Nil(t, fsErr, "Stat /_posts should succeed")
-	assert.True(t, entry.IsDir, "_posts backing table should be a directory")
 }
 
 // TestSynth_BuildPlainText tests the .build/ scaffolding for plain text apps.
@@ -56,6 +52,7 @@ func TestSynth_BuildPlainText(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "snippets")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -64,13 +61,13 @@ func TestSynth_BuildPlainText(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/snippets", []byte("txt\n"))
 	require.Nil(t, fsErr, "WriteFile to .build/snippets should succeed: %v", fsErr)
 
-	// Root should now list both _snippets and snippets
+	// Root should list snippets (synth view) and .tables (backing table access)
 	entries, fsErr := ops.ReadDir(ctx, "/")
 	require.Nil(t, fsErr, "ReadDir root should succeed")
 
 	names := fsEntryNames(entries)
-	assert.Contains(t, names, "_snippets", "root should contain backing table _snippets")
 	assert.Contains(t, names, "snippets", "root should contain view snippets")
+	assert.Contains(t, names, ".tables", "root should contain .tables directory")
 }
 
 // TestSynth_FormatMarkdown tests the .format/ handler on an existing table.
@@ -123,6 +120,7 @@ func TestSynth_ReadMarkdownFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -131,7 +129,7 @@ func TestSynth_ReadMarkdownFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', '# Hello World
 
 This is my first post.
@@ -169,13 +167,14 @@ This is my first post.
 }
 
 // TestSynth_WriteMarkdownFile tests creating a new file via write.
-// echo content > posts/new.md → INSERT into _posts
+// echo content > posts/new.md → INSERT into tigerfs.posts
 func TestSynth_WriteMarkdownFile(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -214,6 +213,7 @@ func TestSynth_EditMarkdownFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -222,7 +222,7 @@ func TestSynth_EditMarkdownFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 First version.
@@ -262,13 +262,14 @@ First version.
 }
 
 // TestSynth_DeleteMarkdownFile tests deleting a synthesized file.
-// rm posts/hello-world.md → DELETE FROM _posts WHERE id = ?
+// rm posts/hello-world.md → DELETE FROM tigerfs.posts WHERE id = ?
 func TestSynth_DeleteMarkdownFile(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -277,7 +278,7 @@ func TestSynth_DeleteMarkdownFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 Content here.
@@ -317,6 +318,7 @@ func TestSynth_ReadPlainTextFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "snippets")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -325,7 +327,7 @@ func TestSynth_ReadPlainTextFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/snippets", []byte("txt\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _snippets (filename, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.snippets (filename, body) VALUES
 		('hello.txt', 'Hello, world!
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
@@ -344,13 +346,14 @@ func TestSynth_ReadPlainTextFile(t *testing.T) {
 }
 
 // TestSynth_NativeAccessStillWorks verifies that the native row/column access
-// still works on the backing table alongside the synthesized view.
+// still works on the backing table via .tables/ alongside the synthesized view.
 func TestSynth_NativeAccessStillWorks(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -359,7 +362,7 @@ func TestSynth_NativeAccessStillWorks(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 Content here.
@@ -371,9 +374,9 @@ Content here.
 	require.Nil(t, fsErr, "synth ReadFile should succeed")
 	assert.Contains(t, string(content.Data), "title: Hello World")
 
-	// Access via native table (_posts) — row directory format
-	entries, fsErr := ops.ReadDir(ctx, "/_posts")
-	require.Nil(t, fsErr, "ReadDir /_posts should succeed")
+	// Access via .tables/posts — row directory format
+	entries, fsErr := ops.ReadDir(ctx, "/.tables/posts")
+	require.Nil(t, fsErr, "ReadDir /.tables/posts should succeed")
 
 	// Should see row "1" (or whatever PK is assigned)
 	var hasRow bool
@@ -385,7 +388,7 @@ Content here.
 			hasRow = true
 
 			// Read a column from native path
-			titleContent, fsErr := ops.ReadFile(ctx, "/_posts/"+e.Name+"/title")
+			titleContent, fsErr := ops.ReadFile(ctx, "/.tables/posts/"+e.Name+"/title")
 			require.Nil(t, fsErr, "ReadFile column should succeed")
 			assert.Equal(t, "Hello World\n", string(titleContent.Data))
 			break
@@ -401,6 +404,7 @@ func TestSynth_MultipleFiles(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -410,7 +414,7 @@ func TestSynth_MultipleFiles(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Insert multiple rows
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('first-post.md', 'First Post', 'alice', 'Body of first post.
 '),
 		('second-post.md', 'Second Post', 'bob', 'Body of second post.
@@ -459,6 +463,7 @@ func TestSynth_RenameMarkdownFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -467,7 +472,7 @@ func TestSynth_RenameMarkdownFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', '# Hello World
 
 This is my first post.
@@ -515,6 +520,7 @@ func TestSynth_RenameFilenameWithExtension(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -524,7 +530,7 @@ func TestSynth_RenameFilenameWithExtension(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Insert data WITH .md extension in filename — matching real blog app convention
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', '# Hello
 
 This is a post.
@@ -565,6 +571,7 @@ func TestSynth_RenamePlainTextFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "snippets")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -573,7 +580,7 @@ func TestSynth_RenamePlainTextFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/snippets", []byte("txt\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _snippets (filename, body) VALUES ('scratch.txt', 'Some scratch notes.
+	insertSQL := `INSERT INTO tigerfs.snippets (filename, body) VALUES ('scratch.txt', 'Some scratch notes.
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
 
@@ -600,6 +607,7 @@ func TestSynth_RenamePreservesFilename(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "posts")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
@@ -608,7 +616,7 @@ func TestSynth_RenamePreservesFilename(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/posts", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	insertSQL := `INSERT INTO _posts (filename, title, author, body) VALUES
+	insertSQL := `INSERT INTO tigerfs.posts (filename, title, author, body) VALUES
 		('hello-world.md', 'Hello World', 'alice', 'Body content.
 ')`
 	require.NoError(t, execSQL(t, result.ConnStr, insertSQL))
@@ -641,6 +649,7 @@ func TestMount_BuildMarkdownViaNFS(t *testing.T) {
 		return
 	}
 	defer dbResult.Cleanup()
+	cleanupTigerFSTables(t, dbResult.ConnStr, "testapp")
 
 	cfg := defaultTestConfig()
 	mountpoint := t.TempDir()
@@ -676,7 +685,6 @@ func TestMount_BuildMarkdownViaNFS(t *testing.T) {
 	t.Logf("Mount root entries: %v", names)
 
 	assert.Contains(t, names, "testapp", "root should contain synth view 'testapp'")
-	assert.Contains(t, names, "_testapp", "root should contain backing table '_testapp'")
 }
 
 // ============================================================================
@@ -690,26 +698,27 @@ func TestSynth_HierarchicalMkdir(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_mkdir")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
 	// Build a markdown app (now includes filetype column)
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_mkdir", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed: %v", fsErr)
 
 	// Create a directory
-	fsErr = ops.Mkdir(ctx, "/memory/projects")
+	fsErr = ops.Mkdir(ctx, "/mem_mkdir/projects")
 	require.Nil(t, fsErr, "Mkdir should succeed: %v", fsErr)
 
 	// Verify it appears in listing
-	entries, fsErr := ops.ReadDir(ctx, "/memory")
+	entries, fsErr := ops.ReadDir(ctx, "/mem_mkdir")
 	require.Nil(t, fsErr, "ReadDir should succeed")
 	names := fsEntryNames(entries)
 	assert.Contains(t, names, "projects", "root should show projects directory")
 
 	// Verify it's a directory
-	entry, fsErr := ops.Stat(ctx, "/memory/projects")
+	entry, fsErr := ops.Stat(ctx, "/mem_mkdir/projects")
 	require.Nil(t, fsErr, "Stat should succeed")
 	assert.True(t, entry.IsDir, "projects should be a directory")
 }
@@ -721,29 +730,30 @@ func TestSynth_HierarchicalMkdirNested(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_mknest")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_mknest", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a nested directory — should auto-create parent
-	fsErr = ops.Mkdir(ctx, "/memory/projects/web")
+	fsErr = ops.Mkdir(ctx, "/mem_mknest/projects/web")
 	require.Nil(t, fsErr, "Mkdir nested should succeed: %v", fsErr)
 
 	// Verify parent was auto-created
-	entry, fsErr := ops.Stat(ctx, "/memory/projects")
+	entry, fsErr := ops.Stat(ctx, "/mem_mknest/projects")
 	require.Nil(t, fsErr, "Stat parent should succeed")
 	assert.True(t, entry.IsDir, "parent should be a directory")
 
 	// Verify nested dir exists
-	entry, fsErr = ops.Stat(ctx, "/memory/projects/web")
+	entry, fsErr = ops.Stat(ctx, "/mem_mknest/projects/web")
 	require.Nil(t, fsErr, "Stat nested should succeed")
 	assert.True(t, entry.IsDir, "nested should be a directory")
 
 	// ReadDir on parent should show child
-	entries, fsErr := ops.ReadDir(ctx, "/memory/projects")
+	entries, fsErr := ops.ReadDir(ctx, "/mem_mknest/projects")
 	require.Nil(t, fsErr, "ReadDir parent should succeed")
 	names := fsEntryNames(entries)
 	assert.Contains(t, names, "web", "projects/ should contain web")
@@ -756,29 +766,30 @@ func TestSynth_HierarchicalWriteFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_write")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_write", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Write a file in a subdirectory — should auto-create parent dirs
 	content := "---\ntitle: Todo\nauthor: alice\n---\n\n# Todo\n\nFix bugs.\n"
-	fsErr = ops.WriteFile(ctx, "/memory/projects/web/todo.md", []byte(content))
+	fsErr = ops.WriteFile(ctx, "/mem_write/projects/web/todo.md", []byte(content))
 	require.Nil(t, fsErr, "WriteFile nested should succeed: %v", fsErr)
 
 	// Verify parent directories were auto-created
-	entry, fsErr := ops.Stat(ctx, "/memory/projects")
+	entry, fsErr := ops.Stat(ctx, "/mem_write/projects")
 	require.Nil(t, fsErr, "parent dir should exist")
 	assert.True(t, entry.IsDir)
 
-	entry, fsErr = ops.Stat(ctx, "/memory/projects/web")
+	entry, fsErr = ops.Stat(ctx, "/mem_write/projects/web")
 	require.Nil(t, fsErr, "parent dir should exist")
 	assert.True(t, entry.IsDir)
 
 	// Verify the file exists and is readable
-	readContent, fsErr := ops.ReadFile(ctx, "/memory/projects/web/todo.md")
+	readContent, fsErr := ops.ReadFile(ctx, "/mem_write/projects/web/todo.md")
 	require.Nil(t, fsErr, "ReadFile should succeed")
 	assert.Contains(t, string(readContent.Data), "title: Todo")
 	assert.Contains(t, string(readContent.Data), "# Todo")
@@ -791,31 +802,32 @@ func TestSynth_HierarchicalReadDir(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_readdir")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_readdir", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create structure: projects/web/todo.md, projects/web/notes.md, readme.md
-	fsErr = ops.Mkdir(ctx, "/memory/projects/web")
+	fsErr = ops.Mkdir(ctx, "/mem_readdir/projects/web")
 	require.Nil(t, fsErr, "Mkdir should succeed")
 
-	fsErr = ops.WriteFile(ctx, "/memory/projects/web/todo.md",
+	fsErr = ops.WriteFile(ctx, "/mem_readdir/projects/web/todo.md",
 		[]byte("---\ntitle: Todo\n---\n\nContent.\n"))
 	require.Nil(t, fsErr, "WriteFile todo should succeed")
 
-	fsErr = ops.WriteFile(ctx, "/memory/projects/web/notes.md",
+	fsErr = ops.WriteFile(ctx, "/mem_readdir/projects/web/notes.md",
 		[]byte("---\ntitle: Notes\n---\n\nNotes content.\n"))
 	require.Nil(t, fsErr, "WriteFile notes should succeed")
 
-	fsErr = ops.WriteFile(ctx, "/memory/readme.md",
+	fsErr = ops.WriteFile(ctx, "/mem_readdir/readme.md",
 		[]byte("---\ntitle: Readme\n---\n\nWelcome.\n"))
 	require.Nil(t, fsErr, "WriteFile readme should succeed")
 
 	// Root level: should show "projects" dir and "readme.md" file
-	entries, fsErr := ops.ReadDir(ctx, "/memory")
+	entries, fsErr := ops.ReadDir(ctx, "/mem_readdir")
 	require.Nil(t, fsErr, "ReadDir root should succeed")
 	names := fsEntryNames(entries)
 	assert.Contains(t, names, "projects")
@@ -823,13 +835,13 @@ func TestSynth_HierarchicalReadDir(t *testing.T) {
 	assert.NotContains(t, names, "todo.md", "nested files should not appear at root")
 
 	// projects/ should show "web" dir
-	entries, fsErr = ops.ReadDir(ctx, "/memory/projects")
+	entries, fsErr = ops.ReadDir(ctx, "/mem_readdir/projects")
 	require.Nil(t, fsErr, "ReadDir projects should succeed")
 	names = fsEntryNames(entries)
 	assert.Contains(t, names, "web")
 
 	// projects/web/ should show todo.md and notes.md
-	entries, fsErr = ops.ReadDir(ctx, "/memory/projects/web")
+	entries, fsErr = ops.ReadDir(ctx, "/mem_readdir/projects/web")
 	require.Nil(t, fsErr, "ReadDir projects/web should succeed")
 	names = fsEntryNames(entries)
 	assert.Contains(t, names, "todo.md")
@@ -843,31 +855,32 @@ func TestSynth_HierarchicalStatFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_stat")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_stat", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Write a nested file
 	content := "---\ntitle: Deep File\n---\n\nDeep content.\n"
-	fsErr = ops.WriteFile(ctx, "/memory/deep/nested/file.md", []byte(content))
+	fsErr = ops.WriteFile(ctx, "/mem_stat/deep/nested/file.md", []byte(content))
 	require.Nil(t, fsErr, "WriteFile should succeed")
 
 	// Stat the file
-	entry, fsErr := ops.Stat(ctx, "/memory/deep/nested/file.md")
+	entry, fsErr := ops.Stat(ctx, "/mem_stat/deep/nested/file.md")
 	require.Nil(t, fsErr, "Stat file should succeed")
 	assert.False(t, entry.IsDir, "should be a file")
 	assert.True(t, entry.Size > 0, "file should have content")
 
 	// Stat the directory
-	entry, fsErr = ops.Stat(ctx, "/memory/deep/nested")
+	entry, fsErr = ops.Stat(ctx, "/mem_stat/deep/nested")
 	require.Nil(t, fsErr, "Stat dir should succeed")
 	assert.True(t, entry.IsDir, "should be a directory")
 
 	// Stat the parent directory
-	entry, fsErr = ops.Stat(ctx, "/memory/deep")
+	entry, fsErr = ops.Stat(ctx, "/mem_stat/deep")
 	require.Nil(t, fsErr, "Stat parent dir should succeed")
 	assert.True(t, entry.IsDir, "should be a directory")
 }
@@ -881,38 +894,39 @@ func TestSynth_HierarchicalStatNotFound(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_statnf")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_statnf", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Write one real file so the view isn't empty
 	content := "---\ntitle: Real File\n---\n\nReal content.\n"
-	fsErr = ops.WriteFile(ctx, "/memory/real-file.md", []byte(content))
+	fsErr = ops.WriteFile(ctx, "/mem_statnf/real-file.md", []byte(content))
 	require.Nil(t, fsErr, "WriteFile should succeed")
 
 	// Stat a non-existent file — should return not-found
-	_, fsErr = ops.Stat(ctx, "/memory/nonexistent.md")
+	_, fsErr = ops.Stat(ctx, "/mem_statnf/nonexistent.md")
 	require.NotNil(t, fsErr, "Stat non-existent file should fail")
 	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should be not-found error")
 
 	// Stat the same non-existent file again — should hit negative cache (no extra DB query)
-	_, fsErr = ops.Stat(ctx, "/memory/nonexistent.md")
+	_, fsErr = ops.Stat(ctx, "/mem_statnf/nonexistent.md")
 	require.NotNil(t, fsErr, "Second stat should also fail")
 	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should still be not-found")
 
 	// Stat different non-existent files (backup/probe names that don't start with '.',
 	// since dot-prefix paths are parsed as control files by the path parser)
 	for _, name := range []string{"real-file.md~", "real-file.bak", "nonexistent2.md"} {
-		_, fsErr = ops.Stat(ctx, "/memory/"+name)
+		_, fsErr = ops.Stat(ctx, "/mem_statnf/"+name)
 		require.NotNil(t, fsErr, "Stat %s should fail", name)
 		assert.Equal(t, fs.ErrNotExist, fsErr.Code, "should be not-found for %s", name)
 	}
 
 	// The real file should still be stat-able
-	entry, fsErr := ops.Stat(ctx, "/memory/real-file.md")
+	entry, fsErr := ops.Stat(ctx, "/mem_statnf/real-file.md")
 	require.Nil(t, fsErr, "Stat real file should succeed")
 	assert.False(t, entry.IsDir, "should be a file")
 	assert.True(t, entry.Size > 0, "file should have content")
@@ -925,29 +939,30 @@ func TestSynth_HierarchicalDeleteFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_delf")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_delf", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a file in a directory
-	fsErr = ops.WriteFile(ctx, "/memory/docs/readme.md",
+	fsErr = ops.WriteFile(ctx, "/mem_delf/docs/readme.md",
 		[]byte("---\ntitle: Readme\n---\n\nContent.\n"))
 	require.Nil(t, fsErr, "WriteFile should succeed")
 
 	// Delete the file
-	fsErr = ops.Delete(ctx, "/memory/docs/readme.md")
+	fsErr = ops.Delete(ctx, "/mem_delf/docs/readme.md")
 	require.Nil(t, fsErr, "Delete should succeed")
 
 	// File should be gone
-	_, fsErr = ops.ReadFile(ctx, "/memory/docs/readme.md")
+	_, fsErr = ops.ReadFile(ctx, "/mem_delf/docs/readme.md")
 	require.NotNil(t, fsErr, "ReadFile should fail after delete")
 	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
 
 	// Parent directory should still exist
-	entry, fsErr := ops.Stat(ctx, "/memory/docs")
+	entry, fsErr := ops.Stat(ctx, "/mem_delf/docs")
 	require.Nil(t, fsErr, "parent dir should still exist")
 	assert.True(t, entry.IsDir)
 }
@@ -959,23 +974,24 @@ func TestSynth_HierarchicalRmdir(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_rmdir")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_rmdir", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create an empty directory
-	fsErr = ops.Mkdir(ctx, "/memory/empty-dir")
+	fsErr = ops.Mkdir(ctx, "/mem_rmdir/empty-dir")
 	require.Nil(t, fsErr, "Mkdir should succeed")
 
 	// Delete the empty directory
-	fsErr = ops.Delete(ctx, "/memory/empty-dir")
+	fsErr = ops.Delete(ctx, "/mem_rmdir/empty-dir")
 	require.Nil(t, fsErr, "Delete empty dir should succeed")
 
 	// Directory should be gone
-	_, fsErr = ops.Stat(ctx, "/memory/empty-dir")
+	_, fsErr = ops.Stat(ctx, "/mem_rmdir/empty-dir")
 	require.NotNil(t, fsErr, "Stat should fail after delete")
 	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
 }
@@ -987,20 +1003,21 @@ func TestSynth_HierarchicalRmdirNonEmpty(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_rmne")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_rmne", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a directory with a file in it
-	fsErr = ops.WriteFile(ctx, "/memory/docs/readme.md",
+	fsErr = ops.WriteFile(ctx, "/mem_rmne/docs/readme.md",
 		[]byte("---\ntitle: Readme\n---\n\nContent.\n"))
 	require.Nil(t, fsErr, "WriteFile should succeed")
 
 	// Attempt to delete non-empty directory should fail
-	fsErr = ops.Delete(ctx, "/memory/docs")
+	fsErr = ops.Delete(ctx, "/mem_rmne/docs")
 	require.NotNil(t, fsErr, "Delete non-empty dir should fail")
 	assert.Equal(t, fs.ErrNotEmpty, fsErr.Code, "should be ENOTEMPTY error")
 }
@@ -1012,29 +1029,30 @@ func TestSynth_HierarchicalRenameFile(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_renf")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_renf", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a file in a directory
-	fsErr = ops.WriteFile(ctx, "/memory/docs/old-name.md",
+	fsErr = ops.WriteFile(ctx, "/mem_renf/docs/old-name.md",
 		[]byte("---\ntitle: My Doc\n---\n\nContent here.\n"))
 	require.Nil(t, fsErr, "WriteFile should succeed")
 
 	// Rename the file
-	fsErr = ops.Rename(ctx, "/memory/docs/old-name.md", "/memory/docs/new-name.md")
+	fsErr = ops.Rename(ctx, "/mem_renf/docs/old-name.md", "/mem_renf/docs/new-name.md")
 	require.Nil(t, fsErr, "Rename should succeed")
 
 	// Old path should not exist
-	_, fsErr = ops.ReadFile(ctx, "/memory/docs/old-name.md")
+	_, fsErr = ops.ReadFile(ctx, "/mem_renf/docs/old-name.md")
 	require.NotNil(t, fsErr, "old path should not exist")
 	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
 
 	// New path should be readable
-	content, fsErr := ops.ReadFile(ctx, "/memory/docs/new-name.md")
+	content, fsErr := ops.ReadFile(ctx, "/mem_renf/docs/new-name.md")
 	require.Nil(t, fsErr, "new path should be readable")
 	assert.Contains(t, string(content.Data), "title: My Doc")
 }
@@ -1046,41 +1064,42 @@ func TestSynth_HierarchicalRenameDir(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_rend")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_rend", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a directory with files
-	fsErr = ops.WriteFile(ctx, "/memory/old-dir/file1.md",
+	fsErr = ops.WriteFile(ctx, "/mem_rend/old-dir/file1.md",
 		[]byte("---\ntitle: File One\n---\n\nContent 1.\n"))
 	require.Nil(t, fsErr, "WriteFile file1 should succeed")
 
-	fsErr = ops.WriteFile(ctx, "/memory/old-dir/file2.md",
+	fsErr = ops.WriteFile(ctx, "/mem_rend/old-dir/file2.md",
 		[]byte("---\ntitle: File Two\n---\n\nContent 2.\n"))
 	require.Nil(t, fsErr, "WriteFile file2 should succeed")
 
 	// Rename the directory
-	fsErr = ops.Rename(ctx, "/memory/old-dir", "/memory/new-dir")
+	fsErr = ops.Rename(ctx, "/mem_rend/old-dir", "/mem_rend/new-dir")
 	require.Nil(t, fsErr, "Rename dir should succeed: %v", fsErr)
 
 	// Old path should not exist
-	_, fsErr = ops.Stat(ctx, "/memory/old-dir")
+	_, fsErr = ops.Stat(ctx, "/mem_rend/old-dir")
 	require.NotNil(t, fsErr, "old dir should not exist")
 
 	// New path should be a directory
-	entry, fsErr := ops.Stat(ctx, "/memory/new-dir")
+	entry, fsErr := ops.Stat(ctx, "/mem_rend/new-dir")
 	require.Nil(t, fsErr, "new dir should exist")
 	assert.True(t, entry.IsDir)
 
 	// Files should be accessible under new path
-	content, fsErr := ops.ReadFile(ctx, "/memory/new-dir/file1.md")
+	content, fsErr := ops.ReadFile(ctx, "/mem_rend/new-dir/file1.md")
 	require.Nil(t, fsErr, "file1 should be readable under new dir")
 	assert.Contains(t, string(content.Data), "title: File One")
 
-	content, fsErr = ops.ReadFile(ctx, "/memory/new-dir/file2.md")
+	content, fsErr = ops.ReadFile(ctx, "/mem_rend/new-dir/file2.md")
 	require.Nil(t, fsErr, "file2 should be readable under new dir")
 	assert.Contains(t, string(content.Data), "title: File Two")
 }
@@ -1092,37 +1111,38 @@ func TestSynth_DeeplyNested(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_deep")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_deep", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Write a deeply nested file — auto-creates all parent directories
 	content := "---\ntitle: Deep File\n---\n\nVery deep content.\n"
-	fsErr = ops.WriteFile(ctx, "/memory/a/b/c/d/deep.md", []byte(content))
+	fsErr = ops.WriteFile(ctx, "/mem_deep/a/b/c/d/deep.md", []byte(content))
 	require.Nil(t, fsErr, "WriteFile deeply nested should succeed: %v", fsErr)
 
 	// Verify all intermediate directories exist
-	for _, dir := range []string{"/memory/a", "/memory/a/b", "/memory/a/b/c", "/memory/a/b/c/d"} {
+	for _, dir := range []string{"/mem_deep/a", "/mem_deep/a/b", "/mem_deep/a/b/c", "/mem_deep/a/b/c/d"} {
 		entry, fsErr := ops.Stat(ctx, dir)
 		require.Nil(t, fsErr, "Stat %s should succeed", dir)
 		assert.True(t, entry.IsDir, "%s should be a directory", dir)
 	}
 
 	// Verify the file is readable
-	readContent, fsErr := ops.ReadFile(ctx, "/memory/a/b/c/d/deep.md")
+	readContent, fsErr := ops.ReadFile(ctx, "/mem_deep/a/b/c/d/deep.md")
 	require.Nil(t, fsErr, "ReadFile deeply nested should succeed")
 	assert.Contains(t, string(readContent.Data), "title: Deep File")
 
 	// ReadDir at each level should show correct children
-	entries, fsErr := ops.ReadDir(ctx, "/memory/a")
+	entries, fsErr := ops.ReadDir(ctx, "/mem_deep/a")
 	require.Nil(t, fsErr)
 	assert.Equal(t, 1, len(entries), "a/ should have 1 entry")
 	assert.Equal(t, "b", entries[0].Name)
 
-	entries, fsErr = ops.ReadDir(ctx, "/memory/a/b/c/d")
+	entries, fsErr = ops.ReadDir(ctx, "/mem_deep/a/b/c/d")
 	require.Nil(t, fsErr)
 	assert.Equal(t, 1, len(entries), "d/ should have 1 entry")
 	assert.Equal(t, "deep.md", entries[0].Name)
@@ -1135,25 +1155,26 @@ func TestSynth_MixedFlatAndHierarchical(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_mixed")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_mixed", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a flat file
-	fsErr = ops.WriteFile(ctx, "/memory/flat-file.md",
+	fsErr = ops.WriteFile(ctx, "/mem_mixed/flat-file.md",
 		[]byte("---\ntitle: Flat\n---\n\nFlat content.\n"))
 	require.Nil(t, fsErr, "WriteFile flat should succeed")
 
 	// Create a nested file (creates directory)
-	fsErr = ops.WriteFile(ctx, "/memory/subdir/nested.md",
+	fsErr = ops.WriteFile(ctx, "/mem_mixed/subdir/nested.md",
 		[]byte("---\ntitle: Nested\n---\n\nNested content.\n"))
 	require.Nil(t, fsErr, "WriteFile nested should succeed")
 
 	// Root should show both flat file and directory
-	entries, fsErr := ops.ReadDir(ctx, "/memory")
+	entries, fsErr := ops.ReadDir(ctx, "/mem_mixed")
 	require.Nil(t, fsErr, "ReadDir should succeed")
 	names := fsEntryNames(entries)
 	assert.Contains(t, names, "flat-file.md", "should have flat file")
@@ -1177,30 +1198,31 @@ func TestSynth_HierarchicalPlainText(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "notes_hier")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
 	// Build a plain text app
-	fsErr := ops.WriteFile(ctx, "/.build/notes", []byte("txt\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/notes_hier", []byte("txt\n"))
 	require.Nil(t, fsErr, "build should succeed: %v", fsErr)
 
 	// Create a nested file
-	fsErr = ops.WriteFile(ctx, "/notes/work/meeting.txt", []byte("Discuss quarterly goals.\n"))
+	fsErr = ops.WriteFile(ctx, "/notes_hier/work/meeting.txt", []byte("Discuss quarterly goals.\n"))
 	require.Nil(t, fsErr, "WriteFile nested txt should succeed: %v", fsErr)
 
 	// Verify parent directory was auto-created
-	entry, fsErr := ops.Stat(ctx, "/notes/work")
+	entry, fsErr := ops.Stat(ctx, "/notes_hier/work")
 	require.Nil(t, fsErr, "Stat parent dir should succeed")
 	assert.True(t, entry.IsDir)
 
 	// Verify the file is readable
-	content, fsErr := ops.ReadFile(ctx, "/notes/work/meeting.txt")
+	content, fsErr := ops.ReadFile(ctx, "/notes_hier/work/meeting.txt")
 	require.Nil(t, fsErr, "ReadFile should succeed")
 	assert.Equal(t, "Discuss quarterly goals.\n", string(content.Data))
 
 	// ReadDir should show the file
-	entries, fsErr := ops.ReadDir(ctx, "/notes/work")
+	entries, fsErr := ops.ReadDir(ctx, "/notes_hier/work")
 	require.Nil(t, fsErr, "ReadDir should succeed")
 	names := fsEntryNames(entries)
 	assert.Contains(t, names, "meeting.txt")
@@ -1213,19 +1235,20 @@ func TestSynth_MkdirAlreadyExists(t *testing.T) {
 		return
 	}
 	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_mkexist")
 
 	ops := setupFSOperations(t, result.ConnStr)
 	ctx := context.Background()
 
-	fsErr := ops.WriteFile(ctx, "/.build/memory", []byte("markdown\n"))
+	fsErr := ops.WriteFile(ctx, "/.build/mem_mkexist", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create a directory
-	fsErr = ops.Mkdir(ctx, "/memory/projects")
+	fsErr = ops.Mkdir(ctx, "/mem_mkexist/projects")
 	require.Nil(t, fsErr, "first Mkdir should succeed")
 
 	// Creating the same directory again should fail
-	fsErr = ops.Mkdir(ctx, "/memory/projects")
+	fsErr = ops.Mkdir(ctx, "/mem_mkexist/projects")
 	require.NotNil(t, fsErr, "second Mkdir should fail")
 	assert.Equal(t, fs.ErrExists, fsErr.Code, "should be EEXIST error")
 }
