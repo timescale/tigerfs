@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,9 @@ type Operations struct {
 	// Stat checks this before querying the DB. ReadFile bypasses it (always fresh).
 	// Invalidated by write operations; 2-second TTL as safety net.
 	statCache statCache
+
+	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
+	legacyWarnOnce sync.Once
 }
 
 // NewOperations creates a new Operations instance.
@@ -373,10 +377,11 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 		Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 	)
 
-	// Add tables
+	// Add tables and warn about legacy backing tables
 	for _, t := range tables {
 		entries = append(entries, Entry{Name: t, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	}
+	o.warnLegacyBackingTables(ctx, currentSchema, tables, views)
 
 	// Add views — synth views get 0755 (writable), others get 0555
 	for _, v := range views {
@@ -388,6 +393,34 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 	}
 
 	return entries, nil
+}
+
+// warnLegacyBackingTables logs a one-time warning for each legacy underscore-prefixed
+// backing table that has a matching synth-commented view. These should be migrated
+// to the tigerfs schema using `tigerfs migrate`.
+func (o *Operations) warnLegacyBackingTables(ctx context.Context, schema string, tables, views []string) {
+	o.legacyWarnOnce.Do(func() {
+		viewSet := make(map[string]bool, len(views))
+		for _, v := range views {
+			viewSet[v] = true
+		}
+		for _, t := range tables {
+			if !strings.HasPrefix(t, "_") {
+				continue
+			}
+			viewName := t[1:] // strip leading underscore
+			if !viewSet[viewName] {
+				continue
+			}
+			// Check if the view has a tigerfs comment (synth view)
+			if info := o.getSynthViewInfo(ctx, schema, viewName); info != nil {
+				logging.Warn("legacy backing table detected",
+					zap.String("table", t),
+					zap.String("view", viewName),
+					zap.String("hint", "run 'tigerfs migrate' to move to the tigerfs schema"))
+			}
+		}
+	})
 }
 
 // readDirSchemaList lists all schemas (/.schemas/).
