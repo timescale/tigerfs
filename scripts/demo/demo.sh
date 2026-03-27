@@ -134,7 +134,7 @@ docker_start() {
 
     info "Mounting TigerFS at $MOUNTPOINT (inside container)..."
     docker compose -f "$COMPOSE_FILE" exec -T tigerfs \
-        tigerfs mount "$CONN_STR" "$MOUNTPOINT" &
+        tigerfs mount --insecure-no-ssl "$CONN_STR" "$MOUNTPOINT" &
 
     sleep 2
     if ! docker_is_mounted; then

@@ -44,6 +44,6 @@ COPY --from=builder /build/tigerfs /usr/local/bin/tigerfs
 RUN mkdir -p /mnt/db
 
 # Add convenience alias for mounting
-RUN echo "alias mnt='tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &'" >> /root/.bashrc
+RUN echo "alias mnt='tigerfs mount --insecure-no-ssl postgres://demo:demo@postgres:5432/demo /mnt/db &'" >> /root/.bashrc
 
-CMD ["bash", "-c", "echo 'TigerFS Demo Ready!' && echo '' && echo 'Mount the database:' && echo '  mnt                  # alias for the command below' && echo '  tigerfs mount postgres://demo:demo@postgres:5432/demo /mnt/db &' && echo '' && echo 'Then explore:' && echo '  ls /mnt/db' && echo '  cat /mnt/db/users/1' && echo '  cat /mnt/db/users/1.json' && echo '' && sleep infinity"]
+CMD ["bash", "-c", "echo 'TigerFS Demo Ready!' && echo '' && echo 'Mount the database:' && echo '  mnt                  # alias for the command below' && echo '  tigerfs mount --insecure-no-ssl postgres://demo:demo@postgres:5432/demo /mnt/db &' && echo '' && echo 'Then explore:' && echo '  ls /mnt/db' && echo '  cat /mnt/db/users/1' && echo '  cat /mnt/db/users/1.json' && echo '' && sleep infinity"]
