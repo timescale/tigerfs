@@ -21,10 +21,10 @@ The Docker demo runs both TigerFS and PostgreSQL in containers with sample data 
 
 ```bash
 # From the TigerFS repository root
-cd scripts/docker-demo
+cd scripts/demo
 
 # Start the demo (builds containers, starts PostgreSQL, mounts TigerFS)
-./demo.sh start
+./demo.sh start --docker
 
 # Enter the container (starts in /mnt/db)
 ./demo.sh shell
@@ -76,10 +76,10 @@ The macOS demo runs TigerFS natively using the NFS backend, with only PostgreSQL
 
 ```bash
 # From the TigerFS repository root
-cd scripts/mac-demo
+cd scripts/demo
 
 # Start the demo (starts PostgreSQL, builds TigerFS, mounts at /tmp/tigerfs-demo)
-./demo.sh start
+./demo.sh start --mac
 
 # Explore directly from your Mac terminal
 ls /tmp/tigerfs-demo

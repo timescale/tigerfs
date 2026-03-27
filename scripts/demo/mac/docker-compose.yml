@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: demo
       POSTGRES_DB: demo
     volumes:
-      - ../docker-demo/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
       interval: 2s

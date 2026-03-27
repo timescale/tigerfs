@@ -342,24 +342,12 @@ FUSE on Linux, NFS on macOS. No external dependencies on either platform.
 - **Preserve history.** Every change is recoverable.
 - **Remove coordination code.** The database handles it.
 
-## Try the Demos
-
-### Docker Demo (any platform)
+## Try the Demo
 
 ```bash
-cd scripts/docker-demo
-./demo.sh start
+cd scripts/demo
+./demo.sh start     # auto-detects platform (--docker or --mac)
 ./demo.sh shell     # explore: ls, cat users/1.json, etc.
-./demo.sh stop
-```
-
-### macOS Demo
-
-```bash
-cd scripts/mac-demo
-./demo.sh start
-ls -al /tmp/tigerfs-demo
-cat /tmp/tigerfs-demo/users/1.json
 ./demo.sh stop
 ```
 

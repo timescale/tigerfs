@@ -2797,7 +2797,7 @@ implemented in 4.16a. This task extends that support to views.
 
 **Verification:**
 ```bash
-# Assuming views exist from docker-demo init.sql:
+# Assuming views exist from demo init.sql:
 # - active_users (simple filter view)
 # - order_summary (JOIN view)
 
@@ -4925,7 +4925,7 @@ The markdown synthesized app has fixed frontmatter columns (title, author). User
 2. Add `headers JSONB DEFAULT '{}'::jsonb` column to `GenerateMarkdownTableSQL` in `.build/`
 3. Merge extra headers into YAML frontmatter during synthesis (after known columns, alphabetically sorted)
 4. Collect unknown frontmatter keys into extra headers during parsing (overwrite semantics)
-5. Update demo data (`scripts/docker-demo/init.sql`) with headers column and sample data
+5. Update demo data (`scripts/demo/init.sql` and `scripts/demo/seed.sh`) with headers column and sample data
 6. Unit tests for all new behavior
 
 **Files to Modify:**
@@ -4933,7 +4933,8 @@ The markdown synthesized app has fixed frontmatter columns (title, author). User
 - `internal/tigerfs/fs/synth/build.go`
 - `internal/tigerfs/fs/synth/markdown.go`
 - `internal/tigerfs/fs/synth/format_handler.go` (TODO for reuse existing schema)
-- `scripts/docker-demo/init.sql`
+- `scripts/demo/init.sql`
+- `scripts/demo/seed.sh`
 
 **Files to Modify (tests):**
 - `internal/tigerfs/fs/synth/columns_test.go`
