@@ -67,6 +67,12 @@ func checkFUSEMountCapability(t *testing.T) {
 func mountWithTimeout(t *testing.T, cfg *config.Config, connStr, mountpoint string, timeout time.Duration) Filesystem {
 	t.Helper()
 
+	// Integration tests connect to PostgreSQL in Docker containers where the
+	// hostname (e.g., "postgres") resolves to a non-localhost IP. TigerFS
+	// enforces sslmode=require for non-localhost connections, but test containers
+	// don't have TLS configured. Disable TLS enforcement for all tests.
+	cfg.InsecureNoSSL = true
+
 	// Check mount capability and get method
 	method := checkMountCapability(t)
 	if method == "" {
