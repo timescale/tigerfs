@@ -206,8 +206,8 @@ func TestGenerateBuildSQL_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-func TestSynth_GenerateHistorySQL(t *testing.T) {
-	stmts := GenerateHistorySQL("public", "memory")
+func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
+	stmts := GenerateHistorySQL("public", "memory", FormatMarkdown)
 	allSQL := strings.Join(stmts, "\n")
 
 	// History table in tigerfs schema with clean name
@@ -234,6 +234,20 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 		t.Errorf("history table should contain encoding column, got:\n%s", allSQL)
 	}
 
+	// Markdown-specific columns in history table and trigger
+	if !strings.Contains(allSQL, "title TEXT,") {
+		t.Errorf("markdown history should have title column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "author TEXT,") {
+		t.Errorf("markdown history should have author column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "headers JSONB,") {
+		t.Errorf("markdown history should have headers column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "OLD.title") {
+		t.Errorf("markdown trigger should copy title, got:\n%s", allSQL)
+	}
+
 	// Trigger on tigerfs schema table
 	if !strings.Contains(allSQL, "BEFORE UPDATE OR DELETE") {
 		t.Errorf("should create BEFORE UPDATE OR DELETE trigger, got:\n%s", allSQL)
@@ -244,7 +258,6 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 	if !strings.Contains(allSQL, "TG_OP::text") {
 		t.Errorf("should record TG_OP as _operation, got:\n%s", allSQL)
 	}
-	// History trigger should copy encoding column
 	if !strings.Contains(allSQL, "OLD.encoding") {
 		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
 	}
@@ -268,6 +281,57 @@ func TestSynth_GenerateHistorySQL(t *testing.T) {
 	}
 
 	// Should be 8 statements: table, 2 indexes, func, trigger, hypertable, compression, policy
+	if len(stmts) != 8 {
+		t.Errorf("expected 8 statements, got %d", len(stmts))
+	}
+}
+
+func TestSynth_GenerateHistorySQL_PlainText(t *testing.T) {
+	stmts := GenerateHistorySQL("public", "snippets", FormatPlainText)
+	allSQL := strings.Join(stmts, "\n")
+
+	// History table should exist
+	if !strings.Contains(allSQL, `"tigerfs"."snippets_history"`) {
+		t.Errorf("should reference tigerfs.snippets_history table, got:\n%s", allSQL)
+	}
+
+	// Plain text history should NOT have title/author/headers columns
+	if strings.Contains(allSQL, "title TEXT") {
+		t.Errorf("plain text history should not have title column, got:\n%s", allSQL)
+	}
+	if strings.Contains(allSQL, "author TEXT") {
+		t.Errorf("plain text history should not have author column, got:\n%s", allSQL)
+	}
+	if strings.Contains(allSQL, "headers JSONB") {
+		t.Errorf("plain text history should not have headers column, got:\n%s", allSQL)
+	}
+
+	// Trigger should NOT reference OLD.title/OLD.author/OLD.headers
+	if strings.Contains(allSQL, "OLD.title") {
+		t.Errorf("plain text trigger should not reference OLD.title, got:\n%s", allSQL)
+	}
+	if strings.Contains(allSQL, "OLD.author") {
+		t.Errorf("plain text trigger should not reference OLD.author, got:\n%s", allSQL)
+	}
+	if strings.Contains(allSQL, "OLD.headers") {
+		t.Errorf("plain text trigger should not reference OLD.headers, got:\n%s", allSQL)
+	}
+
+	// Should still have base columns
+	if !strings.Contains(allSQL, "OLD.id") {
+		t.Errorf("trigger should reference OLD.id, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "OLD.filename") {
+		t.Errorf("trigger should reference OLD.filename, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "OLD.body") {
+		t.Errorf("trigger should reference OLD.body, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "OLD.encoding") {
+		t.Errorf("trigger should reference OLD.encoding, got:\n%s", allSQL)
+	}
+
+	// Should be 8 statements
 	if len(stmts) != 8 {
 		t.Errorf("expected 8 statements, got %d", len(stmts))
 	}

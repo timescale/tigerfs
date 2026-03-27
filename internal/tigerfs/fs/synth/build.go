@@ -154,7 +154,7 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 	stmts = append(stmts, triggerStmts...)
 
 	if features.History {
-		historyStmts := GenerateHistorySQL(schema, appName)
+		historyStmts := GenerateHistorySQL(schema, appName, features.Format)
 		stmts = append(stmts, historyStmts...)
 	}
 
@@ -172,32 +172,36 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 //   - TimescaleDB hypertable conversion
 //   - Compression policy
 //
-// The column list is based on the markdown table schema (the most common case).
-// For apps with different schemas, the trigger dynamically copies OLD.* values.
-func GenerateHistorySQL(schema, appName string) []string {
+// The column list varies by format: markdown includes title, author, headers;
+// plain text only has the base columns (id, filename, filetype, body, etc.).
+// The archive trigger must match the source table's actual columns.
+func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
 	tableName := appName
 	historyTable := appName + "_history"
 	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(tableName))
 	qualifiedHistory := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(historyTable))
 
-	// The columns mirror the markdown table schema. Using the same columns
-	// for all synth formats works because plain text tables are a subset
-	// (they have id, filename, filetype, body, created_at, modified_at).
-	// Extra columns (title, author, headers) will be NULL for plain text apps.
+	// Build column lists based on format. Markdown has title/author/headers;
+	// plain text does not. The trigger must only reference columns that exist
+	// on the source table, otherwise PostgreSQL errors with "record OLD has no field".
+	var formatColumns string
+	var formatOldValues string
+	if format == FormatMarkdown {
+		formatColumns = "\n    title TEXT,\n    author TEXT,\n    headers JSONB,"
+		formatOldValues = "OLD.title, OLD.author, OLD.headers, "
+	}
+
 	createTable := fmt.Sprintf(`CREATE TABLE %s (
     id UUID,
     filename TEXT NOT NULL,
-    filetype TEXT,
-    title TEXT,
-    author TEXT,
-    headers JSONB,
+    filetype TEXT,%s
     body TEXT,
     encoding TEXT,
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
     _operation TEXT NOT NULL
-)`, qualifiedHistory)
+)`, qualifiedHistory, formatColumns)
 
 	createIndexFilename := fmt.Sprintf(
 		`CREATE INDEX %s ON %s (filename, _history_id DESC)`,
@@ -211,23 +215,33 @@ func GenerateHistorySQL(schema, appName string) []string {
 		qualifiedHistory,
 	)
 
-	// Archive trigger function — copies OLD row to history table on UPDATE or DELETE
+	// Archive trigger function — copies OLD row to history table on UPDATE or DELETE.
+	// Column list must match the source table's actual columns.
 	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent("archive_"+historyTable))
+
+	var insertColumns, insertValues string
+	if format == FormatMarkdown {
+		insertColumns = "id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at"
+		insertValues = fmt.Sprintf("OLD.id, OLD.filename, OLD.filetype, %sOLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at", formatOldValues)
+	} else {
+		insertColumns = "id, filename, filetype, body, encoding, created_at, modified_at"
+		insertValues = "OLD.id, OLD.filename, OLD.filetype, OLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at"
+	}
+
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO %s
-        (id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at,
+        (%s,
          _history_id, _operation)
     VALUES
-        (OLD.id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers, OLD.body,
-         OLD.encoding, OLD.created_at, OLD.modified_at,
+        (%s,
          uuidv7(), TG_OP::text);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql`, funcName, qualifiedHistory)
+$$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 
 	triggerName := db.QuoteIdent("trg_" + historyTable + "_archive")
 	createTrigger := fmt.Sprintf(`CREATE TRIGGER %s
@@ -273,7 +287,7 @@ func GenerateHistoryOnlySQL(schema, appName string, existingFeatures FeatureSet)
 	updatedFeatures.History = true
 	commentSQL := GenerateViewCommentSQLWithFeatures(schema, appName, updatedFeatures)
 
-	historyStmts := GenerateHistorySQL(schema, appName)
+	historyStmts := GenerateHistorySQL(schema, appName, existingFeatures.Format)
 	stmts := []string{commentSQL}
 	stmts = append(stmts, historyStmts...)
 	return stmts
