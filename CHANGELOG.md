@@ -5,18 +5,24 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-03-26
 
-**Dedicated tigerfs schema for backing tables -- cleaner namespacing, migration support, and .tables/ directory.**
+**Dedicated tigerfs schema, security hardening, and unified demo.**
 
-- **Backing table schema** -- synth backing tables, triggers, functions, and history tables now live in a dedicated `tigerfs` schema instead of using underscore-prefixed names in the user's schema. Before: `public._blog` + `public.blog` (view). After: `tigerfs.blog` + `public.blog` (view).
-- **`.tables/` directory** -- new `/.tables/` directory lists all backing tables in the `tigerfs` schema with full pipeline support (filters, export, etc.)
-- **`tigerfs migrate` command** -- general migration framework with `--describe` and `--dry-run` flags. First migration moves legacy `_name` tables to the `tigerfs` schema.
-- **Legacy convention warning** -- logs a warning when old-style `_name` backing tables are detected, directing users to run `tigerfs migrate`
+- **Dedicated `tigerfs` schema** -- synth backing tables, triggers, functions, and history now live in a `tigerfs` schema instead of underscore-prefixed tables in the user's schema (`tigerfs.blog` + `public.blog` view, replacing `public._blog` + `public.blog` view)
+- **`tigerfs migrate` command** -- migration framework with `--describe` and `--dry-run` flags; first migration moves legacy `_name` tables to the `tigerfs` schema
+- **`.tables/` directory** -- browse backing tables in the `tigerfs` schema with full pipeline support
+- **`.build/` schema restriction** -- `.build/` only operates in the default schema
+- **TLS enforcement** -- non-localhost connections default to `sslmode=require`; localhost defaults to `sslmode=disable`; override with `--insecure-no-ssl`
+- **SQL injection hardening** -- all identifier interpolation uses properly escaped helpers (`db.QuoteIdent`, `db.QuoteTable`)
+- **Credential sanitization** -- connection strings in debug logs are scrubbed to prevent credential exposure
+- **Agent skill auto-install** -- TigerFS skills are automatically installed when a coding agent (Claude Code, Gemini CLI, Codex) is detected at mount time
+- **Unified demo** -- single `scripts/demo/` directory with `demo.sh start [--docker|--mac]` (auto-detects platform); file-first apps seeded via mount instead of hand-written SQL
+- **Bug fixes** -- plain text history triggers no longer reference markdown-only columns; export/info files use full path as stat cache key
 
 ### Breaking Changes
 
-- Backing tables are no longer created with underscore prefix in the user's schema. Existing databases need `tigerfs migrate` to update.
+- Backing tables are created in the `tigerfs` schema instead of the user's schema. Run `tigerfs migrate` to update existing databases.
 
 ## [0.5.0] - 2026-02-28
 
@@ -95,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLI** — mount, unmount, status, list, config commands
 - **Install script** — `curl -fsSL https://install.tigerfs.io | sh`
 
+[0.6.0]: https://github.com/timescale/tigerfs/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/timescale/tigerfs/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/timescale/tigerfs/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/timescale/tigerfs/compare/v0.2.0...v0.3.0

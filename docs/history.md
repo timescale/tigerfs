@@ -133,10 +133,10 @@ Maintain a living knowledge base where articles are frequently updated. History 
 
 ## How It Works
 
-- **Companion table** — Each history-enabled app gets a `_<name>_history` table (e.g., `_notes_history`) that mirrors the source table's columns plus history metadata (`_history_id`, `_operation`)
+- **Companion table** -- Each history-enabled app gets a `tigerfs.<name>_history` table (e.g., `tigerfs.notes_history`) that mirrors the source table's columns plus history metadata (`_history_id`, `_operation`)
 - **Trigger** — A PostgreSQL BEFORE UPDATE/DELETE trigger copies the OLD row into the history table on every change
 - **TimescaleDB hypertable** — The history table is partitioned by `_history_id` (UUIDv7) with 1-month chunks, compressed after 1 day, using `segment_by='filename'` and `order_by='_history_id DESC'`
-- **Detection** — TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion `_<name>_history` table
+- **Detection** -- TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion `tigerfs.<name>_history` table
 
 ## Requirements
 

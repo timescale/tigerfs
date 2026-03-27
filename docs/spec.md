@@ -276,8 +276,9 @@ Synthesized apps, DDL operations, and pipeline queries add additional dotfile di
 │       └── hello.md/                     # Versions of a file
 │           ├── .id                       # Row UUID
 │           └── 2026-02-24T150000Z        # Timestamped snapshot (read-only)
-└── _notes/                               # Backing native table (underscore prefix)
-    └── 1/                                # Standard row-as-directory access
+└── .tables/
+    └── notes/                            # Backing table (tigerfs schema)
+        └── 1/                            # Standard row-as-directory access
 ```
 
 ### Schema Handling
@@ -1230,7 +1231,7 @@ There are two creation paths:
 echo "markdown" > /mnt/db/.build/notes
 ```
 
-Creates a backing table `_notes`, a view `notes`, and sets the view comment to `tigerfs:md`. The view gets the clean name; the table gets an underscore prefix.
+Creates a backing table `tigerfs.notes`, a view `notes`, and sets the view comment to `tigerfs:md`. The view lives in the user's schema; the backing table lives in the dedicated `tigerfs` schema.
 
 **`<table>/.format/markdown` — Add a synthesized view to an existing table:**
 
@@ -1242,7 +1243,7 @@ Creates a view `posts_md` over the existing `posts` table, with comment `tigerfs
 
 | Method | View Name | Table Name | Example Path |
 |--------|-----------|------------|--------------|
-| `.build/notes` | `notes/` | `_notes/` | `/mnt/db/notes/hello.md` |
+| `.build/notes` | `notes/` | `tigerfs.notes` | `/mnt/db/notes/hello.md` |
 | `posts/.format/markdown` | `posts_md/` | `posts/` | `/mnt/db/posts_md/hello.md` |
 
 ### Markdown Format
@@ -1294,7 +1295,7 @@ Operations:
 The `.build/` command creates a table with this schema (for markdown apps):
 
 ```sql
-CREATE TABLE "_notes" (
+CREATE TABLE tigerfs.notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -1312,7 +1313,7 @@ A `BEFORE UPDATE` trigger automatically sets `modified_at = now()` on every upda
 
 ### View Architecture
 
-Each synthesized app is exposed through a PostgreSQL VIEW (`CREATE VIEW "notes" AS SELECT * FROM "_notes"`). TigerFS identifies synthesized apps by parsing the view comment:
+Each synthesized app is exposed through a PostgreSQL VIEW (`CREATE VIEW "notes" AS SELECT * FROM tigerfs.notes`). TigerFS identifies synthesized apps by parsing the view comment:
 
 | Comment | Meaning |
 |---------|---------|
@@ -1323,7 +1324,7 @@ Each synthesized app is exposed through a PostgreSQL VIEW (`CREATE VIEW "notes" 
 
 The comment is set via `COMMENT ON VIEW "notes" IS 'tigerfs:md'`. TigerFS scans view comments on mount to discover all synthesized apps.
 
-The native backing table remains accessible alongside the synthesized view — `ls /mnt/db/_notes/` shows the standard row-as-directory structure, while `ls /mnt/db/notes/` shows synthesized markdown files.
+The native backing table remains accessible via the `.tables/` directory -- `ls /mnt/db/.tables/notes/` shows the standard row-as-directory structure, while `ls /mnt/db/notes/` shows synthesized markdown files.
 
 ---
 
@@ -1351,10 +1352,10 @@ Both paths store the feature flag in the view comment (`tigerfs:md,history`).
 
 ### History Table Schema
 
-Each history-enabled app gets a companion table named `_<name>_history`:
+Each history-enabled app gets a companion table named `tigerfs.<name>_history`:
 
 ```sql
-CREATE TABLE "_notes_history" (
+CREATE TABLE tigerfs.notes_history (
     -- Mirrors all source table columns --
     id UUID,
     filename TEXT NOT NULL,
@@ -1412,7 +1413,7 @@ Version timestamps are extracted from the UUIDv7 `_history_id`, formatted as `20
 
 TigerFS detects history support via:
 1. **View comment** — parsing `tigerfs:md,history` from `COMMENT ON VIEW`
-2. **Companion table** — checking for a `_<name>_history` table if the comment doesn't specify history
+2. **Companion table** -- checking for a `tigerfs.<name>_history` table if the comment doesn't specify history
 
 ---
 

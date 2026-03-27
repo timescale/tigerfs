@@ -72,10 +72,10 @@ The two creation methods use different naming conventions:
 
 | Method | Synthesized View | Native Table | Example |
 |--------|------------------|--------------|---------|
-| `.build/notes` | `notes/` | `_notes/` | `/notes/hello.md` and `/_notes/1/body` |
+| `.build/notes` | `notes/` | `tigerfs.notes` | `/notes/hello.md` and `/.tables/notes/1/body` |
 | `posts/.format/markdown` | `posts_md/` | `posts/` | `/posts_md/hello.md` and `/posts/1/body` |
 
-**`.build/` (new app):** View gets the clean name, table gets underscore prefix. This is the primary method.
+**`.build/` (new app):** View gets the clean name in the user's schema, backing table lives in the `tigerfs` schema. This is the primary method.
 
 **`.format/` (existing table):** View gets `_md` suffix to avoid collision with the existing table name.
 
@@ -379,7 +379,7 @@ ls /mnt/db/posts/          # Native row-as-directory
 ls /mnt/db/posts_md/       # Synthesized markdown
 
 # For .build/ (new app)
-ls /mnt/db/_notes/         # Native (underscore prefix)
+ls /mnt/db/.tables/notes/  # Native backing table
 ls /mnt/db/notes/          # Synthesized markdown
 ```
 
