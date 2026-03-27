@@ -212,15 +212,20 @@ Migrations are named actions that update database structures for compatibility
 with newer TigerFS versions. Each migration detects whether it's needed and
 generates the appropriate SQL.
 
+CONNECTION uses a prefix to select the backend:
+  tiger:ID    Tiger Cloud service by ID
+  ghost:ID    Ghost database by ID
+  postgres:// Direct connection string
+
 Examples:
   # List pending migrations
-  tigerfs migrate postgres://localhost/mydb --describe
+  tigerfs migrate tiger:abcde12345 --describe
 
   # Preview SQL without executing
-  tigerfs migrate postgres://localhost/mydb --dry-run
+  tigerfs migrate postgres://user@host/db --dry-run
 
   # Run all pending migrations
-  tigerfs migrate postgres://localhost/mydb`,
+  tigerfs migrate tiger:abcde12345`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
