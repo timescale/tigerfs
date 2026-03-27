@@ -68,7 +68,7 @@ func TestSynth_MigrateDetectAndExecute(t *testing.T) {
 	var describeBuf bytes.Buffer
 	describeCmd.SetOut(&describeBuf)
 	describeCmd.SetErr(&describeBuf)
-	describeCmd.SetArgs([]string{result.ConnStr, "--describe"})
+	describeCmd.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
 	err = describeCmd.Execute()
 	require.NoError(t, err, "migrate --describe should succeed")
 
@@ -81,7 +81,7 @@ func TestSynth_MigrateDetectAndExecute(t *testing.T) {
 	var dryRunBuf bytes.Buffer
 	dryRunCmd.SetOut(&dryRunBuf)
 	dryRunCmd.SetErr(&dryRunBuf)
-	dryRunCmd.SetArgs([]string{result.ConnStr, "--dry-run"})
+	dryRunCmd.SetArgs([]string{result.ConnStr, "--dry-run", "--insecure-no-ssl"})
 	err = dryRunCmd.Execute()
 	require.NoError(t, err, "migrate --dry-run should succeed")
 
@@ -103,7 +103,7 @@ func TestSynth_MigrateDetectAndExecute(t *testing.T) {
 	var execBuf bytes.Buffer
 	execCmd.SetOut(&execBuf)
 	execCmd.SetErr(&execBuf)
-	execCmd.SetArgs([]string{result.ConnStr})
+	execCmd.SetArgs([]string{result.ConnStr, "--insecure-no-ssl"})
 	err = execCmd.Execute()
 	require.NoError(t, err, "migrate should succeed")
 
@@ -147,7 +147,7 @@ func TestSynth_MigrateDetectAndExecute(t *testing.T) {
 	var idempBuf bytes.Buffer
 	idempCmd.SetOut(&idempBuf)
 	idempCmd.SetErr(&idempBuf)
-	idempCmd.SetArgs([]string{result.ConnStr, "--describe"})
+	idempCmd.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
 	err = idempCmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, idempBuf.String(), "No pending migrations", "second run should find nothing to do")
@@ -221,7 +221,7 @@ func TestSynth_MigrateWithHistory(t *testing.T) {
 	var describeBuf bytes.Buffer
 	describeCmd.SetOut(&describeBuf)
 	describeCmd.SetErr(&describeBuf)
-	describeCmd.SetArgs([]string{result.ConnStr, "--describe"})
+	describeCmd.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
 	err = describeCmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, describeBuf.String(), "_mig_hist")
@@ -231,7 +231,7 @@ func TestSynth_MigrateWithHistory(t *testing.T) {
 	var dryRunBuf bytes.Buffer
 	dryRunCmd.SetOut(&dryRunBuf)
 	dryRunCmd.SetErr(&dryRunBuf)
-	dryRunCmd.SetArgs([]string{result.ConnStr, "--dry-run"})
+	dryRunCmd.SetArgs([]string{result.ConnStr, "--dry-run", "--insecure-no-ssl"})
 	err = dryRunCmd.Execute()
 	require.NoError(t, err)
 	dryRunOutput := dryRunBuf.String()
@@ -242,7 +242,7 @@ func TestSynth_MigrateWithHistory(t *testing.T) {
 	var execBuf bytes.Buffer
 	execCmd.SetOut(&execBuf)
 	execCmd.SetErr(&execBuf)
-	execCmd.SetArgs([]string{result.ConnStr})
+	execCmd.SetArgs([]string{result.ConnStr, "--insecure-no-ssl"})
 	err = execCmd.Execute()
 	require.NoError(t, err, "migrate should succeed")
 
@@ -285,7 +285,7 @@ func TestSynth_MigrateWithHistory(t *testing.T) {
 	var idempBuf bytes.Buffer
 	idempCmd.SetOut(&idempBuf)
 	idempCmd.SetErr(&idempBuf)
-	idempCmd.SetArgs([]string{result.ConnStr, "--describe"})
+	idempCmd.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
 	err = idempCmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, idempBuf.String(), "No pending migrations")

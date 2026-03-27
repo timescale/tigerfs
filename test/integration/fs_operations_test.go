@@ -22,6 +22,7 @@ func setupFSOperations(t *testing.T, connStr string) *fs.Operations {
 		QueryTimeout:    30,
 		PoolSize:        5,
 		PoolMaxIdle:     2,
+		InsecureNoSSL:   true,
 	}
 
 	ctx := context.Background()

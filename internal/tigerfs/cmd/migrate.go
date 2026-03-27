@@ -201,6 +201,7 @@ func moveBackingTablesMigration() migration {
 func BuildMigrateCmd() *cobra.Command {
 	var describe bool
 	var dryRun bool
+	var insecureNoSSL bool
 	var schemaFlag string
 
 	cmd := &cobra.Command{
@@ -236,6 +237,9 @@ Examples:
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
+			}
+			if insecureNoSSL {
+				cfg.InsecureNoSSL = true
 			}
 
 			var explicitConnStr string
@@ -330,5 +334,6 @@ Examples:
 	cmd.Flags().BoolVar(&describe, "describe", false, "List pending migrations without executing")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show SQL that would be executed")
 	cmd.Flags().StringVar(&schemaFlag, "schema", "", "Schema to migrate (default: database search_path)")
+	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "Allow non-TLS connections to remote databases (insecure)")
 	return cmd
 }
