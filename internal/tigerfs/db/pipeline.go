@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -58,9 +57,9 @@ type FilterCondition struct {
 
 // QueryParams contains all parameters needed to build a pipeline query.
 type QueryParams struct {
-	Schema   string
-	Table    string
-	PKColumn string
+	Schema    string
+	Table     string
+	PKColumns []string
 
 	// Filters (from .by and .filter), AND-combined
 	Filters []FilterCondition
@@ -136,12 +135,16 @@ func QueryRowsPipeline(ctx context.Context, pool *pgxpool.Pool, params QueryPara
 	defer rows.Close()
 
 	var pks []string
+	scanDests := make([]interface{}, len(params.PKColumns))
 	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
+		vals := make([]interface{}, len(params.PKColumns))
+		for i := range vals {
+			scanDests[i] = &vals[i]
+		}
+		if err := rows.Scan(scanDests...); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pkStr, err := format.ConvertValueToText(pk)
+		pkStr, err := scanAndEncodePK(vals, params.PKColumns)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
 		}
@@ -258,7 +261,7 @@ func buildPipelineSQL(params QueryParams, selectPKOnly bool) (string, []interfac
 // Priority: selectPKOnly > params.Columns > *.
 func buildSelectClause(params QueryParams, selectPKOnly bool) string {
 	if selectPKOnly {
-		return qi(params.PKColumn)
+		return pkSelectList(params.PKColumns)
 	}
 	if len(params.Columns) > 0 {
 		quoted := make([]string, len(params.Columns))
@@ -337,7 +340,7 @@ func buildNestedPipelineSQL(params QueryParams, selectPKOnly bool) (string, []in
 	}
 
 	// Build the outer query with current limit
-	orderClause := buildOrderClauseForLimitType(params.LimitType, params.PKColumn, params.OrderBy, params.OrderDesc)
+	orderClause := buildOrderClauseForLimitType(params.LimitType, params.PKColumns, params.OrderBy, params.OrderDesc)
 
 	limitClause := ""
 	if params.HasLimit() && params.Limit > 0 {
@@ -365,7 +368,7 @@ func buildInnerLimitQuery(params QueryParams, paramIndex *int) (string, []interf
 	tableRef := qt(params.Schema, params.Table)
 
 	// Order clause for the previous limit type
-	orderClause := buildOrderClauseForLimitType(params.PreviousLimitType, params.PKColumn, "", false)
+	orderClause := buildOrderClauseForLimitType(params.PreviousLimitType, params.PKColumns, "", false)
 
 	limitClause := ""
 	if params.PreviousLimit > 0 {
@@ -386,33 +389,33 @@ func buildOrderClause(params QueryParams) string {
 		if params.OrderDesc {
 			direction = "DESC"
 		}
-		// Add PK as secondary sort for stability
-		return fmt.Sprintf(` ORDER BY %s %s NULLS LAST, %s %s`,
-			qi(params.OrderBy), direction, qi(params.PKColumn), direction)
+		// Add PK columns as secondary sort for stability
+		return fmt.Sprintf(` ORDER BY %s %s NULLS LAST, %s`,
+			qi(params.OrderBy), direction, pkOrderByList(params.PKColumns, direction))
 	}
 
 	// Default ordering based on limit type
-	return buildOrderClauseForLimitType(params.LimitType, params.PKColumn, "", false)
+	return buildOrderClauseForLimitType(params.LimitType, params.PKColumns, "", false)
 }
 
 // buildOrderClauseForLimitType builds ORDER BY for a specific limit type.
-func buildOrderClauseForLimitType(lt LimitType, pkColumn, orderBy string, orderDesc bool) string {
+func buildOrderClauseForLimitType(lt LimitType, pkColumns []string, orderBy string, orderDesc bool) string {
 	// If custom order is specified, use it
 	if orderBy != "" {
 		direction := "ASC"
 		if orderDesc {
 			direction = "DESC"
 		}
-		return fmt.Sprintf(` ORDER BY %s %s NULLS LAST, %s %s`,
-			qi(orderBy), direction, qi(pkColumn), direction)
+		return fmt.Sprintf(` ORDER BY %s %s NULLS LAST, %s`,
+			qi(orderBy), direction, pkOrderByList(pkColumns, direction))
 	}
 
 	// Default ordering based on limit type
 	switch lt {
 	case LimitFirst:
-		return fmt.Sprintf(` ORDER BY %s ASC`, qi(pkColumn))
+		return " ORDER BY " + pkOrderByList(pkColumns, "ASC")
 	case LimitLast:
-		return fmt.Sprintf(` ORDER BY %s DESC`, qi(pkColumn))
+		return " ORDER BY " + pkOrderByList(pkColumns, "DESC")
 	case LimitSample:
 		return " ORDER BY RANDOM()"
 	default:

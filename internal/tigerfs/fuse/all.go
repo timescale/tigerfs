@@ -88,7 +88,7 @@ func (a *AllRowsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno)
 	pkColumn := pk.Columns[0]
 
 	// List ALL rows (no limit)
-	rows, err := a.db.ListAllRows(ctx, a.schema, a.tableName, pkColumn)
+	rows, err := a.db.ListAllRows(ctx, a.schema, a.tableName, []string{pkColumn})
 	if err != nil {
 		logging.Error("Failed to list all rows",
 			zap.String("table", a.tableName),
@@ -137,7 +137,7 @@ func (a *AllRowsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	pkColumn := pk.Columns[0]
 
 	// Check if row exists
-	_, err = a.db.GetRow(ctx, a.schema, a.tableName, pkColumn, pkValue)
+	_, err = a.db.GetRow(ctx, a.schema, a.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Debug("Row not found",
 			zap.String("table", a.tableName),

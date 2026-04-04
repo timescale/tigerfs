@@ -380,6 +380,7 @@ cat /mnt/db/customers/.by/tier/premium/.by/state/CA/.filter/last_active_gt/2024-
 4. **Export is terminal** — cannot chain after `.export/`
 5. **Columns is near-terminal** — after `.columns/`, only `.export/` is available
 6. **No import pipeline** — `.import/` is separate and not composable
+7. **Text PK format extension clash** — text PK values ending in `.json`, `.csv`, `.tsv`, or `.yaml` are misinterpreted as format extensions
 
 ## Table Metadata
 

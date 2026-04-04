@@ -19,7 +19,7 @@ func TestPipelineNode_Readdir(t *testing.T) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
 	// Return empty rows for simplicity
-	mockDB.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mockDB.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{}, nil
 	}
 
@@ -67,7 +67,7 @@ func TestPipelineNode_Readdir_AfterOrder(t *testing.T) {
 	mockDB.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mockDB.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mockDB.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{}, nil
 	}
 
@@ -110,7 +110,7 @@ func TestPipelineNode_Readdir_AfterLimit(t *testing.T) {
 	mockDB.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mockDB.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mockDB.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{}, nil
 	}
 

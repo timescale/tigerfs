@@ -2708,7 +2708,99 @@ echo '{"name":"Test"}' > /tmp/testmount/user_orders/.first/10/1.json
 
 ---
 
-### Task 4.16a: Support Tables Without Primary Keys
+### Task 4.16: Support Composite Primary Keys
+
+**Objective:** Enable full filesystem operations on tables with multi-column primary keys
+
+**Background:** TigerFS currently rejects tables with composite PKs (`db/keys.go:60-63`). The `PrimaryKey` struct holds `Columns []string`, but all downstream code assumes a single column via `pk.Columns[0]` (~40+ sites). This task removes that limitation.
+
+**Design Decisions:**
+- **Path representation:** Comma-delimited values. For `PRIMARY KEY (customer_id, product_id)` with values `(5, 42)`, the directory name is `5,42`. Single-column PKs unchanged (backward compatible). Values containing commas are URL-encoded (`%2C`).
+- **Code strategy:** Introduce `PKMatch` struct bundling column names + values. DB methods accept `*PKMatch` for row identification. `PrimaryKey` gains `Encode(values)` and `Decode(dirname)` methods.
+
+**Steps:**
+1. Create `internal/tigerfs/db/pk_match.go`:
+   - `PKMatch` struct with `Columns []string` and `Values []string`
+   - `WhereClause(startParam int)` generates `"col1" = $1 AND "col2" = $2`
+   - `WhereArgs()` returns values as `[]interface{}`
+   - `SinglePKMatch(column, value string)` convenience constructor
+2. Add `Encode`/`Decode` methods to `PrimaryKey` in `internal/tigerfs/db/keys.go`:
+   - `Encode(values []string) string` -- comma-delimited with URL-encoding
+   - `Decode(dirname string) (*PKMatch, error)` -- returns `*PKMatch`
+   - Remove composite PK rejection (lines 60-63)
+3. Update `internal/tigerfs/db/interfaces.go`:
+   - Row-identifying methods (`GetRow`, `UpdateRow`, `DeleteRow`, etc.) take `*PKMatch`
+   - Listing/pagination methods take `pkColumns []string`
+4. Update `internal/tigerfs/db/query.go`:
+   - All CRUD functions use `PKMatch.WhereClause()` and `PKMatch.WhereArgs()`
+   - Pagination functions handle multi-column SELECT/ORDER BY/scan
+5. Update `internal/tigerfs/db/keys.go`:
+   - `ListRows`/`ListAllRows`: SELECT all PK columns, encode with `pk.Encode()`
+6. Update `internal/tigerfs/db/pipeline.go`:
+   - `QueryParams.PKColumn string` -> `PKColumns []string`
+   - Multi-column SELECT, ORDER BY in pipeline SQL
+7. Update `internal/tigerfs/fs/context.go`:
+   - `FSContext.PKColumn string` -> `PKColumns []string`
+8. Update `internal/tigerfs/fs/operations.go` (7 sites):
+   - Each `pk.Columns[0]` -> `pk.Decode(parsed.PrimaryKey)` then pass `*PKMatch`
+9. Update `internal/tigerfs/fs/write.go` (6 sites):
+   - Same pattern; rename decodes both old and new PK
+10. Update FUSE legacy code (compile fix only):
+    - Wrap existing `pk.Columns[0]` calls with `db.SinglePKMatch()` to satisfy new interfaces
+
+**Files to Create:**
+- `internal/tigerfs/db/pk_match.go`
+- `internal/tigerfs/db/pk_match_test.go`
+
+**Files to Modify:**
+- `internal/tigerfs/db/keys.go`
+- `internal/tigerfs/db/keys_test.go`
+- `internal/tigerfs/db/interfaces.go`
+- `internal/tigerfs/db/query.go`
+- `internal/tigerfs/db/pipeline.go`
+- `internal/tigerfs/db/export.go`
+- `internal/tigerfs/fs/context.go`
+- `internal/tigerfs/fs/operations.go`
+- `internal/tigerfs/fs/write.go`
+- `internal/tigerfs/fs/synth_ops.go`
+- `internal/tigerfs/fuse/table.go` (compile fix)
+- `internal/tigerfs/fuse/index.go` (compile fix)
+- `internal/tigerfs/fuse/all.go` (compile fix)
+- `internal/tigerfs/fuse/pagination.go` (compile fix)
+- `internal/tigerfs/fuse/sample.go` (compile fix)
+- `internal/tigerfs/fuse/order.go` (compile fix)
+
+**Verification:**
+```bash
+# Unit tests
+go test ./internal/tigerfs/db/... ./internal/tigerfs/fs/...
+
+# All tests (backward compat)
+go test ./...
+
+# Integration tests
+go test -v -run TestMount_CompositePK ./test/integration/...
+
+# Manual verification
+psql -c "CREATE TABLE order_items (customer_id int, product_id int, quantity int, PRIMARY KEY (customer_id, product_id));"
+psql -c "INSERT INTO order_items VALUES (1, 100, 5), (1, 200, 3), (2, 100, 1);"
+ls /mount/order_items/            # Should show: 1,100  1,200  2,100
+cat /mount/order_items/1,100      # Should show row data
+cat /mount/order_items/1,100/quantity  # Should show: 5
+```
+
+**Completion Criteria:**
+- Composite primary keys work for ReadDir, ReadFile, ReadColumn
+- Writes (update, insert, delete) work with composite PKs
+- Pipeline operations (.first, .last, .order, .filter, .export) work
+- Mixed PK types (int+text, uuid+int) work
+- Single-column PK behavior unchanged
+- All existing tests pass
+- New unit and integration tests pass
+
+---
+
+### Task 4.17a: Support Tables Without Primary Keys
 
 **Objective:** Allow read-only access to tables without primary keys using ctid
 
@@ -2761,7 +2853,7 @@ echo '{"message":"test"}' > /tmp/testmount/logs/0_1.json
 
 ---
 
-### Task 4.16b: Support Reading Views (No Primary Key)
+### Task 4.17b: Support Reading Views (No Primary Key)
 
 **Objective:** Allow read-only access to views using ctid-based row identification
 
@@ -2834,7 +2926,7 @@ echo '{"name":"test"}' > /tmp/testmount/active_users/'(0,1)'.json
 
 ---
 
-### Task 4.17: Support TimescaleDB Hypertables
+### Task 4.18: Support TimescaleDB Hypertables
 
 **Objective:** Proper support for TimescaleDB hypertables with time-based access
 
@@ -2889,44 +2981,6 @@ ls /tmp/testmount/metrics/.chunks/
 - Chunk navigation works
 - Continuous aggregates accessible
 - Tests pass
-
----
-
-### Task 4.18: Example Workflows for Advanced Features
-
-**Objective:** Create documentation with real-world examples for advanced TigerFS features
-
-**Steps:**
-1. Create `docs/examples-advanced.md`
-2. Write examples:
-   - **Example 1:** Navigating large tables with .first/, .last/, .sample/
-   - **Example 2:** Index-based lookups for efficient queries
-   - **Example 3:** Working with composite indexes
-   - **Example 4:** Accessing tables without primary keys
-   - **Example 5:** Working with UUID and text primary keys
-   - **Example 6:** TimescaleDB hypertable time-based navigation
-   - **Example 7:** Multi-schema database navigation
-   - **Example 8:** Permission-based access patterns
-3. Each example should include:
-   - Scenario description
-   - Complete commands
-   - Expected output
-   - Explanation
-
-**Files to Create:**
-- `docs/examples-advanced.md`
-
-**Verification:**
-```bash
-# Run through each example
-# Verify commands work as documented
-```
-
-**Completion Criteria:**
-- At least 8 examples documented
-- Each example tested and works
-- Clear explanations provided
-- Output shown
 
 ---
 

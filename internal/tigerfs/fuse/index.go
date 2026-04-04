@@ -685,9 +685,9 @@ func (p *IndexValuePaginationLimitNode) Readdir(ctx context.Context) (fs.DirStre
 	var pks []string
 	var err error
 	if p.paginationType == PaginationFirst {
-		pks, err = p.db.GetRowsByIndexValueOrdered(ctx, p.schema, p.tableName, p.column, p.value, p.pkColumn, p.limit, true)
+		pks, err = p.db.GetRowsByIndexValueOrdered(ctx, p.schema, p.tableName, p.column, p.value, []string{p.pkColumn}, p.limit, true)
 	} else {
-		pks, err = p.db.GetRowsByIndexValueOrdered(ctx, p.schema, p.tableName, p.column, p.value, p.pkColumn, p.limit, false)
+		pks, err = p.db.GetRowsByIndexValueOrdered(ctx, p.schema, p.tableName, p.column, p.value, []string{p.pkColumn}, p.limit, false)
 	}
 
 	if err != nil {
@@ -715,7 +715,7 @@ func (p *IndexValuePaginationLimitNode) Lookup(ctx context.Context, name string,
 	pkValue, format := util.ParseRowFilename(name)
 
 	// Verify row exists
-	_, err := p.db.GetRow(ctx, p.schema, p.tableName, p.pkColumn, pkValue)
+	_, err := p.db.GetRow(ctx, p.schema, p.tableName, db.SinglePKMatch(p.pkColumn, pkValue))
 	if err != nil {
 		return nil, syscall.ENOENT
 	}
@@ -1098,7 +1098,7 @@ func (n *CompositeIndexLevelNode) readdirFinalLevel(ctx context.Context, limit i
 
 	pkColumn := pk.Columns[0]
 
-	pks, err := n.db.GetRowsByCompositeIndex(ctx, n.schema, n.tableName, n.columns, n.values, pkColumn, limit)
+	pks, err := n.db.GetRowsByCompositeIndex(ctx, n.schema, n.tableName, n.columns, n.values, []string{pkColumn}, limit)
 	if err != nil {
 		logging.Error("Failed to get rows by composite index",
 			zap.String("table", n.tableName),
@@ -1289,7 +1289,7 @@ func (n *CompositeIndexLevelNode) lookupRow(ctx context.Context, name string) (*
 	pkValue, format := util.ParseRowFilename(name)
 
 	// Verify row exists
-	_, err = n.db.GetRow(ctx, n.schema, n.tableName, pkColumn, pkValue)
+	_, err = n.db.GetRow(ctx, n.schema, n.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Debug("Row not found via composite index",
 			zap.String("table", n.tableName),
@@ -1496,7 +1496,7 @@ func (p *IndexPaginationLimitNode) Lookup(ctx context.Context, name string, out 
 
 	pkColumn := pk.Columns[0]
 
-	rows, err := p.db.GetRowsByIndexValue(ctx, p.schema, p.tableName, p.column, name, pkColumn, 100)
+	rows, err := p.db.GetRowsByIndexValue(ctx, p.schema, p.tableName, p.column, name, []string{pkColumn}, 100)
 	if err != nil {
 		return nil, syscall.EIO
 	}

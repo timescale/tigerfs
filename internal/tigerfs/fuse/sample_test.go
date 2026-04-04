@@ -159,7 +159,7 @@ func TestSampleLimitNode_Readdir_WithMock(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockPaginationReader.GetRandomSampleRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+	mock.MockPaginationReader.GetRandomSampleRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
 		// Return approximately the requested number of rows
 		return []string{"42", "17", "99", "5", "73"}, nil
 	}
@@ -207,7 +207,7 @@ func TestSampleLimitNode_Readdir_WithMock_WithCache(t *testing.T) {
 	}
 
 	var capturedEstimate int64
-	mock.MockPaginationReader.GetRandomSampleRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+	mock.MockPaginationReader.GetRandomSampleRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
 		capturedEstimate = estimatedRows
 		return []string{"1", "2", "3"}, nil
 	}
@@ -280,7 +280,7 @@ func TestSampleLimitNode_Readdir_WithMock_SampleError(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockPaginationReader.GetRandomSampleRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+	mock.MockPaginationReader.GetRandomSampleRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
 		return nil, context.DeadlineExceeded
 	}
 

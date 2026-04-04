@@ -229,7 +229,7 @@ func (c *ColumnFileNode) fetchData(ctx context.Context) error {
 	}
 
 	// Row is committed or doesn't exist in partial state - query database
-	value, err := c.db.GetColumn(ctx, c.schema, c.tableName, c.pkColumn, c.pkValue, c.columnName)
+	value, err := c.db.GetColumn(ctx, c.schema, c.tableName, db.SinglePKMatch(c.pkColumn, c.pkValue), c.columnName)
 	if err != nil {
 		return err
 	}
@@ -332,7 +332,7 @@ func (fh *ColumnFileHandle) Flush(ctx context.Context) syscall.Errno {
 	}
 
 	// Check if row exists in database
-	_, err := fh.node.db.GetRow(ctx, fh.node.schema, fh.node.tableName, fh.node.pkColumn, fh.node.pkValue)
+	_, err := fh.node.db.GetRow(ctx, fh.node.schema, fh.node.tableName, db.SinglePKMatch(fh.node.pkColumn, fh.node.pkValue))
 	rowExists := (err == nil)
 
 	if !rowExists {
@@ -382,8 +382,7 @@ func (fh *ColumnFileHandle) Flush(ctx context.Context) syscall.Errno {
 		ctx,
 		fh.node.schema,
 		fh.node.tableName,
-		fh.node.pkColumn,
-		fh.node.pkValue,
+		db.SinglePKMatch(fh.node.pkColumn, fh.node.pkValue),
 		fh.node.columnName,
 		value,
 	)

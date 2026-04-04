@@ -293,7 +293,7 @@ func parseSchemaPath(segments []string) (*ParsedPath, *FSError) {
 
 	// /.schemas/<schema>/<table>/... - parse as table path with explicit schema
 	table := segments[2]
-	ctx := NewFSContext(schema, table, "")
+	ctx := NewFSContext(schema, table, nil)
 
 	result := &ParsedPath{
 		Type:    PathTable,
@@ -397,7 +397,7 @@ func parseTablesPath(segments []string) (*ParsedPath, *FSError) {
 
 	// /.tables/<table>/... - parse as table path with tigerfs schema
 	table := segments[1]
-	ctx := NewFSContext("tigerfs", table, "")
+	ctx := NewFSContext("tigerfs", table, nil)
 
 	result := &ParsedPath{
 		Type:    PathTable,
@@ -421,7 +421,7 @@ func parseTablePath(segments []string) (*ParsedPath, *FSError) {
 	startIdx := 1
 
 	// Create initial context
-	ctx := NewFSContext(schema, table, "")
+	ctx := NewFSContext(schema, table, nil)
 
 	// Process remaining segments
 	result := &ParsedPath{
@@ -1032,6 +1032,13 @@ func processTableDDL(result *ParsedPath, remaining []string, op string) (int, *F
 }
 
 // processRowOrColumn handles row PK and column segments.
+//
+// Known limitation: format extensions (.json, .csv, .tsv, .yaml) are stripped
+// from the PK segment. A text PK value that literally ends in a known extension
+// (e.g., PK value "config.json") will be misinterpreted as PK="config" with
+// format="json". This is unlikely in practice since data-mode table PKs are
+// almost always integers, UUIDs, or short text keys. Synth apps use a separate
+// filename column, not the PK, for display names.
 func processRowOrColumn(result *ParsedPath, remaining []string) (*ParsedPath, *FSError) {
 	if len(remaining) == 0 {
 		return result, nil

@@ -127,38 +127,38 @@ func (m *MockSchemaReader) GetViewCommentsBatch(ctx context.Context, schema stri
 
 // MockRowReader is a mock implementation of RowReader for testing.
 type MockRowReader struct {
-	GetRowFunc      func(ctx context.Context, schema, table, pkColumn, pkValue string) (*Row, error)
-	GetColumnFunc   func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error)
-	ListRowsFunc    func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
-	ListAllRowsFunc func(ctx context.Context, schema, table, pkColumn string) ([]string, error)
+	GetRowFunc      func(ctx context.Context, schema, table string, pk *PKMatch) (*Row, error)
+	GetColumnFunc   func(ctx context.Context, schema, table string, pk *PKMatch, columnName string) (interface{}, error)
+	ListRowsFunc    func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error)
+	ListAllRowsFunc func(ctx context.Context, schema, table string, pkColumns []string) ([]string, error)
 }
 
 var _ RowReader = (*MockRowReader)(nil)
 
-func (m *MockRowReader) GetRow(ctx context.Context, schema, table, pkColumn, pkValue string) (*Row, error) {
+func (m *MockRowReader) GetRow(ctx context.Context, schema, table string, pk *PKMatch) (*Row, error) {
 	if m.GetRowFunc != nil {
-		return m.GetRowFunc(ctx, schema, table, pkColumn, pkValue)
+		return m.GetRowFunc(ctx, schema, table, pk)
 	}
-	return &Row{Columns: []string{"id"}, Values: []interface{}{pkValue}}, nil
+	return &Row{Columns: []string{"id"}, Values: []interface{}{""}}, nil
 }
 
-func (m *MockRowReader) GetColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+func (m *MockRowReader) GetColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName string) (interface{}, error) {
 	if m.GetColumnFunc != nil {
-		return m.GetColumnFunc(ctx, schema, table, pkColumn, pkValue, columnName)
+		return m.GetColumnFunc(ctx, schema, table, pk, columnName)
 	}
 	return nil, nil
 }
 
-func (m *MockRowReader) ListRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+func (m *MockRowReader) ListRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	if m.ListRowsFunc != nil {
-		return m.ListRowsFunc(ctx, schema, table, pkColumn, limit)
+		return m.ListRowsFunc(ctx, schema, table, pkColumns, limit)
 	}
 	return []string{}, nil
 }
 
-func (m *MockRowReader) ListAllRows(ctx context.Context, schema, table, pkColumn string) ([]string, error) {
+func (m *MockRowReader) ListAllRows(ctx context.Context, schema, table string, pkColumns []string) ([]string, error) {
 	if m.ListAllRowsFunc != nil {
-		return m.ListAllRowsFunc(ctx, schema, table, pkColumn)
+		return m.ListAllRowsFunc(ctx, schema, table, pkColumns)
 	}
 	return []string{}, nil
 }
@@ -166,10 +166,10 @@ func (m *MockRowReader) ListAllRows(ctx context.Context, schema, table, pkColumn
 // MockRowWriter is a mock implementation of RowWriter for testing.
 type MockRowWriter struct {
 	InsertRowFunc       func(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error)
-	UpdateRowFunc       func(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error
-	UpdateColumnFunc    func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error
-	UpdateColumnCASFunc func(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error
-	DeleteRowFunc       func(ctx context.Context, schema, table, pkColumn, pkValue string) error
+	UpdateRowFunc       func(ctx context.Context, schema, table string, pk *PKMatch, columns []string, values []interface{}) error
+	UpdateColumnFunc    func(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error
+	UpdateColumnCASFunc func(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error
+	DeleteRowFunc       func(ctx context.Context, schema, table string, pk *PKMatch) error
 }
 
 var _ RowWriter = (*MockRowWriter)(nil)
@@ -181,30 +181,30 @@ func (m *MockRowWriter) InsertRow(ctx context.Context, schema, table string, col
 	return "1", nil
 }
 
-func (m *MockRowWriter) UpdateRow(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+func (m *MockRowWriter) UpdateRow(ctx context.Context, schema, table string, pk *PKMatch, columns []string, values []interface{}) error {
 	if m.UpdateRowFunc != nil {
-		return m.UpdateRowFunc(ctx, schema, table, pkColumn, pkValue, columns, values)
+		return m.UpdateRowFunc(ctx, schema, table, pk, columns, values)
 	}
 	return nil
 }
 
-func (m *MockRowWriter) UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+func (m *MockRowWriter) UpdateColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error {
 	if m.UpdateColumnFunc != nil {
-		return m.UpdateColumnFunc(ctx, schema, table, pkColumn, pkValue, columnName, newValue)
+		return m.UpdateColumnFunc(ctx, schema, table, pk, columnName, newValue)
 	}
 	return nil
 }
 
-func (m *MockRowWriter) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error {
+func (m *MockRowWriter) UpdateColumnCAS(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error {
 	if m.UpdateColumnCASFunc != nil {
-		return m.UpdateColumnCASFunc(ctx, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue)
+		return m.UpdateColumnCASFunc(ctx, schema, table, pk, setColumn, newValue, whereColumn, whereValue)
 	}
 	return nil
 }
 
-func (m *MockRowWriter) DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+func (m *MockRowWriter) DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error {
 	if m.DeleteRowFunc != nil {
-		return m.DeleteRowFunc(ctx, schema, table, pkColumn, pkValue)
+		return m.DeleteRowFunc(ctx, schema, table, pk)
 	}
 	return nil
 }
@@ -218,9 +218,9 @@ type MockIndexReader struct {
 	GetDistinctValuesFunc          func(ctx context.Context, schema, table, column string, limit int) ([]string, error)
 	GetDistinctValuesOrderedFunc   func(ctx context.Context, schema, table, column string, limit int, ascending bool) ([]string, error)
 	GetDistinctValuesFilteredFunc  func(ctx context.Context, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error)
-	GetRowsByIndexValueFunc        func(ctx context.Context, schema, table, column, value, pkColumn string, limit int) ([]string, error)
-	GetRowsByIndexValueOrderedFunc func(ctx context.Context, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error)
-	GetRowsByCompositeIndexFunc    func(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error)
+	GetRowsByIndexValueFunc        func(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) ([]string, error)
+	GetRowsByIndexValueOrderedFunc func(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error)
+	GetRowsByCompositeIndexFunc    func(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error)
 }
 
 var _ IndexReader = (*MockIndexReader)(nil)
@@ -274,23 +274,23 @@ func (m *MockIndexReader) GetDistinctValuesFiltered(ctx context.Context, schema,
 	return []string{}, nil
 }
 
-func (m *MockIndexReader) GetRowsByIndexValue(ctx context.Context, schema, table, column, value, pkColumn string, limit int) ([]string, error) {
+func (m *MockIndexReader) GetRowsByIndexValue(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
 	if m.GetRowsByIndexValueFunc != nil {
-		return m.GetRowsByIndexValueFunc(ctx, schema, table, column, value, pkColumn, limit)
+		return m.GetRowsByIndexValueFunc(ctx, schema, table, column, value, pkColumns, limit)
 	}
 	return []string{}, nil
 }
 
-func (m *MockIndexReader) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error) {
+func (m *MockIndexReader) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
 	if m.GetRowsByIndexValueOrderedFunc != nil {
-		return m.GetRowsByIndexValueOrderedFunc(ctx, schema, table, column, value, pkColumn, limit, ascending)
+		return m.GetRowsByIndexValueOrderedFunc(ctx, schema, table, column, value, pkColumns, limit, ascending)
 	}
 	return []string{}, nil
 }
 
-func (m *MockIndexReader) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+func (m *MockIndexReader) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
 	if m.GetRowsByCompositeIndexFunc != nil {
-		return m.GetRowsByCompositeIndexFunc(ctx, schema, table, columns, values, pkColumn, limit)
+		return m.GetRowsByCompositeIndexFunc(ctx, schema, table, columns, values, pkColumns, limit)
 	}
 	return []string{}, nil
 }
@@ -429,46 +429,46 @@ func (m *MockDDLReader) GetDependentViews(ctx context.Context, schema, name stri
 
 // MockPaginationReader is a mock implementation of PaginationReader for testing.
 type MockPaginationReader struct {
-	GetFirstNRowsFunc        func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
-	GetLastNRowsFunc         func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
-	GetRandomSampleRowsFunc  func(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error)
-	GetFirstNRowsOrderedFunc func(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
-	GetLastNRowsOrderedFunc  func(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
+	GetFirstNRowsFunc        func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error)
+	GetLastNRowsFunc         func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error)
+	GetRandomSampleRowsFunc  func(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error)
+	GetFirstNRowsOrderedFunc func(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error)
+	GetLastNRowsOrderedFunc  func(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error)
 }
 
 var _ PaginationReader = (*MockPaginationReader)(nil)
 
-func (m *MockPaginationReader) GetFirstNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+func (m *MockPaginationReader) GetFirstNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	if m.GetFirstNRowsFunc != nil {
-		return m.GetFirstNRowsFunc(ctx, schema, table, pkColumn, limit)
+		return m.GetFirstNRowsFunc(ctx, schema, table, pkColumns, limit)
 	}
 	return []string{}, nil
 }
 
-func (m *MockPaginationReader) GetLastNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+func (m *MockPaginationReader) GetLastNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	if m.GetLastNRowsFunc != nil {
-		return m.GetLastNRowsFunc(ctx, schema, table, pkColumn, limit)
+		return m.GetLastNRowsFunc(ctx, schema, table, pkColumns, limit)
 	}
 	return []string{}, nil
 }
 
-func (m *MockPaginationReader) GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+func (m *MockPaginationReader) GetRandomSampleRows(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
 	if m.GetRandomSampleRowsFunc != nil {
-		return m.GetRandomSampleRowsFunc(ctx, schema, table, pkColumn, limit, estimatedRows)
+		return m.GetRandomSampleRowsFunc(ctx, schema, table, pkColumns, limit, estimatedRows)
 	}
 	return []string{}, nil
 }
 
-func (m *MockPaginationReader) GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+func (m *MockPaginationReader) GetFirstNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
 	if m.GetFirstNRowsOrderedFunc != nil {
-		return m.GetFirstNRowsOrderedFunc(ctx, schema, table, pkColumn, orderColumn, limit)
+		return m.GetFirstNRowsOrderedFunc(ctx, schema, table, pkColumns, orderColumn, limit)
 	}
 	return []string{}, nil
 }
 
-func (m *MockPaginationReader) GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+func (m *MockPaginationReader) GetLastNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
 	if m.GetLastNRowsOrderedFunc != nil {
-		return m.GetLastNRowsOrderedFunc(ctx, schema, table, pkColumn, orderColumn, limit)
+		return m.GetLastNRowsOrderedFunc(ctx, schema, table, pkColumns, orderColumn, limit)
 	}
 	return []string{}, nil
 }
@@ -476,8 +476,8 @@ func (m *MockPaginationReader) GetLastNRowsOrdered(ctx context.Context, schema, 
 // MockExportReader is a mock implementation of ExportReader for testing.
 type MockExportReader struct {
 	GetAllRowsFunc            func(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error)
-	GetFirstNRowsWithDataFunc func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
-	GetLastNRowsWithDataFunc  func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+	GetFirstNRowsWithDataFunc func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error)
+	GetLastNRowsWithDataFunc  func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error)
 	RowExistsByColumnsFunc    func(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error)
 	GetRowByColumnsFunc       func(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error)
 }
@@ -491,16 +491,16 @@ func (m *MockExportReader) GetAllRows(ctx context.Context, schema, table string,
 	return []string{}, [][]interface{}{}, nil
 }
 
-func (m *MockExportReader) GetFirstNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func (m *MockExportReader) GetFirstNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	if m.GetFirstNRowsWithDataFunc != nil {
-		return m.GetFirstNRowsWithDataFunc(ctx, schema, table, pkColumn, limit)
+		return m.GetFirstNRowsWithDataFunc(ctx, schema, table, pkColumns, limit)
 	}
 	return []string{}, [][]interface{}{}, nil
 }
 
-func (m *MockExportReader) GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func (m *MockExportReader) GetLastNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	if m.GetLastNRowsWithDataFunc != nil {
-		return m.GetLastNRowsWithDataFunc(ctx, schema, table, pkColumn, limit)
+		return m.GetLastNRowsWithDataFunc(ctx, schema, table, pkColumns, limit)
 	}
 	return []string{}, [][]interface{}{}, nil
 }

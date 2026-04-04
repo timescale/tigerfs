@@ -249,9 +249,9 @@ func (p *PaginationLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscal
 	} else {
 		// Legacy behavior: direct query
 		if p.paginationType == PaginationFirst {
-			rows, err = p.db.GetFirstNRows(ctx, p.schema, p.tableName, pkColumn, p.limit)
+			rows, err = p.db.GetFirstNRows(ctx, p.schema, p.tableName, []string{pkColumn}, p.limit)
 		} else {
-			rows, err = p.db.GetLastNRows(ctx, p.schema, p.tableName, pkColumn, p.limit)
+			rows, err = p.db.GetLastNRows(ctx, p.schema, p.tableName, []string{pkColumn}, p.limit)
 		}
 	}
 
@@ -353,7 +353,7 @@ func (p *PaginationLimitNode) Lookup(ctx context.Context, name string, out *fuse
 	pkColumn := pk.Columns[0]
 
 	// Check if row exists
-	_, err = p.db.GetRow(ctx, p.schema, p.tableName, pkColumn, pkValue)
+	_, err = p.db.GetRow(ctx, p.schema, p.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Debug("Row not found",
 			zap.String("table", p.tableName),

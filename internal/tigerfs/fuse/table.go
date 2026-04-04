@@ -137,7 +137,7 @@ func (t *TableNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	pkColumn := pk.Columns[0]
 
 	// List rows (limited by dir_listing_limit)
-	rows, err := t.db.ListRows(ctx, t.schema, t.tableName, pkColumn, t.cfg.DirListingLimit)
+	rows, err := t.db.ListRows(ctx, t.schema, t.tableName, []string{pkColumn}, t.cfg.DirListingLimit)
 	if err != nil {
 		logging.Error("Failed to list rows",
 			zap.String("table", t.tableName),
@@ -245,7 +245,7 @@ func (t *TableNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 	// Check if row exists by trying to fetch it (use PK value without extension)
 	// This validates the row exists before creating the inode
-	_, err = t.db.GetRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	_, err = t.db.GetRow(ctx, t.schema, t.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Debug("Row not found",
 			zap.String("table", t.tableName),
@@ -401,7 +401,7 @@ func (t *TableNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	pkColumn := pk.Columns[0]
 
 	// Delete row from database
-	err = t.db.DeleteRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	err = t.db.DeleteRow(ctx, t.schema, t.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Error("Failed to delete row",
 			zap.String("table", t.tableName),
@@ -456,7 +456,7 @@ func (t *TableNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	pkColumn := pk.Columns[0]
 
 	// Delete row from database
-	err = t.db.DeleteRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	err = t.db.DeleteRow(ctx, t.schema, t.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Error("Failed to delete row",
 			zap.String("table", t.tableName),
@@ -510,7 +510,7 @@ func (t *TableNode) Mkdir(ctx context.Context, name string, mode uint32, out *fu
 	pkColumn := pk.Columns[0]
 
 	// Check if row already exists
-	_, err = t.db.GetRow(ctx, t.schema, t.tableName, pkColumn, pkValue)
+	_, err = t.db.GetRow(ctx, t.schema, t.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err == nil {
 		// Row already exists
 		logging.Debug("Row already exists",

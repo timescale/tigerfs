@@ -150,7 +150,7 @@ func (a *FSAdapter) ErrorToErrno(err *tigerfs.FSError) syscall.Errno {
 		return syscall.ENOENT
 	case tigerfs.ErrPermission:
 		return syscall.EACCES
-	case tigerfs.ErrInvalidPath, tigerfs.ErrInvalidFormat:
+	case tigerfs.ErrInvalidPath, tigerfs.ErrInvalidFormat, tigerfs.ErrInvalidArgument:
 		return syscall.EINVAL
 	case tigerfs.ErrInvalidOperation:
 		return syscall.EPERM

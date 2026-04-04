@@ -59,16 +59,18 @@ type SchemaReader interface {
 // Used by row and column file nodes.
 type RowReader interface {
 	// GetRow fetches a single row by primary key.
-	GetRow(ctx context.Context, schema, table, pkColumn, pkValue string) (*Row, error)
+	GetRow(ctx context.Context, schema, table string, pk *PKMatch) (*Row, error)
 
 	// GetColumn fetches a single column value from a row by primary key.
-	GetColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error)
+	GetColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName string) (interface{}, error)
 
 	// ListRows returns a list of primary key values from a table.
-	ListRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
+	// Returns encoded PK strings (comma-delimited for composite PKs).
+	ListRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error)
 
 	// ListAllRows returns all primary key values from a table without any limit.
-	ListAllRows(ctx context.Context, schema, table, pkColumn string) ([]string, error)
+	// Returns encoded PK strings (comma-delimited for composite PKs).
+	ListAllRows(ctx context.Context, schema, table string, pkColumns []string) ([]string, error)
 }
 
 // RowWriter provides row-level write operations.
@@ -79,20 +81,20 @@ type RowWriter interface {
 	InsertRow(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error)
 
 	// UpdateRow updates an existing row with the given column values.
-	UpdateRow(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error
+	UpdateRow(ctx context.Context, schema, table string, pk *PKMatch, columns []string, values []interface{}) error
 
 	// UpdateColumn updates a single column value for a row by primary key.
-	UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error
+	UpdateColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error
 
 	// UpdateColumnCAS performs a compare-and-swap update on a column.
 	// Only updates if the current value of whereColumn matches whereValue.
 	// Returns "row not found" error if no row matches (either PK doesn't exist
 	// or the current value has already changed). This enables atomic rename:
 	// two concurrent renames of the same file will have exactly one succeed.
-	UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error
+	UpdateColumnCAS(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error
 
 	// DeleteRow deletes a row by primary key.
-	DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error
+	DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error
 }
 
 // IndexReader provides index metadata and lookup operations.
@@ -120,13 +122,13 @@ type IndexReader interface {
 	GetDistinctValuesFiltered(ctx context.Context, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error)
 
 	// GetRowsByIndexValue retrieves primary keys of rows matching an indexed column value.
-	GetRowsByIndexValue(ctx context.Context, schema, table, column, value, pkColumn string, limit int) ([]string, error)
+	GetRowsByIndexValue(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) ([]string, error)
 
 	// GetRowsByIndexValueOrdered retrieves primary keys with explicit ordering.
-	GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error)
+	GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error)
 
 	// GetRowsByCompositeIndex retrieves primary keys matching multiple column conditions.
-	GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error)
+	GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error)
 }
 
 // CountReader provides row count operations.
@@ -188,19 +190,19 @@ type DDLReader interface {
 // Used by .first/N, .last/N, .sample/N, and .order/<column>/ navigation paths.
 type PaginationReader interface {
 	// GetFirstNRows returns the first N primary key values ordered by PK ascending.
-	GetFirstNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
+	GetFirstNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error)
 
 	// GetLastNRows returns the last N primary key values ordered by PK descending.
-	GetLastNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error)
+	GetLastNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error)
 
 	// GetRandomSampleRows returns approximately N random primary key values.
-	GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error)
+	GetRandomSampleRows(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error)
 
 	// GetFirstNRowsOrdered returns the first N primary key values ordered by a specified column ascending.
-	GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
+	GetFirstNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error)
 
 	// GetLastNRowsOrdered returns the last N primary key values ordered by a specified column descending.
-	GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error)
+	GetLastNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error)
 }
 
 // ExportReader provides bulk data export operations.
@@ -211,10 +213,10 @@ type ExportReader interface {
 	GetAllRows(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error)
 
 	// GetFirstNRowsWithData returns the first N rows with full data ordered by PK ascending.
-	GetFirstNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+	GetFirstNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error)
 
 	// GetLastNRowsWithData returns the last N rows with full data ordered by PK descending.
-	GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error)
+	GetLastNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error)
 
 	// RowExistsByColumns checks if any row matches the given column=value conditions.
 	// Generates: SELECT 1 FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1

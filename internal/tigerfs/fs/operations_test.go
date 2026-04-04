@@ -745,7 +745,7 @@ func TestReadDirWithContext(t *testing.T) {
 
 	ops := NewOperations(cfg, mockDB)
 
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	entries, err := ops.ReadDirWithContext(context.Background(), ctx)
 
 	require.Nil(t, err)
@@ -962,7 +962,7 @@ func TestStatWithContext(t *testing.T) {
 
 	ops := NewOperations(cfg, mockDB)
 
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	entry, err := ops.StatWithContext(context.Background(), ctx)
 
 	require.Nil(t, err)
@@ -993,7 +993,7 @@ func TestReadFileWithContext(t *testing.T) {
 
 	// Note: ReadFileWithContext is designed for row/column paths, not tables
 	// So we test that it returns an error for PathTable
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	_, err := ops.ReadFileWithContext(context.Background(), ctx)
 
 	// Should error because PathTable is not a file type
@@ -1002,7 +1002,7 @@ func TestReadFileWithContext(t *testing.T) {
 
 // TestToQueryParams tests the ToQueryParams method.
 func TestToQueryParams(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithFilter("status", "active", true)
 	ctx = ctx.WithOrder("created_at", true)
 	ctx = ctx.WithLimit(10, LimitFirst)
@@ -1011,7 +1011,7 @@ func TestToQueryParams(t *testing.T) {
 
 	assert.Equal(t, "public", params.Schema)
 	assert.Equal(t, "users", params.Table)
-	assert.Equal(t, "id", params.PKColumn)
+	assert.Equal(t, []string{"id"}, params.PKColumns)
 	assert.Len(t, params.Filters, 1)
 	assert.Equal(t, "status", params.Filters[0].Column)
 	assert.Equal(t, "active", params.Filters[0].Value)
@@ -1214,25 +1214,25 @@ func (m *mockDBClient) GetViewCommentsBatch(ctx context.Context, schema string) 
 
 // Implement db.RowReader
 
-func (m *mockDBClient) GetRow(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+func (m *mockDBClient) GetRow(ctx context.Context, schema, table string, pk *db.PKMatch) (*db.Row, error) {
 	m.getRowCalls++
-	key := schema + "." + table + "." + pkValue
+	key := schema + "." + table + "." + pk.Values[0]
 	if row, ok := m.rowData[key]; ok {
 		return &db.Row{Columns: row.columns, Values: row.values}, nil
 	}
 	return nil, fmt.Errorf("row not found: %s", key)
 }
 
-func (m *mockDBClient) GetColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+func (m *mockDBClient) GetColumn(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
 	m.getColumnCalls++
-	key := schema + "." + table + "." + pkValue + "." + columnName
+	key := schema + "." + table + "." + pk.Values[0] + "." + columnName
 	if val, ok := m.columnData[key]; ok {
 		return val, nil
 	}
 	return nil, fmt.Errorf("column not found: %s", key)
 }
 
-func (m *mockDBClient) ListRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+func (m *mockDBClient) ListRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	key := schema + "." + table
 	if rows, ok := m.rows[key]; ok {
 		if limit > 0 && limit < len(rows) {
@@ -1243,7 +1243,7 @@ func (m *mockDBClient) ListRows(ctx context.Context, schema, table, pkColumn str
 	return []string{}, nil
 }
 
-func (m *mockDBClient) ListAllRows(ctx context.Context, schema, table, pkColumn string) ([]string, error) {
+func (m *mockDBClient) ListAllRows(ctx context.Context, schema, table string, pkColumns []string) ([]string, error) {
 	key := schema + "." + table
 	if rows, ok := m.rows[key]; ok {
 		return rows, nil
@@ -1383,38 +1383,38 @@ func (m *mockDBClient) GetDistinctValuesFiltered(ctx context.Context, schema, ta
 	return []string{}, nil
 }
 
-func (m *mockDBClient) GetRowsByIndexValue(ctx context.Context, schema, table, column, value, pkColumn string, limit int) ([]string, error) {
+func (m *mockDBClient) GetRowsByIndexValue(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
 	return []string{}, nil
 }
 
-func (m *mockDBClient) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error) {
+func (m *mockDBClient) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
 	return []string{}, nil
 }
 
-func (m *mockDBClient) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+func (m *mockDBClient) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
 	return []string{}, nil
 }
 
 // Implement db.PaginationReader
 
-func (m *mockDBClient) GetFirstNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
-	return m.ListRows(ctx, schema, table, pkColumn, limit)
+func (m *mockDBClient) GetFirstNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
+	return m.ListRows(ctx, schema, table, pkColumns, limit)
 }
 
-func (m *mockDBClient) GetLastNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
-	return m.ListRows(ctx, schema, table, pkColumn, limit)
+func (m *mockDBClient) GetLastNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
+	return m.ListRows(ctx, schema, table, pkColumns, limit)
 }
 
-func (m *mockDBClient) GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
-	return m.ListRows(ctx, schema, table, pkColumn, limit)
+func (m *mockDBClient) GetRandomSampleRows(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
+	return m.ListRows(ctx, schema, table, pkColumns, limit)
 }
 
-func (m *mockDBClient) GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
-	return m.ListRows(ctx, schema, table, pkColumn, limit)
+func (m *mockDBClient) GetFirstNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
+	return m.ListRows(ctx, schema, table, pkColumns, limit)
 }
 
-func (m *mockDBClient) GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
-	return m.ListRows(ctx, schema, table, pkColumn, limit)
+func (m *mockDBClient) GetLastNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
+	return m.ListRows(ctx, schema, table, pkColumns, limit)
 }
 
 // Implement db.ExportReader
@@ -1431,11 +1431,11 @@ func (m *mockDBClient) GetAllRows(ctx context.Context, schema, table string, lim
 	return nil, nil, nil
 }
 
-func (m *mockDBClient) GetFirstNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func (m *mockDBClient) GetFirstNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	return nil, nil, nil
 }
 
-func (m *mockDBClient) GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func (m *mockDBClient) GetLastNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	return nil, nil, nil
 }
 
@@ -1512,7 +1512,7 @@ func (m *mockDBClient) InsertRow(ctx context.Context, schema, table string, colu
 	return "1", nil
 }
 
-func (m *mockDBClient) UpdateRow(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+func (m *mockDBClient) UpdateRow(ctx context.Context, schema, table string, pk *db.PKMatch, columns []string, values []interface{}) error {
 	m.updateCalled = true
 	if len(columns) > 0 {
 		m.lastUpdateColumn = columns[0]
@@ -1520,14 +1520,14 @@ func (m *mockDBClient) UpdateRow(ctx context.Context, schema, table, pkColumn, p
 	return nil
 }
 
-func (m *mockDBClient) UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+func (m *mockDBClient) UpdateColumn(ctx context.Context, schema, table string, pk *db.PKMatch, columnName, newValue string) error {
 	m.updateColumnCalled = true
 	m.lastColumnName = columnName
 	m.lastColumnValue = newValue
 	return nil
 }
 
-func (m *mockDBClient) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error {
+func (m *mockDBClient) UpdateColumnCAS(ctx context.Context, schema, table string, pk *db.PKMatch, setColumn, newValue, whereColumn, whereValue string) error {
 	m.updateColumnCASCalled = true
 	m.updateColumnCASWhereVal = whereValue
 	m.updateColumnCASNewVal = newValue
@@ -1537,11 +1537,11 @@ func (m *mockDBClient) UpdateColumnCAS(ctx context.Context, schema, table, pkCol
 	return nil
 }
 
-func (m *mockDBClient) DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+func (m *mockDBClient) DeleteRow(ctx context.Context, schema, table string, pk *db.PKMatch) error {
 	m.deleteCalled = true
-	m.lastDeletePK = pkValue
+	m.lastDeletePK = pk.Values[0]
 	// Check if row exists
-	key := schema + "." + table + "." + pkValue
+	key := schema + "." + table + "." + pk.Values[0]
 	if _, ok := m.rowData[key]; !ok {
 		return fmt.Errorf("row not found: %s", key)
 	}
@@ -1940,7 +1940,7 @@ func TestReadDir_NoPipeline_UsesListRows(t *testing.T) {
 // TestHasPipelineOperations verifies the HasPipelineOperations helper.
 func TestHasPipelineOperations(t *testing.T) {
 	// No operations
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	assert.False(t, ctx.HasPipelineOperations(), "empty context should have no pipeline operations")
 
 	// With filter
@@ -1948,12 +1948,12 @@ func TestHasPipelineOperations(t *testing.T) {
 	assert.True(t, ctx.HasPipelineOperations(), "context with filter should have pipeline operations")
 
 	// With order only
-	ctx = NewFSContext("public", "users", "id")
+	ctx = NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithOrder("name", false)
 	assert.True(t, ctx.HasPipelineOperations(), "context with order should have pipeline operations")
 
 	// With limit only
-	ctx = NewFSContext("public", "users", "id")
+	ctx = NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithLimit(10, LimitFirst)
 	assert.True(t, ctx.HasPipelineOperations(), "context with limit should have pipeline operations")
 }
@@ -2468,7 +2468,7 @@ func TestStat_TableWithInvalidColumns(t *testing.T) {
 	ops := NewOperations(cfg, mockDB)
 
 	// Stat with a valid column works
-	fsCtx := NewFSContext("public", "users", "id")
+	fsCtx := NewFSContext("public", "users", []string{"id"})
 	fsCtx = fsCtx.WithColumns([]string{"id", "name"})
 	entry, err := ops.StatWithContext(context.Background(), fsCtx)
 	require.Nil(t, err)
@@ -2476,7 +2476,7 @@ func TestStat_TableWithInvalidColumns(t *testing.T) {
 	assert.True(t, entry.IsDir)
 
 	// Stat with an invalid column returns ErrNotExist
-	fsCtx2 := NewFSContext("public", "users", "id")
+	fsCtx2 := NewFSContext("public", "users", []string{"id"})
 	fsCtx2 = fsCtx2.WithColumns([]string{"id", "nonexistent"})
 	_, err2 := ops.StatWithContext(context.Background(), fsCtx2)
 	require.NotNil(t, err2)

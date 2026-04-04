@@ -586,7 +586,7 @@ func TestGetRowsByIndexValue(t *testing.T) {
 	}()
 
 	// Query rows with category='electronics'
-	pks, err := client.GetRowsByIndexValue(ctx, "public", "test_rows_by_index", "category", "electronics", "id", 100)
+	pks, err := client.GetRowsByIndexValue(ctx, "public", "test_rows_by_index", "category", "electronics", []string{"id"}, 100)
 	if err != nil {
 		t.Fatalf("GetRowsByIndexValue() failed: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestGetRowsByIndexValue(t *testing.T) {
 	}
 
 	// Query non-existent value
-	pks, err = client.GetRowsByIndexValue(ctx, "public", "test_rows_by_index", "category", "nonexistent", "id", 100)
+	pks, err = client.GetRowsByIndexValue(ctx, "public", "test_rows_by_index", "category", "nonexistent", []string{"id"}, 100)
 	if err != nil {
 		t.Fatalf("GetRowsByIndexValue() failed: %v", err)
 	}
@@ -623,7 +623,7 @@ func TestClient_GetRowsByIndexValue_NilPool(t *testing.T) {
 	client := &Client{cfg: &config.Config{}}
 	ctx := context.Background()
 
-	_, err := client.GetRowsByIndexValue(ctx, "public", "test", "col", "val", "id", 100)
+	_, err := client.GetRowsByIndexValue(ctx, "public", "test", "col", "val", []string{"id"}, 100)
 	if err == nil {
 		t.Error("Expected error for nil pool")
 	}
@@ -839,7 +839,7 @@ func TestGetRowsByIndexValueOrdered(t *testing.T) {
 	}()
 
 	// Test ascending order - first 2 electronics rows
-	pks, err := client.GetRowsByIndexValueOrdered(ctx, "public", "test_rows_ordered", "category", "electronics", "id", 2, true)
+	pks, err := client.GetRowsByIndexValueOrdered(ctx, "public", "test_rows_ordered", "category", "electronics", []string{"id"}, 2, true)
 	if err != nil {
 		t.Fatalf("GetRowsByIndexValueOrdered(ASC) failed: %v", err)
 	}
@@ -856,7 +856,7 @@ func TestGetRowsByIndexValueOrdered(t *testing.T) {
 	}
 
 	// Test descending order - last 2 electronics rows
-	pks, err = client.GetRowsByIndexValueOrdered(ctx, "public", "test_rows_ordered", "category", "electronics", "id", 2, false)
+	pks, err = client.GetRowsByIndexValueOrdered(ctx, "public", "test_rows_ordered", "category", "electronics", []string{"id"}, 2, false)
 	if err != nil {
 		t.Fatalf("GetRowsByIndexValueOrdered(DESC) failed: %v", err)
 	}
@@ -891,7 +891,7 @@ func TestClient_GetRowsByIndexValueOrdered_NilPool(t *testing.T) {
 	client := &Client{cfg: &config.Config{}}
 	ctx := context.Background()
 
-	_, err := client.GetRowsByIndexValueOrdered(ctx, "public", "test", "col", "val", "id", 10, true)
+	_, err := client.GetRowsByIndexValueOrdered(ctx, "public", "test", "col", "val", []string{"id"}, 10, true)
 	if err == nil {
 		t.Error("Expected error for nil pool")
 	}

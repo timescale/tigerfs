@@ -80,9 +80,9 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 		{
 			name: "no filters, no limit",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 			},
 			selectPKOnly: true,
 			wantSQL:      `SELECT "id" FROM "public"."users"`,
@@ -91,9 +91,9 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 		{
 			name: "single filter",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "active"},
 				},
@@ -105,9 +105,9 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 		{
 			name: "multiple filters",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "order_id",
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"order_id"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "pending"},
 					{Column: "customer_id", Value: "123"},
@@ -122,7 +122,7 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			params: QueryParams{
 				Schema:    "public",
 				Table:     "users",
-				PKColumn:  "id",
+				PKColumns: []string{"id"},
 				Limit:     100,
 				LimitType: LimitFirst,
 			},
@@ -135,7 +135,7 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			params: QueryParams{
 				Schema:    "public",
 				Table:     "users",
-				PKColumn:  "id",
+				PKColumns: []string{"id"},
 				Limit:     50,
 				LimitType: LimitLast,
 			},
@@ -148,7 +148,7 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			params: QueryParams{
 				Schema:    "public",
 				Table:     "users",
-				PKColumn:  "id",
+				PKColumns: []string{"id"},
 				Limit:     25,
 				LimitType: LimitSample,
 			},
@@ -161,7 +161,7 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			params: QueryParams{
 				Schema:    "public",
 				Table:     "users",
-				PKColumn:  "id",
+				PKColumns: []string{"id"},
 				OrderBy:   "name",
 				OrderDesc: false,
 				Limit:     100,
@@ -176,7 +176,7 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			params: QueryParams{
 				Schema:    "public",
 				Table:     "users",
-				PKColumn:  "id",
+				PKColumns: []string{"id"},
 				OrderBy:   "created_at",
 				OrderDesc: true,
 				Limit:     50,
@@ -189,9 +189,9 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 		{
 			name: "filter + order + limit",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "active"},
 				},
@@ -209,7 +209,7 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 			params: QueryParams{
 				Schema:    "public",
 				Table:     "users",
-				PKColumn:  "id",
+				PKColumns: []string{"id"},
 				Limit:     10,
 				LimitType: LimitFirst,
 			},
@@ -220,9 +220,9 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 		{
 			name: "identifiers with embedded double quotes",
 			params: QueryParams{
-				Schema:   `my"schema`,
-				Table:    `my"table`,
-				PKColumn: `my"id`,
+				Schema:    `my"schema`,
+				Table:     `my"table`,
+				PKColumns: []string{`my"id`},
 			},
 			selectPKOnly: true,
 			wantSQL:      `SELECT "my""id" FROM "my""schema"."my""table"`,
@@ -231,9 +231,9 @@ func TestBuildPipelineSQL_Simple(t *testing.T) {
 		{
 			name: "filter column with embedded double quote",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: `sta"tus`, Value: "active"},
 				},
@@ -273,7 +273,7 @@ func TestBuildPipelineSQL_Nested(t *testing.T) {
 			params: QueryParams{
 				Schema:            "public",
 				Table:             "users",
-				PKColumn:          "id",
+				PKColumns:         []string{"id"},
 				Limit:             50,
 				LimitType:         LimitLast,
 				PreviousLimit:     100,
@@ -288,7 +288,7 @@ func TestBuildPipelineSQL_Nested(t *testing.T) {
 			params: QueryParams{
 				Schema:            "public",
 				Table:             "users",
-				PKColumn:          "id",
+				PKColumns:         []string{"id"},
 				Limit:             50,
 				LimitType:         LimitFirst,
 				PreviousLimit:     100,
@@ -303,7 +303,7 @@ func TestBuildPipelineSQL_Nested(t *testing.T) {
 			params: QueryParams{
 				Schema:            "public",
 				Table:             "users",
-				PKColumn:          "id",
+				PKColumns:         []string{"id"},
 				Limit:             50,
 				LimitType:         LimitSample,
 				PreviousLimit:     1000,
@@ -316,9 +316,9 @@ func TestBuildPipelineSQL_Nested(t *testing.T) {
 		{
 			name: "nested with post-filter (.first/100/.filter/status/active/.last/50/)",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "active"},
 				},
@@ -366,9 +366,9 @@ func TestBuildPipelineSQL_Nested(t *testing.T) {
 // TestBuildPipelineSQL_ParameterValues tests that parameter values are correct.
 func TestBuildPipelineSQL_ParameterValues(t *testing.T) {
 	params := QueryParams{
-		Schema:   "myschema",
-		Table:    "mytable",
-		PKColumn: "pk",
+		Schema:    "myschema",
+		Table:     "mytable",
+		PKColumns: []string{"pk"},
 		Filters: []FilterCondition{
 			{Column: "col1", Value: "val1"},
 			{Column: "col2", Value: "val2"},
@@ -399,9 +399,9 @@ func TestBuildPipelineSQL_ParameterValues(t *testing.T) {
 func TestBuildPipelineSQL_SQLInjectionPrevention(t *testing.T) {
 	t.Run("semicolon injection", func(t *testing.T) {
 		params := QueryParams{
-			Schema:   "public; DROP TABLE users;--",
-			Table:    "users\"; DROP TABLE users;--",
-			PKColumn: "id\"; DROP TABLE users;--",
+			Schema:    "public; DROP TABLE users;--",
+			Table:     "users\"; DROP TABLE users;--",
+			PKColumns: []string{"id\"; DROP TABLE users;--"},
 			Filters: []FilterCondition{
 				{Column: "status\"; DROP TABLE users;--", Value: "active"},
 			},
@@ -425,9 +425,9 @@ func TestBuildPipelineSQL_SQLInjectionPrevention(t *testing.T) {
 	t.Run("embedded double quote injection", func(t *testing.T) {
 		// A table/schema with " in its name must have quotes properly escaped
 		params := QueryParams{
-			Schema:   `my"schema`,
-			Table:    `my"table`,
-			PKColumn: `my"pk`,
+			Schema:    `my"schema`,
+			Table:     `my"table`,
+			PKColumns: []string{`my"pk`},
 		}
 
 		sql, _ := BuildPipelineSQLForTest(params, true)
@@ -445,9 +445,9 @@ func TestBuildPipelineSQL_SQLInjectionPrevention(t *testing.T) {
 
 	t.Run("filter column with embedded quote", func(t *testing.T) {
 		params := QueryParams{
-			Schema:   "public",
-			Table:    "users",
-			PKColumn: "id",
+			Schema:    "public",
+			Table:     "users",
+			PKColumns: []string{"id"},
 			Filters: []FilterCondition{
 				{Column: `col"name`, Value: "val"},
 			},
@@ -476,7 +476,7 @@ func TestBuildPipelineSQL_NonIdentifierValues(t *testing.T) {
 		{
 			name: "ascending order",
 			params: QueryParams{
-				Schema: "public", Table: "users", PKColumn: "id",
+				Schema: "public", Table: "users", PKColumns: []string{"id"},
 				OrderBy: "name", OrderDesc: false,
 				Limit: 10, LimitType: LimitFirst,
 			},
@@ -484,7 +484,7 @@ func TestBuildPipelineSQL_NonIdentifierValues(t *testing.T) {
 		{
 			name: "descending order",
 			params: QueryParams{
-				Schema: "public", Table: "users", PKColumn: "id",
+				Schema: "public", Table: "users", PKColumns: []string{"id"},
 				OrderBy: "created_at", OrderDesc: true,
 				Limit: 10, LimitType: LimitLast,
 			},
@@ -492,7 +492,7 @@ func TestBuildPipelineSQL_NonIdentifierValues(t *testing.T) {
 		{
 			name: "random sample",
 			params: QueryParams{
-				Schema: "public", Table: "users", PKColumn: "id",
+				Schema: "public", Table: "users", PKColumns: []string{"id"},
 				Limit: 10, LimitType: LimitSample,
 			},
 		},
@@ -562,9 +562,9 @@ func TestBuildPipelineSQL_ConflictingFilters(t *testing.T) {
 		{
 			name: "same column different values (.by/user_id/90/.by/user_id/71/)",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "user_id", Value: "90", Indexed: true},
 					{Column: "user_id", Value: "71", Indexed: true},
@@ -577,9 +577,9 @@ func TestBuildPipelineSQL_ConflictingFilters(t *testing.T) {
 		{
 			name: "mixed indexed and non-indexed on same column",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "active", Indexed: true},
 					{Column: "status", Value: "inactive", Indexed: false},
@@ -592,9 +592,9 @@ func TestBuildPipelineSQL_ConflictingFilters(t *testing.T) {
 		{
 			name: "three filters on same column",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "events",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "events",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "type", Value: "click", Indexed: true},
 					{Column: "type", Value: "view", Indexed: true},
@@ -607,9 +607,9 @@ func TestBuildPipelineSQL_ConflictingFilters(t *testing.T) {
 		{
 			name: "conflicting filter with limit",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "id", Value: "1", Indexed: true},
 					{Column: "id", Value: "2", Indexed: true},
@@ -647,9 +647,9 @@ func TestBuildPipelineSQL_ComplexScenarios(t *testing.T) {
 		{
 			name: "export query (SELECT *)",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "id",
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"id"},
 				Filters: []FilterCondition{
 					{Column: "customer_id", Value: "123"},
 				},
@@ -661,9 +661,9 @@ func TestBuildPipelineSQL_ComplexScenarios(t *testing.T) {
 			check: func(t *testing.T, sql string, params []interface{}) {
 				// For export, we want SELECT *
 				gotSQL, _ := BuildPipelineSQLForTest(QueryParams{
-					Schema:   "public",
-					Table:    "orders",
-					PKColumn: "id",
+					Schema:    "public",
+					Table:     "orders",
+					PKColumns: []string{"id"},
 					Filters: []FilterCondition{
 						{Column: "customer_id", Value: "123"},
 					},
@@ -681,9 +681,9 @@ func TestBuildPipelineSQL_ComplexScenarios(t *testing.T) {
 		{
 			name: "multiple filters with order",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "events",
-				PKColumn: "event_id",
+				Schema:    "public",
+				Table:     "events",
+				PKColumns: []string{"event_id"},
 				Filters: []FilterCondition{
 					{Column: "type", Value: "click", Indexed: true},
 					{Column: "source", Value: "web", Indexed: false},
@@ -729,10 +729,10 @@ func TestBuildPipelineSQL_Columns(t *testing.T) {
 		{
 			name: "columns produce SELECT col list",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "id",
-				Columns:  []string{"id", "status", "total"},
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"id"},
+				Columns:   []string{"id", "status", "total"},
 			},
 			selectPKOnly: false,
 			wantSQL:      `SELECT "id", "status", "total" FROM "public"."orders"`,
@@ -741,10 +741,10 @@ func TestBuildPipelineSQL_Columns(t *testing.T) {
 		{
 			name: "selectPKOnly overrides columns",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "id",
-				Columns:  []string{"id", "status"},
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"id"},
+				Columns:   []string{"id", "status"},
 			},
 			selectPKOnly: true,
 			wantSQL:      `SELECT "id" FROM "public"."orders"`,
@@ -753,10 +753,10 @@ func TestBuildPipelineSQL_Columns(t *testing.T) {
 		{
 			name: "columns with filter",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "id",
-				Columns:  []string{"id", "amount"},
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"id"},
+				Columns:   []string{"id", "amount"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "active"},
 				},
@@ -768,10 +768,10 @@ func TestBuildPipelineSQL_Columns(t *testing.T) {
 		{
 			name: "columns with filter and limit",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "orders",
-				PKColumn: "id",
-				Columns:  []string{"id", "status"},
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"id"},
+				Columns:   []string{"id", "status"},
 				Filters: []FilterCondition{
 					{Column: "status", Value: "pending"},
 				},
@@ -785,10 +785,10 @@ func TestBuildPipelineSQL_Columns(t *testing.T) {
 		{
 			name: "single column",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
-				Columns:  []string{"email"},
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
+				Columns:   []string{"email"},
 			},
 			selectPKOnly: false,
 			wantSQL:      `SELECT "email" FROM "public"."users"`,
@@ -797,10 +797,10 @@ func TestBuildPipelineSQL_Columns(t *testing.T) {
 		{
 			name: "empty columns means SELECT *",
 			params: QueryParams{
-				Schema:   "public",
-				Table:    "users",
-				PKColumn: "id",
-				Columns:  []string{},
+				Schema:    "public",
+				Table:     "users",
+				PKColumns: []string{"id"},
+				Columns:   []string{},
 			},
 			selectPKOnly: false,
 			wantSQL:      `SELECT * FROM "public"."users"`,
@@ -828,7 +828,7 @@ func TestBuildPipelineSQL_ColumnsNested(t *testing.T) {
 	params := QueryParams{
 		Schema:            "public",
 		Table:             "orders",
-		PKColumn:          "id",
+		PKColumns:         []string{"id"},
 		Columns:           []string{"id", "status"},
 		Limit:             50,
 		LimitType:         LimitLast,

@@ -299,7 +299,8 @@ func (p *PipelineNode) lookupRow(ctx context.Context, name string) (*fs.Inode, s
 	pkValue, format := util.ParseRowFilename(name)
 
 	// Verify row exists
-	_, err := p.db.GetRow(ctx, p.schema, p.table, p.pipeline.PKColumn, pkValue)
+	pkColumn := p.pipeline.PKColumns[0]
+	_, err := p.db.GetRow(ctx, p.schema, p.table, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Debug("Row not found",
 			zap.String("table", p.table),
@@ -311,7 +312,7 @@ func (p *PipelineNode) lookupRow(ctx context.Context, name string) (*fs.Inode, s
 	// If name has format extension, create row file node
 	if name != pkValue {
 		stableAttr := fs.StableAttr{Mode: syscall.S_IFREG}
-		rowNode := NewRowFileNode(p.cfg, p.db, p.cache, p.schema, p.table, p.pipeline.PKColumn, pkValue, format)
+		rowNode := NewRowFileNode(p.cfg, p.db, p.cache, p.schema, p.table, pkColumn, pkValue, format)
 		child := p.NewPersistentInode(ctx, rowNode, stableAttr)
 
 		// Fill in entry attributes
@@ -325,7 +326,7 @@ func (p *PipelineNode) lookupRow(ctx context.Context, name string) (*fs.Inode, s
 
 	// No extension, create row directory node
 	stableAttr := fs.StableAttr{Mode: syscall.S_IFDIR}
-	rowDirNode := NewRowDirectoryNode(p.cfg, p.db, p.cache, p.schema, p.table, p.pipeline.PKColumn, pkValue, p.partialRows)
+	rowDirNode := NewRowDirectoryNode(p.cfg, p.db, p.cache, p.schema, p.table, pkColumn, pkValue, p.partialRows)
 	child := p.NewPersistentInode(ctx, rowDirNode, stableAttr)
 	return child, 0
 }

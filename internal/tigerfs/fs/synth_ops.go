@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
@@ -114,7 +115,8 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 			colNames[i] = c.Name
 		}
 
-		// Detect PK column (views might not have one, try anyway)
+		// Detect PK column (views might not have one, try anyway).
+		// Synth views always have single-column PKs; use first column for role detection.
 		pkColumn := "id"
 		pk, err := o.metaCache.GetPrimaryKey(ctx, schema, viewName)
 		if err == nil {
@@ -475,13 +477,12 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 
 	if rowExists {
 		// UPDATE existing row — need to find the PK value
-		pkColumn := info.Roles.PrimaryKey
 		pkValue, fsErr := o.getSynthRowPK(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
 		if fsErr != nil {
 			return fsErr
 		}
 
-		dbErr := o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, pkValue, columns, values)
+		dbErr := o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue), columns, values)
 		if dbErr != nil {
 			return &FSError{
 				Code:    ErrIO,
@@ -548,7 +549,7 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 			if lookupErr != nil {
 				return lookupErr
 			}
-			err = o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, info.Roles.PrimaryKey, pkValue)
+			err = o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue))
 			if err != nil {
 				return &FSError{
 					Code:    ErrIO,
@@ -567,7 +568,7 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 		return fsErr
 	}
 
-	err := o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, info.Roles.PrimaryKey, pkValue)
+	err := o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue))
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -861,7 +862,7 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 	// Atomic rename: UPDATE SET filename = new WHERE pk = X AND filename = old.
 	// If another process already renamed this file, the WHERE won't match
 	// and we get "row not found" — exactly one concurrent rename wins.
-	err := o.db.UpdateColumnCAS(ctx, schema, table, info.Roles.PrimaryKey, pkValue, info.Roles.Filename, newFilename, info.Roles.Filename, rawOldFilename)
+	err := o.db.UpdateColumnCAS(ctx, schema, table, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue), info.Roles.Filename, newFilename, info.Roles.Filename, rawOldFilename)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return &FSError{

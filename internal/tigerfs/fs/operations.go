@@ -551,8 +551,6 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		}
 	}
 
-	pkColumn := pk.Columns[0]
-
 	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
@@ -565,7 +563,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	if fsCtx.HasPipelineOperations() {
 		// Use pipeline query to respect filters, order, and limits
 		params := fsCtx.ToQueryParams()
-		params.PKColumn = pkColumn
+		params.PKColumns = pk.Columns
 
 		// Apply default limit if none specified in pipeline
 		if params.Limit == 0 {
@@ -582,7 +580,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		}
 	} else {
 		// Simple table scan for raw table access
-		rows, err = o.db.ListRows(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, limit)
+		rows, err = o.db.ListRows(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns, limit)
 		if err != nil {
 			return nil, &FSError{
 				Code:    ErrIO,
@@ -687,7 +685,11 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 	var valueMap map[string]interface{}
 	pk, pkErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
 	if pkErr == nil {
-		row, rowErr := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey)
+		match, decodeErr := pk.Decode(parsed.PrimaryKey)
+		if decodeErr != nil {
+			return nil, &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+		}
+		row, rowErr := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 		if rowErr == nil && len(row.Columns) == len(row.Values) {
 			valueMap = make(map[string]interface{}, len(row.Columns))
 			for i, col := range row.Columns {
@@ -1401,8 +1403,14 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 		}
 	}
 
+	// Decode composite PK from directory name
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return nil, &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
+
 	// Check if row exists by fetching it
-	row, err := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey)
+	row, err := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrNotExist,
@@ -1492,8 +1500,14 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		}
 	}
 
+	// Decode composite PK from directory name
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return nil, &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
+
 	// Get column value using the resolved column name
-	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey, actualColumn)
+	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, match, actualColumn)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrNotExist,
@@ -1928,8 +1942,14 @@ func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*File
 		}
 	}
 
+	// Decode composite PK from directory name
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return nil, &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
+
 	// Get row data
-	row, err := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey)
+	row, err := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrNotExist,
@@ -2009,8 +2029,14 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 		}
 	}
 
+	// Decode composite PK from directory name
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return nil, &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
+
 	// Get column value using the resolved column name
-	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, pk.Columns[0], parsed.PrimaryKey, actualColumn)
+	val, err := o.db.GetColumn(ctx, fsCtx.Schema, fsCtx.TableName, match, actualColumn)
 	if err != nil {
 		return nil, &FSError{
 			Code:    ErrNotExist,
@@ -2193,7 +2219,7 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 
 		// Use pipeline query to respect filters, order, and limits
 		params := fsCtx.ToQueryParams()
-		params.PKColumn = pk.Columns[0]
+		params.PKColumns = pk.Columns
 
 		// Apply default limit if none specified in pipeline
 		if params.Limit == 0 {
