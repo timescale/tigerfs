@@ -1,6 +1,7 @@
 -- Demo data for TigerFS
--- ~1,000 users, 10 categories, ~200 products, ~8,000 orders
--- Demonstrates mixed PK types: SERIAL (users, products), TEXT (categories), UUIDv7 (orders)
+-- ~1,000 users, 10 categories, ~200 products, ~8,000 orders, ~600 inventory records
+-- Demonstrates mixed PK types: SERIAL (users, products), TEXT (categories), UUIDv7 (orders),
+-- composite (product_inventory: product_id + warehouse)
 --
 -- File-first apps (blog, docs, snippets) are created by seed.sh via the TigerFS mount,
 -- not in this SQL file. This keeps init.sql data-first only.
@@ -156,11 +157,45 @@ SELECT
     NOW() - ((i % 365) || ' days')::INTERVAL - ((i % 24) || ' hours')::INTERVAL AS created_at
 FROM generate_series(1, 8000) AS i;
 
+-- Product inventory uses composite primary key (product_id, warehouse)
+-- Tracks stock levels per product per warehouse location
+CREATE TABLE product_inventory (
+    product_id INTEGER REFERENCES products(id),
+    warehouse TEXT NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 0,
+    observed_at TIMESTAMP NOT NULL,
+    last_restocked TIMESTAMP,
+    PRIMARY KEY (product_id, warehouse)
+);
+
+-- Generate ~600 inventory rows: each product in 3 warehouses
+INSERT INTO product_inventory (product_id, warehouse, quantity, observed_at, last_restocked)
+SELECT
+    p.id AS product_id,
+    w.name AS warehouse,
+    -- Quantity varies by warehouse: east has more, central less
+    CASE w.name
+        WHEN 'east' THEN 10 + (p.id % 50)
+        WHEN 'west' THEN 5 + (p.id % 30)
+        ELSE 2 + (p.id % 15)  -- central
+    END AS quantity,
+    -- Observed within the last 3 days
+    NOW() - ((p.id % 3) || ' days')::INTERVAL - ((p.id % 12) || ' hours')::INTERVAL AS observed_at,
+    -- Last restocked: some recent, some old, some NULL (never restocked)
+    CASE
+        WHEN p.id % 5 = 0 THEN NULL  -- 20% never restocked
+        ELSE NOW() - ((p.id % 60 + 1) || ' days')::INTERVAL
+    END AS last_restocked
+FROM products p
+CROSS JOIN (VALUES ('east'), ('west'), ('central')) AS w(name);
+
 -- Single-column indexes
 CREATE INDEX idx_products_category ON products(category);
 CREATE INDEX idx_orders_user_id ON orders(user_id);
 CREATE INDEX idx_orders_product_id ON orders(product_id);
 CREATE INDEX idx_orders_created_at ON orders(created_at);
+
+CREATE INDEX idx_inventory_warehouse ON product_inventory(warehouse);
 
 -- Composite indexes for multi-column navigation
 -- Example: ls /mnt/db/users/.by/last_name.first_name/Smith/Alice/
