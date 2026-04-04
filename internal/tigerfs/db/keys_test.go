@@ -337,6 +337,74 @@ func TestClient_GetPrimaryKey_NilPool(t *testing.T) {
 	}
 }
 
+func TestListRows_CompositePK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create table with composite primary key
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_list_rows_composite (
+			region text,
+			user_id int,
+			name text,
+			PRIMARY KEY (region, user_id)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_list_rows_composite")
+	}()
+
+	// Insert rows in non-sorted order
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_list_rows_composite (region, user_id, name) VALUES
+		('us', 2, 'Bob'),
+		('eu', 1, 'Alice'),
+		('us', 1, 'Charlie')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// List rows with composite PK columns
+	rows, err := client.ListRows(ctx, "public", "test_list_rows_composite", []string{"region", "user_id"}, 10)
+	if err != nil {
+		t.Fatalf("ListRows() failed: %v", err)
+	}
+
+	if len(rows) != 3 {
+		t.Fatalf("Expected 3 rows, got %d", len(rows))
+	}
+
+	// Should be ordered by region ASC, user_id ASC and comma-delimited
+	expected := []string{"eu,1", "us,1", "us,2"}
+	for i, want := range expected {
+		if rows[i] != want {
+			t.Errorf("Row %d = %q, want %q", i, rows[i], want)
+		}
+	}
+
+	t.Logf("Composite PK rows: %v", rows)
+}
+
 func TestClient_ListRows_NilPool(t *testing.T) {
 	client := &Client{
 		cfg: &config.Config{},

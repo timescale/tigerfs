@@ -26,6 +26,46 @@ func TestNewFSContext(t *testing.T) {
 	}
 }
 
+// TestCompositePK_Context verifies FSContext with composite primary keys.
+func TestCompositePK_Context(t *testing.T) {
+	ctx := NewFSContext("public", "orders", []string{"customer_id", "product_id"})
+
+	// Verify PKColumns has 2 elements
+	if len(ctx.PKColumns) != 2 {
+		t.Fatalf("PKColumns has %d elements, want 2", len(ctx.PKColumns))
+	}
+	if ctx.PKColumns[0] != "customer_id" || ctx.PKColumns[1] != "product_id" {
+		t.Errorf("PKColumns = %v, want [customer_id, product_id]", ctx.PKColumns)
+	}
+
+	// Verify ToQueryParams copies PKColumns
+	params := ctx.ToQueryParams()
+	if len(params.PKColumns) != 2 {
+		t.Fatalf("params.PKColumns has %d elements, want 2", len(params.PKColumns))
+	}
+	if params.PKColumns[0] != "customer_id" || params.PKColumns[1] != "product_id" {
+		t.Errorf("params.PKColumns = %v, want [customer_id, product_id]", params.PKColumns)
+	}
+
+	// Verify Clone preserves PKColumns
+	clone := ctx.Clone()
+	if len(clone.PKColumns) != 2 {
+		t.Fatalf("clone.PKColumns has %d elements, want 2", len(clone.PKColumns))
+	}
+	if clone.PKColumns[0] != "customer_id" || clone.PKColumns[1] != "product_id" {
+		t.Errorf("clone.PKColumns = %v, want [customer_id, product_id]", clone.PKColumns)
+	}
+
+	// Verify WithFilter preserves PKColumns
+	filtered := ctx.WithFilter("status", "active", false)
+	if len(filtered.PKColumns) != 2 {
+		t.Fatalf("filtered.PKColumns has %d elements, want 2", len(filtered.PKColumns))
+	}
+	if filtered.PKColumns[0] != "customer_id" || filtered.PKColumns[1] != "product_id" {
+		t.Errorf("filtered.PKColumns = %v, want [customer_id, product_id]", filtered.PKColumns)
+	}
+}
+
 // TestFSContextClone verifies independent copy.
 func TestFSContextClone(t *testing.T) {
 	ctx := NewFSContext("public", "users", []string{"id"})
