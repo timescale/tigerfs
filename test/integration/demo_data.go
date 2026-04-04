@@ -59,6 +59,11 @@ func seedDemoData(ctx context.Context, connStr string, cfg DemoDataConfig) error
 		return err
 	}
 
+	// Create product_inventory table (composite PK: product_id + warehouse)
+	if err := createProductInventoryTable(ctx, pool, cfg.ProductCount); err != nil {
+		return err
+	}
+
 	// Create indexes for .by/ navigation
 	if err := createIndexes(ctx, pool); err != nil {
 		return err
@@ -259,6 +264,59 @@ func createOrdersTable(ctx context.Context, pool *pgxpool.Pool, count, userCount
 	return nil
 }
 
+func createProductInventoryTable(ctx context.Context, pool *pgxpool.Pool, productCount int) error {
+	_, err := pool.Exec(ctx, `
+		CREATE TABLE product_inventory (
+			product_id INTEGER REFERENCES products(id),
+			warehouse TEXT NOT NULL,
+			quantity INTEGER NOT NULL DEFAULT 0,
+			observed_at TIMESTAMP NOT NULL,
+			last_restocked TIMESTAMP,
+			PRIMARY KEY (product_id, warehouse)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create product_inventory: %w", err)
+	}
+
+	warehouses := []string{"east", "west", "central"}
+
+	for i := 1; i <= productCount; i++ {
+		for j, wh := range warehouses {
+			// Vary quantity by warehouse
+			quantity := 5 + (i*(j+1))%50
+
+			// Observed within the last 3 days from base timestamp
+			observedOffset := fmt.Sprintf("%d hours", (i%72)+(j*8))
+
+			// Last restocked: some NULL (never restocked)
+			var lastRestocked *string
+			if i%5 != 0 { // 80% have been restocked
+				offset := fmt.Sprintf("%d days", (i%60)+1)
+				lr := fmt.Sprintf("'%s'::timestamp - '%s'::interval", BaseTimestamp, offset)
+				lastRestocked = &lr
+			}
+
+			var lrSQL string
+			if lastRestocked != nil {
+				lrSQL = *lastRestocked
+			} else {
+				lrSQL = "NULL"
+			}
+
+			_, err := pool.Exec(ctx, fmt.Sprintf(`
+				INSERT INTO product_inventory (product_id, warehouse, quantity, observed_at, last_restocked)
+				VALUES ($1, $2, $3, '%s'::timestamp - '%s'::interval, %s)
+			`, BaseTimestamp, observedOffset, lrSQL), i, wh, quantity)
+			if err != nil {
+				return fmt.Errorf("insert inventory product %d warehouse %s: %w", i, wh, err)
+			}
+		}
+	}
+
+	return nil
+}
+
 func createIndexes(ctx context.Context, pool *pgxpool.Pool) error {
 	indexes := []string{
 		"CREATE INDEX idx_users_email ON users(email)",
@@ -269,6 +327,7 @@ func createIndexes(ctx context.Context, pool *pgxpool.Pool) error {
 		"CREATE INDEX idx_orders_product ON orders(product_id)",
 		"CREATE INDEX idx_orders_status ON orders(status)",
 		"CREATE INDEX idx_orders_created ON orders(created_at)",
+		"CREATE INDEX idx_inventory_warehouse ON product_inventory(warehouse)",
 	}
 
 	for _, idx := range indexes {
@@ -358,6 +417,15 @@ var (
 	CategoryElectronicsName        = "Electronics"
 	CategoryElectronicsDescription = "Gadgets, devices, and electronic accessories"
 	CategoryElectronicsOrder       = 1
+
+	// Product inventory (composite PK: product_id, warehouse)
+	// Product 1 in 3 warehouses: east, west, central
+	Inventory1EastQuantity    = 6 // 5 + (1*1)%50 = 6
+	Inventory1WestQuantity    = 7 // 5 + (1*2)%50 = 7
+	Inventory1CentralQuantity = 8 // 5 + (1*3)%50 = 8
+
+	// All warehouse names (sorted)
+	AllWarehouses = []string{"central", "east", "west"}
 
 	// All category slugs (sorted)
 	AllCategorySlugs = []string{
