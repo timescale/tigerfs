@@ -17,22 +17,61 @@ type Row struct {
 	Values  []interface{}
 }
 
-// GetRow fetches a single row by primary key
-func GetRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue string) (*Row, error) {
+// pkSelectList returns a comma-separated list of quoted PK column names for SELECT.
+// Example: `"customer_id", "product_id"`
+func pkSelectList(pkColumns []string) string {
+	quoted := make([]string, len(pkColumns))
+	for i, col := range pkColumns {
+		quoted[i] = qi(col)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// pkOrderByList returns a comma-separated ORDER BY clause fragment for PK columns.
+// Example with ASC: `"customer_id" ASC, "product_id" ASC`
+func pkOrderByList(pkColumns []string, direction string) string {
+	parts := make([]string, len(pkColumns))
+	for i, col := range pkColumns {
+		parts[i] = qi(col) + " " + direction
+	}
+	return strings.Join(parts, ", ")
+}
+
+// scanAndEncodePK scans multiple PK column values from a row and encodes them
+// into a single string using the PrimaryKey's encoding rules.
+func scanAndEncodePK(values []interface{}, pkColumns []string) (string, error) {
+	if len(pkColumns) == 1 {
+		// Single-column: convert directly
+		return format.ConvertValueToText(values[0])
+	}
+	// Multi-column: convert each value, then encode
+	pk := &PrimaryKey{Columns: pkColumns}
+	strs := make([]string, len(values))
+	for i, v := range values {
+		s, err := format.ConvertValueToText(v)
+		if err != nil {
+			return "", fmt.Errorf("failed to convert PK column %q: %w", pkColumns[i], err)
+		}
+		strs[i] = s
+	}
+	return pk.Encode(strs), nil
+}
+
+// GetRow fetches a single row by primary key (single or composite).
+func GetRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, pk *PKMatch) (*Row, error) {
 	logging.Debug("Querying row",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
-		zap.String("pk_value", pkValue))
+		zap.Strings("pk_columns", pk.Columns),
+		zap.Strings("pk_values", pk.Values))
 
-	// Build query with proper quoting for identifiers
-	// SELECT * FROM "schema"."table" WHERE "pk_column" = $1
+	// SELECT * FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE %s = $1`,
-		qt(schema, table), qi(pkColumn),
+		`SELECT * FROM %s WHERE %s`,
+		qt(schema, table), pk.WhereClause(1),
 	)
 
-	rows, err := pool.Query(ctx, query, pkValue)
+	rows, err := pool.Query(ctx, query, pk.WhereArgs()...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query row: %w", err)
 	}
@@ -62,8 +101,8 @@ func GetRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pk
 		logging.Warn("Multiple rows returned for primary key lookup",
 			zap.String("schema", schema),
 			zap.String("table", table),
-			zap.String("pk_column", pkColumn),
-			zap.String("pk_value", pkValue))
+			zap.Strings("pk_columns", pk.Columns),
+			zap.Strings("pk_values", pk.Values))
 	}
 
 	if err := rows.Err(); err != nil {
@@ -82,32 +121,29 @@ func GetRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pk
 }
 
 // GetRow is a convenience wrapper for Client
-func (c *Client) GetRow(ctx context.Context, schema, table, pkColumn, pkValue string) (*Row, error) {
+func (c *Client) GetRow(ctx context.Context, schema, table string, pk *PKMatch) (*Row, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetRow(ctx, c.pool, schema, table, pkColumn, pkValue)
+	return GetRow(ctx, c.pool, schema, table, pk)
 }
 
-// GetColumn fetches a single column value from a row by primary key
-// Returns the column value and whether it was NULL
-func GetColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+// GetColumn fetches a single column value from a row by primary key (single or composite).
+func GetColumn(ctx context.Context, pool *pgxpool.Pool, schema, table string, pk *PKMatch, columnName string) (interface{}, error) {
 	logging.Debug("Querying column",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
-		zap.String("pk_value", pkValue),
+		zap.Strings("pk_columns", pk.Columns),
 		zap.String("column", columnName))
 
-	// Build query with proper quoting for identifiers
-	// SELECT "column" FROM "schema"."table" WHERE "pk_column" = $1
+	// SELECT "column" FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2
 	query := fmt.Sprintf(
-		`SELECT %s FROM %s WHERE %s = $1`,
-		qi(columnName), qt(schema, table), qi(pkColumn),
+		`SELECT %s FROM %s WHERE %s`,
+		qi(columnName), qt(schema, table), pk.WhereClause(1),
 	)
 
 	var value interface{}
-	err := pool.QueryRow(ctx, query, pkValue).Scan(&value)
+	err := pool.QueryRow(ctx, query, pk.WhereArgs()...).Scan(&value)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query column: %w", err)
 	}
@@ -122,29 +158,27 @@ func GetColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 }
 
 // GetColumn is a convenience wrapper for Client
-func (c *Client) GetColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+func (c *Client) GetColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName string) (interface{}, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetColumn(ctx, c.pool, schema, table, pkColumn, pkValue, columnName)
+	return GetColumn(ctx, c.pool, schema, table, pk, columnName)
 }
 
-// UpdateColumn updates a single column value for a row by primary key
-// Empty string is treated as NULL
-func UpdateColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+// UpdateColumn updates a single column value for a row by primary key (single or composite).
+// Empty string is treated as NULL.
+func UpdateColumn(ctx context.Context, pool *pgxpool.Pool, schema, table string, pk *PKMatch, columnName, newValue string) error {
 	logging.Debug("Updating column",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
-		zap.String("pk_value", pkValue),
+		zap.Strings("pk_columns", pk.Columns),
 		zap.String("column", columnName),
 		zap.Bool("is_null", newValue == ""))
 
-	// Build UPDATE query with proper quoting for identifiers
-	// UPDATE "schema"."table" SET "column" = $1 WHERE "pk_column" = $2
+	// UPDATE "schema"."table" SET "column" = $1 WHERE "col1" = $2 AND "col2" = $3
 	query := fmt.Sprintf(
-		`UPDATE %s SET %s = $1 WHERE %s = $2`,
-		qt(schema, table), qi(columnName), qi(pkColumn),
+		`UPDATE %s SET %s = $1 WHERE %s`,
+		qt(schema, table), qi(columnName), pk.WhereClause(2),
 	)
 
 	// Convert empty string to NULL
@@ -155,8 +189,11 @@ func UpdateColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColu
 		value = newValue
 	}
 
+	// Build args: [value, pkVal1, pkVal2, ...]
+	args := append([]interface{}{value}, pk.WhereArgs()...)
+
 	// Execute update
-	cmdTag, err := pool.Exec(ctx, query, value, pkValue)
+	cmdTag, err := pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update column: %w", err)
 	}
@@ -176,17 +213,17 @@ func UpdateColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColu
 }
 
 // UpdateColumn is a convenience wrapper for Client
-func (c *Client) UpdateColumn(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+func (c *Client) UpdateColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error {
 	if c.pool == nil {
 		return fmt.Errorf("database connection not initialized")
 	}
-	return UpdateColumn(ctx, c.pool, schema, table, pkColumn, pkValue, columnName, newValue)
+	return UpdateColumn(ctx, c.pool, schema, table, pk, columnName, newValue)
 }
 
 // UpdateColumnCAS performs a compare-and-swap update on a column.
 // Only updates the row if whereColumn still has whereValue (atomic check).
 // Returns "row not found" if no row matches, enabling safe concurrent renames.
-func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, pkValue, setColumn, newValue, whereColumn, whereValue string) error {
+func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error {
 	if c.pool == nil {
 		return fmt.Errorf("database connection not initialized")
 	}
@@ -194,18 +231,24 @@ func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table, pkColumn, p
 	logging.Debug("CAS updating column",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
-		zap.String("pk_value", pkValue),
+		zap.Strings("pk_columns", pk.Columns),
 		zap.String("set_column", setColumn),
 		zap.String("where_column", whereColumn))
 
-	// UPDATE "schema"."table" SET "setColumn" = $1 WHERE "pkColumn" = $2 AND "whereColumn" = $3
+	// UPDATE "schema"."table" SET "setColumn" = $1 WHERE "col1" = $2 AND ... AND "whereColumn" = $N
+	whereStart := 2
+	pkWhere := pk.WhereClause(whereStart)
+	casParam := whereStart + pk.ParamCount()
 	query := fmt.Sprintf(
-		`UPDATE %s SET %s = $1 WHERE %s = $2 AND %s = $3`,
-		qt(schema, table), qi(setColumn), qi(pkColumn), qi(whereColumn),
+		`UPDATE %s SET %s = $1 WHERE %s AND %s = $%d`,
+		qt(schema, table), qi(setColumn), pkWhere, qi(whereColumn), casParam,
 	)
 
-	cmdTag, err := c.pool.Exec(ctx, query, newValue, pkValue, whereValue)
+	// Build args: [newValue, pkVal1, pkVal2, ..., whereValue]
+	args := append([]interface{}{newValue}, pk.WhereArgs()...)
+	args = append(args, whereValue)
+
+	cmdTag, err := c.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update column: %w", err)
 	}
@@ -301,13 +344,12 @@ func (c *Client) InsertRow(ctx context.Context, schema, table string, columns []
 	return InsertRow(ctx, c.pool, schema, table, columns, values)
 }
 
-// UpdateRow updates an existing row with the given column values
-func UpdateRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+// UpdateRow updates an existing row with the given column values.
+func UpdateRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, pk *PKMatch, columns []string, values []interface{}) error {
 	logging.Debug("Updating row",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
-		zap.String("pk_value", pkValue),
+		zap.Strings("pk_columns", pk.Columns),
 		zap.Int("column_count", len(columns)))
 
 	if len(columns) == 0 {
@@ -326,14 +368,15 @@ func UpdateRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 	setClause := strings.Join(setClauses, ", ")
 
 	// Build UPDATE query
-	// UPDATE "schema"."table" SET "col1" = $1, "col2" = $2 WHERE "pk_column" = $N
+	// UPDATE "schema"."table" SET "col1" = $1, "col2" = $2 WHERE "pk1" = $N AND "pk2" = $N+1
+	whereStart := len(values) + 1
 	query := fmt.Sprintf(
-		`UPDATE %s SET %s WHERE %s = $%d`,
-		qt(schema, table), setClause, qi(pkColumn), len(values)+1,
+		`UPDATE %s SET %s WHERE %s`,
+		qt(schema, table), setClause, pk.WhereClause(whereStart),
 	)
 
-	// Append PK value to values list
-	allValues := append(values, pkValue)
+	// Append PK values to values list
+	allValues := append(values, pk.WhereArgs()...)
 
 	// Execute update
 	cmdTag, err := pool.Exec(ctx, query, allValues...)
@@ -355,30 +398,29 @@ func UpdateRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 }
 
 // UpdateRow is a convenience wrapper for Client
-func (c *Client) UpdateRow(ctx context.Context, schema, table, pkColumn, pkValue string, columns []string, values []interface{}) error {
+func (c *Client) UpdateRow(ctx context.Context, schema, table string, pk *PKMatch, columns []string, values []interface{}) error {
 	if c.pool == nil {
 		return fmt.Errorf("database connection not initialized")
 	}
-	return UpdateRow(ctx, c.pool, schema, table, pkColumn, pkValue, columns, values)
+	return UpdateRow(ctx, c.pool, schema, table, pk, columns, values)
 }
 
-// DeleteRow deletes a row by primary key
-func DeleteRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, pkValue string) error {
+// DeleteRow deletes a row by primary key (single or composite).
+func DeleteRow(ctx context.Context, pool *pgxpool.Pool, schema, table string, pk *PKMatch) error {
 	logging.Debug("Deleting row",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
-		zap.String("pk_value", pkValue))
+		zap.Strings("pk_columns", pk.Columns),
+		zap.Strings("pk_values", pk.Values))
 
-	// Build DELETE query with proper quoting for identifiers
-	// DELETE FROM "schema"."table" WHERE "pk_column" = $1
+	// DELETE FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2
 	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE %s = $1`,
-		qt(schema, table), qi(pkColumn),
+		`DELETE FROM %s WHERE %s`,
+		qt(schema, table), pk.WhereClause(1),
 	)
 
 	// Execute delete
-	cmdTag, err := pool.Exec(ctx, query, pkValue)
+	cmdTag, err := pool.Exec(ctx, query, pk.WhereArgs()...)
 	if err != nil {
 		return fmt.Errorf("failed to delete row: %w", err)
 	}
@@ -397,133 +439,61 @@ func DeleteRow(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn,
 }
 
 // DeleteRow is a convenience wrapper for Client
-func (c *Client) DeleteRow(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+func (c *Client) DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error {
 	if c.pool == nil {
 		return fmt.Errorf("database connection not initialized")
 	}
-	return DeleteRow(ctx, c.pool, schema, table, pkColumn, pkValue)
+	return DeleteRow(ctx, c.pool, schema, table, pk)
 }
 
 // GetFirstNRows returns the first N primary key values ordered by PK ascending.
-// Used by .first/N/ pagination paths.
-//
-// Parameters:
-//   - schema: PostgreSQL schema name
-//   - table: Table name
-//   - pkColumn: Primary key column name
-//   - limit: Maximum number of rows to return
-//
-// Returns primary keys as strings, or error on database failure.
-func GetFirstNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int) ([]string, error) {
+// Returns encoded PK strings (comma-delimited for composite PKs).
+func GetFirstNRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	logging.Debug("Getting first N rows",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT %s FROM %s ORDER BY %s ASC LIMIT $1`,
-		qi(pkColumn), qt(schema, table), qi(pkColumn),
+		`SELECT %s FROM %s ORDER BY %s LIMIT $1`,
+		pkSelectList(pkColumns), qt(schema, table), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query first N rows: %w", err)
-	}
-	defer rows.Close()
-
-	var pks []string
-	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key: %w", err)
-		}
-		pkStr, err := format.ConvertValueToText(pk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
-		}
-		pks = append(pks, pkStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logging.Debug("Got first N rows",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.Int("count", len(pks)))
-
-	return pks, nil
+	return scanPKRows(ctx, pool, query, pkColumns, limit)
 }
 
 // GetFirstNRows is a convenience wrapper for Client
-func (c *Client) GetFirstNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+func (c *Client) GetFirstNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetFirstNRows(ctx, c.pool, schema, table, pkColumn, limit)
+	return GetFirstNRows(ctx, c.pool, schema, table, pkColumns, limit)
 }
 
 // GetLastNRows returns the last N primary key values ordered by PK descending.
-// Used by .last/N/ pagination paths.
-//
-// Parameters:
-//   - schema: PostgreSQL schema name
-//   - table: Table name
-//   - pkColumn: Primary key column name
-//   - limit: Maximum number of rows to return
-//
-// Returns primary keys as strings (highest values first), or error on database failure.
-func GetLastNRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int) ([]string, error) {
+// Returns encoded PK strings (comma-delimited for composite PKs).
+func GetLastNRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	logging.Debug("Getting last N rows",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT %s FROM %s ORDER BY %s DESC LIMIT $1`,
-		qi(pkColumn), qt(schema, table), qi(pkColumn),
+		`SELECT %s FROM %s ORDER BY %s LIMIT $1`,
+		pkSelectList(pkColumns), qt(schema, table), pkOrderByList(pkColumns, "DESC"),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query last N rows: %w", err)
-	}
-	defer rows.Close()
-
-	var pks []string
-	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key: %w", err)
-		}
-		pkStr, err := format.ConvertValueToText(pk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
-		}
-		pks = append(pks, pkStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logging.Debug("Got last N rows",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.Int("count", len(pks)))
-
-	return pks, nil
+	return scanPKRows(ctx, pool, query, pkColumns, limit)
 }
 
 // GetLastNRows is a convenience wrapper for Client
-func (c *Client) GetLastNRows(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+func (c *Client) GetLastNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetLastNRows(ctx, c.pool, schema, table, pkColumn, limit)
+	return GetLastNRows(ctx, c.pool, schema, table, pkColumns, limit)
 }
 
 // GetRandomSampleRows returns approximately N random primary key values.
@@ -542,79 +512,47 @@ func (c *Client) GetLastNRows(ctx context.Context, schema, table, pkColumn strin
 //
 // Returns primary keys as strings. The actual count may vary from the
 // requested limit due to the probabilistic nature of TABLESAMPLE.
-func GetRandomSampleRows(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+func GetRandomSampleRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
 	logging.Debug("Getting random sample rows",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit),
 		zap.Int64("estimated_rows", estimatedRows))
 
+	selectCols := pkSelectList(pkColumns)
 	var query string
 
 	// Use TABLESAMPLE for large tables (more efficient than ORDER BY RANDOM())
-	// BERNOULLI samples at the row level with given percentage
 	if estimatedRows > 1000 {
-		// Calculate percentage to get approximately 'limit' rows
-		// Add 20% buffer since BERNOULLI is probabilistic
 		percentage := float64(limit) * 1.2 / float64(estimatedRows) * 100.0
 		if percentage > 100 {
 			percentage = 100
 		}
 		if percentage < 0.001 {
-			percentage = 0.001 // Minimum percentage to avoid empty results
+			percentage = 0.001
 		}
 
 		query = fmt.Sprintf(
 			`SELECT %s FROM %s TABLESAMPLE BERNOULLI(%f) LIMIT $1`,
-			qi(pkColumn), qt(schema, table), percentage,
+			selectCols, qt(schema, table), percentage,
 		)
 	} else {
-		// For small tables or unknown size, use ORDER BY RANDOM()
 		query = fmt.Sprintf(
 			`SELECT %s FROM %s ORDER BY RANDOM() LIMIT $1`,
-			qi(pkColumn), qt(schema, table),
+			selectCols, qt(schema, table),
 		)
 	}
 
-	rows, err := pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query random sample: %w", err)
-	}
-	defer rows.Close()
-
-	var pks []string
-	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key: %w", err)
-		}
-		pkStr, err := format.ConvertValueToText(pk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
-		}
-		pks = append(pks, pkStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logging.Debug("Got random sample rows",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.Int("requested", limit),
-		zap.Int("returned", len(pks)))
-
-	return pks, nil
+	return scanPKRows(ctx, pool, query, pkColumns, limit)
 }
 
 // GetRandomSampleRows is a convenience wrapper for Client
-func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table, pkColumn string, limit int, estimatedRows int64) ([]string, error) {
+func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetRandomSampleRows(ctx, c.pool, schema, table, pkColumn, limit, estimatedRows)
+	return GetRandomSampleRows(ctx, c.pool, schema, table, pkColumns, limit, estimatedRows)
 }
 
 // GetFirstNRowsOrdered returns the first N primary key values ordered by a specified column ascending.
@@ -628,57 +566,28 @@ func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table, pkColum
 //   - limit: Maximum number of rows to return
 //
 // Returns primary key values as strings, ordered by orderColumn ASC.
-func GetFirstNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+func GetFirstNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
 	logging.Debug("Getting first N rows ordered by column",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.String("order_column", orderColumn),
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT %s FROM %s ORDER BY %s ASC NULLS LAST, %s ASC LIMIT $1`,
-		qi(pkColumn), qt(schema, table), qi(orderColumn), qi(pkColumn),
+		`SELECT %s FROM %s ORDER BY %s ASC NULLS LAST, %s LIMIT $1`,
+		pkSelectList(pkColumns), qt(schema, table), qi(orderColumn), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query first N rows ordered: %w", err)
-	}
-	defer rows.Close()
-
-	var pks []string
-	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key: %w", err)
-		}
-		pkStr, err := format.ConvertValueToText(pk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
-		}
-		pks = append(pks, pkStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logging.Debug("Got first N rows ordered",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.String("order_column", orderColumn),
-		zap.Int("count", len(pks)))
-
-	return pks, nil
+	return scanPKRows(ctx, pool, query, pkColumns, limit)
 }
 
 // GetFirstNRowsOrdered is a convenience wrapper for Client
-func (c *Client) GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+func (c *Client) GetFirstNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetFirstNRowsOrdered(ctx, c.pool, schema, table, pkColumn, orderColumn, limit)
+	return GetFirstNRowsOrdered(ctx, c.pool, schema, table, pkColumns, orderColumn, limit)
 }
 
 // GetLastNRowsOrdered returns the last N primary key values ordered by a specified column descending.
@@ -692,34 +601,53 @@ func (c *Client) GetFirstNRowsOrdered(ctx context.Context, schema, table, pkColu
 //   - limit: Maximum number of rows to return
 //
 // Returns primary key values as strings, ordered by orderColumn DESC.
-func GetLastNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
+func GetLastNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
 	logging.Debug("Getting last N rows ordered by column",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.String("order_column", orderColumn),
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT %s FROM %s ORDER BY %s DESC NULLS LAST, %s DESC LIMIT $1`,
-		qi(pkColumn), qt(schema, table), qi(orderColumn), qi(pkColumn),
+		`SELECT %s FROM %s ORDER BY %s DESC NULLS LAST, %s LIMIT $1`,
+		pkSelectList(pkColumns), qt(schema, table), qi(orderColumn), pkOrderByList(pkColumns, "DESC"),
 	)
 
+	return scanPKRows(ctx, pool, query, pkColumns, limit)
+}
+
+// GetLastNRowsOrdered is a convenience wrapper for Client
+func (c *Client) GetLastNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetLastNRowsOrdered(ctx, c.pool, schema, table, pkColumns, orderColumn, limit)
+}
+
+// scanPKRows executes a query with a LIMIT $1 parameter, scans PK columns, and
+// returns encoded PK strings. Shared by all pagination functions.
+func scanPKRows(ctx context.Context, pool *pgxpool.Pool, query string, pkColumns []string, limit int) ([]string, error) {
 	rows, err := pool.Query(ctx, query, limit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query last N rows ordered: %w", err)
+		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer rows.Close()
 
 	var pks []string
+	scanDests := make([]interface{}, len(pkColumns))
 	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
+		// Create fresh scan destinations for each row
+		vals := make([]interface{}, len(pkColumns))
+		for i := range vals {
+			scanDests[i] = &vals[i]
+		}
+		if err := rows.Scan(scanDests...); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pkStr, err := format.ConvertValueToText(pk)
+		pkStr, err := scanAndEncodePK(vals, pkColumns)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+			return nil, err
 		}
 		pks = append(pks, pkStr)
 	}
@@ -728,21 +656,7 @@ func GetLastNRowsOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		return nil, fmt.Errorf("error iterating rows: %w", err)
 	}
 
-	logging.Debug("Got last N rows ordered",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.String("order_column", orderColumn),
-		zap.Int("count", len(pks)))
-
 	return pks, nil
-}
-
-// GetLastNRowsOrdered is a convenience wrapper for Client
-func (c *Client) GetLastNRowsOrdered(ctx context.Context, schema, table, pkColumn, orderColumn string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
-	}
-	return GetLastNRowsOrdered(ctx, c.pool, schema, table, pkColumn, orderColumn, limit)
 }
 
 // RenameByPrefix atomically renames all rows where the given column value starts

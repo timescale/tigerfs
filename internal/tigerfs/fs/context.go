@@ -46,8 +46,9 @@ type FSContext struct {
 	// TableName is the table being queried.
 	TableName string
 
-	// PKColumn is the primary key column name, used for row identification.
-	PKColumn string
+	// PKColumns holds the primary key column names, used for row identification.
+	// Single-column PKs have one element; composite PKs have multiple.
+	PKColumns []string
 
 	// Filters holds filter conditions from .by/ and .filter/, AND-combined.
 	Filters []FilterCondition
@@ -93,14 +94,14 @@ type FSContext struct {
 // Parameters:
 //   - schema: PostgreSQL schema name
 //   - table: Table name
-//   - pkColumn: Primary key column name (used for row identification)
+//   - pkColumns: Primary key column names (single or composite)
 //
 // Returns a new FSContext ready for capability accumulation.
-func NewFSContext(schema, table, pkColumn string) *FSContext {
+func NewFSContext(schema, table string, pkColumns []string) *FSContext {
 	return &FSContext{
 		Schema:    schema,
 		TableName: table,
-		PKColumn:  pkColumn,
+		PKColumns: pkColumns,
 		Filters:   nil,
 		LimitType: LimitNone,
 	}
@@ -130,7 +131,7 @@ func (ctx *FSContext) Clone() *FSContext {
 	return &FSContext{
 		Schema:            ctx.Schema,
 		TableName:         ctx.TableName,
-		PKColumn:          ctx.PKColumn,
+		PKColumns:         ctx.PKColumns,
 		Filters:           filters,
 		OrderBy:           ctx.OrderBy,
 		OrderDesc:         ctx.OrderDesc,
@@ -386,7 +387,7 @@ func (ctx *FSContext) ToQueryParams() QueryParams {
 	return QueryParams{
 		Schema:            ctx.Schema,
 		Table:             ctx.TableName,
-		PKColumn:          ctx.PKColumn,
+		PKColumns:         ctx.PKColumns,
 		Filters:           filters,
 		OrderBy:           ctx.OrderBy,
 		OrderDesc:         ctx.OrderDesc,

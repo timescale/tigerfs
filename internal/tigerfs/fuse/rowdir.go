@@ -277,7 +277,7 @@ func (r *RowDirectoryNode) Unlink(ctx context.Context, name string) syscall.Errn
 	}
 
 	// Set column to NULL via UPDATE (empty string is converted to NULL)
-	err = r.db.UpdateColumn(ctx, r.schema, r.tableName, r.pkColumn, r.pkValue, targetColumn.Name, "")
+	err = r.db.UpdateColumn(ctx, r.schema, r.tableName, db.SinglePKMatch(r.pkColumn, r.pkValue), targetColumn.Name, "")
 	if err != nil {
 		logging.Error("Failed to set column to NULL",
 			zap.String("table", r.tableName),

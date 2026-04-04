@@ -415,6 +415,8 @@ echo '{"email":"new@example.com","name":"New Name"}' > /mount/users/123.json
 - Atomic updates (single UPDATE statement)
 - Partial updates (PATCH semantics with format extension)
 
+**Note:** Text primary key values that literally end in `.json`, `.csv`, `.tsv`, or `.yaml` will be misinterpreted as format extensions. For example, a row with PK value `config.json` would be parsed as PK `config` with JSON format. This is unlikely in practice since PKs are typically integers, UUIDs, or short text keys.
+
 #### 2. Row Directories (Column-Level Operations)
 
 Row represented as directory with individual column files. Accessible via `cd /table/pk/` but not shown in table directory listings.

@@ -56,6 +56,10 @@ const (
 	// ErrNotImplemented indicates a feature is not yet implemented.
 	// Maps to ENOSYS in POSIX.
 	ErrNotImplemented
+
+	// ErrInvalidArgument indicates an invalid argument value.
+	// Maps to EINVAL in POSIX.
+	ErrInvalidArgument
 )
 
 // Alias for backwards compatibility

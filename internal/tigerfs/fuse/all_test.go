@@ -99,7 +99,7 @@ func TestAllRowsNode_Readdir_WithMock(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowReader.ListAllRowsFunc = func(ctx context.Context, schema, table, pkColumn string) ([]string, error) {
+	mock.MockRowReader.ListAllRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string) ([]string, error) {
 		return []string{"1", "2", "3", "4", "5"}, nil
 	}
 
@@ -147,7 +147,7 @@ func TestAllRowsNode_Readdir_WithMock_Empty(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowReader.ListAllRowsFunc = func(ctx context.Context, schema, table, pkColumn string) ([]string, error) {
+	mock.MockRowReader.ListAllRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string) ([]string, error) {
 		return []string{}, nil
 	}
 
@@ -204,7 +204,7 @@ func TestAllRowsNode_Readdir_WithMock_ListError(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowReader.ListAllRowsFunc = func(ctx context.Context, schema, table, pkColumn string) ([]string, error) {
+	mock.MockRowReader.ListAllRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string) ([]string, error) {
 		return nil, context.DeadlineExceeded
 	}
 

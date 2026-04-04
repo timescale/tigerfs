@@ -185,7 +185,7 @@ func TestPaginationLimitNode_Readdir_WithMock_First(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mock.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{"1", "2", "3", "4", "5"}, nil
 	}
 
@@ -230,7 +230,7 @@ func TestPaginationLimitNode_Readdir_WithMock_Last(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockPaginationReader.GetLastNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mock.MockPaginationReader.GetLastNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{"96", "97", "98", "99", "100"}, nil
 	}
 
@@ -290,7 +290,7 @@ func TestPaginationLimitNode_Readdir_WithMock_QueryError(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mock.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return nil, context.DeadlineExceeded
 	}
 
@@ -312,7 +312,7 @@ func TestPaginationLimitNode_Readdir_WithMock_Empty(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mock.MockPaginationReader.GetFirstNRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{}, nil
 	}
 

@@ -95,14 +95,21 @@ func TestGetPrimaryKey_Composite(t *testing.T) {
 		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_pk_composite")
 	}()
 
-	// Test composite primary key (should return error)
-	_, err = client.GetPrimaryKey(ctx, "public", "test_pk_composite")
-	if err == nil {
-		t.Fatal("Expected error for composite primary key, got nil")
+	// Test composite primary key (should succeed)
+	pk, err := client.GetPrimaryKey(ctx, "public", "test_pk_composite")
+	if err != nil {
+		t.Fatalf("GetPrimaryKey() failed for composite key: %v", err)
 	}
 
-	// Error should mention composite key
-	t.Logf("Got expected error: %v", err)
+	if len(pk.Columns) != 2 {
+		t.Errorf("Expected 2 primary key columns, got %d", len(pk.Columns))
+	}
+
+	if pk.Columns[0] != "user_id" || pk.Columns[1] != "order_id" {
+		t.Errorf("Expected columns [user_id, order_id], got %v", pk.Columns)
+	}
+
+	t.Logf("Found composite primary key: %v", pk.Columns)
 }
 
 func TestGetPrimaryKey_NoPrimaryKey(t *testing.T) {
@@ -194,7 +201,7 @@ func TestListRows(t *testing.T) {
 	}
 
 	// List rows with limit
-	rows, err := client.ListRows(ctx, "public", "test_list_rows", "id", 10)
+	rows, err := client.ListRows(ctx, "public", "test_list_rows", []string{"id"}, 10)
 	if err != nil {
 		t.Fatalf("ListRows() failed: %v", err)
 	}
@@ -255,7 +262,7 @@ func TestListRows_WithLimit(t *testing.T) {
 	}
 
 	// List with limit=2
-	rows, err := client.ListRows(ctx, "public", "test_list_rows_limit", "id", 2)
+	rows, err := client.ListRows(ctx, "public", "test_list_rows_limit", []string{"id"}, 2)
 	if err != nil {
 		t.Fatalf("ListRows() failed: %v", err)
 	}
@@ -302,7 +309,7 @@ func TestListRows_EmptyTable(t *testing.T) {
 	}()
 
 	// List rows from empty table
-	rows, err := client.ListRows(ctx, "public", "test_list_rows_empty", "id", 10)
+	rows, err := client.ListRows(ctx, "public", "test_list_rows_empty", []string{"id"}, 10)
 	if err != nil {
 		t.Fatalf("ListRows() failed: %v", err)
 	}
@@ -337,7 +344,7 @@ func TestClient_ListRows_NilPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err := client.ListRows(ctx, "public", "test_table", "id", 10)
+	_, err := client.ListRows(ctx, "public", "test_table", []string{"id"}, 10)
 	if err == nil {
 		t.Error("Expected error for nil pool, got nil")
 	}

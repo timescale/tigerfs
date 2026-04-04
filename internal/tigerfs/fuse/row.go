@@ -195,7 +195,7 @@ func (r *RowFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, ui
 // fetchData retrieves the row data from the database and converts to the specified format
 func (r *RowFileNode) fetchData(ctx context.Context) error {
 	// Query row from database
-	row, err := r.db.GetRow(ctx, r.schema, r.tableName, r.pkColumn, r.pkValue)
+	row, err := r.db.GetRow(ctx, r.schema, r.tableName, db.SinglePKMatch(r.pkColumn, r.pkValue))
 	if err != nil {
 		return err
 	}
@@ -327,8 +327,7 @@ func (fh *RowFileHandle) Flush(ctx context.Context) syscall.Errno {
 			ctx,
 			fh.node.schema,
 			fh.node.tableName,
-			fh.node.pkColumn,
-			fh.node.pkValue,
+			db.SinglePKMatch(fh.node.pkColumn, fh.node.pkValue),
 			columns,
 			values,
 		)

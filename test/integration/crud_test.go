@@ -104,7 +104,7 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 2. SELECT - Read the row back
 	t.Run("Select", func(t *testing.T) {
-		row, err := db.GetRow(ctx, pool, schema, tableName, "id", "1")
+		row, err := db.GetRow(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"))
 		if err != nil {
 			t.Fatalf("Failed to get row: %v", err)
 		}
@@ -127,13 +127,13 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 3. UPDATE - Modify column values
 	t.Run("Update", func(t *testing.T) {
-		err := db.UpdateColumn(ctx, pool, schema, tableName, "id", "1", "age", "31")
+		err := db.UpdateColumn(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"), "age", "31")
 		if err != nil {
 			t.Fatalf("Failed to update column: %v", err)
 		}
 
 		// Verify update
-		value, err := db.GetColumn(ctx, pool, schema, tableName, "id", "1", "age")
+		value, err := db.GetColumn(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"), "age")
 		if err != nil {
 			t.Fatalf("Failed to get updated column: %v", err)
 		}
@@ -151,13 +151,13 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 4. UPDATE to NULL - Set nullable column to NULL
 	t.Run("UpdateToNull", func(t *testing.T) {
-		err := db.UpdateColumn(ctx, pool, schema, tableName, "id", "1", "bio", "")
+		err := db.UpdateColumn(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"), "bio", "")
 		if err != nil {
 			t.Fatalf("Failed to update column to NULL: %v", err)
 		}
 
 		// Verify NULL
-		value, err := db.GetColumn(ctx, pool, schema, tableName, "id", "1", "bio")
+		value, err := db.GetColumn(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"), "bio")
 		if err != nil {
 			t.Fatalf("Failed to get column: %v", err)
 		}
@@ -169,13 +169,13 @@ func TestCRUDFullCycle(t *testing.T) {
 
 	// 5. DELETE - Remove the row
 	t.Run("Delete", func(t *testing.T) {
-		err := db.DeleteRow(ctx, pool, schema, tableName, "id", "1")
+		err := db.DeleteRow(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"))
 		if err != nil {
 			t.Fatalf("Failed to delete row: %v", err)
 		}
 
 		// Verify deletion
-		_, err = db.GetRow(ctx, pool, schema, tableName, "id", "1")
+		_, err = db.GetRow(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"))
 		if err == nil {
 			t.Error("Expected error when getting deleted row")
 		}
@@ -215,13 +215,13 @@ func TestCRUDPartialUpdates(t *testing.T) {
 
 	// Test partial update - only update one column
 	t.Run("UpdateSingleColumn", func(t *testing.T) {
-		err := db.UpdateColumn(ctx, pool, schema, tableName, "id", pkValue, "age", "25")
+		err := db.UpdateColumn(ctx, pool, schema, tableName, db.SinglePKMatch("id", pkValue), "age", "25")
 		if err != nil {
 			t.Fatalf("Failed to update column: %v", err)
 		}
 
 		// Verify other columns unchanged
-		row, err := db.GetRow(ctx, pool, schema, tableName, "id", pkValue)
+		row, err := db.GetRow(ctx, pool, schema, tableName, db.SinglePKMatch("id", pkValue))
 		if err != nil {
 			t.Fatalf("Failed to get row: %v", err)
 		}
@@ -272,7 +272,7 @@ func TestCRUDNullHandling(t *testing.T) {
 		}
 
 		// Read back and verify NULLs
-		row, err := db.GetRow(ctx, pool, schema, tableName, "id", pkValue)
+		row, err := db.GetRow(ctx, pool, schema, tableName, db.SinglePKMatch("id", pkValue))
 		if err != nil {
 			t.Fatalf("Failed to get row: %v", err)
 		}
@@ -290,7 +290,7 @@ func TestCRUDNullHandling(t *testing.T) {
 
 	// Test reading NULL as empty string
 	t.Run("ReadNullAsEmpty", func(t *testing.T) {
-		value, err := db.GetColumn(ctx, pool, schema, tableName, "id", "1", "age")
+		value, err := db.GetColumn(ctx, pool, schema, tableName, db.SinglePKMatch("id", "1"), "age")
 		if err != nil {
 			t.Fatalf("Failed to get column: %v", err)
 		}
@@ -490,7 +490,7 @@ func TestCRUDMultipleRows(t *testing.T) {
 
 	// List rows
 	t.Run("ListRows", func(t *testing.T) {
-		rows, err := db.ListRows(ctx, pool, schema, tableName, "id", 100)
+		rows, err := db.ListRows(ctx, pool, schema, tableName, []string{"id"}, 100)
 		if err != nil {
 			t.Fatalf("Failed to list rows: %v", err)
 		}

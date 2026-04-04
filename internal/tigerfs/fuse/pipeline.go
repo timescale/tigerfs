@@ -39,5 +39,5 @@ const (
 // NewPipelineContext creates a new pipeline context for a table.
 // Deprecated: Use fs.NewFSContext directly in new code.
 func NewPipelineContext(schema, table, pkColumn string) *PipelineContext {
-	return fs.NewFSContext(schema, table, pkColumn)
+	return fs.NewFSContext(schema, table, []string{pkColumn})
 }

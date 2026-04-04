@@ -7,7 +7,7 @@ import (
 
 // TestNewFSContext verifies context creation.
 func TestNewFSContext(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 
 	if ctx.Schema != "public" {
 		t.Errorf("Schema = %q, want %q", ctx.Schema, "public")
@@ -15,8 +15,8 @@ func TestNewFSContext(t *testing.T) {
 	if ctx.TableName != "users" {
 		t.Errorf("TableName = %q, want %q", ctx.TableName, "users")
 	}
-	if ctx.PKColumn != "id" {
-		t.Errorf("PKColumn = %q, want %q", ctx.PKColumn, "id")
+	if len(ctx.PKColumns) != 1 || ctx.PKColumns[0] != "id" {
+		t.Errorf("PKColumns = %v, want [id]", ctx.PKColumns)
 	}
 	if ctx.LimitType != LimitNone {
 		t.Errorf("LimitType = %v, want %v", ctx.LimitType, LimitNone)
@@ -28,7 +28,7 @@ func TestNewFSContext(t *testing.T) {
 
 // TestFSContextClone verifies independent copy.
 func TestFSContextClone(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithFilter("status", "active", false)
 
 	clone := ctx.Clone()
@@ -52,7 +52,7 @@ func TestFSContextCloneNil(t *testing.T) {
 
 // TestFSContextWithFilter verifies filter addition.
 func TestFSContextWithFilter(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx2 := ctx.WithFilter("status", "active", false)
 	ctx3 := ctx2.WithFilter("role", "admin", true)
 
@@ -83,7 +83,7 @@ func TestFSContextWithFilter(t *testing.T) {
 
 // TestFSContextWithOrder verifies ordering.
 func TestFSContextWithOrder(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx2 := ctx.WithOrder("created_at", true)
 
 	if ctx.HasOrdered {
@@ -102,7 +102,7 @@ func TestFSContextWithOrder(t *testing.T) {
 
 // TestFSContextWithLimit verifies limit application.
 func TestFSContextWithLimit(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx2 := ctx.WithLimit(10, LimitFirst)
 
 	if ctx.LimitType != LimitNone {
@@ -118,7 +118,7 @@ func TestFSContextWithLimit(t *testing.T) {
 
 // TestFSContextNestedLimit verifies nested pagination.
 func TestFSContextNestedLimit(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithLimit(100, LimitFirst) // .first/100/
 	ctx = ctx.WithLimit(10, LimitLast)   // .first/100/.last/10/
 
@@ -138,7 +138,7 @@ func TestFSContextNestedLimit(t *testing.T) {
 
 // TestFSContextWithTerminal verifies terminal state.
 func TestFSContextWithTerminal(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx2 := ctx.WithTerminal()
 
 	if ctx.IsTerminal {
@@ -151,7 +151,7 @@ func TestFSContextWithTerminal(t *testing.T) {
 
 // TestFSContextCanAddFilter verifies filter permission rules.
 func TestFSContextCanAddFilter(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 
 	// Can add filter initially
 	if !ctx.CanAddFilter() {
@@ -171,7 +171,7 @@ func TestFSContextCanAddFilter(t *testing.T) {
 	}
 
 	// Cannot add filter when terminal
-	ctx = NewFSContext("public", "users", "id").WithTerminal()
+	ctx = NewFSContext("public", "users", []string{"id"}).WithTerminal()
 	if ctx.CanAddFilter() {
 		t.Error("Should not be able to add filter when terminal")
 	}
@@ -179,7 +179,7 @@ func TestFSContextCanAddFilter(t *testing.T) {
 
 // TestFSContextCanAddOrder verifies order permission rules.
 func TestFSContextCanAddOrder(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 
 	if !ctx.CanAddOrder() {
 		t.Error("Should be able to add order initially")
@@ -201,26 +201,26 @@ func TestFSContextCanAddLimit(t *testing.T) {
 	}{
 		{
 			name:      "first on empty",
-			setup:     func() *FSContext { return NewFSContext("s", "t", "id") },
+			setup:     func() *FSContext { return NewFSContext("s", "t", []string{"id"}) },
 			limitType: LimitFirst,
 			want:      true,
 		},
 		{
 			name:      "last on empty",
-			setup:     func() *FSContext { return NewFSContext("s", "t", "id") },
+			setup:     func() *FSContext { return NewFSContext("s", "t", []string{"id"}) },
 			limitType: LimitLast,
 			want:      true,
 		},
 		{
 			name:      "sample on empty",
-			setup:     func() *FSContext { return NewFSContext("s", "t", "id") },
+			setup:     func() *FSContext { return NewFSContext("s", "t", []string{"id"}) },
 			limitType: LimitSample,
 			want:      true,
 		},
 		{
 			name: "double first not allowed",
 			setup: func() *FSContext {
-				return NewFSContext("s", "t", "id").WithLimit(10, LimitFirst)
+				return NewFSContext("s", "t", []string{"id"}).WithLimit(10, LimitFirst)
 			},
 			limitType: LimitFirst,
 			want:      false,
@@ -228,7 +228,7 @@ func TestFSContextCanAddLimit(t *testing.T) {
 		{
 			name: "double last not allowed",
 			setup: func() *FSContext {
-				return NewFSContext("s", "t", "id").WithLimit(10, LimitLast)
+				return NewFSContext("s", "t", []string{"id"}).WithLimit(10, LimitLast)
 			},
 			limitType: LimitLast,
 			want:      false,
@@ -236,7 +236,7 @@ func TestFSContextCanAddLimit(t *testing.T) {
 		{
 			name: "last after first allowed (nested)",
 			setup: func() *FSContext {
-				return NewFSContext("s", "t", "id").WithLimit(100, LimitFirst)
+				return NewFSContext("s", "t", []string{"id"}).WithLimit(100, LimitFirst)
 			},
 			limitType: LimitLast,
 			want:      true,
@@ -244,7 +244,7 @@ func TestFSContextCanAddLimit(t *testing.T) {
 		{
 			name: "first after last allowed (nested)",
 			setup: func() *FSContext {
-				return NewFSContext("s", "t", "id").WithLimit(100, LimitLast)
+				return NewFSContext("s", "t", []string{"id"}).WithLimit(100, LimitLast)
 			},
 			limitType: LimitFirst,
 			want:      true,
@@ -252,7 +252,7 @@ func TestFSContextCanAddLimit(t *testing.T) {
 		{
 			name: "nothing after sample",
 			setup: func() *FSContext {
-				return NewFSContext("s", "t", "id").WithLimit(10, LimitSample)
+				return NewFSContext("s", "t", []string{"id"}).WithLimit(10, LimitSample)
 			},
 			limitType: LimitFirst,
 			want:      false,
@@ -260,7 +260,7 @@ func TestFSContextCanAddLimit(t *testing.T) {
 		{
 			name: "terminal blocks all",
 			setup: func() *FSContext {
-				return NewFSContext("s", "t", "id").WithTerminal()
+				return NewFSContext("s", "t", []string{"id"}).WithTerminal()
 			},
 			limitType: LimitFirst,
 			want:      false,
@@ -279,7 +279,7 @@ func TestFSContextCanAddLimit(t *testing.T) {
 
 // TestFSContextAvailableCapabilities verifies capability listing.
 func TestFSContextAvailableCapabilities(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	caps := ctx.AvailableCapabilities()
 
 	// Should have all capabilities initially
@@ -307,7 +307,7 @@ func TestFSContextAvailableCapabilities(t *testing.T) {
 	}
 
 	// Terminal has no capabilities
-	ctx = NewFSContext("s", "t", "id").WithTerminal()
+	ctx = NewFSContext("s", "t", []string{"id"}).WithTerminal()
 	if caps := ctx.AvailableCapabilities(); len(caps) != 0 {
 		t.Errorf("Terminal should have no capabilities, got %v", caps)
 	}
@@ -315,7 +315,7 @@ func TestFSContextAvailableCapabilities(t *testing.T) {
 
 // TestFSContextHasFilters verifies filter presence check.
 func TestFSContextHasFilters(t *testing.T) {
-	ctx := NewFSContext("s", "t", "id")
+	ctx := NewFSContext("s", "t", []string{"id"})
 	if ctx.HasFilters() {
 		t.Error("New context should not have filters")
 	}
@@ -328,7 +328,7 @@ func TestFSContextHasFilters(t *testing.T) {
 
 // TestFSContextHasLimit verifies limit presence check.
 func TestFSContextHasLimit(t *testing.T) {
-	ctx := NewFSContext("s", "t", "id")
+	ctx := NewFSContext("s", "t", []string{"id"})
 	if ctx.HasLimit() {
 		t.Error("New context should not have limit")
 	}
@@ -341,7 +341,7 @@ func TestFSContextHasLimit(t *testing.T) {
 
 // TestFSContextNeedsSubquery verifies subquery detection.
 func TestFSContextNeedsSubquery(t *testing.T) {
-	ctx := NewFSContext("s", "t", "id")
+	ctx := NewFSContext("s", "t", []string{"id"})
 	if ctx.NeedsSubquery() {
 		t.Error("New context should not need subquery")
 	}
@@ -359,7 +359,7 @@ func TestFSContextNeedsSubquery(t *testing.T) {
 
 // TestFSContextWithColumns verifies column projection.
 func TestFSContextWithColumns(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx2 := ctx.WithColumns([]string{"id", "name", "email"})
 
 	// Original unchanged
@@ -384,7 +384,7 @@ func TestFSContextWithColumns(t *testing.T) {
 
 // TestFSContextCanAddColumns verifies column projection permission rules.
 func TestFSContextCanAddColumns(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 
 	// Can add initially
 	if !ctx.CanAddColumns() {
@@ -406,7 +406,7 @@ func TestFSContextCanAddColumns(t *testing.T) {
 
 // TestFSContextColumnsAvailableCapabilities verifies only .export after .columns.
 func TestFSContextColumnsAvailableCapabilities(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithColumns([]string{"id", "name"})
 
 	caps := ctx.AvailableCapabilities()
@@ -420,7 +420,7 @@ func TestFSContextColumnsAvailableCapabilities(t *testing.T) {
 
 // TestFSContextColumnsHasPipelineOperations verifies columns trigger pipeline mode.
 func TestFSContextColumnsHasPipelineOperations(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	if ctx.HasPipelineOperations() {
 		t.Error("New context should not have pipeline operations")
 	}
@@ -433,7 +433,7 @@ func TestFSContextColumnsHasPipelineOperations(t *testing.T) {
 
 // TestFSContextCloneColumns verifies deep copy of columns slice.
 func TestFSContextCloneColumns(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithColumns([]string{"id", "name"})
 
 	clone := ctx.Clone()
@@ -449,7 +449,7 @@ func TestFSContextCloneColumns(t *testing.T) {
 
 // TestFSContextToQueryParamsColumns verifies columns are copied to QueryParams.
 func TestFSContextToQueryParamsColumns(t *testing.T) {
-	ctx := NewFSContext("public", "users", "id")
+	ctx := NewFSContext("public", "users", []string{"id"})
 	ctx = ctx.WithColumns([]string{"id", "name", "email"})
 
 	params := ctx.ToQueryParams()

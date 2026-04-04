@@ -80,16 +80,16 @@ func (c *Client) GetAllRows(ctx context.Context, schema, table string, limit int
 // GetFirstNRowsWithData returns the first N rows ordered by primary key ascending.
 // Returns full row data, not just primary keys.
 // Used for bulk export with .first/N/ pagination.
-func GetFirstNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func GetFirstNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	logging.Debug("Getting first N rows with data",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT * FROM %s ORDER BY %s ASC LIMIT $1`,
-		qt(schema, table), qi(pkColumn),
+		`SELECT * FROM %s ORDER BY %s LIMIT $1`,
+		qt(schema, table), pkOrderByList(pkColumns, "ASC"),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -128,26 +128,26 @@ func GetFirstNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, tabl
 }
 
 // GetFirstNRowsWithData is a convenience wrapper for Client
-func (c *Client) GetFirstNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func (c *Client) GetFirstNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	if c.pool == nil {
 		return nil, nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetFirstNRowsWithData(ctx, c.pool, schema, table, pkColumn, limit)
+	return GetFirstNRowsWithData(ctx, c.pool, schema, table, pkColumns, limit)
 }
 
 // GetLastNRowsWithData returns the last N rows ordered by primary key descending.
 // Returns full row data, not just primary keys.
 // Used for bulk export with .last/N/ pagination.
-func GetLastNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func GetLastNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	logging.Debug("Getting last N rows with data",
 		zap.String("schema", schema),
 		zap.String("table", table),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit))
 
 	query := fmt.Sprintf(
-		`SELECT * FROM %s ORDER BY %s DESC LIMIT $1`,
-		qt(schema, table), qi(pkColumn),
+		`SELECT * FROM %s ORDER BY %s LIMIT $1`,
+		qt(schema, table), pkOrderByList(pkColumns, "DESC"),
 	)
 
 	rows, err := pool.Query(ctx, query, limit)
@@ -186,11 +186,11 @@ func GetLastNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table
 }
 
 // GetLastNRowsWithData is a convenience wrapper for Client
-func (c *Client) GetLastNRowsWithData(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, [][]interface{}, error) {
+func (c *Client) GetLastNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	if c.pool == nil {
 		return nil, nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetLastNRowsWithData(ctx, c.pool, schema, table, pkColumn, limit)
+	return GetLastNRowsWithData(ctx, c.pool, schema, table, pkColumns, limit)
 }
 
 // RowExistsByColumns checks if any row matches the given column=value conditions.

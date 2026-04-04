@@ -364,68 +364,34 @@ func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, co
 //   - limit: Maximum number of rows to return
 //
 // Returns primary key values as strings. If no rows match, returns empty slice (not error).
-func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value, pkColumn string, limit int) ([]string, error) {
+func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
 	logging.Debug("Querying rows by index value",
 		zap.String("schema", schema),
 		zap.String("table", table),
 		zap.String("column", column),
 		zap.String("value", value),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit))
 
-	// Query rows matching the index value, returning PKs
 	query := fmt.Sprintf(
 		`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s LIMIT $2`,
-		qi(pkColumn), qt(schema, table), qi(column), qi(pkColumn),
+		pkSelectList(pkColumns), qt(schema, table), qi(column), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	rows, err := pool.Query(ctx, query, value, limit)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query by index value: %w", err)
-	}
-	defer rows.Close()
-
-	var pks []string
-	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key: %w", err)
-		}
-		pkStr, err := format.ConvertValueToText(pk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
-		}
-		pks = append(pks, pkStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logging.Debug("Found rows by index value",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.String("column", column),
-		zap.String("value", value),
-		zap.Int("count", len(pks)))
-
-	return pks, nil
+	return scanPKRowsWithArgs(ctx, pool, query, pkColumns, value, limit)
 }
 
 // GetRowsByIndexValue is a convenience wrapper for Client.
-func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column, value, pkColumn string, limit int) ([]string, error) {
+func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetRowsByIndexValue(ctx, c.pool, schema, table, column, value, pkColumn, limit)
+	return GetRowsByIndexValue(ctx, c.pool, schema, table, column, value, pkColumns, limit)
 }
 
 // GetRowsByIndexValueOrdered retrieves primary keys with explicit ordering.
 // Used for .first/N/ and .last/N/ within index value navigation.
-//
-// Parameters:
-//   - ascending: true for ASC (first N), false for DESC (last N)
-func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error) {
+func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
 	logging.Debug("Querying ordered rows by index value",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -440,42 +406,52 @@ func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema,
 	}
 
 	query := fmt.Sprintf(
-		`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s %s LIMIT $2`,
-		qi(pkColumn), qt(schema, table), qi(column), qi(pkColumn), order,
+		`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s LIMIT $2`,
+		pkSelectList(pkColumns), qt(schema, table), qi(column), pkOrderByList(pkColumns, order),
 	)
 
-	rows, err := pool.Query(ctx, query, value, limit)
+	return scanPKRowsWithArgs(ctx, pool, query, pkColumns, value, limit)
+}
+
+// GetRowsByIndexValueOrdered is a convenience wrapper for Client.
+func (c *Client) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+	return GetRowsByIndexValueOrdered(ctx, c.pool, schema, table, column, value, pkColumns, limit, ascending)
+}
+
+// scanPKRowsWithArgs executes a query with value and limit args, scans PK columns, and
+// returns encoded PK strings. Used by index query functions.
+func scanPKRowsWithArgs(ctx context.Context, pool *pgxpool.Pool, query string, pkColumns []string, args ...interface{}) ([]string, error) {
+	rows, err := pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query ordered rows by index value: %w", err)
+		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
 	defer rows.Close()
 
 	var pks []string
+	scanDests := make([]interface{}, len(pkColumns))
 	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
+		vals := make([]interface{}, len(pkColumns))
+		for i := range vals {
+			scanDests[i] = &vals[i]
+		}
+		if err := rows.Scan(scanDests...); err != nil {
 			return nil, fmt.Errorf("failed to scan primary key: %w", err)
 		}
-		pkStr, err := format.ConvertValueToText(pk)
+		pkStr, err := scanAndEncodePK(vals, pkColumns)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
+			return nil, err
 		}
 		pks = append(pks, pkStr)
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating ordered rows: %w", err)
+		return nil, fmt.Errorf("error iterating rows: %w", err)
 	}
 
 	return pks, nil
-}
-
-// GetRowsByIndexValueOrdered is a convenience wrapper for Client.
-func (c *Client) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value, pkColumn string, limit int, ascending bool) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
-	}
-	return GetRowsByIndexValueOrdered(ctx, c.pool, schema, table, column, value, pkColumn, limit, ascending)
 }
 
 // GetDistinctValuesFiltered retrieves distinct values for a column filtered by conditions on other columns.
@@ -591,7 +567,7 @@ func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, t
 //   - limit: Maximum number of rows to return
 //
 // Returns primary key values as strings. If no rows match, returns empty slice (not error).
-func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
 	if len(columns) != len(values) {
 		return nil, fmt.Errorf("columns and values length mismatch: %d vs %d", len(columns), len(values))
 	}
@@ -600,7 +576,7 @@ func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, ta
 		zap.String("schema", schema),
 		zap.String("table", table),
 		zap.Strings("columns", columns),
-		zap.String("pk_column", pkColumn),
+		zap.Strings("pk_columns", pkColumns),
 		zap.Int("limit", limit))
 
 	// Build WHERE clause with conditions for each column
@@ -615,49 +591,20 @@ func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, ta
 
 	query := fmt.Sprintf(
 		`SELECT %s FROM %s WHERE %s ORDER BY %s LIMIT $%d`,
-		qi(pkColumn), qt(schema, table),
+		pkSelectList(pkColumns), qt(schema, table),
 		joinStrings(whereParts, " AND "),
-		qi(pkColumn), len(args),
+		pkOrderByList(pkColumns, "ASC"), len(args),
 	)
 
-	rows, err := pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query by composite index: %w", err)
-	}
-	defer rows.Close()
-
-	var pks []string
-	for rows.Next() {
-		var pk interface{}
-		if err := rows.Scan(&pk); err != nil {
-			return nil, fmt.Errorf("failed to scan primary key: %w", err)
-		}
-		pkStr, err := format.ConvertValueToText(pk)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert primary key value: %w", err)
-		}
-		pks = append(pks, pkStr)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating rows: %w", err)
-	}
-
-	logging.Debug("Found rows by composite index",
-		zap.String("schema", schema),
-		zap.String("table", table),
-		zap.Strings("columns", columns),
-		zap.Int("count", len(pks)))
-
-	return pks, nil
+	return scanPKRowsWithArgs(ctx, pool, query, pkColumns, args...)
 }
 
 // GetRowsByCompositeIndex is a convenience wrapper for Client.
-func (c *Client) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+func (c *Client) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
-	return GetRowsByCompositeIndex(ctx, c.pool, schema, table, columns, values, pkColumn, limit)
+	return GetRowsByCompositeIndex(ctx, c.pool, schema, table, columns, values, pkColumns, limit)
 }
 
 // joinStrings joins strings with a separator (helper to avoid importing strings package).

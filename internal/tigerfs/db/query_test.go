@@ -54,7 +54,7 @@ func TestGetRow(t *testing.T) {
 	}
 
 	// Get row by ID
-	row, err := client.GetRow(ctx, "public", "test_get_row", "id", "1")
+	row, err := client.GetRow(ctx, "public", "test_get_row", SinglePKMatch("id", "1"))
 	if err != nil {
 		t.Fatalf("GetRow() failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestGetRow_NotFound(t *testing.T) {
 	}()
 
 	// Try to get non-existent row
-	_, err = client.GetRow(ctx, "public", "test_get_row_notfound", "id", "999")
+	_, err = client.GetRow(ctx, "public", "test_get_row_notfound", SinglePKMatch("id", "999"))
 	if err == nil {
 		t.Fatal("Expected error for non-existent row, got nil")
 	}
@@ -171,7 +171,7 @@ func TestGetRow_WithNULL(t *testing.T) {
 	}
 
 	// Get row
-	row, err := client.GetRow(ctx, "public", "test_get_row_null", "id", "1")
+	row, err := client.GetRow(ctx, "public", "test_get_row_null", SinglePKMatch("id", "1"))
 	if err != nil {
 		t.Fatalf("GetRow() failed: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestClient_GetRow_NilPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err := client.GetRow(ctx, "public", "test_table", "id", "1")
+	_, err := client.GetRow(ctx, "public", "test_table", SinglePKMatch("id", "1"))
 	if err == nil {
 		t.Error("Expected error for nil pool, got nil")
 	}
@@ -254,7 +254,7 @@ func TestGetColumn(t *testing.T) {
 	}
 
 	// Test getting a text column
-	value, err := client.GetColumn(ctx, "public", "test_get_column", "id", "1", "name")
+	value, err := client.GetColumn(ctx, "public", "test_get_column", SinglePKMatch("id", "1"), "name")
 	if err != nil {
 		t.Fatalf("GetColumn() failed: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestGetColumn(t *testing.T) {
 	}
 
 	// Test getting an integer column
-	value, err = client.GetColumn(ctx, "public", "test_get_column", "id", "1", "age")
+	value, err = client.GetColumn(ctx, "public", "test_get_column", SinglePKMatch("id", "1"), "age")
 	if err != nil {
 		t.Fatalf("GetColumn() failed for age: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestGetColumn(t *testing.T) {
 	}
 
 	// Test getting a NULL column
-	value, err = client.GetColumn(ctx, "public", "test_get_column", "id", "2", "email")
+	value, err = client.GetColumn(ctx, "public", "test_get_column", SinglePKMatch("id", "2"), "email")
 	if err != nil {
 		t.Fatalf("GetColumn() failed for NULL email: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestGetColumn_NonExistentRow(t *testing.T) {
 	}()
 
 	// Test getting column from non-existent row
-	_, err = client.GetColumn(ctx, "public", "test_column_nonexistent", "id", "999", "name")
+	_, err = client.GetColumn(ctx, "public", "test_column_nonexistent", SinglePKMatch("id", "999"), "name")
 	if err == nil {
 		t.Fatal("Expected error for non-existent row, got nil")
 	}
@@ -393,7 +393,7 @@ func TestGetColumn_NonExistentColumn(t *testing.T) {
 	}
 
 	// Test getting non-existent column
-	_, err = client.GetColumn(ctx, "public", "test_column_invalid", "id", "1", "nonexistent_column")
+	_, err = client.GetColumn(ctx, "public", "test_column_invalid", SinglePKMatch("id", "1"), "nonexistent_column")
 	if err == nil {
 		t.Fatal("Expected error for non-existent column, got nil")
 	}
@@ -408,7 +408,7 @@ func TestClient_GetColumn_NilPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	_, err := client.GetColumn(ctx, "public", "test_table", "id", "1", "name")
+	_, err := client.GetColumn(ctx, "public", "test_table", SinglePKMatch("id", "1"), "name")
 	if err == nil {
 		t.Error("Expected error for nil pool, got nil")
 	}
@@ -464,13 +464,13 @@ func TestUpdateColumn(t *testing.T) {
 	}
 
 	// Update email column
-	err = client.UpdateColumn(ctx, "public", "test_update_column", "id", "1", "email", "newemail@example.com")
+	err = client.UpdateColumn(ctx, "public", "test_update_column", SinglePKMatch("id", "1"), "email", "newemail@example.com")
 	if err != nil {
 		t.Fatalf("UpdateColumn() failed: %v", err)
 	}
 
 	// Verify update
-	value, err := client.GetColumn(ctx, "public", "test_update_column", "id", "1", "email")
+	value, err := client.GetColumn(ctx, "public", "test_update_column", SinglePKMatch("id", "1"), "email")
 	if err != nil {
 		t.Fatalf("GetColumn() failed: %v", err)
 	}
@@ -532,13 +532,13 @@ func TestUpdateColumn_SetNull(t *testing.T) {
 	}
 
 	// Update email to NULL (empty string)
-	err = client.UpdateColumn(ctx, "public", "test_update_null", "id", "1", "email", "")
+	err = client.UpdateColumn(ctx, "public", "test_update_null", SinglePKMatch("id", "1"), "email", "")
 	if err != nil {
 		t.Fatalf("UpdateColumn() failed: %v", err)
 	}
 
 	// Verify email is now NULL
-	value, err := client.GetColumn(ctx, "public", "test_update_null", "id", "1", "email")
+	value, err := client.GetColumn(ctx, "public", "test_update_null", SinglePKMatch("id", "1"), "email")
 	if err != nil {
 		t.Fatalf("GetColumn() failed: %v", err)
 	}
@@ -585,7 +585,7 @@ func TestUpdateColumn_NonExistentRow(t *testing.T) {
 	}()
 
 	// Try to update non-existent row
-	err = client.UpdateColumn(ctx, "public", "test_update_notfound", "id", "999", "name", "New Name")
+	err = client.UpdateColumn(ctx, "public", "test_update_notfound", SinglePKMatch("id", "999"), "name", "New Name")
 	if err == nil {
 		t.Fatal("Expected error for non-existent row, got nil")
 	}
@@ -604,7 +604,7 @@ func TestClient_UpdateColumn_NilPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.UpdateColumn(ctx, "public", "test_table", "id", "1", "name", "New Name")
+	err := client.UpdateColumn(ctx, "public", "test_table", SinglePKMatch("id", "1"), "name", "New Name")
 	if err == nil {
 		t.Error("Expected error for nil pool, got nil")
 	}
@@ -667,7 +667,7 @@ func TestInsertRow_ExplicitPK(t *testing.T) {
 	}
 
 	// Verify row was inserted
-	row, err := client.GetRow(ctx, "public", "test_insert_explicit", "id", "100")
+	row, err := client.GetRow(ctx, "public", "test_insert_explicit", SinglePKMatch("id", "100"))
 	if err != nil {
 		t.Fatalf("GetRow() failed: %v", err)
 	}
@@ -793,7 +793,7 @@ func TestInsertRow_NullValues(t *testing.T) {
 	}
 
 	// Verify NULL values
-	row, err := client.GetRow(ctx, "public", "test_insert_null", "id", pkValue)
+	row, err := client.GetRow(ctx, "public", "test_insert_null", SinglePKMatch("id", pkValue))
 	if err != nil {
 		t.Fatalf("GetRow() failed: %v", err)
 	}
@@ -995,13 +995,13 @@ func TestUpdateRow_PartialUpdate(t *testing.T) {
 	columns := []string{"email"}
 	values := []interface{}{"newemail@example.com"}
 
-	err = client.UpdateRow(ctx, "public", "test_update_partial", "id", "1", columns, values)
+	err = client.UpdateRow(ctx, "public", "test_update_partial", SinglePKMatch("id", "1"), columns, values)
 	if err != nil {
 		t.Fatalf("UpdateRow() failed: %v", err)
 	}
 
 	// Verify only email changed
-	row, err := client.GetRow(ctx, "public", "test_update_partial", "id", "1")
+	row, err := client.GetRow(ctx, "public", "test_update_partial", SinglePKMatch("id", "1"))
 	if err != nil {
 		t.Fatalf("GetRow() failed: %v", err)
 	}
@@ -1068,13 +1068,13 @@ func TestUpdateRow_AllColumns(t *testing.T) {
 	columns := []string{"name", "email", "age"}
 	values := []interface{}{"Bob", "bob@example.com", int32(25)}
 
-	err = client.UpdateRow(ctx, "public", "test_update_all", "id", "1", columns, values)
+	err = client.UpdateRow(ctx, "public", "test_update_all", SinglePKMatch("id", "1"), columns, values)
 	if err != nil {
 		t.Fatalf("UpdateRow() failed: %v", err)
 	}
 
 	// Verify all columns changed
-	row, err := client.GetRow(ctx, "public", "test_update_all", "id", "1")
+	row, err := client.GetRow(ctx, "public", "test_update_all", SinglePKMatch("id", "1"))
 	if err != nil {
 		t.Fatalf("GetRow() failed: %v", err)
 	}
@@ -1140,13 +1140,13 @@ func TestUpdateRow_SetToNull(t *testing.T) {
 	columns := []string{"email"}
 	values := []interface{}{nil}
 
-	err = client.UpdateRow(ctx, "public", "test_update_tonull", "id", "1", columns, values)
+	err = client.UpdateRow(ctx, "public", "test_update_tonull", SinglePKMatch("id", "1"), columns, values)
 	if err != nil {
 		t.Fatalf("UpdateRow() failed: %v", err)
 	}
 
 	// Verify email is NULL
-	value, err := client.GetColumn(ctx, "public", "test_update_tonull", "id", "1", "email")
+	value, err := client.GetColumn(ctx, "public", "test_update_tonull", SinglePKMatch("id", "1"), "email")
 	if err != nil {
 		t.Fatalf("GetColumn() failed: %v", err)
 	}
@@ -1196,7 +1196,7 @@ func TestUpdateRow_NotFound(t *testing.T) {
 	columns := []string{"name"}
 	values := []interface{}{"New Name"}
 
-	err = client.UpdateRow(ctx, "public", "test_update_notfound", "id", "999", columns, values)
+	err = client.UpdateRow(ctx, "public", "test_update_notfound", SinglePKMatch("id", "999"), columns, values)
 	if err == nil {
 		t.Fatal("Expected error for non-existent row, got nil")
 	}
@@ -1229,7 +1229,7 @@ func TestUpdateRow_NoColumns(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	// Try to update with no columns
-	err = client.UpdateRow(ctx, "public", "test_table", "id", "1", []string{}, []interface{}{})
+	err = client.UpdateRow(ctx, "public", "test_table", SinglePKMatch("id", "1"), []string{}, []interface{}{})
 	if err == nil {
 		t.Fatal("Expected error for no columns, got nil")
 	}
@@ -1246,7 +1246,7 @@ func TestClient_UpdateRow_NilPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.UpdateRow(ctx, "public", "test_table", "id", "1", []string{"name"}, []interface{}{"Alice"})
+	err := client.UpdateRow(ctx, "public", "test_table", SinglePKMatch("id", "1"), []string{"name"}, []interface{}{"Alice"})
 	if err == nil {
 		t.Error("Expected error for nil pool, got nil")
 	}
@@ -1303,19 +1303,19 @@ func TestDeleteRow_Simple(t *testing.T) {
 	}
 
 	// Delete row with id=1
-	err = client.DeleteRow(ctx, "public", "test_delete_simple", "id", "1")
+	err = client.DeleteRow(ctx, "public", "test_delete_simple", SinglePKMatch("id", "1"))
 	if err != nil {
 		t.Fatalf("DeleteRow() failed: %v", err)
 	}
 
 	// Verify row is deleted
-	_, err = client.GetRow(ctx, "public", "test_delete_simple", "id", "1")
+	_, err = client.GetRow(ctx, "public", "test_delete_simple", SinglePKMatch("id", "1"))
 	if err == nil {
 		t.Fatal("Expected error for deleted row, got nil")
 	}
 
 	// Verify other row still exists
-	row, err := client.GetRow(ctx, "public", "test_delete_simple", "id", "2")
+	row, err := client.GetRow(ctx, "public", "test_delete_simple", SinglePKMatch("id", "2"))
 	if err != nil {
 		t.Fatalf("Row 2 should still exist: %v", err)
 	}
@@ -1358,7 +1358,7 @@ func TestDeleteRow_NotFound(t *testing.T) {
 	}()
 
 	// Try to delete non-existent row
-	err = client.DeleteRow(ctx, "public", "test_delete_notfound", "id", "999")
+	err = client.DeleteRow(ctx, "public", "test_delete_notfound", SinglePKMatch("id", "999"))
 	if err == nil {
 		t.Fatal("Expected error for non-existent row, got nil")
 	}
@@ -1415,7 +1415,7 @@ func TestDeleteRow_MultipleDeletes(t *testing.T) {
 
 	// Delete all rows one by one
 	for _, id := range []string{"1", "2", "3"} {
-		err = client.DeleteRow(ctx, "public", "test_delete_multi", "id", id)
+		err = client.DeleteRow(ctx, "public", "test_delete_multi", SinglePKMatch("id", id))
 		if err != nil {
 			t.Fatalf("DeleteRow(%s) failed: %v", id, err)
 		}
@@ -1442,7 +1442,7 @@ func TestClient_DeleteRow_NilPool(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.DeleteRow(ctx, "public", "test_table", "id", "1")
+	err := client.DeleteRow(ctx, "public", "test_table", SinglePKMatch("id", "1"))
 	if err == nil {
 		t.Error("Expected error for nil pool, got nil")
 	}

@@ -35,8 +35,8 @@ func TestNewPipelineContext(t *testing.T) {
 	if ctx.TableName != "users" {
 		t.Errorf("TableName = %q, want %q", ctx.TableName, "users")
 	}
-	if ctx.PKColumn != "id" {
-		t.Errorf("PKColumn = %q, want %q", ctx.PKColumn, "id")
+	if len(ctx.PKColumns) != 1 || ctx.PKColumns[0] != "id" {
+		t.Errorf("PKColumns = %v, want [id]", ctx.PKColumns)
 	}
 	if len(ctx.Filters) != 0 {
 		t.Errorf("Filters should be empty, got %d", len(ctx.Filters))
@@ -68,8 +68,8 @@ func TestPipelineContext_Clone(t *testing.T) {
 	if clone.TableName != original.TableName {
 		t.Errorf("Clone TableName = %q, want %q", clone.TableName, original.TableName)
 	}
-	if clone.PKColumn != original.PKColumn {
-		t.Errorf("Clone PKColumn = %q, want %q", clone.PKColumn, original.PKColumn)
+	if len(clone.PKColumns) != len(original.PKColumns) || clone.PKColumns[0] != original.PKColumns[0] {
+		t.Errorf("Clone PKColumns = %v, want %v", clone.PKColumns, original.PKColumns)
 	}
 	if len(clone.Filters) != len(original.Filters) {
 		t.Errorf("Clone Filters length = %d, want %d", len(clone.Filters), len(original.Filters))
@@ -745,8 +745,8 @@ func TestPipelineContext_ToQueryParams(t *testing.T) {
 	if params.Table != "users" {
 		t.Errorf("Table = %q, want %q", params.Table, "users")
 	}
-	if params.PKColumn != "id" {
-		t.Errorf("PKColumn = %q, want %q", params.PKColumn, "id")
+	if len(params.PKColumns) != 1 || params.PKColumns[0] != "id" {
+		t.Errorf("PKColumns = %v, want [id]", params.PKColumns)
 	}
 	if len(params.Filters) != 2 {
 		t.Fatalf("Filters length = %d, want 2", len(params.Filters))

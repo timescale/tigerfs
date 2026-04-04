@@ -525,7 +525,7 @@ func TestRowDirectoryNode_Unlink_WithMock(t *testing.T) {
 			{Name: "email", DataType: "text", IsNullable: true},
 		}, nil
 	}
-	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName, newValue string) error {
 		updateCalled = true
 		updatedColumn = columnName
 		updatedValue = newValue
@@ -616,7 +616,7 @@ func TestRowDirectoryNode_Unlink_WithMock_Error(t *testing.T) {
 			{Name: "name", DataType: "text", IsNullable: true},
 		}, nil
 	}
-	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName, newValue string) error {
 		return context.DeadlineExceeded
 	}
 

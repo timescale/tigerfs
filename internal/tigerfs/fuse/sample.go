@@ -230,7 +230,7 @@ func (s *SampleLimitNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Er
 				estimatedRows = estimate
 			}
 		}
-		rows, err = s.db.GetRandomSampleRows(ctx, s.schema, s.tableName, pkColumn, s.sampleSize, estimatedRows)
+		rows, err = s.db.GetRandomSampleRows(ctx, s.schema, s.tableName, []string{pkColumn}, s.sampleSize, estimatedRows)
 	}
 
 	if err != nil {
@@ -316,7 +316,7 @@ func (s *SampleLimitNode) Lookup(ctx context.Context, name string, out *fuse.Ent
 	pkColumn := pk.Columns[0]
 
 	// Check if row exists
-	_, err = s.db.GetRow(ctx, s.schema, s.tableName, pkColumn, pkValue)
+	_, err = s.db.GetRow(ctx, s.schema, s.tableName, db.SinglePKMatch(pkColumn, pkValue))
 	if err != nil {
 		logging.Debug("Row not found",
 			zap.String("table", s.tableName),

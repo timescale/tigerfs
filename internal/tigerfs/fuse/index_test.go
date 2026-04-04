@@ -478,7 +478,7 @@ func TestCompositeIndexLevelNode_Readdir_WithMock_Final(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockIndexReader.GetRowsByCompositeIndexFunc = func(ctx context.Context, schema, table string, columns, values []string, pkColumn string, limit int) ([]string, error) {
+	mock.MockIndexReader.GetRowsByCompositeIndexFunc = func(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
 		return []string{"1", "5", "10"}, nil
 	}
 

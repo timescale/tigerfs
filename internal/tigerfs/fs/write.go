@@ -99,7 +99,11 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 		}
 	}
 
-	pkColumn := pk.Columns[0]
+	// Decode the composite primary key from the path segment
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
 
 	// Parse data based on format
 	var columns []string
@@ -124,12 +128,12 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 	}
 
 	// Check if row exists
-	_, err = o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey)
+	_, err = o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 	rowExists := err == nil
 
 	if rowExists {
 		// UPDATE existing row
-		err = o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, columns, values)
+		err = o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, match, columns, values)
 		if err != nil {
 			return &FSError{
 				Code:    ErrIO,
@@ -199,7 +203,11 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 		}
 	}
 
-	pkColumn := pk.Columns[0]
+	// Decode the composite primary key from the path segment
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
 
 	// Convert data to string, trim trailing newline
 	value := string(data)
@@ -208,15 +216,16 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 	}
 
 	// Check if row exists
-	_, err = o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey)
+	_, err = o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 	rowExists := err == nil
 
 	if !rowExists {
 		// Row doesn't exist - use staging for incremental creation
-		if o.staging != nil {
-			o.staging.SetColumn(fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, actualColumn, value)
+		// Note: staging currently supports single-column PKs only
+		if o.staging != nil && len(match.Columns) == 1 {
+			o.staging.SetColumn(fsCtx.Schema, fsCtx.TableName, match.Columns[0], match.Values[0], actualColumn, value)
 			// Try to commit if enough columns provided
-			_, commitErr := o.staging.TryCommit(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, o.db)
+			_, commitErr := o.staging.TryCommit(ctx, fsCtx.Schema, fsCtx.TableName, match.Columns[0], match.Values[0], o.db)
 			if commitErr != nil {
 				return &FSError{
 					Code:    ErrIO,
@@ -233,7 +242,7 @@ func (o *Operations) writeColumnFile(ctx context.Context, parsed *ParsedPath, da
 	}
 
 	// Row exists - update column using the resolved column name
-	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, actualColumn, value)
+	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, match, actualColumn, value)
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -566,10 +575,18 @@ func (o *Operations) Rename(ctx context.Context, oldPath, newPath string) *FSErr
 		}
 	}
 
-	pkColumn := pk.Columns[0]
+	// Decode both old and new primary keys from path segments
+	oldMatch, oldDecodeErr := pk.Decode(oldParsed.PrimaryKey)
+	if oldDecodeErr != nil {
+		return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid source primary key: %v", oldDecodeErr)}
+	}
+	newMatch, newDecodeErr := pk.Decode(newParsed.PrimaryKey)
+	if newDecodeErr != nil {
+		return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid target primary key: %v", newDecodeErr)}
+	}
 
-	// Update the PK column from old value to new value
-	dbErr = o.db.UpdateColumn(ctx, schema, table, pkColumn, oldParsed.PrimaryKey, pkColumn, newParsed.PrimaryKey)
+	// Update the PK columns from old values to new values
+	dbErr = o.db.UpdateRow(ctx, schema, table, oldMatch, newMatch.Columns, toInterfaceSlice(newMatch.Values))
 	if dbErr != nil {
 		if strings.Contains(dbErr.Error(), "not found") {
 			return &FSError{
@@ -698,10 +715,14 @@ func (o *Operations) deleteRow(ctx context.Context, parsed *ParsedPath) *FSError
 		}
 	}
 
-	pkColumn := pk.Columns[0]
+	// Decode the composite primary key from the path segment
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
 
 	// Delete row
-	err = o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey)
+	err = o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 	if err != nil {
 		// Check if row doesn't exist
 		if strings.Contains(err.Error(), "not found") {
@@ -768,10 +789,14 @@ func (o *Operations) deleteColumn(ctx context.Context, parsed *ParsedPath) *FSEr
 		}
 	}
 
-	pkColumn := pk.Columns[0]
+	// Decode the composite primary key from the path segment
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+	}
 
 	// Set column to NULL using the resolved column name
-	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey, actualColumn, "")
+	err = o.db.UpdateColumn(ctx, fsCtx.Schema, fsCtx.TableName, match, actualColumn, "")
 	if err != nil {
 		return &FSError{
 			Code:    ErrIO,
@@ -885,10 +910,14 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 			}
 		}
 
-		pkColumn := pk.Columns[0]
+		// Decode the composite primary key from the path segment
+		match, decodeErr := pk.Decode(parsed.PrimaryKey)
+		if decodeErr != nil {
+			return &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid primary key: %v", decodeErr)}
+		}
 
 		// Check if row already exists
-		_, dbErr = o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey)
+		_, dbErr = o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match)
 		if dbErr == nil {
 			return &FSError{
 				Code:    ErrExists,
@@ -896,11 +925,13 @@ func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {
 			}
 		}
 
-		// Create staging entry
+		// Create staging entry (currently supports single-column PKs only)
 		if o.staging == nil {
 			o.staging = NewStagingManager()
 		}
-		o.staging.GetOrCreate(fsCtx.Schema, fsCtx.TableName, pkColumn, parsed.PrimaryKey)
+		if len(match.Columns) == 1 {
+			o.staging.GetOrCreate(fsCtx.Schema, fsCtx.TableName, match.Columns[0], match.Values[0])
+		}
 		return nil
 
 	case PathDDL:
@@ -1085,4 +1116,13 @@ func (o *Operations) mkdirDDL(ctx context.Context, parsed *ParsedPath) *FSError 
 	}
 
 	return nil
+}
+
+// toInterfaceSlice converts a []string to []interface{} for use in database calls.
+func toInterfaceSlice(ss []string) []interface{} {
+	result := make([]interface{}, len(ss))
+	for i, s := range ss {
+		result[i] = s
+	}
+	return result
 }

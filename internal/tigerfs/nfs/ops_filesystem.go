@@ -754,7 +754,7 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 			return nil, os.ErrNotExist
 		case fs.ErrPermission:
 			return nil, os.ErrPermission
-		case fs.ErrInvalidPath:
+		case fs.ErrInvalidPath, fs.ErrInvalidArgument:
 			return nil, os.ErrInvalid
 		default:
 			// For other errors, return not exist to avoid false permission denied
@@ -790,7 +790,7 @@ func (f *OpsFilesystem) Rename(oldpath, newpath string) error {
 			return os.ErrNotExist
 		case fs.ErrPermission:
 			return os.ErrPermission
-		case fs.ErrInvalidPath:
+		case fs.ErrInvalidPath, fs.ErrInvalidArgument:
 			return os.ErrInvalid
 		default:
 			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
@@ -867,7 +867,7 @@ func (f *OpsFilesystem) ReadDir(dirname string) ([]os.FileInfo, error) {
 			return nil, os.ErrNotExist
 		case fs.ErrPermission:
 			return nil, os.ErrPermission
-		case fs.ErrInvalidPath:
+		case fs.ErrInvalidPath, fs.ErrInvalidArgument:
 			return nil, os.ErrInvalid
 		default:
 			// For other errors (IO, internal), return a generic error

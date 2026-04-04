@@ -627,8 +627,8 @@ func TestColumnFileNode_Getattr_WithMock(t *testing.T) {
 
 	// Create mock that returns column data
 	mock := db.NewMockDBClient()
-	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
-		if columnName == "email" && pkValue == "1" {
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
+		if columnName == "email" && pk.Values[0] == "1" {
 			return "john@example.com", nil
 		}
 		return nil, nil
@@ -663,7 +663,7 @@ func TestColumnFileNode_Getattr_WithMock_NullValue(t *testing.T) {
 
 	// Mock returns nil (NULL value)
 	mock := db.NewMockDBClient()
-	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
 		return nil, nil
 	}
 
@@ -690,7 +690,7 @@ func TestColumnFileNode_Getattr_WithMock_Error(t *testing.T) {
 
 	// Mock returns error
 	mock := db.NewMockDBClient()
-	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
 		return nil, context.DeadlineExceeded
 	}
 
@@ -730,7 +730,7 @@ func TestColumnFileNode_fetchData_WithMock(t *testing.T) {
 			cfg := &config.Config{}
 
 			mock := db.NewMockDBClient()
-			mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+			mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
 				return tc.value, nil
 			}
 
@@ -756,7 +756,7 @@ func TestColumnFileNode_fetchData_WithTrailingNewlines(t *testing.T) {
 	}
 
 	mock := db.NewMockDBClient()
-	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName string) (interface{}, error) {
+	mock.MockRowReader.GetColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
 		return "hello", nil
 	}
 
@@ -783,10 +783,10 @@ func TestColumnFileHandle_Flush_WithMock_ExistingRow(t *testing.T) {
 
 	mock := db.NewMockDBClient()
 	// Row exists
-	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch) (*db.Row, error) {
 		return &db.Row{Columns: []string{"id", "email"}, Values: []interface{}{"1", "old@example.com"}}, nil
 	}
-	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName, newValue string) error {
 		updatedColumn = columnName
 		updatedValue = newValue
 		return nil
@@ -852,11 +852,11 @@ func TestColumnFileHandle_Flush_WithMock_Error(t *testing.T) {
 
 	mock := db.NewMockDBClient()
 	// Row exists
-	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) (*db.Row, error) {
+	mock.MockRowReader.GetRowFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch) (*db.Row, error) {
 		return &db.Row{Columns: []string{"id"}, Values: []interface{}{"1"}}, nil
 	}
 	// Update fails
-	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table, pkColumn, pkValue, columnName, newValue string) error {
+	mock.MockRowWriter.UpdateColumnFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch, columnName, newValue string) error {
 		return context.DeadlineExceeded
 	}
 

@@ -151,7 +151,7 @@ func TestTableNode_Readdir_WithMock(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowReader.ListRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mock.MockRowReader.ListRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{"1", "2", "3"}, nil
 	}
 
@@ -200,7 +200,7 @@ func TestTableNode_Readdir_WithMock_Empty(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowReader.ListRowsFunc = func(ctx context.Context, schema, table, pkColumn string, limit int) ([]string, error) {
+	mock.MockRowReader.ListRowsFunc = func(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
 		return []string{}, nil
 	}
 
@@ -288,9 +288,9 @@ func TestTableNode_Unlink_WithMock(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch) error {
 		deleteCalled = true
-		deletedPK = pkValue
+		deletedPK = pk.Values[0]
 		return nil
 	}
 
@@ -320,7 +320,7 @@ func TestTableNode_Unlink_WithMock_Error(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch) error {
 		return context.DeadlineExceeded
 	}
 
@@ -345,7 +345,7 @@ func TestTableNode_Rmdir_WithMock(t *testing.T) {
 	mock.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
 		return &db.PrimaryKey{Columns: []string{"id"}}, nil
 	}
-	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table, pkColumn, pkValue string) error {
+	mock.MockRowWriter.DeleteRowFunc = func(ctx context.Context, schema, table string, pk *db.PKMatch) error {
 		deleteCalled = true
 		return nil
 	}
