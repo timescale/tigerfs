@@ -3237,3 +3237,223 @@ func TestCompositePK_Stat(t *testing.T) {
 	assert.True(t, entry.IsDir)
 	assert.Equal(t, "1,100", entry.Name)
 }
+
+// TestCompositePK_SpecialCharsInValues tests that PK values containing commas
+// are percent-encoded in directory names and correctly decoded when reading rows.
+func TestCompositePK_SpecialCharsInValues(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"items"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.items": {columns: []string{"category", "item_id"}},
+		},
+		rows: map[string][]string{
+			// ListRows returns already-encoded directory names
+			"public.items": {"food%2Cdrink,42"},
+		},
+		rowData: map[string]*mockRow{
+			// GetRow key uses the decoded values joined by comma
+			"public.items.food,drink,42": {
+				columns: []string{"category", "item_id", "name"},
+				values:  []interface{}{"food,drink", 42, "combo meal"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// ReadDir should show the percent-encoded entry
+	entries, err := ops.ReadDir(ctx, "/items")
+	require.Nil(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	assert.Contains(t, names, "food%2Cdrink,42")
+
+	// Reading the row file should decode the PK correctly
+	content, readErr := ops.ReadFile(ctx, "/items/food%2Cdrink,42.json")
+	require.Nil(t, readErr)
+	require.NotNil(t, content)
+	assert.Contains(t, string(content.Data), "combo meal")
+
+	// Verify the PKMatch was decoded correctly
+	require.NotNil(t, mockDB.lastPKMatch)
+	assert.Equal(t, []string{"category", "item_id"}, mockDB.lastPKMatch.Columns)
+	assert.Equal(t, []string{"food,drink", "42"}, mockDB.lastPKMatch.Values)
+}
+
+// TestCompositePK_SlashInValues tests that PK values containing slashes
+// are percent-encoded as %2F and correctly decoded when reading rows.
+func TestCompositePK_SlashInValues(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"paths"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.paths": {columns: []string{"path", "version"}},
+		},
+		rows: map[string][]string{
+			"public.paths": {"a%2Fb,1"},
+		},
+		rowData: map[string]*mockRow{
+			"public.paths.a/b,1": {
+				columns: []string{"path", "version", "data"},
+				values:  []interface{}{"a/b", 1, "some data"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// ReadDir should show the percent-encoded entry
+	entries, err := ops.ReadDir(ctx, "/paths")
+	require.Nil(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	assert.Contains(t, names, "a%2Fb,1")
+
+	// Reading the row file should decode the PK correctly
+	content, readErr := ops.ReadFile(ctx, "/paths/a%2Fb,1.json")
+	require.Nil(t, readErr)
+	require.NotNil(t, content)
+	assert.Contains(t, string(content.Data), "some data")
+
+	// Verify the PKMatch was decoded correctly
+	require.NotNil(t, mockDB.lastPKMatch)
+	assert.Equal(t, []string{"path", "version"}, mockDB.lastPKMatch.Columns)
+	assert.Equal(t, []string{"a/b", "1"}, mockDB.lastPKMatch.Values)
+}
+
+// TestCompositePK_InsertRow tests inserting a new row via a composite PK path
+// using a row-as-file JSON write (composite PKs skip staging).
+func TestCompositePK_InsertRow(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		// No existing row data -- GetRow will return "row not found"
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Write JSON data to insert new row via composite PK path
+	data := []byte(`{"customer_id": 10, "product_id": 20, "quantity": 3}`)
+	err := ops.WriteFile(context.Background(), "/orders/10,20.json", data)
+
+	require.Nil(t, err)
+	assert.True(t, mockDB.insertCalled, "InsertRow should have been called")
+	assert.Contains(t, mockDB.lastInsertColumns, "customer_id")
+	assert.Contains(t, mockDB.lastInsertColumns, "product_id")
+	assert.Contains(t, mockDB.lastInsertColumns, "quantity")
+}
+
+// TestCompositePK_ThreeColumnPK tests ReadDir and ReadRow with a 3-column
+// composite primary key.
+func TestCompositePK_ThreeColumnPK(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"shipments"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.shipments": {columns: []string{"warehouse", "order_id", "item_id"}},
+		},
+		rows: map[string][]string{
+			"public.shipments": {"east,100,1", "east,100,2", "west,200,1"},
+		},
+		rowData: map[string]*mockRow{
+			"public.shipments.east,100,1": {
+				columns: []string{"warehouse", "order_id", "item_id", "status"},
+				values:  []interface{}{"east", 100, 1, "shipped"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// ReadDir should list all 3-part composite PK entries
+	entries, err := ops.ReadDir(ctx, "/shipments")
+	require.Nil(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	assert.Contains(t, names, "east,100,1")
+	assert.Contains(t, names, "east,100,2")
+	assert.Contains(t, names, "west,200,1")
+
+	// Read a row file with 3-column PK
+	content, readErr := ops.ReadFile(ctx, "/shipments/east,100,1.json")
+	require.Nil(t, readErr)
+	require.NotNil(t, content)
+	assert.Contains(t, string(content.Data), "shipped")
+
+	// Verify the PKMatch has all 3 columns decoded
+	require.NotNil(t, mockDB.lastPKMatch)
+	assert.Equal(t, []string{"warehouse", "order_id", "item_id"}, mockDB.lastPKMatch.Columns)
+	assert.Equal(t, []string{"east", "100", "1"}, mockDB.lastPKMatch.Values)
+}
+
+// TestCompositePK_EmptyTable tests that ReadDir on an empty table with a
+// composite PK returns only metadata/capability directories (no row entries).
+func TestCompositePK_EmptyTable(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		rows: map[string][]string{
+			"public.orders": {}, // empty table
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	entries, err := ops.ReadDir(context.Background(), "/orders")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+
+	// Should have capability directories but no row entries
+	assert.Contains(t, names, ".info")
+	assert.Contains(t, names, ".filter")
+	assert.Contains(t, names, ".order")
+	assert.Contains(t, names, ".export")
+
+	// No row entries -- all entries should start with "."
+	for _, name := range names {
+		assert.True(t, strings.HasPrefix(name, "."),
+			"expected only dot-directories in empty table, got %q", name)
+	}
+}
