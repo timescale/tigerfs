@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1085,6 +1086,9 @@ type mockDBClient struct {
 	execInTxSuccess bool
 	execInTxError   error
 
+	// PK match tracking for composite PK tests
+	lastPKMatch *db.PKMatch
+
 	// Call counting for cache optimization tests
 	getRowCalls      int
 	getColumnsCalls  int
@@ -1216,7 +1220,8 @@ func (m *mockDBClient) GetViewCommentsBatch(ctx context.Context, schema string) 
 
 func (m *mockDBClient) GetRow(ctx context.Context, schema, table string, pk *db.PKMatch) (*db.Row, error) {
 	m.getRowCalls++
-	key := schema + "." + table + "." + pk.Values[0]
+	m.lastPKMatch = pk
+	key := schema + "." + table + "." + strings.Join(pk.Values, ",")
 	if row, ok := m.rowData[key]; ok {
 		return &db.Row{Columns: row.columns, Values: row.values}, nil
 	}
@@ -1225,7 +1230,8 @@ func (m *mockDBClient) GetRow(ctx context.Context, schema, table string, pk *db.
 
 func (m *mockDBClient) GetColumn(ctx context.Context, schema, table string, pk *db.PKMatch, columnName string) (interface{}, error) {
 	m.getColumnCalls++
-	key := schema + "." + table + "." + pk.Values[0] + "." + columnName
+	m.lastPKMatch = pk
+	key := schema + "." + table + "." + strings.Join(pk.Values, ",") + "." + columnName
 	if val, ok := m.columnData[key]; ok {
 		return val, nil
 	}
@@ -3012,4 +3018,222 @@ func TestStatExportFile_CachedStat(t *testing.T) {
 	entry2, fsErr := ops.Stat(ctx, "/users/.export/csv")
 	require.Nil(t, fsErr)
 	assert.Equal(t, entry1.Size, entry2.Size, "cached size should match")
+}
+
+// --- Composite Primary Key Tests ---
+
+// TestCompositePK_ReadDir tests that ReadDir on a table with a composite PK
+// returns the comma-delimited PK strings from ListRows.
+func TestCompositePK_ReadDir(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		rows: map[string][]string{
+			"public.orders": {"1,100", "1,200", "2,100"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	entries, err := ops.ReadDir(context.Background(), "/orders")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+
+	// Should have composite PK rows as comma-delimited directory names
+	assert.Contains(t, names, "1,100")
+	assert.Contains(t, names, "1,200")
+	assert.Contains(t, names, "2,100")
+
+	// Should also have capability directories
+	assert.Contains(t, names, ".info")
+	assert.Contains(t, names, ".filter")
+	assert.Contains(t, names, ".export")
+}
+
+// TestCompositePK_ReadRow tests that reading a row file with a composite PK
+// correctly decodes the PK and passes the right PKMatch to the DB layer.
+func TestCompositePK_ReadRow(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		rowData: map[string]*mockRow{
+			// Key uses all PK values joined by comma
+			"public.orders.1,100": {
+				columns: []string{"customer_id", "product_id", "quantity"},
+				values:  []interface{}{1, 100, 5},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	content, err := ops.ReadFile(context.Background(), "/orders/1,100.json")
+
+	require.Nil(t, err)
+	require.NotNil(t, content)
+	assert.Contains(t, string(content.Data), "customer_id")
+	assert.Contains(t, string(content.Data), "product_id")
+	assert.Contains(t, string(content.Data), "quantity")
+
+	// Verify the mock received the correct PKMatch
+	require.NotNil(t, mockDB.lastPKMatch)
+	assert.Equal(t, []string{"customer_id", "product_id"}, mockDB.lastPKMatch.Columns)
+	assert.Equal(t, []string{"1", "100"}, mockDB.lastPKMatch.Values)
+}
+
+// TestCompositePK_ReadRowDirectory tests that ReadDir on a composite-PK row
+// directory returns column files.
+func TestCompositePK_ReadRowDirectory(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		columns: map[string][]mockColumn{
+			"public.orders": {
+				{name: "customer_id", dataType: "integer"},
+				{name: "product_id", dataType: "integer"},
+				{name: "quantity", dataType: "integer"},
+				{name: "notes", dataType: "text"},
+			},
+		},
+		rowData: map[string]*mockRow{
+			"public.orders.1,100": {
+				columns: []string{"customer_id", "product_id", "quantity", "notes"},
+				values:  []interface{}{1, 100, 5, "rush order"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	entries, err := ops.ReadDir(context.Background(), "/orders/1,100")
+
+	require.Nil(t, err)
+	require.NotNil(t, entries)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+
+	// Should have column files (integers have no extension, text gets .txt)
+	assert.Contains(t, names, "customer_id")
+	assert.Contains(t, names, "product_id")
+	assert.Contains(t, names, "quantity")
+	assert.Contains(t, names, "notes.txt")
+
+	// Should have row export format files
+	assert.Contains(t, names, ".json")
+	assert.Contains(t, names, ".tsv")
+	assert.Contains(t, names, ".csv")
+	assert.Contains(t, names, ".yaml")
+}
+
+// TestCompositePK_DecodeError tests that accessing a path with the wrong number
+// of PK parts for a composite PK returns ErrInvalidArgument.
+func TestCompositePK_DecodeError(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// "onlyonevalue" has no comma, so it's 1 part for a 2-column composite PK
+	_, err := ops.ReadFile(context.Background(), "/orders/onlyonevalue.json")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidArgument, err.Code,
+		"should return ErrInvalidArgument for mismatched composite PK parts")
+	assert.Contains(t, err.Message, "invalid primary key")
+}
+
+// TestCompositePK_ReadColumnFile tests reading a single column file from a
+// composite-PK row.
+func TestCompositePK_ReadColumnFile(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		columns: map[string][]mockColumn{
+			"public.orders": {
+				{name: "customer_id", dataType: "integer"},
+				{name: "product_id", dataType: "integer"},
+				{name: "quantity", dataType: "integer"},
+			},
+		},
+		columnData: map[string]interface{}{
+			"public.orders.1,100.quantity": 5,
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	content, err := ops.ReadFile(context.Background(), "/orders/1,100/quantity")
+
+	require.Nil(t, err)
+	require.NotNil(t, content)
+	assert.Equal(t, "5\n", string(content.Data))
+
+	// Verify correct PKMatch was passed
+	require.NotNil(t, mockDB.lastPKMatch)
+	assert.Equal(t, []string{"customer_id", "product_id"}, mockDB.lastPKMatch.Columns)
+	assert.Equal(t, []string{"1", "100"}, mockDB.lastPKMatch.Values)
+}
+
+// TestCompositePK_Stat tests that Stat on a composite-PK row directory works.
+func TestCompositePK_Stat(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"orders"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.orders": {columns: []string{"customer_id", "product_id"}},
+		},
+		rows: map[string][]string{
+			"public.orders": {"1,100", "1,200"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// Prime the stat cache via ReadDir
+	_, readErr := ops.ReadDir(ctx, "/orders")
+	require.Nil(t, readErr)
+
+	// Stat on a composite-PK row directory
+	entry, statErr := ops.Stat(ctx, "/orders/1,100")
+	require.Nil(t, statErr)
+	assert.True(t, entry.IsDir)
+	assert.Equal(t, "1,100", entry.Name)
 }

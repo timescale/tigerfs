@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1433,6 +1434,392 @@ func TestDeleteRow_MultipleDeletes(t *testing.T) {
 	}
 
 	t.Logf("All rows deleted successfully")
+}
+
+func TestGetRow_CompositePK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_get_row_cpk (
+			a int,
+			b int,
+			name text,
+			PRIMARY KEY (a, b)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_row_cpk")
+	}()
+
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_get_row_cpk (a, b, name) VALUES
+		(1, 2, 'target'),
+		(1, 3, 'other'),
+		(2, 2, 'another')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Fetch using composite PKMatch
+	pk := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "2"}}
+	row, err := client.GetRow(ctx, "public", "test_get_row_cpk", pk)
+	if err != nil {
+		t.Fatalf("GetRow() failed: %v", err)
+	}
+
+	if len(row.Columns) != 3 {
+		t.Fatalf("Expected 3 columns, got %d", len(row.Columns))
+	}
+
+	// Find the name column value
+	nameIdx := -1
+	for i, col := range row.Columns {
+		if col == "name" {
+			nameIdx = i
+			break
+		}
+	}
+	if nameIdx == -1 {
+		t.Fatal("Column 'name' not found in result")
+	}
+
+	nameVal := fmt.Sprintf("%v", row.Values[nameIdx])
+	if nameVal != "target" {
+		t.Errorf("Expected name='target', got %q", nameVal)
+	}
+}
+
+func TestUpdateRow_CompositePK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_update_row_cpk (
+			a int,
+			b int,
+			name text,
+			status text,
+			PRIMARY KEY (a, b)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_row_cpk")
+	}()
+
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_update_row_cpk (a, b, name, status) VALUES
+		(1, 2, 'Alice', 'active'),
+		(1, 3, 'Bob', 'active')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Update row (1, 2) using composite PKMatch
+	pk := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "2"}}
+	err = client.UpdateRow(ctx, "public", "test_update_row_cpk", pk,
+		[]string{"name", "status"}, []interface{}{"Alice Updated", "inactive"})
+	if err != nil {
+		t.Fatalf("UpdateRow() failed: %v", err)
+	}
+
+	// Verify the updated row
+	row, err := client.GetRow(ctx, "public", "test_update_row_cpk", pk)
+	if err != nil {
+		t.Fatalf("GetRow() after update failed: %v", err)
+	}
+
+	// Find name and status values
+	vals := make(map[string]string)
+	for i, col := range row.Columns {
+		vals[col] = fmt.Sprintf("%v", row.Values[i])
+	}
+
+	if vals["name"] != "Alice Updated" {
+		t.Errorf("Expected name='Alice Updated', got %q", vals["name"])
+	}
+	if vals["status"] != "inactive" {
+		t.Errorf("Expected status='inactive', got %q", vals["status"])
+	}
+
+	// Verify the other row was NOT updated
+	otherPK := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "3"}}
+	otherRow, err := client.GetRow(ctx, "public", "test_update_row_cpk", otherPK)
+	if err != nil {
+		t.Fatalf("GetRow() for other row failed: %v", err)
+	}
+
+	otherVals := make(map[string]string)
+	for i, col := range otherRow.Columns {
+		otherVals[col] = fmt.Sprintf("%v", otherRow.Values[i])
+	}
+
+	if otherVals["name"] != "Bob" {
+		t.Errorf("Other row name should be unchanged, got %q", otherVals["name"])
+	}
+}
+
+func TestDeleteRow_CompositePK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_delete_cpk (
+			a int,
+			b int,
+			name text,
+			PRIMARY KEY (a, b)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_delete_cpk")
+	}()
+
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_delete_cpk (a, b, name) VALUES
+		(1, 2, 'delete-me'),
+		(1, 3, 'keep-me')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Delete row (1, 2) using composite PKMatch
+	pk := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "2"}}
+	err = client.DeleteRow(ctx, "public", "test_delete_cpk", pk)
+	if err != nil {
+		t.Fatalf("DeleteRow() failed: %v", err)
+	}
+
+	// Verify it's gone
+	_, err = client.GetRow(ctx, "public", "test_delete_cpk", pk)
+	if err == nil {
+		t.Fatal("Expected error for deleted row, got nil")
+	}
+
+	// Verify the other row still exists
+	otherPK := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "3"}}
+	row, err := client.GetRow(ctx, "public", "test_delete_cpk", otherPK)
+	if err != nil {
+		t.Fatalf("GetRow() for remaining row failed: %v", err)
+	}
+
+	nameIdx := -1
+	for i, col := range row.Columns {
+		if col == "name" {
+			nameIdx = i
+			break
+		}
+	}
+	if nameIdx == -1 {
+		t.Fatal("Column 'name' not found")
+	}
+	if fmt.Sprintf("%v", row.Values[nameIdx]) != "keep-me" {
+		t.Errorf("Remaining row name = %q, want 'keep-me'", row.Values[nameIdx])
+	}
+}
+
+func TestGetColumn_CompositePK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_get_col_cpk (
+			a int,
+			b int,
+			email text,
+			PRIMARY KEY (a, b)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_get_col_cpk")
+	}()
+
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_get_col_cpk (a, b, email) VALUES
+		(1, 2, 'alice@example.com'),
+		(1, 3, 'bob@example.com')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Fetch single column via composite PKMatch
+	pk := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "2"}}
+	value, err := client.GetColumn(ctx, "public", "test_get_col_cpk", pk, "email")
+	if err != nil {
+		t.Fatalf("GetColumn() failed: %v", err)
+	}
+
+	strVal := fmt.Sprintf("%v", value)
+	if strVal != "alice@example.com" {
+		t.Errorf("Expected 'alice@example.com', got %q", strVal)
+	}
+
+	// Verify different composite PK returns different value
+	pk2 := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "3"}}
+	value2, err := client.GetColumn(ctx, "public", "test_get_col_cpk", pk2, "email")
+	if err != nil {
+		t.Fatalf("GetColumn() for second row failed: %v", err)
+	}
+
+	strVal2 := fmt.Sprintf("%v", value2)
+	if strVal2 != "bob@example.com" {
+		t.Errorf("Expected 'bob@example.com', got %q", strVal2)
+	}
+}
+
+func TestUpdateColumn_CompositePK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_update_col_cpk (
+			a int,
+			b int,
+			email text,
+			PRIMARY KEY (a, b)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_update_col_cpk")
+	}()
+
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_update_col_cpk (a, b, email) VALUES
+		(1, 2, 'old@example.com'),
+		(1, 3, 'other@example.com')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Update single column via composite PKMatch
+	pk := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "2"}}
+	err = client.UpdateColumn(ctx, "public", "test_update_col_cpk", pk, "email", "new@example.com")
+	if err != nil {
+		t.Fatalf("UpdateColumn() failed: %v", err)
+	}
+
+	// Verify the update
+	value, err := client.GetColumn(ctx, "public", "test_update_col_cpk", pk, "email")
+	if err != nil {
+		t.Fatalf("GetColumn() after update failed: %v", err)
+	}
+
+	strVal := fmt.Sprintf("%v", value)
+	if strVal != "new@example.com" {
+		t.Errorf("Expected 'new@example.com', got %q", strVal)
+	}
+
+	// Verify the other row was NOT updated
+	otherPK := &PKMatch{Columns: []string{"a", "b"}, Values: []string{"1", "3"}}
+	otherValue, err := client.GetColumn(ctx, "public", "test_update_col_cpk", otherPK, "email")
+	if err != nil {
+		t.Fatalf("GetColumn() for other row failed: %v", err)
+	}
+
+	otherStr := fmt.Sprintf("%v", otherValue)
+	if otherStr != "other@example.com" {
+		t.Errorf("Other row should be unchanged, got %q", otherStr)
+	}
 }
 
 func TestClient_DeleteRow_NilPool(t *testing.T) {

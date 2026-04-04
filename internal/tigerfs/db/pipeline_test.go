@@ -852,3 +852,135 @@ func TestBuildPipelineSQL_ColumnsNested(t *testing.T) {
 		t.Errorf("Expected 2 parameters (two limits), got %d", len(qp))
 	}
 }
+
+// TestBuildPipelineSQL_CompositePK tests SQL generation with multi-column primary keys.
+func TestBuildPipelineSQL_CompositePK(t *testing.T) {
+	tests := []struct {
+		name         string
+		params       QueryParams
+		selectPKOnly bool
+		wantSQL      string
+		wantParams   int
+	}{
+		{
+			name: "selectPKOnly with two PK columns",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"customer_id", "order_id"},
+			},
+			selectPKOnly: true,
+			wantSQL:      `SELECT "customer_id", "order_id" FROM "public"."orders"`,
+			wantParams:   0,
+		},
+		{
+			name: "selectPKOnly with three PK columns",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "events",
+				PKColumns: []string{"year", "month", "event_id"},
+			},
+			selectPKOnly: true,
+			wantSQL:      `SELECT "year", "month", "event_id" FROM "public"."events"`,
+			wantParams:   0,
+		},
+		{
+			name: "composite PK with filter",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"region", "order_id"},
+				Filters: []FilterCondition{
+					{Column: "status", Value: "pending"},
+				},
+			},
+			selectPKOnly: true,
+			wantSQL:      `WHERE "status" = $1`,
+			wantParams:   1,
+		},
+		{
+			name: "composite PK with first N limit uses multi-column ORDER BY",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"region", "order_id"},
+				Limit:     100,
+				LimitType: LimitFirst,
+			},
+			selectPKOnly: true,
+			wantSQL:      `ORDER BY "region" ASC, "order_id" ASC LIMIT $1`,
+			wantParams:   1,
+		},
+		{
+			name: "composite PK with last N limit uses multi-column DESC ORDER BY",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"region", "order_id"},
+				Limit:     50,
+				LimitType: LimitLast,
+			},
+			selectPKOnly: true,
+			wantSQL:      `ORDER BY "region" DESC, "order_id" DESC LIMIT $1`,
+			wantParams:   1,
+		},
+		{
+			name: "composite PK with custom order appends all PK columns as tiebreaker",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{"region", "order_id"},
+				OrderBy:   "created_at",
+				OrderDesc: false,
+				Limit:     100,
+				LimitType: LimitFirst,
+			},
+			selectPKOnly: true,
+			wantSQL:      `ORDER BY "created_at" ASC NULLS LAST, "region" ASC, "order_id" ASC LIMIT`,
+			wantParams:   1,
+		},
+		{
+			name: "composite PK with filter + order + limit",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "events",
+				PKColumns: []string{"year", "month", "event_id"},
+				Filters: []FilterCondition{
+					{Column: "type", Value: "click"},
+				},
+				OrderBy:   "timestamp",
+				OrderDesc: true,
+				Limit:     50,
+				LimitType: LimitFirst,
+			},
+			selectPKOnly: true,
+			wantSQL:      `WHERE "type" = $1 ORDER BY "timestamp" DESC NULLS LAST, "year" DESC, "month" DESC, "event_id" DESC LIMIT`,
+			wantParams:   2,
+		},
+		{
+			name: "composite PK with embedded double quotes in column names",
+			params: QueryParams{
+				Schema:    "public",
+				Table:     "orders",
+				PKColumns: []string{`my"col`, `other"col`},
+			},
+			selectPKOnly: true,
+			wantSQL:      `SELECT "my""col", "other""col" FROM "public"."orders"`,
+			wantParams:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, params := BuildPipelineSQLForTest(tt.params, tt.selectPKOnly)
+
+			if !strings.Contains(sql, tt.wantSQL) {
+				t.Errorf("SQL does not contain expected fragment:\n  got:  %s\n  want: %s", sql, tt.wantSQL)
+			}
+
+			if len(params) != tt.wantParams {
+				t.Errorf("Parameter count = %d, want %d\nSQL: %s", len(params), tt.wantParams, sql)
+			}
+		})
+	}
+}
