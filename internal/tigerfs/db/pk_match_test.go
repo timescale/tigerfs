@@ -267,6 +267,67 @@ func TestPrimaryKey_RoundTrip_SingleColumn(t *testing.T) {
 	}
 }
 
+func TestPrimaryKey_ThreeColumnPK(t *testing.T) {
+	pk := &PrimaryKey{Columns: []string{"a", "b", "c"}}
+
+	t.Run("encode three values", func(t *testing.T) {
+		got := pk.Encode([]string{"x", "y", "z"})
+		if got != "x,y,z" {
+			t.Errorf("Encode([x,y,z]) = %q, want %q", got, "x,y,z")
+		}
+	})
+
+	t.Run("decode three values", func(t *testing.T) {
+		match, err := pk.Decode("x,y,z")
+		if err != nil {
+			t.Fatalf("Decode(x,y,z) error: %v", err)
+		}
+		want := []string{"x", "y", "z"}
+		for i, v := range match.Values {
+			if v != want[i] {
+				t.Errorf("Values[%d] = %q, want %q", i, v, want[i])
+			}
+		}
+		if len(match.Columns) != 3 || match.Columns[0] != "a" || match.Columns[1] != "b" || match.Columns[2] != "c" {
+			t.Errorf("Columns = %v, want [a b c]", match.Columns)
+		}
+	})
+
+	t.Run("where clause", func(t *testing.T) {
+		match := &PKMatch{Columns: []string{"a", "b", "c"}, Values: []string{"x", "y", "z"}}
+		got := match.WhereClause(1)
+		want := `"a" = $1 AND "b" = $2 AND "c" = $3`
+		if got != want {
+			t.Errorf("WhereClause(1) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("round-trip with special chars in all values", func(t *testing.T) {
+		values := []string{"hello,world", "100%done", "path/to"}
+		encoded := pk.Encode(values)
+		match, err := pk.Decode(encoded)
+		if err != nil {
+			t.Fatalf("round-trip error for %v (encoded=%q): %v", values, encoded, err)
+		}
+		for i, v := range match.Values {
+			if v != values[i] {
+				t.Errorf("round-trip[%d]: got %q, want %q", i, v, values[i])
+			}
+		}
+	})
+
+	t.Run("decode wrong part count", func(t *testing.T) {
+		_, err := pk.Decode("only,two")
+		if err == nil {
+			t.Error("Decode(only,two) expected error for 3-column PK, got nil")
+		}
+		_, err = pk.Decode("a,b,c,d")
+		if err == nil {
+			t.Error("Decode(a,b,c,d) expected error for 3-column PK, got nil")
+		}
+	})
+}
+
 func TestPrimaryKey_RoundTrip_Composite(t *testing.T) {
 	pk := &PrimaryKey{Columns: []string{"a", "b", "c"}}
 
