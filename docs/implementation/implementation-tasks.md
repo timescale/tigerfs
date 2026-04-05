@@ -2926,9 +2926,52 @@ echo '{"name":"test"}' > /tmp/testmount/active_users/'(0,1)'.json
 
 ---
 
-### Task 4.18: Support TimescaleDB Hypertables
+### Task 4.18a: Basic Hypertable Support (with Primary Keys)
 
-**Objective:** Proper support for TimescaleDB hypertables with time-based access
+**Objective:** Verify and ensure that TimescaleDB hypertables with primary keys work as regular tables through existing TigerFS filesystem operations.
+
+**Background:** TimescaleDB hypertables are regular PostgreSQL tables with automatic partitioning. They appear in `information_schema.tables` as `BASE TABLE` and their PKs appear in `information_schema.table_constraints`. Hypertable PKs must include the time dimension column, making them composite (e.g., `PRIMARY KEY (time, product_id, user_id)`). With composite PK support (task 4.16), hypertables should work transparently through existing table discovery, PK discovery, and CRUD/pipeline operations.
+
+**Steps:**
+1. Add `product_views` hypertable to demo data (`scripts/demo/init.sql`) using modern `WITH (tsdb.hypertable, tsdb.segmentby, tsdb.orderby)` syntax
+2. Add `createProductViewsTable` to test data helper (`test/integration/demo_data.go`)
+3. Write integration tests (`test/integration/hypertable_test.go`) covering:
+   - ReadDir (listing with timestamp composite PK entries)
+   - ReadRow (reading by 3-column composite PK)
+   - ReadColumn (single column from composite PK row)
+   - WriteColumn (update column value)
+   - DeleteRow (delete by composite PK)
+   - Pipeline (.first, .filter, .order, .export/json)
+   - InsertRow (write JSON to new PK path)
+   - DDLCreate (create hypertable via DDL staging with multi-statement SQL)
+
+**Files Modified:**
+- `scripts/demo/init.sql` -- added product_views hypertable with columnstore
+- `test/integration/demo_data.go` -- added createProductViewsTable
+- `test/integration/hypertable_test.go` -- new: 8 integration tests
+
+**Verification:**
+```bash
+# Run hypertable integration tests
+go test -v -run "Hypertable" -timeout 120s ./test/integration/...
+
+# Verify all existing tests still pass
+go test ./... -count=1
+```
+
+**Completion Criteria:**
+- Hypertables with composite PKs work as regular tables (no code changes needed)
+- All CRUD operations work (read, write, update, delete)
+- Pipeline operations work (.first, .filter, .order, .export)
+- DDL staging creates hypertables with multi-statement SQL
+- Timestamp PK values round-trip correctly through filesystem encoding
+- All 8 integration tests pass
+
+---
+
+### Task 4.18b: Advanced Hypertable Support (.time/, .chunks/, continuous aggregates)
+
+**Objective:** Add hypertable-specific navigation with time-based access and chunk visibility
 
 **Steps:**
 1. Create `internal/tigerfs/db/timescale.go`:
@@ -2936,43 +2979,26 @@ echo '{"name":"test"}' > /tmp/testmount/active_users/'(0,1)'.json
    - Detect hypertables: `SELECT * FROM timescaledb_information.hypertables`
    - Get time column for hypertable
    - Get chunk information
-2. Update `internal/tigerfs/fuse/table.go`:
+2. Update filesystem path handling:
    - For hypertables, add `.chunks/` virtual directory
    - Add time-based access paths: `.time/2026-01-01/` to `.time/2026-01-31/`
-3. Create `internal/tigerfs/fuse/hypertable.go`:
-   - Implement time-range navigation
-   - Implement chunk-based navigation
-   - Support continuous aggregates as virtual tables
+3. Implement time-range and chunk-based navigation
+4. Support continuous aggregates as virtual tables
 
 **Files to Create:**
 - `internal/tigerfs/db/timescale.go`
 - `internal/tigerfs/db/timescale_test.go`
-- `internal/tigerfs/fuse/hypertable.go`
-- `internal/tigerfs/fuse/hypertable_test.go`
-
-**Files to Modify:**
-- `internal/tigerfs/fuse/table.go`
 
 **Verification:**
 ```bash
-# Create hypertable (requires TimescaleDB)
-psql -c "CREATE EXTENSION IF NOT EXISTS timescaledb;"
-psql -c "CREATE TABLE metrics (time TIMESTAMPTZ NOT NULL, device_id INT, value DOUBLE PRECISION);"
-psql -c "SELECT create_hypertable('metrics', 'time');"
-psql -c "INSERT INTO metrics SELECT generate_series('2026-01-01'::timestamptz, '2026-01-10'::timestamptz, '1 hour'), 1, random();"
-
 go run ./cmd/tigerfs postgres://... /tmp/testmount
 
 # Access via time range
-ls /tmp/testmount/metrics/.time/
-# Should show date ranges
-
-ls /tmp/testmount/metrics/.time/2026-01-01/
-# Should show rows from that day
+ls /tmp/testmount/product_views/.time/
+ls /tmp/testmount/product_views/.time/2026-01-01/
 
 # Access via chunks
-ls /tmp/testmount/metrics/.chunks/
-# Should show chunk names
+ls /tmp/testmount/product_views/.chunks/
 ```
 
 **Completion Criteria:**

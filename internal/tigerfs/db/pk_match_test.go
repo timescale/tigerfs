@@ -328,6 +328,69 @@ func TestPrimaryKey_ThreeColumnPK(t *testing.T) {
 	})
 }
 
+// TestPrimaryKey_TimestampPK verifies that RFC3339 timestamps with colons,
+// plus signs, and timezone offsets encode and decode correctly in composite PKs.
+// This is the format used by TimescaleDB hypertable PKs.
+func TestPrimaryKey_TimestampPK(t *testing.T) {
+	pk := &PrimaryKey{Columns: []string{"time", "product_id", "user_id"}}
+
+	tests := []struct {
+		name   string
+		values []string
+		want   string
+	}{
+		{
+			name:   "UTC timestamp",
+			values: []string{"2024-01-15T10:00:00Z", "1", "1"},
+			want:   "2024-01-15T10:00:00Z,1,1",
+		},
+		{
+			name:   "negative timezone offset",
+			values: []string{"2024-01-15T05:00:00-05:00", "1", "1"},
+			want:   "2024-01-15T05:00:00-05:00,1,1",
+		},
+		{
+			name:   "positive timezone offset",
+			values: []string{"2024-01-15T15:00:00+05:00", "2", "3"},
+			want:   "2024-01-15T15:00:00+05:00,2,3",
+		},
+		{
+			name:   "nanosecond precision",
+			values: []string{"2024-01-15T10:00:00.123456789Z", "1", "42"},
+			want:   "2024-01-15T10:00:00.123456789Z,1,42",
+		},
+		{
+			name:   "timestamp with spaces (non-RFC3339)",
+			values: []string{"2024-01-15 10:00:00+00", "5", "10"},
+			want:   "2024-01-15 10:00:00+00,5,10",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test encode
+			encoded := pk.Encode(tt.values)
+			if encoded != tt.want {
+				t.Errorf("Encode(%v) = %q, want %q", tt.values, encoded, tt.want)
+			}
+
+			// Test round-trip
+			match, err := pk.Decode(encoded)
+			if err != nil {
+				t.Fatalf("Decode(%q) error: %v", encoded, err)
+			}
+			for i, v := range match.Values {
+				if v != tt.values[i] {
+					t.Errorf("round-trip[%d]: got %q, want %q", i, v, tt.values[i])
+				}
+			}
+			if match.Columns[0] != "time" || match.Columns[1] != "product_id" || match.Columns[2] != "user_id" {
+				t.Errorf("Columns = %v, want [time product_id user_id]", match.Columns)
+			}
+		})
+	}
+}
+
 func TestPrimaryKey_RoundTrip_Composite(t *testing.T) {
 	pk := &PrimaryKey{Columns: []string{"a", "b", "c"}}
 

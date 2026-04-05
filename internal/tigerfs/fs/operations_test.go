@@ -3457,3 +3457,89 @@ func TestCompositePK_EmptyTable(t *testing.T) {
 			"expected only dot-directories in empty table, got %q", name)
 	}
 }
+
+// TestCompositePK_TimestampPK tests that a hypertable-style table with a TIMESTAMPTZ
+// column in its composite PK works correctly through ReadDir and ReadFile.
+// Timestamps in RFC3339 format contain colons, which must pass through without corruption.
+func TestCompositePK_TimestampPK(t *testing.T) {
+	cfg := &config.Config{
+		DirListingLimit: 1000,
+	}
+	// Simulate a hypertable's 3-column PK (time, product_id, user_id)
+	// with timestamp values already encoded as RFC3339 strings in the PK listing
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"product_views"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.product_views": {columns: []string{"time", "product_id", "user_id"}},
+		},
+		rows: map[string][]string{
+			"public.product_views": {
+				"2024-01-15T10:00:00Z,1,1",
+				"2024-01-15T10:05:00-05:00,1,2",
+				"2024-01-14T09:00:00+00:00,2,1",
+			},
+		},
+		rowData: map[string]*mockRow{
+			"public.product_views.2024-01-15T10:00:00Z,1,1": {
+				columns: []string{"time", "product_id", "user_id", "duration_seconds"},
+				values:  []interface{}{"2024-01-15T10:00:00Z", 1, 1, 30},
+			},
+		},
+		columnData: map[string]interface{}{
+			"public.product_views.2024-01-15T10:00:00Z,1,1.duration_seconds": 30,
+		},
+		columns: map[string][]mockColumn{
+			"public.product_views": {
+				{name: "time", dataType: "timestamp with time zone"},
+				{name: "product_id", dataType: "integer"},
+				{name: "user_id", dataType: "integer"},
+				{name: "duration_seconds", dataType: "integer"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	t.Run("ReadDir lists timestamp PK entries", func(t *testing.T) {
+		entries, err := ops.ReadDir(context.Background(), "/product_views")
+
+		require.Nil(t, err)
+		require.NotNil(t, entries)
+
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name
+		}
+
+		// Should contain RFC3339 timestamps with colons as PK directory names
+		assert.Contains(t, names, "2024-01-15T10:00:00Z,1,1")
+		assert.Contains(t, names, "2024-01-15T10:05:00-05:00,1,2")
+		assert.Contains(t, names, "2024-01-14T09:00:00+00:00,2,1")
+	})
+
+	t.Run("ReadFile decodes timestamp PK for row fetch", func(t *testing.T) {
+		content, err := ops.ReadFile(context.Background(), "/product_views/2024-01-15T10:00:00Z,1,1.json")
+
+		require.Nil(t, err)
+		require.NotNil(t, content)
+
+		// Verify the PKMatch was correctly decoded
+		assert.NotNil(t, mockDB.lastPKMatch)
+		assert.Equal(t, []string{"time", "product_id", "user_id"}, mockDB.lastPKMatch.Columns)
+		assert.Equal(t, []string{"2024-01-15T10:00:00Z", "1", "1"}, mockDB.lastPKMatch.Values)
+
+		// Content should be valid JSON with the row data
+		assert.Contains(t, string(content.Data), "duration_seconds")
+		assert.Contains(t, string(content.Data), "30")
+	})
+
+	t.Run("ReadFile column from timestamp PK row", func(t *testing.T) {
+		content, err := ops.ReadFile(context.Background(), "/product_views/2024-01-15T10:00:00Z,1,1/duration_seconds")
+
+		require.Nil(t, err)
+		require.NotNil(t, content)
+		assert.Equal(t, "30\n", string(content.Data))
+	})
+}
