@@ -64,6 +64,11 @@ func seedDemoData(ctx context.Context, connStr string, cfg DemoDataConfig) error
 		return err
 	}
 
+	// Create product_views hypertable (composite PK: time + product_id + user_id)
+	if err := createProductViewsTable(ctx, pool, cfg.ProductCount, cfg.UserCount); err != nil {
+		return err
+	}
+
 	// Create indexes for .by/ navigation
 	if err := createIndexes(ctx, pool); err != nil {
 		return err
@@ -311,6 +316,67 @@ func createProductInventoryTable(ctx context.Context, pool *pgxpool.Pool, produc
 			if err != nil {
 				return fmt.Errorf("insert inventory product %d warehouse %s: %w", i, wh, err)
 			}
+		}
+	}
+
+	return nil
+}
+
+func createProductViewsTable(ctx context.Context, pool *pgxpool.Pool, productCount, userCount int) error {
+	// Check if TimescaleDB is available
+	var hasTimescale bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_extension WHERE extname = 'timescaledb'
+		)
+	`).Scan(&hasTimescale)
+	if err != nil || !hasTimescale {
+		// TimescaleDB not available -- skip silently
+		return nil
+	}
+
+	// Create hypertable using modern TimescaleDB WITH clause syntax
+	_, err = pool.Exec(ctx, `
+		CREATE TABLE product_views (
+			time TIMESTAMPTZ NOT NULL,
+			product_id INTEGER NOT NULL REFERENCES products(id),
+			user_id INTEGER NOT NULL REFERENCES users(id),
+			duration_seconds INTEGER,
+			PRIMARY KEY (time, product_id, user_id)
+		) WITH (
+			tsdb.hypertable,
+			tsdb.segmentby = 'product_id',
+			tsdb.orderby = 'time DESC'
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("create product_views hypertable: %w", err)
+	}
+
+	// Insert deterministic rows based on BaseTimestamp.
+	// We generate ~2000 rows: 10 days x ~200 views/day.
+	// Each row has a unique (time, product_id, user_id) triple.
+	rowCount := 2000
+	for i := 1; i <= rowCount; i++ {
+		productID := ((i - 1) % productCount) + 1
+		userID := ((i - 1) % userCount) + 1
+		duration := 5 + (i % 300) // 5-304 seconds
+
+		// Spread across 10 days before BaseTimestamp, ~200 rows per day
+		dayOffset := (i - 1) / 200        // 0-9 days back
+		hourOffset := ((i - 1) % 200) / 8 // 0-24 hours
+		minOffset := (i - 1) % 60         // 0-59 minutes
+
+		ts := fmt.Sprintf("'%s'::timestamptz - '%d days'::interval - '%d hours'::interval - '%d minutes'::interval",
+			BaseTimestamp, dayOffset, hourOffset, minOffset)
+
+		_, err := pool.Exec(ctx, fmt.Sprintf(`
+			INSERT INTO product_views (time, product_id, user_id, duration_seconds)
+			VALUES (%s, $1, $2, $3)
+			ON CONFLICT DO NOTHING
+		`, ts), productID, userID, duration)
+		if err != nil {
+			return fmt.Errorf("insert product_view %d: %w", i, err)
 		}
 	}
 

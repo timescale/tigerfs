@@ -80,7 +80,8 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 4.15 | Support Database Views | 2631 |
 | ✅ | 4.16 | Support Composite Primary Keys | 2711 |
 | ⬜ | 4.17 | Support Tables/Views Without Primary Keys | TBD |
-| ⬜ | 4.18 | Support TimescaleDB Hypertables | TBD |
+| ✅ | 4.18a | Basic Hypertable Support (with Primary Keys) | 2929 |
+| ⬜ | 4.18b | Advanced Hypertable Support (.time/, .chunks/, aggregates) | 2929 |
 | ✅ | 4.19 | Synthesize Filename Extensions from Column Types | 2860 |
 | ✅ | 4.20 | Implement .ddl Extended Schema File | 2936 |
 | ✅ | 4.21 | Implement .indexes Metadata File | 3023 |
@@ -267,7 +268,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 1: Core Foundation | 11 | 11 | 100% |
 | Phase 2: Full CRUD | 14 | 14 | 100% |
 | Phase 3: CLI Commands | 7 | 7 | 100% |
-| Phase 4: Advanced Features | 26 | 30 | 87% |
+| Phase 4: Advanced Features | 27 | 31 | 87% |
 | Phase 5: Pipeline Query Architecture | 11 | 11 | 100% |
 | Phase 6: Synthesized Apps | 33 | 39 | 85% |
 |   6.1: Markdown & Plain Text | 9 | 9 | 100% |
@@ -279,4 +280,4 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| **Total** | **105** | **122** | **86%** |
+| **Total** | **106** | **123** | **86%** |

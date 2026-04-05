@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -403,6 +404,100 @@ func TestListRows_CompositePK(t *testing.T) {
 	}
 
 	t.Logf("Composite PK rows: %v", rows)
+}
+
+// TestListRows_TimestampPK verifies that hypertable-style composite PKs with
+// TIMESTAMPTZ columns work correctly through ListRows and GetRow.
+// pgx must handle string-to-timestamptz casting in WHERE clauses.
+func TestListRows_TimestampPK(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{
+		PoolSize:    5,
+		PoolMaxIdle: 2,
+	}
+
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Create table with timestamptz in composite PK (like a hypertable)
+	_, err = client.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS test_timestamp_pk (
+			time TIMESTAMPTZ NOT NULL,
+			device_id INTEGER NOT NULL,
+			value DOUBLE PRECISION,
+			PRIMARY KEY (time, device_id)
+		)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create test table: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_timestamp_pk")
+	}()
+
+	_, err = client.pool.Exec(ctx, `
+		INSERT INTO test_timestamp_pk (time, device_id, value) VALUES
+			('2024-01-15 10:00:00+00', 1, 22.5),
+			('2024-01-15 10:00:00+00', 2, 23.1),
+			('2024-01-15 10:05:00+00', 1, 22.8)
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert test data: %v", err)
+	}
+
+	// Test ListRows returns properly encoded timestamp,device_id pairs
+	rows, err := client.ListRows(ctx, "public", "test_timestamp_pk", []string{"time", "device_id"}, 10)
+	if err != nil {
+		t.Fatalf("ListRows() failed: %v", err)
+	}
+
+	if len(rows) != 3 {
+		t.Fatalf("Expected 3 rows, got %d: %v", len(rows), rows)
+	}
+
+	t.Logf("Timestamp PK rows: %v", rows)
+
+	// Each row should contain a timestamp and device_id separated by comma
+	for _, row := range rows {
+		if !strings.Contains(row, ",") {
+			t.Errorf("Row %q should be comma-delimited composite PK", row)
+		}
+	}
+
+	// Test GetRow with a timestamp-based PKMatch
+	// Decode the first listed PK, then use it to fetch the row
+	pk := &PrimaryKey{Columns: []string{"time", "device_id"}}
+	match, err := pk.Decode(rows[0])
+	if err != nil {
+		t.Fatalf("Failed to decode PK %q: %v", rows[0], err)
+	}
+
+	row, err := GetRow(ctx, client.pool, "public", "test_timestamp_pk", match)
+	if err != nil {
+		t.Fatalf("GetRow() with timestamp PKMatch failed: %v", err)
+	}
+
+	if row == nil {
+		t.Fatal("GetRow() returned nil row")
+	}
+
+	t.Logf("GetRow columns: %v", row.Columns)
+	t.Logf("GetRow values: %v", row.Values)
+
+	// Should have time, device_id, value columns
+	if len(row.Columns) != 3 {
+		t.Errorf("Expected 3 columns, got %d: %v", len(row.Columns), row.Columns)
+	}
 }
 
 func TestClient_ListRows_NilPool(t *testing.T) {

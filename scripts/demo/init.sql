@@ -1,5 +1,6 @@
 -- Demo data for TigerFS
--- ~1,000 users, 10 categories, ~200 products, ~8,000 orders, ~600 inventory records
+-- ~1,000 users, 10 categories, ~200 products, ~8,000 orders, ~600 inventory records,
+-- ~50,000 product views (TimescaleDB hypertable with columnstore)
 -- Demonstrates mixed PK types: SERIAL (users, products), TEXT (categories), UUIDv7 (orders),
 -- composite (product_inventory: product_id + warehouse)
 --
@@ -188,6 +189,44 @@ SELECT
     END AS last_restocked
 FROM products p
 CROSS JOIN (VALUES ('east'), ('west'), ('central')) AS w(name);
+
+-- Product views hypertable with columnar storage (composite PK: time + product_id + user_id)
+-- Tracks which products users are browsing -- fits the e-commerce demo theme
+CREATE TABLE product_views (
+    time TIMESTAMPTZ NOT NULL,
+    product_id INTEGER NOT NULL REFERENCES products(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    duration_seconds INTEGER,
+    PRIMARY KEY (time, product_id, user_id)
+) WITH (
+    tsdb.hypertable,
+    tsdb.segmentby = 'product_id',
+    tsdb.orderby = 'time DESC'
+);
+
+-- ~50,000 rows: 30 days of browsing data, realistic distribution
+INSERT INTO product_views (time, product_id, user_id, duration_seconds)
+SELECT
+    NOW() - ((d * 24 + h) || ' hours')::INTERVAL - ((m * 60 + s) || ' seconds')::INTERVAL,
+    (i % 200) + 1,
+    CASE
+        WHEN i % 5 = 0 THEN (i % 100) + 1   -- power users
+        ELSE (i % 1000) + 1                   -- all users
+    END,
+    5 + (i % 300)  -- 5-304 seconds viewing time
+FROM generate_series(1, 50000) AS i,
+     LATERAL (SELECT i / 1700 AS d, (i / 70) % 24 AS h, (i / 3) % 60 AS m, i % 60 AS s) AS t;
+
+-- Convert all chunks to columnstore immediately
+DO $$
+DECLARE
+    chunk REGCLASS;
+BEGIN
+    FOR chunk IN SELECT show_chunks('product_views')
+    LOOP
+        CALL convert_to_columnstore(chunk);
+    END LOOP;
+END $$;
 
 -- Single-column indexes
 CREATE INDEX idx_products_category ON products(category);
