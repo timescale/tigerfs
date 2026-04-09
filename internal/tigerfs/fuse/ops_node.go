@@ -37,6 +37,7 @@ var _ fs.NodeMkdirer = (*OpsNode)(nil)
 var _ fs.NodeUnlinker = (*OpsNode)(nil)
 var _ fs.NodeRmdirer = (*OpsNode)(nil)
 var _ fs.NodeRenamer = (*OpsNode)(nil)
+var _ fs.NodeReadlinker = (*OpsNode)(nil)
 
 // OpsNode is a single generic FUSE node type that delegates all operations
 // to FSAdapter. Every directory and file in the tree is represented by an
@@ -140,10 +141,22 @@ func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 	mode := uint32(syscall.S_IFREG)
 	if entry.IsDir {
 		mode = uint32(syscall.S_IFDIR)
+	} else if entry.IsSymlink() {
+		mode = uint32(syscall.S_IFLNK)
 	}
 
 	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter, childPath), fs.StableAttr{Mode: mode})
 	return child, 0
+}
+
+// Readlink returns the target of a symlink.
+func (n *OpsNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+	logging.Debug("OpsNode.Readlink", zap.String("path", n.path))
+	target, fsErr := n.adapter.ops.Readlink(ctx, n.path)
+	if fsErr != nil {
+		return nil, n.adapter.ErrorToErrno(fsErr)
+	}
+	return []byte(target), 0
 }
 
 // Readdir lists directory contents.
