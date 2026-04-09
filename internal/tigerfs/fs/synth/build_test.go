@@ -180,6 +180,14 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if len(stmts) != 6 {
 		t.Errorf("expected 6 statements, got %d", len(stmts))
 	}
+
+	// Non-history apps should NOT have log or savepoint tables
+	if strings.Contains(allSQL, "_log") {
+		t.Errorf("non-history app should not have log table, got:\n%s", allSQL)
+	}
+	if strings.Contains(allSQL, "_savepoint") {
+		t.Errorf("non-history app should not have savepoint table, got:\n%s", allSQL)
+	}
 }
 
 func TestGenerateBuildSQL_PlainText(t *testing.T) {
@@ -280,9 +288,57 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 		t.Errorf("compression policy should use tigerfs schema, got:\n%s", allSQL)
 	}
 
-	// Should be 8 statements: table, 2 indexes, func, trigger, hypertable, compression, policy
-	if len(stmts) != 8 {
-		t.Errorf("expected 8 statements, got %d", len(stmts))
+	// Should be 13 statements: history (table, 2 indexes, func, trigger, hypertable,
+	// compression, policy) + log (table, hypertable, index, compression) + savepoint (table)
+	if len(stmts) != 11 {
+		t.Errorf("expected 11 statements, got %d", len(stmts))
+	}
+
+	// --- Log table ---
+	if !strings.Contains(allSQL, `"tigerfs"."memory_log"`) {
+		t.Errorf("should create log table in tigerfs schema, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
+		t.Errorf("log table should have log_id UUIDv7 PK, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "file_id UUID NOT NULL") {
+		t.Errorf("log table should have file_id column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "filename TEXT NOT NULL") {
+		t.Errorf("log table should have filename column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "history_id UUID") {
+		t.Errorf("log table should have history_id column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "CHECK (type IN ('insert', 'update', 'delete', 'undo'))") {
+		t.Errorf("log table should have type CHECK constraint, got:\n%s", allSQL)
+	}
+	// Log table uses modern CREATE TABLE WITH syntax for hypertable + columnstore
+	if !strings.Contains(allSQL, "tsdb.hypertable") {
+		t.Errorf("log table should be a hypertable via CREATE TABLE WITH, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "tsdb.chunk_interval = '7 days'") {
+		t.Errorf("log hypertable should have 7-day chunk interval, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, `"idx_memory_log_by_file"`) {
+		t.Errorf("log table should have (file_id, log_id) index, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "tsdb.segmentby = 'file_id'") {
+		t.Errorf("log columnstore should segment by file_id, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "tsdb.orderby = 'log_id ASC'") {
+		t.Errorf("log columnstore should order by log_id ASC, got:\n%s", allSQL)
+	}
+
+	// --- Savepoint table ---
+	if !strings.Contains(allSQL, `"tigerfs"."memory_savepoint"`) {
+		t.Errorf("should create savepoint table in tigerfs schema, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "savepoint_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
+		t.Errorf("savepoint table should have savepoint_id UUIDv7 PK, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "name TEXT NOT NULL UNIQUE") {
+		t.Errorf("savepoint table should have unique name column, got:\n%s", allSQL)
 	}
 }
 
@@ -331,9 +387,17 @@ func TestSynth_GenerateHistorySQL_PlainText(t *testing.T) {
 		t.Errorf("trigger should reference OLD.encoding, got:\n%s", allSQL)
 	}
 
-	// Should be 8 statements
-	if len(stmts) != 8 {
-		t.Errorf("expected 8 statements, got %d", len(stmts))
+	// Should be 13 statements (same as markdown -- log/savepoint are format-independent)
+	if len(stmts) != 11 {
+		t.Errorf("expected 11 statements, got %d", len(stmts))
+	}
+
+	// Log and savepoint tables should exist for plain text too
+	if !strings.Contains(allSQL, `"tigerfs"."snippets_log"`) {
+		t.Errorf("should create log table for plain text app, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, `"tigerfs"."snippets_savepoint"`) {
+		t.Errorf("should create savepoint table for plain text app, got:\n%s", allSQL)
 	}
 }
 
@@ -346,9 +410,9 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 
 	allSQL := strings.Join(stmts, "\n")
 
-	// Should have base (6: schema+table+view+comment+func+trigger) + history (8) = 14 statements
-	if len(stmts) != 14 {
-		t.Errorf("expected 14 statements, got %d", len(stmts))
+	// Should have base (6: schema+table+view+comment+func+trigger) + history (11) = 17 statements
+	if len(stmts) != 17 {
+		t.Errorf("expected 17 statements, got %d", len(stmts))
 	}
 
 	// First statement should create tigerfs schema
@@ -389,9 +453,9 @@ func TestSynth_GenerateHistoryOnlySQL(t *testing.T) {
 		t.Errorf("comment should include history, got: %s", stmts[0])
 	}
 
-	// Should have 1 (comment) + 8 (history) = 9 statements
-	if len(stmts) != 9 {
-		t.Errorf("expected 9 statements, got %d", len(stmts))
+	// Should have 1 (comment) + 11 (history + log + savepoint) = 12 statements
+	if len(stmts) != 12 {
+		t.Errorf("expected 12 statements, got %d", len(stmts))
 	}
 
 	// History infrastructure in tigerfs schema

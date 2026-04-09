@@ -266,7 +266,53 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 		TigerFSSchema, historyTable,
 	)
 
+	// --- Operation log table (ADR-016 Section 1) ---
+	// Records every data change for undo operations. Uses UUIDv7 PKs for
+	// time-ordered entries and SkipScan-optimized queries.
+	logTable := appName + "_log"
+	qualifiedLog := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(logTable))
+
+	// Log table with hypertable + columnstore settings inline via CREATE TABLE WITH.
+	// TimescaleDB automatically creates a columnstore policy using the chunk interval
+	// as the compression interval (no explicit compress_after needed).
+	createLogTable := fmt.Sprintf(`CREATE TABLE %s (
+    log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id TEXT,
+    type TEXT NOT NULL CHECK (type IN ('insert', 'update', 'delete', 'undo')),
+    file_id UUID NOT NULL,
+    filename TEXT NOT NULL,
+    history_id UUID,
+    description TEXT
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'log_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'log_id ASC'
+)`, qualifiedLog)
+
+	// Composite index for SkipScan on the undo DISTINCT ON query
+	createLogIndex := fmt.Sprintf(
+		`CREATE INDEX %s ON %s (file_id, log_id ASC)`,
+		db.QuoteIdent("idx_"+logTable+"_by_file"),
+		qualifiedLog,
+	)
+
+	// --- Savepoint table (ADR-016 Section 2) ---
+	// Named bookmarks for undo-to-savepoint operations. Regular table (not a
+	// hypertable) -- savepoints are small and don't need time-series features.
+	savepointTable := appName + "_savepoint"
+	qualifiedSavepoint := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(savepointTable))
+
+	createSavepointTable := fmt.Sprintf(`CREATE TABLE %s (
+    savepoint_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    user_id TEXT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT
+)`, qualifiedSavepoint)
+
 	return []string{
+		// History infrastructure
 		createTable,
 		createIndexFilename,
 		createIndexID,
@@ -275,6 +321,11 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 		createHypertable,
 		setCompression,
 		addCompressionPolicy,
+		// Undo log infrastructure
+		createLogTable,
+		createLogIndex,
+		// Savepoint infrastructure
+		createSavepointTable,
 	}
 }
 
