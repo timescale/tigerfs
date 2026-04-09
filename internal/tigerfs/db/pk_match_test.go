@@ -2,6 +2,9 @@ package db
 
 import (
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
 func TestSinglePKMatch(t *testing.T) {
@@ -412,5 +415,149 @@ func TestPrimaryKey_RoundTrip_Composite(t *testing.T) {
 				t.Errorf("round-trip[%d]: encoded=%q, got %q, want %q", i, encoded, v, values[i])
 			}
 		}
+	}
+}
+
+func TestPKDecode_UUIDv7DisplayName(t *testing.T) {
+	// Generate a UUIDv7, convert to display name, then decode via pkDecodeSingle.
+	// The result should be the standard hex UUID string (for DB queries).
+	v7, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	displayName := format.UUIDv7ToDisplayName(v7)
+
+	pk := &PrimaryKey{Columns: []string{"id"}}
+	match, err := pk.Decode(displayName)
+	if err != nil {
+		t.Fatalf("Decode(%q) error: %v", displayName, err)
+	}
+
+	expectedHex := v7.String()
+	if match.Values[0] != expectedHex {
+		t.Errorf("Decode(%q) = %q, want hex UUID %q", displayName, match.Values[0], expectedHex)
+	}
+}
+
+func TestPKDecode_HexUUID_Unchanged(t *testing.T) {
+	// A standard hex UUID (v4 or v7) should pass through Decode unchanged.
+	hexUUID := "019590a0-1234-7fff-8000-a1b2c3d4e5f6"
+	pk := &PrimaryKey{Columns: []string{"id"}}
+	match, err := pk.Decode(hexUUID)
+	if err != nil {
+		t.Fatalf("Decode(%q) error: %v", hexUUID, err)
+	}
+	if match.Values[0] != hexUUID {
+		t.Errorf("Decode(%q) = %q, want unchanged", hexUUID, match.Values[0])
+	}
+}
+
+func TestPKDecode_NonUUID_Unchanged(t *testing.T) {
+	// A regular string PK value (not a UUID) should pass through unchanged.
+	pk := &PrimaryKey{Columns: []string{"name"}}
+	match, err := pk.Decode("hello-world")
+	if err != nil {
+		t.Fatalf("Decode(%q) error: %v", "hello-world", err)
+	}
+	if match.Values[0] != "hello-world" {
+		t.Errorf("Decode(%q) = %q, want unchanged", "hello-world", match.Values[0])
+	}
+}
+
+func TestPKEncodeDecode_UUIDv7_RoundTrip(t *testing.T) {
+	// Full round-trip: UUIDv7 bytes -> scanAndEncodePK (display name) ->
+	// Decode (back to hex UUID). The hex UUID should match the original.
+	v7, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate what scanAndEncodePK does for a UUIDv7
+	bytes := [16]byte(v7)
+	if !format.IsUUIDv7(bytes) {
+		t.Fatal("generated UUID is not v7")
+	}
+	displayName := format.UUIDv7ToDisplayName(bytes)
+
+	// Decode back (simulating path resolution)
+	pk := &PrimaryKey{Columns: []string{"id"}}
+	match, err := pk.Decode(displayName)
+	if err != nil {
+		t.Fatalf("Decode(%q) error: %v", displayName, err)
+	}
+
+	expectedHex := v7.String()
+	if match.Values[0] != expectedHex {
+		t.Errorf("round-trip: display=%q decoded=%q want=%q", displayName, match.Values[0], expectedHex)
+	}
+}
+
+func TestPKEncodeDecode_UUIDv4_RoundTrip(t *testing.T) {
+	// UUIDv4 should NOT get display name encoding -- it stays as hex
+	// through the entire encode/decode cycle.
+	v4 := uuid.New()
+	hexStr := v4.String()
+
+	// pkDecodeSingle should return hex unchanged (IsDisplayName returns false)
+	pk := &PrimaryKey{Columns: []string{"id"}}
+	match, err := pk.Decode(hexStr)
+	if err != nil {
+		t.Fatalf("Decode(%q) error: %v", hexStr, err)
+	}
+	if match.Values[0] != hexStr {
+		t.Errorf("v4 UUID decode: got %q, want %q (unchanged)", match.Values[0], hexStr)
+	}
+}
+
+func TestScanAndEncodePK_UUIDv7(t *testing.T) {
+	// scanAndEncodePK should produce display name format for UUIDv7
+	v7, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := []interface{}{[16]byte(v7)}
+	encoded, err := scanAndEncodePK(values, []string{"id"})
+	if err != nil {
+		t.Fatalf("scanAndEncodePK error: %v", err)
+	}
+	if !format.IsDisplayName(encoded) {
+		t.Errorf("scanAndEncodePK for UUIDv7 produced non-display-name: %q", encoded)
+	}
+
+	// Verify round-trip back to the same UUID
+	recovered, err := format.DisplayNameToUUIDv7(encoded)
+	if err != nil {
+		t.Fatalf("DisplayNameToUUIDv7(%q) error: %v", encoded, err)
+	}
+	if v7 != recovered {
+		t.Errorf("round-trip mismatch: orig=%s encoded=%q recovered=%s", v7, encoded, recovered)
+	}
+}
+
+func TestScanAndEncodePK_UUIDv4(t *testing.T) {
+	// scanAndEncodePK should produce standard hex for UUIDv4
+	v4 := uuid.New()
+	values := []interface{}{[16]byte(v4)}
+	encoded, err := scanAndEncodePK(values, []string{"id"})
+	if err != nil {
+		t.Fatalf("scanAndEncodePK error: %v", err)
+	}
+	if format.IsDisplayName(encoded) {
+		t.Errorf("scanAndEncodePK for UUIDv4 produced display name: %q (should be hex)", encoded)
+	}
+	if encoded != v4.String() {
+		t.Errorf("scanAndEncodePK for UUIDv4: got %q, want %q", encoded, v4.String())
+	}
+}
+
+func TestScanAndEncodePK_NonUUID(t *testing.T) {
+	// Non-UUID PK values should pass through unchanged
+	values := []interface{}{"hello"}
+	encoded, err := scanAndEncodePK(values, []string{"name"})
+	if err != nil {
+		t.Fatalf("scanAndEncodePK error: %v", err)
+	}
+	if encoded != "hello" {
+		t.Errorf("scanAndEncodePK for string: got %q, want %q", encoded, "hello")
 	}
 }
