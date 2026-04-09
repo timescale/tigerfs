@@ -261,6 +261,25 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
+## Phase 12: Undo and Recovery
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 12.1 | UUIDv7 Display Format (timestamp+base36) | ~8680 |
+| ⬜ | 12.2 | Symlink Support (Adapter Plumbing) | ~8730 |
+| ⬜ | 12.3 | Log and Savepoint Table DDL | ~8780 |
+| ⬜ | 12.4 | Log Entry Creation in Write Path | ~8820 |
+| ⬜ | 12.5 | User Identity (.info/user) | ~8860 |
+| ⬜ | 12.6 | Path Parsing for .log/, .savepoint/, .undo/ | ~8900 |
+| ⬜ | 12.7 | .log/ Interface (Data-First on Log Table + Diff Symlinks) | ~8930 |
+| ⬜ | 12.8 | .savepoint/ Interface (Data-First + Write Support) | ~8970 |
+| ⬜ | 12.9 | Auto-Savepoints (Session-Based) | ~9000 |
+| ⬜ | 12.10 | Undo Execution Logic (Core Engine) | ~9030 |
+| ⬜ | 12.11 | .undo/ Interface (Preview + Apply) | ~9080 |
+| ⬜ | 12.12 | Skills and Documentation | ~9150 |
+
+---
+
 ## Summary
 
 | Phase | Complete | Total | Progress |
@@ -280,4 +299,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| **Total** | **106** | **123** | **86%** |
+| Phase 12: Undo and Recovery | 0 | 12 | 0% |
+| **Total** | **106** | **135** | **79%** |
