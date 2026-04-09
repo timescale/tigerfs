@@ -848,6 +848,47 @@ func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyT
 	return c.queryRows(ctx, query, filterValue)
 }
 
+// InsertLogEntry inserts an operation log entry into the log hypertable.
+func (c *Client) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error {
+	query := fmt.Sprintf(
+		`INSERT INTO %s (user_id, type, file_id, filename, history_id, description) VALUES ($1, $2, $3, $4, $5, $6)`,
+		qt(schema, logTable),
+	)
+
+	// Convert empty strings to nil for nullable columns
+	var userIDVal, historyIDVal, descVal interface{}
+	if userID != "" {
+		userIDVal = userID
+	}
+	if historyID != "" {
+		historyIDVal = historyID
+	}
+	if description != "" {
+		descVal = description
+	}
+
+	_, err := c.pool.Exec(ctx, query, userIDVal, opType, fileID, filename, historyIDVal, descVal)
+	if err != nil {
+		return fmt.Errorf("failed to insert log entry: %w", err)
+	}
+	return nil
+}
+
+// QueryLatestHistoryID returns the most recent _history_id for a given
+// file_id from the history table. Returns empty string if no history entry found.
+func (c *Client) QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	query := fmt.Sprintf(
+		`SELECT "_history_id" FROM %s WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT 1`,
+		qt(schema, historyTable),
+	)
+	var historyID string
+	err := c.pool.QueryRow(ctx, query, fileID).Scan(&historyID)
+	if err != nil {
+		return "", fmt.Errorf("failed to query latest history ID: %w", err)
+	}
+	return historyID, nil
+}
+
 // queryRows executes a query and returns columns and row data.
 func (c *Client) queryRows(ctx context.Context, query string, args ...interface{}) ([]string, [][]interface{}, error) {
 	rows, err := c.pool.Query(ctx, query, args...)

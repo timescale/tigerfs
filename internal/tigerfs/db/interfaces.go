@@ -292,6 +292,26 @@ type HierarchyWriter interface {
 	InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error
 }
 
+// LogWriter provides operations for the undo operation log.
+// Used by synth write operations to record changes for undo/recovery.
+type LogWriter interface {
+	// InsertLogEntry inserts an operation log entry into the log hypertable.
+	// Parameters:
+	//   - logTable: the log table name (e.g., "notes_log")
+	//   - userID: the user/agent identity (may be empty for anonymous)
+	//   - opType: operation type ("insert", "update", "delete", "undo")
+	//   - fileID: stable UUID of the affected row
+	//   - filename: filename at time of operation (denormalized)
+	//   - historyID: UUID of the history entry (before-state), empty for inserts
+	//   - description: optional human-readable note
+	InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error
+
+	// QueryLatestHistoryID returns the most recent _history_id for a given
+	// file_id from the history table. Used to capture the before-state pointer
+	// after an UPDATE/DELETE fires the BEFORE trigger.
+	QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error)
+}
+
 // DBClient is the composite interface combining all database capabilities.
 // FUSE nodes that need multiple capabilities can accept this interface.
 // *db.Client satisfies this interface automatically.
@@ -309,6 +329,7 @@ type DBClient interface {
 	PipelineReader
 	HierarchyWriter
 	HistoryReader
+	LogWriter
 }
 
 // Compile-time verification that *Client implements DBClient

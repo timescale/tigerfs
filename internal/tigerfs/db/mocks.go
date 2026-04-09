@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 )
 
 // MockDDLExecutor is a mock implementation of DDLExecutor for testing.
@@ -675,6 +676,7 @@ type MockDBClient struct {
 	*MockPipelineReader
 	*MockHierarchyWriter
 	*MockHistoryReader
+	*MockLogWriter
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -695,5 +697,34 @@ func NewMockDBClient() *MockDBClient {
 		MockPipelineReader:   &MockPipelineReader{},
 		MockHierarchyWriter:  &MockHierarchyWriter{},
 		MockHistoryReader:    &MockHistoryReader{},
+		MockLogWriter:        &MockLogWriter{},
 	}
+}
+
+// MockLogWriter implements LogWriter for testing.
+type MockLogWriter struct {
+	LogEntries []MockLogEntry    // Recorded log entries for verification
+	HistoryIDs map[string]string // fileID -> latest historyID
+}
+
+// MockLogEntry records a single log entry for test verification.
+type MockLogEntry struct {
+	Schema, LogTable, UserID, OpType, FileID, Filename, HistoryID, Description string
+}
+
+func (m *MockLogWriter) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error {
+	m.LogEntries = append(m.LogEntries, MockLogEntry{
+		Schema: schema, LogTable: logTable, UserID: userID, OpType: opType,
+		FileID: fileID, Filename: filename, HistoryID: historyID, Description: description,
+	})
+	return nil
+}
+
+func (m *MockLogWriter) QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	if m.HistoryIDs != nil {
+		if id, ok := m.HistoryIDs[fileID]; ok {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("no history entry for %s", fileID)
 }
