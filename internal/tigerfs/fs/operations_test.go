@@ -3543,3 +3543,43 @@ func TestCompositePK_TimestampPK(t *testing.T) {
 		assert.Equal(t, "30\n", string(content.Data))
 	})
 }
+
+// TestReadlink_NonSymlink verifies that Readlink on a regular file or directory
+// returns ErrInvalidOperation.
+func TestReadlink_NonSymlink(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"users"}},
+		columns: map[string][]mockColumn{
+			"users": {{name: "id", dataType: "integer"}},
+		},
+		primaryKeys: map[string]*mockPK{
+			"users": {columns: []string{"id"}},
+		},
+	}
+	ops := NewOperations(cfg, mockDB)
+
+	// Root directory is not a symlink
+	_, err := ops.Readlink(context.Background(), "/")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidOperation, err.Code)
+
+	// Table directory is not a symlink
+	_, err = ops.Readlink(context.Background(), "/users")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidOperation, err.Code)
+}
+
+// TestReadlink_NonexistentPath verifies that Readlink on a path that doesn't
+// exist returns ErrNotExist.
+func TestReadlink_NonexistentPath(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"users"}},
+	}
+	ops := NewOperations(cfg, mockDB)
+
+	_, err := ops.Readlink(context.Background(), "/nonexistent_table")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
+}

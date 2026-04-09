@@ -914,19 +914,36 @@ func (f *OpsFilesystem) MkdirAll(filename string, perm os.FileMode) error {
 	return nil
 }
 
-// Lstat is the same as Stat (no symlinks).
+// Lstat returns file info without following symlinks. For symlink entries,
+// this returns the symlink's own metadata (with os.ModeSymlink set).
+// For non-symlinks, this is identical to Stat.
 func (f *OpsFilesystem) Lstat(filename string) (os.FileInfo, error) {
+	// Lstat and Stat currently go through the same ops.Stat path.
+	// ops.Stat returns symlink entries with os.ModeSymlink set and Target populated.
+	// The distinction between Lstat and Stat (following vs not following) is handled
+	// by the kernel/NFS client layer, not by us -- go-nfs calls Lstat for LOOKUP
+	// and Stat for GETATTR-after-following.
 	return f.Stat(filename)
 }
 
-// Symlink is not supported.
+// Symlink is not supported. TigerFS symlinks are virtual (computed by the fs
+// layer for specific paths like .log/ diff links), not user-created.
 func (f *OpsFilesystem) Symlink(target, link string) error {
 	return fmt.Errorf("symlinks not supported")
 }
 
-// Readlink is not supported.
+// Readlink returns the target path of a symlink.
 func (f *OpsFilesystem) Readlink(link string) (string, error) {
-	return "", fmt.Errorf("symlinks not supported")
+	link = normalizePath(link)
+	ctx := context.Background()
+	target, fsErr := f.ops.Readlink(ctx, link)
+	if fsErr != nil {
+		if fsErr.Cause != nil {
+			return "", fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+		}
+		return "", fmt.Errorf("%s", fsErr.Message)
+	}
+	return target, nil
 }
 
 // Chroot returns a filesystem rooted at the given path.
@@ -1018,11 +1035,16 @@ func (fi *opsFileInfo) Size() int64  { return fi.entry.Size }
 // as the NFS mode field. NFS mode should only contain permission bits (0-07777),
 // not file type bits. go-nfs correctly uses IsDir() to set the NFS type field,
 // but the mode field ends up with os.ModeDir (0x80000000) included.
-// We return the permission bits only to work around this.
-// Note: We still need IsDir() to return true for go-nfs to set the correct NFS type.
+// We return the permission bits only for directories and regular files.
+//
+// EXCEPTION: go-nfs checks Mode() & os.ModeSymlink to detect symlinks
+// (in file.go and nfs_onreadlink.go), so we MUST preserve the symlink bit.
 func (fi *opsFileInfo) Mode() os.FileMode {
+	if fi.entry.IsSymlink() {
+		return fi.entry.Mode.Perm() | os.ModeSymlink
+	}
 	// Return only permission bits (masking off file type)
-	// go-nfs will still correctly identify this as a directory via IsDir()
+	// go-nfs will still correctly identify directories via IsDir()
 	return fi.entry.Mode.Perm()
 }
 func (fi *opsFileInfo) ModTime() time.Time { return fi.entry.ModTime }

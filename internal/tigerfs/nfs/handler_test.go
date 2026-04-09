@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	tigerfs "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	nfs "github.com/willscott/go-nfs"
 )
 
@@ -284,4 +285,52 @@ func TestVerifierFor_DifferentContentsProduceDifferentVerifier(t *testing.T) {
 	v1 := h.VerifierFor(path, makeContents("uuid-1", "uuid-2"))
 	v2 := h.VerifierFor(path, makeContents("uuid-3", "uuid-4"))
 	assert.NotEqual(t, v1, v2, "different contents should produce different verifiers")
+}
+
+// TestOpsFileInfo_Mode_Symlink verifies that opsFileInfo preserves os.ModeSymlink
+// in the Mode() return value for symlink entries.
+func TestOpsFileInfo_Mode_Symlink(t *testing.T) {
+	// Symlink entry: Mode must include os.ModeSymlink for go-nfs detection
+	symlinkEntry := &tigerfs.Entry{
+		Name:   "before",
+		Mode:   os.ModeSymlink | 0777,
+		Target: "/dev/null",
+	}
+	fi := &opsFileInfo{entry: symlinkEntry, path: "/test/before"}
+	mode := fi.Mode()
+
+	if mode&os.ModeSymlink == 0 {
+		t.Errorf("symlink entry Mode() = %v, missing os.ModeSymlink bit", mode)
+	}
+	if mode.Perm() != 0777 {
+		t.Errorf("symlink entry Mode().Perm() = %o, want 0777", mode.Perm())
+	}
+
+	// Regular file: Mode must NOT include os.ModeSymlink
+	fileEntry := &tigerfs.Entry{
+		Name: "file.txt",
+		Mode: 0644,
+	}
+	fi2 := &opsFileInfo{entry: fileEntry, path: "/test/file.txt"}
+	mode2 := fi2.Mode()
+
+	if mode2&os.ModeSymlink != 0 {
+		t.Errorf("regular file Mode() = %v, should not have os.ModeSymlink", mode2)
+	}
+	if mode2.Perm() != 0644 {
+		t.Errorf("regular file Mode().Perm() = %o, want 0644", mode2.Perm())
+	}
+
+	// Directory: Mode must NOT include os.ModeSymlink
+	dirEntry := &tigerfs.Entry{
+		Name:  "dir",
+		IsDir: true,
+		Mode:  os.ModeDir | 0755,
+	}
+	fi3 := &opsFileInfo{entry: dirEntry, path: "/test/dir"}
+	mode3 := fi3.Mode()
+
+	if mode3&os.ModeSymlink != 0 {
+		t.Errorf("directory Mode() = %v, should not have os.ModeSymlink", mode3)
+	}
 }

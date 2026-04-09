@@ -1194,6 +1194,24 @@ func (o *Operations) Stat(ctx context.Context, path string) (*Entry, *FSError) {
 	return o.statWithParsed(ctx, parsed, path)
 }
 
+// Readlink returns the target path of a symlink. Returns ErrInvalidOperation
+// if the path is not a symlink. This is a stub that will be wired to specific
+// path handlers (e.g., .log/ diff symlinks, .undo/ preview symlinks) in later tasks.
+func (o *Operations) Readlink(ctx context.Context, path string) (string, *FSError) {
+	// First, stat the path to check if it's a symlink
+	entry, err := o.Stat(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if !entry.IsSymlink() {
+		return "", &FSError{
+			Code:    ErrInvalidOperation,
+			Message: "not a symlink",
+		}
+	}
+	return entry.Target, nil
+}
+
 // StatWithContext returns metadata using a pre-parsed context.
 func (o *Operations) StatWithContext(ctx context.Context, fsCtx *FSContext) (*Entry, *FSError) {
 	parsed := &ParsedPath{
