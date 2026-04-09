@@ -343,3 +343,197 @@ func TestSynth_NonHierarchicalViewUnchanged(t *testing.T) {
 	assert.Contains(t, names, "second-post.md")
 	assert.Len(t, entries, 2, "flat view should have exactly 2 entries")
 }
+
+// TestSynth_LogEntries_WriteSynthFile verifies that write operations on
+// history-enabled synth apps create log entries.
+func TestSynth_LogEntries_WriteSynthFile(t *testing.T) {
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md,history"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "filename", "title", "body", "encoding", "created_at", "modified_at"},
+				rows:    [][]interface{}{},
+			},
+		},
+		// InsertRow returns a fake PK
+		lastInsertReturnPK: "uuid-new-1",
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// INSERT: write a new file
+	content := "---\ntitle: Hello\n---\n# Hello\n"
+	writeErr := ops.WriteFile(ctx, "/notes/hello.md", []byte(content))
+	require.Nil(t, writeErr, "WriteFile should succeed for insert")
+
+	// Verify a log entry was created for the insert
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after insert")
+	assert.Equal(t, "insert", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-new-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
+	assert.Empty(t, mockDB.logEntries[0].historyID, "insert should have no history_id")
+}
+
+// TestSynth_LogEntries_NoHistory verifies that write operations on synth apps
+// WITHOUT history do NOT create log entries.
+func TestSynth_LogEntries_NoHistory(t *testing.T) {
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md"}, // no ",history"
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "filename", "title", "body", "encoding", "created_at", "modified_at"},
+				rows:    [][]interface{}{},
+			},
+		},
+		lastInsertReturnPK: "uuid-new-1",
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	content := "---\ntitle: Hello\n---\n# Hello\n"
+	writeErr := ops.WriteFile(ctx, "/notes/hello.md", []byte(content))
+	require.Nil(t, writeErr)
+
+	// No history → no log entries
+	assert.Empty(t, mockDB.logEntries, "non-history app should not create log entries")
+}
+
+// newHistoryMockDB creates a mock DB with a history-enabled synth app that has
+// one existing row (hello.md with PK uuid-1). Used for UPDATE/DELETE/RENAME tests.
+func newHistoryMockDB() *mockDBClient {
+	return &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md,history"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "filename", "title", "body", "encoding", "created_at", "modified_at"},
+				rows: [][]interface{}{
+					{"uuid-1", "hello.md", "Hello", "# Hello\n", "utf8", nil, nil},
+				},
+			},
+		},
+		latestHistoryIDs: map[string]string{
+			"uuid-1": "history-uuid-abc",
+		},
+		// rowData is checked by DeleteRow mock
+		rowData: map[string]*mockRow{
+			"public.notes.uuid-1": {
+				columns: []string{"id", "filename", "title", "body"},
+				values:  []interface{}{"uuid-1", "hello.md", "Hello", "# Hello\n"},
+			},
+		},
+	}
+}
+
+// TestSynth_LogEntries_UpdateSynthFile verifies that updating an existing file
+// creates a log entry with type=update and captures the history_id.
+func TestSynth_LogEntries_UpdateSynthFile(t *testing.T) {
+	mockDB := newHistoryMockDB()
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	// UPDATE: write to an existing file
+	content := "---\ntitle: Hello Updated\n---\n# Hello Updated\n"
+	writeErr := ops.WriteFile(context.Background(), "/notes/hello.md", []byte(content))
+	require.Nil(t, writeErr, "WriteFile should succeed for update")
+
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after update")
+	assert.Equal(t, "update", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].historyID, "update should capture history_id")
+}
+
+// TestSynth_LogEntries_DeleteSynthFile verifies that deleting a file creates
+// a log entry with type=delete and captures the history_id.
+func TestSynth_LogEntries_DeleteSynthFile(t *testing.T) {
+	mockDB := newHistoryMockDB()
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	deleteErr := ops.Delete(context.Background(), "/notes/hello.md")
+	require.Nil(t, deleteErr, "Delete should succeed")
+
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after delete")
+	assert.Equal(t, "delete", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].historyID, "delete should capture history_id")
+}
+
+// TestSynth_LogEntries_RenameSynthFile verifies that renaming a file creates
+// a log entry with type=update, the new filename, and captures the history_id.
+func TestSynth_LogEntries_RenameSynthFile(t *testing.T) {
+	mockDB := newHistoryMockDB()
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	renameErr := ops.Rename(context.Background(), "/notes/hello.md", "/notes/goodbye.md")
+	require.Nil(t, renameErr, "Rename should succeed")
+
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after rename")
+	assert.Equal(t, "update", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "goodbye.md", mockDB.logEntries[0].filename, "rename should log the NEW filename")
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].historyID, "rename should capture history_id")
+}

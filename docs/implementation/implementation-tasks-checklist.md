@@ -268,7 +268,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 12.1 | UUIDv7 Display Format (timestamp+base36) | ~8680 |
 | ✅ | 12.2 | Symlink Support (Adapter Plumbing) | ~8730 |
 | ✅ | 12.3 | Log and Savepoint Table DDL | ~8780 |
-| ⬜ | 12.4 | Log Entry Creation in Write Path | ~8820 |
+| ✅ | 12.4 | Log Entry Creation in Write Path | ~8820 |
 | ⬜ | 12.5 | User Identity (.info/user) | ~8860 |
 | ⬜ | 12.6 | Path Parsing for .log/, .savepoint/, .undo/ | ~8900 |
 | ⬜ | 12.7 | .log/ Interface (Data-First on Log Table + Diff Symlinks) | ~8930 |
@@ -299,5 +299,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| Phase 12: Undo and Recovery | 3 | 12 | 25% |
-| **Total** | **109** | **135** | **81%** |
+| Phase 12: Undo and Recovery | 4 | 12 | 33% |
+| **Total** | **110** | **135** | **81%** |

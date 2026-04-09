@@ -420,6 +420,46 @@ func (o *Operations) readFileSynthView(ctx context.Context, parsed *ParsedPath, 
 	return content, nil
 }
 
+// logSynthOp records an operation in the undo log for history-enabled synth apps.
+// This is a best-effort operation -- log failures are logged but don't fail the
+// original write. The userID parameter is empty until user identity is wired (Task 12.5).
+func (o *Operations) logSynthOp(ctx context.Context, schema, tableName string, info *synth.ViewInfo, opType, fileID, filename string) {
+	if !info.HasHistory {
+		return
+	}
+
+	logTable := tableName + "_log"
+	historyTable := tableName + "_history"
+
+	// For UPDATE/DELETE/UNDO, capture the history_id of the before-state.
+	// The BEFORE trigger has already fired, so the most recent history entry
+	// for this file_id is the one we want.
+	var historyID string
+	if opType != "insert" && fileID != "" {
+		hid, err := o.db.QueryLatestHistoryID(ctx, synth.TigerFSSchema, historyTable, fileID)
+		if err != nil {
+			logging.Debug("failed to capture history_id for log entry",
+				zap.String("table", tableName),
+				zap.String("file_id", fileID),
+				zap.Error(err))
+		} else {
+			historyID = hid
+		}
+	}
+
+	// TODO(12.5): Wire user_id from Operations.userID field
+	userID := ""
+
+	err := o.db.InsertLogEntry(ctx, synth.TigerFSSchema, logTable, userID, opType, fileID, filename, historyID, "")
+	if err != nil {
+		logging.Warn("failed to insert undo log entry",
+			zap.String("table", tableName),
+			zap.String("type", opType),
+			zap.String("filename", filename),
+			zap.Error(err))
+	}
+}
+
 // writeSynthFile handles writes to synthesized view files (create or update).
 // For views with hierarchy, auto-creates parent directory rows on insert.
 // Binary data (null bytes or invalid UTF-8) is base64-encoded for TEXT column storage.
@@ -490,6 +530,8 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 				Cause:   dbErr,
 			}
 		}
+
+		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "update", pkValue, filename)
 	} else {
 		// For hierarchical views, auto-create parent directories before inserting
 		if info.SupportsHierarchy {
@@ -498,8 +540,8 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 			}
 		}
 
-		// INSERT new row
-		_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+		// INSERT new row — capture the returned PK for the log entry
+		insertedPK, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 		if dbErr != nil {
 			return &FSError{
 				Code:    ErrIO,
@@ -507,6 +549,8 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 				Cause:   dbErr,
 			}
 		}
+
+		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "insert", insertedPK, filename)
 	}
 
 	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
@@ -557,6 +601,7 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 					Cause:   err,
 				}
 			}
+			o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "delete", pkValue, dirPath)
 			o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 			return nil
 		}
@@ -577,6 +622,7 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 		}
 	}
 
+	o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "delete", pkValue, filename)
 	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
 }
@@ -878,6 +924,9 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 		}
 	}
 
+	// Log rename as an update operation. The filename recorded is the NEW name
+	// (the historically-correct name at the time of this operation).
+	o.logSynthOp(ctx, schema, table, info, "update", pkValue, newFilename)
 	o.statCache.invalidate(schema, table)
 	return nil
 }

@@ -1086,6 +1086,15 @@ type mockDBClient struct {
 	execInTxSuccess bool
 	execInTxError   error
 
+	// Log entry tracking
+	logEntries []mockLogEntry
+
+	// Insert return value (PK of inserted row)
+	lastInsertReturnPK string
+
+	// History ID return value for QueryLatestHistoryID
+	latestHistoryIDs map[string]string // fileID -> historyID
+
 	// PK match tracking for composite PK tests
 	lastPKMatch *db.PKMatch
 
@@ -1095,6 +1104,13 @@ type mockDBClient struct {
 	getColumnCalls   int
 	getTableDDLCalls int
 	getFullDDLCalls  int
+}
+
+type mockLogEntry struct {
+	opType    string
+	fileID    string
+	filename  string
+	historyID string
 }
 
 type mockPK struct {
@@ -1515,7 +1531,11 @@ func (m *mockDBClient) InsertRow(ctx context.Context, schema, table string, colu
 	m.insertCalled = true
 	m.lastInsertColumns = columns
 	m.lastInsertValues = values
-	return "1", nil
+	pk := "1"
+	if m.lastInsertReturnPK != "" {
+		pk = m.lastInsertReturnPK
+	}
+	return pk, nil
 }
 
 func (m *mockDBClient) UpdateRow(ctx context.Context, schema, table string, pk *db.PKMatch, columns []string, values []interface{}) error {
@@ -1643,6 +1663,22 @@ func (m *mockDBClient) QueryHistoryDistinctIDs(ctx context.Context, schema, hist
 
 func (m *mockDBClient) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
 	return nil, nil, nil
+}
+
+func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error {
+	m.logEntries = append(m.logEntries, mockLogEntry{
+		opType: opType, fileID: fileID, filename: filename, historyID: historyID,
+	})
+	return nil
+}
+
+func (m *mockDBClient) QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	if m.latestHistoryIDs != nil {
+		if hid, ok := m.latestHistoryIDs[fileID]; ok {
+			return hid, nil
+		}
+	}
+	return "", fmt.Errorf("no history entry for %s", fileID)
 }
 
 // ============================================================================
