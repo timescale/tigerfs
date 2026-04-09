@@ -39,9 +39,16 @@ func pkOrderByList(pkColumns []string, direction string) string {
 
 // scanAndEncodePK scans multiple PK column values from a row and encodes them
 // into a single string using the PrimaryKey's encoding rules.
+//
+// For single-column UUIDv7 primary keys, this produces a human-readable
+// timestamp+base36 display name instead of the standard hex UUID format.
+// Non-v7 UUIDs continue to display as hex. See ADR-016 Section 11.
 func scanAndEncodePK(values []interface{}, pkColumns []string) (string, error) {
 	if len(pkColumns) == 1 {
-		// Single-column: convert directly
+		// Single-column: check for UUIDv7 before generic conversion
+		if bytes, ok := values[0].([16]byte); ok && format.IsUUIDv7(bytes) {
+			return format.UUIDv7ToDisplayName(bytes), nil
+		}
 		return format.ConvertValueToText(values[0])
 	}
 	// Multi-column: convert each value, then encode

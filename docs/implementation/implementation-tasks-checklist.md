@@ -265,7 +265,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
-| ⬜ | 12.1 | UUIDv7 Display Format (timestamp+base36) | ~8680 |
+| ✅ | 12.1 | UUIDv7 Display Format (timestamp+base36) | ~8680 |
 | ⬜ | 12.2 | Symlink Support (Adapter Plumbing) | ~8730 |
 | ⬜ | 12.3 | Log and Savepoint Table DDL | ~8780 |
 | ⬜ | 12.4 | Log Entry Creation in Write Path | ~8820 |
@@ -299,5 +299,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| Phase 12: Undo and Recovery | 0 | 12 | 0% |
-| **Total** | **106** | **135** | **79%** |
+| Phase 12: Undo and Recovery | 1 | 12 | 8% |
+| **Total** | **107** | **135** | **79%** |
