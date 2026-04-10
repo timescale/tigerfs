@@ -1092,8 +1092,8 @@ type mockDBClient struct {
 	// Insert return value (PK of inserted row)
 	lastInsertReturnPK string
 
-	// History ID return value for QueryLatestHistoryID
-	latestHistoryIDs map[string]string // fileID -> historyID
+	// Version ID return value for QueryLatestVersionID
+	latestVersionIDs map[string]string // fileID -> versionID
 
 	// PK match tracking for composite PK tests
 	lastPKMatch *db.PKMatch
@@ -1110,7 +1110,7 @@ type mockLogEntry struct {
 	opType    string
 	fileID    string
 	filename  string
-	historyID string
+	versionID string
 }
 
 type mockPK struct {
@@ -1665,17 +1665,17 @@ func (m *mockDBClient) QueryHistoryVersionByTime(ctx context.Context, schema, hi
 	return nil, nil, nil
 }
 
-func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error {
+func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
 	m.logEntries = append(m.logEntries, mockLogEntry{
-		opType: opType, fileID: fileID, filename: filename, historyID: historyID,
+		opType: opType, fileID: fileID, filename: filename, versionID: versionID,
 	})
 	return nil
 }
 
-func (m *mockDBClient) QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
-	if m.latestHistoryIDs != nil {
-		if hid, ok := m.latestHistoryIDs[fileID]; ok {
-			return hid, nil
+func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	if m.latestVersionIDs != nil {
+		if vid, ok := m.latestVersionIDs[fileID]; ok {
+			return vid, nil
 		}
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)

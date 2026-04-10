@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
 // PathType indicates what kind of filesystem path was parsed.
@@ -992,10 +994,16 @@ func processHistory(result *ParsedPath, remaining []string) (int, *FSError) {
 	return consumed, nil
 }
 
-// isVersionID returns true if a segment looks like a history version ID timestamp.
-// Version IDs have the format "2006-01-02T150405Z" (e.g., "2026-02-12T013000Z").
+// isVersionID returns true if a segment looks like a history version ID.
+// Recognizes two formats:
+//   - Legacy: "2006-01-02T150405Z" (18 chars, second-precision timestamp)
+//   - Display name: "2006-01-02T150405.000Z-<base36>" (UUIDv7 display format, ADR-016)
 func isVersionID(seg string) bool {
-	// Quick length check: "2006-01-02T150405Z" = 18 chars
+	// Check for UUIDv7 display name format (e.g., "2026-04-10T173000.123Z-abc123")
+	if format.IsDisplayName(seg) {
+		return true
+	}
+	// Legacy: "2006-01-02T150405Z" = 18 chars
 	if len(seg) != 18 {
 		return false
 	}

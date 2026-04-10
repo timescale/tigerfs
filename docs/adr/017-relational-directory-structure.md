@@ -25,7 +25,7 @@ Replace path-encoded filenames with a parent-pointer model: `filename` stores on
 ```sql
 CREATE TABLE tigerfs.<app> (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    parent_id UUID REFERENCES tigerfs.<app>(id) DEFERRABLE INITIALLY DEFERRED,
+    parent_id UUID REFERENCES tigerfs.<app>(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,                    -- markdown only
@@ -35,14 +35,14 @@ CREATE TABLE tigerfs.<app> (
     encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY DEFERRED
+    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
 )
 ```
 
 Changes from ADR-011:
 - `filename`: now stores leaf name only (e.g., `todo.md`), not full path (`projects/web/todo.md`). No slashes.
-- `parent_id UUID`: self-referencing FK (DEFERRABLE INITIALLY DEFERRED) to parent directory row. NULL for root-level entries. Deferral is needed so undo transactions can DELETE/INSERT rows in any order within the transaction.
-- `UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY DEFERRED`: uniqueness is per-directory, not global. `NULLS NOT DISTINCT` (PostgreSQL 15+) ensures uniqueness at the root level where parent_id is NULL. `DEFERRABLE INITIALLY DEFERRED` allows intermediate UNIQUE violations within undo transactions (e.g., restoring a filename before deleting the row that currently holds it).
+- `parent_id UUID`: self-referencing FK (DEFERRABLE INITIALLY IMMEDIATE) to parent directory row. NULL for root-level entries. `DEFERRABLE` is needed so undo transactions can `SET CONSTRAINTS ALL DEFERRED` to DELETE/INSERT rows in any order. `INITIALLY IMMEDIATE` (not DEFERRED) because PostgreSQL's ON CONFLICT clause does not support deferrable constraints as arbiters -- `InsertIfNotExists` for parent directory creation needs immediate constraint checking for normal operations.
+- `UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE`: uniqueness is per-directory, not global. `NULLS NOT DISTINCT` (PostgreSQL 15+) ensures uniqueness at the root level where parent_id is NULL. `DEFERRABLE` allows undo transactions to defer checking via `SET CONSTRAINTS ALL DEFERRED`. `INITIALLY IMMEDIATE` for the same ON CONFLICT reason as above; note that `InsertIfNotExists` uses plain INSERT with unique-violation error handling (SQLSTATE 23505) rather than ON CONFLICT, because even `INITIALLY IMMEDIATE` deferrable constraints are not valid ON CONFLICT arbiters in PostgreSQL.
 - Self-referencing FK uses ON DELETE RESTRICT (default) -- cannot delete a directory that has children.
 
 Additional DDL:
@@ -310,7 +310,7 @@ All use the standard DISTINCT ON + UPSERT undo pattern. No special cases for dir
 
 **Unfiltered undo-to-savepoint always succeeds** because ALL affected rows (including deleted parent directories) are restored within the same transaction. The DEFERRABLE FK allows intermediate states; all constraints are satisfied at COMMIT.
 
-**UNIQUE constraint at commit.** Both the FK and UNIQUE constraints are `DEFERRABLE INITIALLY DEFERRED`, so intermediate violations within the undo transaction are OK. At COMMIT, PostgreSQL checks all deferred constraints. If the final state has a UNIQUE violation (e.g., two rows with the same name in the same directory that weren't both handled by the undo), the transaction rolls back. This is a genuine conflict requiring manual resolution, but it can only happen with filtered undos -- unfiltered undo-to-savepoint restores the savepoint state exactly, which was valid.
+**UNIQUE constraint at commit.** Both the FK and UNIQUE constraints are `DEFERRABLE INITIALLY IMMEDIATE`, so intermediate violations within the undo transaction are OK. At COMMIT, PostgreSQL checks all deferred constraints. If the final state has a UNIQUE violation (e.g., two rows with the same name in the same directory that weren't both handled by the undo), the transaction rolls back. This is a genuine conflict requiring manual resolution, but it can only happen with filtered undos -- unfiltered undo-to-savepoint restores the savepoint state exactly, which was valid.
 
 ### Removed code
 
@@ -403,7 +403,7 @@ ALTER TABLE tigerfs.<app> ADD CONSTRAINT fk_parent
 -- 6. Replace UNIQUE constraint
 ALTER TABLE tigerfs.<app> DROP CONSTRAINT <app>_filename_filetype_key;
 ALTER TABLE tigerfs.<app> ADD CONSTRAINT uq_parent_filename_filetype 
-    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY DEFERRED;
+    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE;
 
 -- 7. Create index for ReadDir and path resolution
 CREATE INDEX idx_<app>_parent ON tigerfs.<app>(parent_id, filename);

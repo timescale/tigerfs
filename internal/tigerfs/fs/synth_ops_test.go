@@ -389,10 +389,10 @@ func TestSynth_LogEntries_WriteSynthFile(t *testing.T) {
 
 	// Verify a log entry was created for the insert
 	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after insert")
-	assert.Equal(t, "insert", mockDB.logEntries[0].opType)
+	assert.Equal(t, "create", mockDB.logEntries[0].opType)
 	assert.Equal(t, "uuid-new-1", mockDB.logEntries[0].fileID)
 	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
-	assert.Empty(t, mockDB.logEntries[0].historyID, "insert should have no history_id")
+	assert.Empty(t, mockDB.logEntries[0].versionID, "create should have no version_id")
 }
 
 // TestSynth_LogEntries_NoHistory verifies that write operations on synth apps
@@ -472,7 +472,7 @@ func newHistoryMockDB() *mockDBClient {
 				},
 			},
 		},
-		latestHistoryIDs: map[string]string{
+		latestVersionIDs: map[string]string{
 			"uuid-1": "history-uuid-abc",
 		},
 		// rowData is checked by DeleteRow mock
@@ -485,27 +485,27 @@ func newHistoryMockDB() *mockDBClient {
 	}
 }
 
-// TestSynth_LogEntries_UpdateSynthFile verifies that updating an existing file
-// creates a log entry with type=update and captures the history_id.
-func TestSynth_LogEntries_UpdateSynthFile(t *testing.T) {
+// TestSynth_LogEntries_EditSynthFile verifies that updating an existing file
+// creates a log entry with type=edit and captures the version_id.
+func TestSynth_LogEntries_EditSynthFile(t *testing.T) {
 	mockDB := newHistoryMockDB()
 	cfg := &config.Config{DirListingLimit: 1000}
 	ops := NewOperations(cfg, mockDB)
 
-	// UPDATE: write to an existing file
+	// EDIT: write to an existing file
 	content := "---\ntitle: Hello Updated\n---\n# Hello Updated\n"
 	writeErr := ops.WriteFile(context.Background(), "/notes/hello.md", []byte(content))
-	require.Nil(t, writeErr, "WriteFile should succeed for update")
+	require.Nil(t, writeErr, "WriteFile should succeed for edit")
 
-	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after update")
-	assert.Equal(t, "update", mockDB.logEntries[0].opType)
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after edit")
+	assert.Equal(t, "edit", mockDB.logEntries[0].opType)
 	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
 	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
-	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].historyID, "update should capture history_id")
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "edit should capture version_id")
 }
 
 // TestSynth_LogEntries_DeleteSynthFile verifies that deleting a file creates
-// a log entry with type=delete and captures the history_id.
+// a log entry with type=delete and captures the version_id.
 func TestSynth_LogEntries_DeleteSynthFile(t *testing.T) {
 	mockDB := newHistoryMockDB()
 	cfg := &config.Config{DirListingLimit: 1000}
@@ -518,11 +518,11 @@ func TestSynth_LogEntries_DeleteSynthFile(t *testing.T) {
 	assert.Equal(t, "delete", mockDB.logEntries[0].opType)
 	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
 	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
-	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].historyID, "delete should capture history_id")
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "delete should capture version_id")
 }
 
 // TestSynth_LogEntries_RenameSynthFile verifies that renaming a file creates
-// a log entry with type=update, the new filename, and captures the history_id.
+// a log entry with type=rename, the new filename, and captures the version_id.
 func TestSynth_LogEntries_RenameSynthFile(t *testing.T) {
 	mockDB := newHistoryMockDB()
 	cfg := &config.Config{DirListingLimit: 1000}
@@ -532,8 +532,8 @@ func TestSynth_LogEntries_RenameSynthFile(t *testing.T) {
 	require.Nil(t, renameErr, "Rename should succeed")
 
 	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after rename")
-	assert.Equal(t, "update", mockDB.logEntries[0].opType)
+	assert.Equal(t, "rename", mockDB.logEntries[0].opType)
 	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
 	assert.Equal(t, "goodbye.md", mockDB.logEntries[0].filename, "rename should log the NEW filename")
-	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].historyID, "rename should capture history_id")
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "rename should capture version_id")
 }

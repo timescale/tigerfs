@@ -2,14 +2,22 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
+
+// isUniqueViolation returns true if the error is a PostgreSQL unique violation (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 
 // Row represents a database row with column names and values
 type Row struct {
@@ -729,13 +737,19 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
 
+	// Plain INSERT without ON CONFLICT -- deferrable unique constraints (required
+	// by ADR-017 for undo transactions) don't support ON CONFLICT as arbiter.
+	// Instead, catch the unique violation error (23505) and treat it as a no-op.
 	query := fmt.Sprintf(
-		`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING`,
+		`INSERT INTO %s (%s) VALUES (%s)`,
 		qt(schema, table), strings.Join(quotedCols, ", "), strings.Join(placeholders, ", "),
 	)
 
 	_, err := c.pool.Exec(ctx, query, values...)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil // Row already exists, no-op
+		}
 		return fmt.Errorf("failed to insert if not exists: %w", err)
 	}
 
@@ -772,20 +786,20 @@ func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, e
 }
 
 // QueryHistoryByFilename queries the history table for versions of a file by filename.
-// Returns columns and rows ordered by _history_id DESC (most recent first).
+// Returns columns and rows ordered by version_id DESC (most recent first).
 func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE "filename" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		`SELECT * FROM %s WHERE "filename" = $1 ORDER BY "version_id" DESC LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, filename)
 }
 
-// QueryHistoryByID queries the history table for versions of a row by its UUID.
-// Returns columns and rows ordered by _history_id DESC (most recent first).
+// QueryHistoryByID queries the history table for versions of a row by its file_id UUID.
+// Returns columns and rows ordered by version_id DESC (most recent first).
 func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		`SELECT * FROM %s WHERE "file_id" = $1 ORDER BY "version_id" DESC LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, rowID)
@@ -814,10 +828,10 @@ func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, hist
 	return filenames, nil
 }
 
-// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
+// QueryHistoryDistinctIDs returns distinct row UUIDs (file_id) from the history table.
 func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "id"::text FROM %s ORDER BY "id" LIMIT %d`,
+		`SELECT DISTINCT "file_id"::text FROM %s ORDER BY "file_id" LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
 	rows, err := c.pool.Query(ctx, query)
@@ -839,54 +853,54 @@ func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTab
 
 // QueryHistoryVersionByTime finds a history row matching a version ID timestamp.
 // Version IDs have second precision; UUIDv7 has millisecond precision. This queries
-// with a 1-second window around the target timestamp plus filename or id filter.
+// with a 1-second window around the target timestamp plus filename or file_id filter.
 func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE %s = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		`SELECT * FROM %s WHERE %s = $1 ORDER BY "version_id" DESC LIMIT %d`,
 		qt(schema, historyTable), qi(filterColumn), limit,
 	)
 	return c.queryRows(ctx, query, filterValue)
 }
 
 // InsertLogEntry inserts an operation log entry into the log hypertable.
-func (c *Client) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error {
+func (c *Client) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
 	query := fmt.Sprintf(
-		`INSERT INTO %s (user_id, type, file_id, filename, history_id, description) VALUES ($1, $2, $3, $4, $5, $6)`,
+		`INSERT INTO %s (user_id, type, file_id, filename, version_id, description) VALUES ($1, $2, $3, $4, $5, $6)`,
 		qt(schema, logTable),
 	)
 
 	// Convert empty strings to nil for nullable columns
-	var userIDVal, historyIDVal, descVal interface{}
+	var userIDVal, versionIDVal, descVal interface{}
 	if userID != "" {
 		userIDVal = userID
 	}
-	if historyID != "" {
-		historyIDVal = historyID
+	if versionID != "" {
+		versionIDVal = versionID
 	}
 	if description != "" {
 		descVal = description
 	}
 
-	_, err := c.pool.Exec(ctx, query, userIDVal, opType, fileID, filename, historyIDVal, descVal)
+	_, err := c.pool.Exec(ctx, query, userIDVal, opType, fileID, filename, versionIDVal, descVal)
 	if err != nil {
 		return fmt.Errorf("failed to insert log entry: %w", err)
 	}
 	return nil
 }
 
-// QueryLatestHistoryID returns the most recent _history_id for a given
+// QueryLatestVersionID returns the most recent version_id for a given
 // file_id from the history table. Returns empty string if no history entry found.
-func (c *Client) QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+func (c *Client) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
 	query := fmt.Sprintf(
-		`SELECT "_history_id" FROM %s WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT 1`,
+		`SELECT "version_id" FROM %s WHERE "file_id" = $1 ORDER BY "version_id" DESC LIMIT 1`,
 		qt(schema, historyTable),
 	)
-	var historyID string
-	err := c.pool.QueryRow(ctx, query, fileID).Scan(&historyID)
+	var versionID string
+	err := c.pool.QueryRow(ctx, query, fileID).Scan(&versionID)
 	if err != nil {
-		return "", fmt.Errorf("failed to query latest history ID: %w", err)
+		return "", fmt.Errorf("failed to query latest version ID: %w", err)
 	}
-	return historyID, nil
+	return versionID, nil
 }
 
 // queryRows executes a query and returns columns and row data.

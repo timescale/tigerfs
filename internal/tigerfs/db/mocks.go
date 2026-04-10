@@ -704,25 +704,25 @@ func NewMockDBClient() *MockDBClient {
 // MockLogWriter implements LogWriter for testing.
 type MockLogWriter struct {
 	LogEntries []MockLogEntry    // Recorded log entries for verification
-	HistoryIDs map[string]string // fileID -> latest historyID
+	VersionIDs map[string]string // fileID -> latest versionID
 }
 
 // MockLogEntry records a single log entry for test verification.
 type MockLogEntry struct {
-	Schema, LogTable, UserID, OpType, FileID, Filename, HistoryID, Description string
+	Schema, LogTable, UserID, OpType, FileID, Filename, VersionID, Description string
 }
 
-func (m *MockLogWriter) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error {
+func (m *MockLogWriter) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
 	m.LogEntries = append(m.LogEntries, MockLogEntry{
 		Schema: schema, LogTable: logTable, UserID: userID, OpType: opType,
-		FileID: fileID, Filename: filename, HistoryID: historyID, Description: description,
+		FileID: fileID, Filename: filename, VersionID: versionID, Description: description,
 	})
 	return nil
 }
 
-func (m *MockLogWriter) QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
-	if m.HistoryIDs != nil {
-		if id, ok := m.HistoryIDs[fileID]; ok {
+func (m *MockLogWriter) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	if m.VersionIDs != nil {
+		if id, ok := m.VersionIDs[fileID]; ok {
 			return id, nil
 		}
 	}
