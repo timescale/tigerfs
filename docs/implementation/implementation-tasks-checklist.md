@@ -280,6 +280,25 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
+## Phase 13: Relational Directory Structure
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ⬜ | 13.1 | Schema and DDL Changes (parent_id, version_id, resolve_path) | ~9200 |
+| ⬜ | 13.2 | Path Resolution (resolve_path + Go cache) | ~9230 |
+| ⬜ | 13.3 | ReadDir by parent_id | ~9260 |
+| ⬜ | 13.4 | Write Path Updates (parent_id) | ~9280 |
+| ⬜ | 13.5 | Rename and Move (single-row operations) | ~9300 |
+| ⬜ | 13.6 | Delete Path Updates | ~9330 |
+| ⬜ | 13.7 | History and .history/ Updates | ~9350 |
+| ⬜ | 13.8 | Log Entry Updates (FS-centric types, version_id) | ~9370 |
+| ⬜ | 13.9 | Migration Script | ~9390 |
+| ⬜ | 13.10 | Update Existing Tests (45 verification scenarios) | ~9410 |
+| ⬜ | 13.11 | Update ADR-016 and Phase 12 Tasks | ~9430 |
+| ⬜ | 13.12 | Documentation (ADR-017, spec, skills) | ~9450 |
+
+---
+
 ## Summary
 
 | Phase | Complete | Total | Progress |
@@ -300,4 +319,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
 | Phase 12: Undo and Recovery | 4 | 12 | 33% |
-| **Total** | **110** | **135** | **81%** |
+| Phase 13: Relational Directory Structure | 0 | 12 | 0% |
+| **Total** | **110** | **147** | **75%** |

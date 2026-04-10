@@ -1,6 +1,6 @@
 # ADR-011: Directory Hierarchies in Synthesized Apps
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-017](017-relational-directory-structure.md)
 **Date:** 2026-02-12
 **Author:** Mike Freedman
 

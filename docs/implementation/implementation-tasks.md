@@ -8995,3 +8995,167 @@ Update skills, spec, and implementation docs.
 - **Ask questions when blocked** - Don't guess or skip ahead
 
 **Ready to begin! Start with Task 1.1: Evaluate and Select FUSE Library**
+---
+
+## Phase 13: Relational Directory Structure
+
+Design spec: `docs/adr/017-relational-directory-structure.md`
+
+Replaces path-encoded filenames with a parent-pointer model. Must be completed before resuming Phase 12 undo tasks (12.5+).
+
+### Task 13.1: Schema and DDL Changes
+
+**Objective:** Update synth/build.go to generate the new source table, history table, log table, and BEFORE trigger with parent_id and renamed columns.
+
+**Depends on:** Nothing
+**Files:** `internal/tigerfs/fs/synth/build.go`
+**Tasks:**
+1. Source table: add `parent_id UUID REFERENCES ... DEFERRABLE INITIALLY DEFERRED`, change `filename` semantics to leaf name, `UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY DEFERRED`, index on `(parent_id, filename)`
+2. History table: rename `id` → `file_id`, `_history_id` → `version_id`, `_operation` → `operation`, add `parent_id`, CHECK constraints, modern CREATE TABLE WITH syntax
+3. Log table: rename `history_id` → `version_id`, update CHECK constraint to `create/edit/rename/delete/undo`
+4. BEFORE trigger: copy `parent_id`, use new column names (`file_id`, `version_id`, `operation`)
+5. Create `resolve_path` PL/pgSQL function
+6. Unit tests for all DDL generation
+
+### Task 13.2: Path Resolution
+
+**Objective:** Implement resolve_path Go wrapper and path cache.
+
+**Depends on:** 13.1
+**Files:** `internal/tigerfs/db/query.go`, `internal/tigerfs/fs/operations.go`
+**Tasks:**
+1. Add `ResolvePath(ctx, schema, table, startParent, segments)` to DB layer -- calls resolve_path function, returns intermediate IDs
+2. Add Go-level `pathCache` with 2-second TTL, keyed on `(parent_id, filename)` → `id`
+3. Integration: walk path segments checking cache, call ResolvePath for remaining segments, populate cache from results
+4. Unit tests for cache behavior (hits, misses, TTL, partial hits)
+5. Integration test: resolve_path against real DB
+
+### Task 13.3: ReadDir by parent_id
+
+**Objective:** Replace GetAllRows + in-memory filtering with direct parent_id queries.
+
+**Depends on:** 13.1, 13.2
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Add `GetRowsByParent(ctx, schema, table, parentID)` to DB layer
+2. Remove `filterHierarchicalChildren`
+3. Update `readDirSynthView` (root level: `WHERE parent_id IS NULL`)
+4. Update `readDirSynthHierarchical` (subdirectory: `WHERE parent_id = X`)
+5. Unit and integration tests
+
+### Task 13.4: Write Path Updates
+
+**Objective:** Update file creation and editing to use parent_id.
+
+**Depends on:** 13.2, 13.3
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/fs/write.go`
+**Tasks:**
+1. `writeSynthFile`: resolve parent_id from path, insert/update with parent_id
+2. `ensureSynthParentDirs`: create parent chain with parent_id linking
+3. `mkdirSynth`: insert with parent_id
+4. Unit and integration tests
+
+### Task 13.5: Rename and Move
+
+**Objective:** Replace RenameByPrefix with single-row updates.
+
+**Depends on:** 13.4
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`, `internal/tigerfs/db/interfaces.go`
+**Tasks:**
+1. Directory rename: `UPDATE SET filename='new' WHERE id=dir_id` (1 row)
+2. File rename: `UPDATE SET filename='new' WHERE id=file_id`
+3. File/directory move: `UPDATE SET parent_id=new_parent WHERE id=X`
+4. Remove `RenameByPrefix`, `HasChildrenWithPrefix` from DB layer and interfaces
+5. Log entries use filesystem-centric types: `rename` for rename/move
+6. Unit and integration tests including: rename dir with children, move dir between parents, concurrent rename
+
+### Task 13.6: Delete Path Updates
+
+**Objective:** Update delete operations to use parent_id for child checks.
+
+**Depends on:** 13.3
+**Files:** `internal/tigerfs/fs/synth_ops.go`
+**Tasks:**
+1. Check children: `SELECT EXISTS(... WHERE parent_id = dir_id)` instead of LIKE prefix
+2. Delete file: standard DELETE, no FK issues (leaf node)
+3. Delete empty directory: DELETE after child check
+4. Delete non-empty directory: return ENOTEMPTY
+5. Unit and integration tests
+
+### Task 13.7: History and .history/ Updates
+
+**Objective:** Update history queries for new column names and parent_id navigation.
+
+**Depends on:** 13.1
+**Files:** `internal/tigerfs/fs/history.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Update all history queries: `file_id` (was `id`), `version_id` (was `_history_id`), `operation` (was `_operation`)
+2. `.history/` navigation uses parent_id traversal
+3. `.history/.by/<uuid>/` unchanged (queries by file_id)
+4. Unit and integration tests
+
+### Task 13.8: Log Entry Updates
+
+**Objective:** Update log entry creation for new column names and filesystem-centric types.
+
+**Depends on:** 13.5
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Rename types: `insert`→`create`, `update`→`edit`/`rename`, `delete`→`delete`, `undo`→`undo`
+2. `logSynthOp`: compute denormalized full path by walking parent chain at log-write time
+3. Update `InsertLogEntry` for `version_id` column name
+4. Update `QueryLatestHistoryID` for `version_id` column name
+5. Unit and integration tests
+
+### Task 13.9: Migration Script
+
+**Objective:** Create migration for existing databases.
+
+**Depends on:** 13.1-13.8
+**Files:** `scripts/migrate-parent-id.sql`
+**Tasks:**
+1. Auto-discover synth apps from view comments
+2. For each app: add parent_id, populate from path parsing, strip filename to leaf, add FK/UNIQUE, rename history/log columns
+3. Test with existing demo data
+4. Document migration in README or docs
+
+### Task 13.10: Update Existing Tests
+
+**Objective:** Rewrite all synth hierarchy tests for parent_id model.
+
+**Depends on:** 13.1-13.8
+**Tasks:**
+1. Rewrite synth_ops_test.go hierarchy tests
+2. Rewrite integration tests for hierarchy operations
+3. Add complex undo scenarios from ADR-017 verification section (45 test cases)
+4. Run full test suite: `go fmt ./... && go vet ./... && go test ./...`
+
+### Task 13.11: Update ADR-016 and Phase 12 Tasks
+
+**Objective:** Ensure consistency across ADRs and implementation tasks.
+
+**Depends on:** 13.1-13.10
+**Tasks:**
+1. Rewrite ADR-016 sections: log schema (version_id, filesystem-centric types), history references, UPSERT SQL (includes parent_id)
+2. Update Phase 12 tasks 12.5-12.12 in implementation-tasks.md for new schema
+3. Verify consistency between ADR-016, ADR-017, and implementation tasks
+
+### Task 13.12: Documentation
+
+**Objective:** Finalize documentation.
+
+**Depends on:** 13.1-13.11
+**Tasks:**
+1. Save ADR-017 to `docs/adr/017-relational-directory-structure.md`
+2. Update `docs/spec.md` with new schema and directory model
+3. Update skills if needed
+4. Update implementation-tasks-checklist.md
+
+---
+
+## Verification (Phase 13)
+
+1. `go fmt ./... && go vet ./... && go test ./...` passes after every task
+2. All 45 verification scenarios from ADR-017 covered by tests
+3. Demo: directory rename produces one log entry, undo restores correctly
+4. Migration script tested against demo data
