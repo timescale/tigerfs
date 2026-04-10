@@ -299,17 +299,17 @@ type LogWriter interface {
 	// Parameters:
 	//   - logTable: the log table name (e.g., "notes_log")
 	//   - userID: the user/agent identity (may be empty for anonymous)
-	//   - opType: operation type ("insert", "update", "delete", "undo")
+	//   - opType: operation type ("create", "edit", "rename", "delete", "undo")
 	//   - fileID: stable UUID of the affected row
-	//   - filename: filename at time of operation (denormalized)
-	//   - historyID: UUID of the history entry (before-state), empty for inserts
+	//   - filename: filename at time of operation (denormalized full path for log display)
+	//   - versionID: UUID of the history entry (before-state), empty for creates
 	//   - description: optional human-readable note
-	InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, historyID, description string) error
+	InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error
 
-	// QueryLatestHistoryID returns the most recent _history_id for a given
+	// QueryLatestVersionID returns the most recent version_id for a given
 	// file_id from the history table. Used to capture the before-state pointer
 	// after an UPDATE/DELETE fires the BEFORE trigger.
-	QueryLatestHistoryID(ctx context.Context, schema, historyTable, fileID string) (string, error)
+	QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error)
 }
 
 // DBClient is the composite interface combining all database capabilities.

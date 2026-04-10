@@ -16,14 +16,17 @@ func TestGenerateMarkdownTableSQL(t *testing.T) {
 	if !strings.Contains(sql, "id UUID PRIMARY KEY") {
 		t.Errorf("should have UUID primary key, got:\n%s", sql)
 	}
+	if !strings.Contains(sql, `parent_id UUID REFERENCES "tigerfs"."posts"(id) DEFERRABLE INITIALLY IMMEDIATE`) {
+		t.Errorf("should have parent_id FK with DEFERRABLE, got:\n%s", sql)
+	}
 	if !strings.Contains(sql, "filename TEXT NOT NULL") {
 		t.Errorf("should have filename column, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "filetype TEXT NOT NULL DEFAULT 'file'") {
 		t.Errorf("should have filetype column, got:\n%s", sql)
 	}
-	if !strings.Contains(sql, "UNIQUE(filename, filetype)") {
-		t.Errorf("should have compound UNIQUE constraint, got:\n%s", sql)
+	if !strings.Contains(sql, "UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE") {
+		t.Errorf("should have UNIQUE NULLS NOT DISTINCT constraint with DEFERRABLE, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "title TEXT") {
 		t.Errorf("should have title column, got:\n%s", sql)
@@ -54,14 +57,17 @@ func TestGeneratePlainTextTableSQL(t *testing.T) {
 	if !strings.Contains(sql, `"tigerfs"."snippets"`) {
 		t.Errorf("should reference tigerfs.snippets table, got:\n%s", sql)
 	}
+	if !strings.Contains(sql, `parent_id UUID REFERENCES "tigerfs"."snippets"(id) DEFERRABLE INITIALLY IMMEDIATE`) {
+		t.Errorf("should have parent_id FK with DEFERRABLE, got:\n%s", sql)
+	}
 	if !strings.Contains(sql, "filename TEXT NOT NULL") {
 		t.Errorf("should have filename column, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "filetype TEXT NOT NULL DEFAULT 'file'") {
 		t.Errorf("should have filetype column, got:\n%s", sql)
 	}
-	if !strings.Contains(sql, "UNIQUE(filename, filetype)") {
-		t.Errorf("should have compound UNIQUE constraint, got:\n%s", sql)
+	if !strings.Contains(sql, "UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE") {
+		t.Errorf("should have UNIQUE NULLS NOT DISTINCT constraint with DEFERRABLE, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "body TEXT") {
 		t.Errorf("should have body column, got:\n%s", sql)
@@ -153,6 +159,10 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if !strings.Contains(stmts[0], `CREATE SCHEMA IF NOT EXISTS "tigerfs"`) {
 		t.Errorf("first statement should create tigerfs schema, got: %s", stmts[0])
 	}
+	// Second statement should create resolve_path function
+	if !strings.Contains(stmts[1], "resolve_path") {
+		t.Errorf("second statement should create resolve_path function, got: %s", stmts[1])
+	}
 	// Should contain all parts
 	if !strings.Contains(allSQL, "CREATE TABLE") {
 		t.Errorf("should contain CREATE TABLE, got:\n%s", allSQL)
@@ -176,9 +186,17 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, `"public"."posts" AS SELECT * FROM "tigerfs"."posts"`) {
 		t.Errorf("view should be in public schema referencing tigerfs, got:\n%s", allSQL)
 	}
-	// Should have 6 statements: schema, table, view, comment, function, trigger
-	if len(stmts) != 6 {
-		t.Errorf("expected 6 statements, got %d", len(stmts))
+	// Should have 8 statements: schema, resolve_path, table, parent_index, view, comment, function, trigger
+	if len(stmts) != 8 {
+		t.Errorf("expected 8 statements, got %d", len(stmts))
+	}
+
+	// Parent index for ReadDir and path resolution
+	if !strings.Contains(allSQL, `"idx_posts_parent"`) {
+		t.Errorf("should create parent index, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "(parent_id, filename)") {
+		t.Errorf("parent index should be on (parent_id, filename), got:\n%s", allSQL)
 	}
 
 	// Non-history apps should NOT have log or savepoint tables
@@ -222,24 +240,60 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, `"tigerfs"."memory_history"`) {
 		t.Errorf("should reference tigerfs.memory_history table, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "_history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
-		t.Errorf("should have _history_id column, got:\n%s", allSQL)
+
+	// ADR-017 column renames: id->file_id, _history_id->version_id, _operation->operation
+	if !strings.Contains(allSQL, "file_id UUID,") {
+		t.Errorf("history table should have file_id column (renamed from id), got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "_operation TEXT NOT NULL") {
-		t.Errorf("should have _operation column, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "parent_id UUID,") {
+		t.Errorf("history table should have parent_id column, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
+		t.Errorf("should have version_id column (renamed from _history_id), got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "operation TEXT NOT NULL") {
+		t.Errorf("should have operation column (renamed from _operation), got:\n%s", allSQL)
 	}
 
-	// Indexes with clean names
+	// CHECK constraints on filetype, encoding, operation
+	if !strings.Contains(allSQL, "filetype TEXT CHECK (filetype IN ('file', 'directory'))") {
+		t.Errorf("history should have filetype CHECK constraint, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "encoding TEXT CHECK (encoding IN ('utf8', 'base64'))") {
+		t.Errorf("history should have encoding CHECK constraint, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "CHECK (operation IN ('UPDATE', 'DELETE'))") {
+		t.Errorf("history should have operation CHECK constraint, got:\n%s", allSQL)
+	}
+
+	// History table uses modern CREATE TABLE WITH syntax for hypertable + columnstore
+	if !strings.Contains(allSQL, "tsdb.partition_column = 'version_id'") {
+		t.Errorf("history hypertable should partition by version_id, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "tsdb.segmentby = 'file_id'") {
+		t.Errorf("history columnstore should segment by file_id, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "tsdb.orderby = 'version_id DESC'") {
+		t.Errorf("history columnstore should order by version_id DESC, got:\n%s", allSQL)
+	}
+
+	// Indexes with clean names (using new column names)
 	if !strings.Contains(allSQL, `"idx_memory_history_by_filename"`) {
 		t.Errorf("should create filename index with clean name, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "(filename, version_id DESC)") {
+		t.Errorf("filename index should use version_id, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, `"idx_memory_history_by_id"`) {
 		t.Errorf("should create id index with clean name, got:\n%s", allSQL)
 	}
+	if !strings.Contains(allSQL, "(file_id, version_id DESC)") {
+		t.Errorf("id index should use file_id and version_id, got:\n%s", allSQL)
+	}
 
 	// Encoding column in history table
-	if !strings.Contains(allSQL, "encoding TEXT,") {
-		t.Errorf("history table should contain encoding column, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "encoding TEXT CHECK") {
+		t.Errorf("history table should contain encoding column with CHECK, got:\n%s", allSQL)
 	}
 
 	// Markdown-specific columns in history table and trigger
@@ -256,15 +310,21 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 		t.Errorf("markdown trigger should copy title, got:\n%s", allSQL)
 	}
 
-	// Trigger on tigerfs schema table
+	// Trigger copies parent_id and uses new column names
 	if !strings.Contains(allSQL, "BEFORE UPDATE OR DELETE") {
 		t.Errorf("should create BEFORE UPDATE OR DELETE trigger, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, `ON "tigerfs"."memory"`) {
 		t.Errorf("trigger should be on tigerfs.memory, got:\n%s", allSQL)
 	}
+	if !strings.Contains(allSQL, "OLD.parent_id") {
+		t.Errorf("trigger should copy OLD.parent_id, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "version_id, operation") {
+		t.Errorf("trigger INSERT should use version_id and operation columns, got:\n%s", allSQL)
+	}
 	if !strings.Contains(allSQL, "TG_OP::text") {
-		t.Errorf("should record TG_OP as _operation, got:\n%s", allSQL)
+		t.Errorf("should record TG_OP as operation, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "OLD.encoding") {
 		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
@@ -275,23 +335,10 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 		t.Errorf("archive function should be in tigerfs schema, got:\n%s", allSQL)
 	}
 
-	// Hypertable uses tigerfs schema
-	if !strings.Contains(allSQL, "create_hypertable('tigerfs.memory_history'") {
-		t.Errorf("hypertable should use tigerfs schema, got:\n%s", allSQL)
-	}
-
-	// Compression
-	if !strings.Contains(allSQL, "timescaledb.compress") {
-		t.Errorf("should enable compression, got:\n%s", allSQL)
-	}
-	if !strings.Contains(allSQL, "add_compression_policy('tigerfs.memory_history'") {
-		t.Errorf("compression policy should use tigerfs schema, got:\n%s", allSQL)
-	}
-
-	// Should be 13 statements: history (table, 2 indexes, func, trigger, hypertable,
-	// compression, policy) + log (table, hypertable, index, compression) + savepoint (table)
-	if len(stmts) != 11 {
-		t.Errorf("expected 11 statements, got %d", len(stmts))
+	// Should be 8 statements: history (table with WITH, 2 indexes, func, trigger)
+	// + log (table, index) + savepoint (table)
+	if len(stmts) != 8 {
+		t.Errorf("expected 8 statements, got %d", len(stmts))
 	}
 
 	// --- Log table ---
@@ -301,17 +348,13 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, "log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
 		t.Errorf("log table should have log_id UUIDv7 PK, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "file_id UUID NOT NULL") {
-		t.Errorf("log table should have file_id column, got:\n%s", allSQL)
+	// Log table should have version_id (renamed from history_id)
+	if !strings.Contains(allSQL, "version_id UUID") {
+		t.Errorf("log table should have version_id column, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "filename TEXT NOT NULL") {
-		t.Errorf("log table should have filename column, got:\n%s", allSQL)
-	}
-	if !strings.Contains(allSQL, "history_id UUID") {
-		t.Errorf("log table should have history_id column, got:\n%s", allSQL)
-	}
-	if !strings.Contains(allSQL, "CHECK (type IN ('insert', 'update', 'delete', 'undo'))") {
-		t.Errorf("log table should have type CHECK constraint, got:\n%s", allSQL)
+	// Filesystem-centric type names (ADR-017)
+	if !strings.Contains(allSQL, "CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo'))") {
+		t.Errorf("log table should have filesystem-centric type CHECK constraint, got:\n%s", allSQL)
 	}
 	// Log table uses modern CREATE TABLE WITH syntax for hypertable + columnstore
 	if !strings.Contains(allSQL, "tsdb.hypertable") {
@@ -322,9 +365,6 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	}
 	if !strings.Contains(allSQL, `"idx_memory_log_by_file"`) {
 		t.Errorf("log table should have (file_id, log_id) index, got:\n%s", allSQL)
-	}
-	if !strings.Contains(allSQL, "tsdb.segmentby = 'file_id'") {
-		t.Errorf("log columnstore should segment by file_id, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "tsdb.orderby = 'log_id ASC'") {
 		t.Errorf("log columnstore should order by log_id ASC, got:\n%s", allSQL)
@@ -373,9 +413,12 @@ func TestSynth_GenerateHistorySQL_PlainText(t *testing.T) {
 		t.Errorf("plain text trigger should not reference OLD.headers, got:\n%s", allSQL)
 	}
 
-	// Should still have base columns
+	// Should still have base columns (OLD.id maps to file_id in history)
 	if !strings.Contains(allSQL, "OLD.id") {
 		t.Errorf("trigger should reference OLD.id, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "OLD.parent_id") {
+		t.Errorf("trigger should reference OLD.parent_id, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "OLD.filename") {
 		t.Errorf("trigger should reference OLD.filename, got:\n%s", allSQL)
@@ -387,9 +430,9 @@ func TestSynth_GenerateHistorySQL_PlainText(t *testing.T) {
 		t.Errorf("trigger should reference OLD.encoding, got:\n%s", allSQL)
 	}
 
-	// Should be 13 statements (same as markdown -- log/savepoint are format-independent)
-	if len(stmts) != 11 {
-		t.Errorf("expected 11 statements, got %d", len(stmts))
+	// Should be 8 statements (same as markdown -- log/savepoint are format-independent)
+	if len(stmts) != 8 {
+		t.Errorf("expected 8 statements, got %d", len(stmts))
 	}
 
 	// Log and savepoint tables should exist for plain text too
@@ -410,9 +453,10 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 
 	allSQL := strings.Join(stmts, "\n")
 
-	// Should have base (6: schema+table+view+comment+func+trigger) + history (11) = 17 statements
-	if len(stmts) != 17 {
-		t.Errorf("expected 17 statements, got %d", len(stmts))
+	// Should have base (8: schema+resolve_path+table+parent_idx+view+comment+func+trigger)
+	// + history (8: table+2idx+func+trigger+log+logidx+savepoint) = 16 statements
+	if len(stmts) != 16 {
+		t.Errorf("expected 16 statements, got %d", len(stmts))
 	}
 
 	// First statement should create tigerfs schema
@@ -430,13 +474,16 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 		t.Errorf("should create history table in tigerfs schema, got:\n%s", allSQL)
 	}
 
-	// History trigger should copy encoding column
+	// History trigger should copy encoding and parent_id columns
 	if !strings.Contains(allSQL, "OLD.encoding") {
 		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
 	}
-	// History table should have encoding column
-	if !strings.Contains(allSQL, "encoding TEXT,") {
-		t.Errorf("history table should contain encoding column, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "OLD.parent_id") {
+		t.Errorf("history trigger should copy parent_id column, got:\n%s", allSQL)
+	}
+	// History table should have encoding column with CHECK
+	if !strings.Contains(allSQL, "encoding TEXT CHECK") {
+		t.Errorf("history table should contain encoding column with CHECK, got:\n%s", allSQL)
 	}
 }
 
@@ -453,14 +500,82 @@ func TestSynth_GenerateHistoryOnlySQL(t *testing.T) {
 		t.Errorf("comment should include history, got: %s", stmts[0])
 	}
 
-	// Should have 1 (comment) + 11 (history + log + savepoint) = 12 statements
-	if len(stmts) != 12 {
-		t.Errorf("expected 12 statements, got %d", len(stmts))
+	// Should have 1 (comment) + 8 (history + log + savepoint) = 9 statements
+	if len(stmts) != 9 {
+		t.Errorf("expected 9 statements, got %d", len(stmts))
 	}
 
 	// History infrastructure in tigerfs schema
 	if !strings.Contains(allSQL, `"tigerfs"."memory_history"`) {
 		t.Errorf("should create history table in tigerfs schema, got:\n%s", allSQL)
+	}
+}
+
+func TestSynth_GenerateResolvePathSQL(t *testing.T) {
+	sql := GenerateResolvePathSQL()
+
+	// Function should be in tigerfs schema
+	if !strings.Contains(sql, `"tigerfs".resolve_path`) {
+		t.Errorf("should create function in tigerfs schema, got:\n%s", sql)
+	}
+	// Should accept REGCLASS, UUID, TEXT[] parameters
+	if !strings.Contains(sql, "tbl REGCLASS") {
+		t.Errorf("should accept REGCLASS parameter, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "start_parent UUID") {
+		t.Errorf("should accept start_parent UUID parameter, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "segments TEXT[]") {
+		t.Errorf("should accept segments TEXT[] parameter, got:\n%s", sql)
+	}
+	// Should return table with expected columns
+	if !strings.Contains(sql, "RETURNS TABLE(depth INT, resolved_id UUID, resolved_name TEXT)") {
+		t.Errorf("should return (depth, resolved_id, resolved_name), got:\n%s", sql)
+	}
+	// Should use EXECUTE with format() for dynamic table (REGCLASS)
+	if !strings.Contains(sql, "EXECUTE format(") {
+		t.Errorf("should use EXECUTE format() for dynamic table, got:\n%s", sql)
+	}
+	// Should use IS NOT DISTINCT FROM for NULL-safe parent_id comparison
+	if !strings.Contains(sql, "IS NOT DISTINCT FROM") {
+		t.Errorf("should use IS NOT DISTINCT FROM for NULL-safe comparison, got:\n%s", sql)
+	}
+	// Should be PL/pgSQL
+	if !strings.Contains(sql, "LANGUAGE plpgsql") {
+		t.Errorf("should be PL/pgSQL function, got:\n%s", sql)
+	}
+	// Should be CREATE OR REPLACE (idempotent)
+	if !strings.Contains(sql, "CREATE OR REPLACE FUNCTION") {
+		t.Errorf("should use CREATE OR REPLACE, got:\n%s", sql)
+	}
+}
+
+func TestSynth_GenerateParentIndexSQL(t *testing.T) {
+	sql := GenerateParentIndexSQL("memory")
+
+	if !strings.Contains(sql, `"idx_memory_parent"`) {
+		t.Errorf("index name should be idx_memory_parent, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, `"tigerfs"."memory"`) {
+		t.Errorf("should reference tigerfs.memory table, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "(parent_id, filename)") {
+		t.Errorf("should index (parent_id, filename), got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "CREATE INDEX") {
+		t.Errorf("should be CREATE INDEX, got:\n%s", sql)
+	}
+}
+
+func TestSynth_GenerateParentIndexSQL_SpecialName(t *testing.T) {
+	sql := GenerateParentIndexSQL("my-app")
+
+	// Should properly quote identifiers with special characters
+	if !strings.Contains(sql, `"idx_my-app_parent"`) {
+		t.Errorf("should quote index name with special chars, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, `"tigerfs"."my-app"`) {
+		t.Errorf("should quote table name with special chars, got:\n%s", sql)
 	}
 }
 

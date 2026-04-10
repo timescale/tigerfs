@@ -24,8 +24,10 @@ const TigerFSSchema = "tigerfs"
 //   - created_at: timestamptz with auto-default
 //   - modified_at: timestamptz with auto-default
 func GenerateMarkdownTableSQL(schema, name string) string {
-	return fmt.Sprintf(`CREATE TABLE %s.%s (
+	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
+	return fmt.Sprintf(`CREATE TABLE %s (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    parent_id UUID REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
@@ -35,8 +37,8 @@ func GenerateMarkdownTableSQL(schema, name string) string {
     encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(filename, filetype)
-)`, db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
+    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
+)`, qualifiedTable, qualifiedTable)
 }
 
 // GeneratePlainTextTableSQL returns the CREATE TABLE statement for a plain text app.
@@ -51,16 +53,18 @@ func GenerateMarkdownTableSQL(schema, name string) string {
 //   - created_at: timestamptz with auto-default
 //   - modified_at: timestamptz with auto-default
 func GeneratePlainTextTableSQL(schema, name string) string {
-	return fmt.Sprintf(`CREATE TABLE %s.%s (
+	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
+	return fmt.Sprintf(`CREATE TABLE %s (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    parent_id UUID REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     body TEXT,
     encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(filename, filetype)
-)`, db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
+    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
+)`, qualifiedTable, qualifiedTable)
 }
 
 // GenerateViewSQL returns a CREATE VIEW statement that selects all columns
@@ -129,11 +133,60 @@ func GenerateBuildSQL(schema, appName string, format SynthFormat) ([]string, err
 	return GenerateBuildSQLWithFeatures(schema, appName, FeatureSet{Format: format})
 }
 
+// GenerateResolvePathSQL returns a CREATE OR REPLACE FUNCTION statement for the
+// tigerfs.resolve_path PL/pgSQL function. This function resolves a sequence of
+// path segments to row IDs using the parent-pointer model (ADR-017).
+//
+// Parameters:
+//   - tbl: REGCLASS reference to the source table
+//   - start_parent: UUID of the starting parent (NULL for root)
+//   - segments: TEXT[] array of path segments to resolve
+//
+// Returns a table of (depth, resolved_id, resolved_name) rows, one per resolved
+// segment. The Go layer populates its path cache from these results. If any segment
+// doesn't resolve, the function returns fewer rows than segments.
+func GenerateResolvePathSQL() string {
+	return fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s.resolve_path(
+    tbl REGCLASS,
+    start_parent UUID,
+    segments TEXT[]
+)
+RETURNS TABLE(depth INT, resolved_id UUID, resolved_name TEXT) AS $$
+DECLARE
+    current_id UUID := start_parent;
+    i INT := 0;
+    seg TEXT;
+BEGIN
+    FOREACH seg IN ARRAY segments LOOP
+        i := i + 1;
+        EXECUTE format('SELECT id FROM %%s WHERE filename = $1 AND parent_id IS NOT DISTINCT FROM $2', tbl)
+        INTO current_id
+        USING seg, current_id;
+        IF current_id IS NULL THEN RETURN; END IF;
+        depth := i;
+        resolved_id := current_id;
+        resolved_name := seg;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql`, db.QuoteIdent(TigerFSSchema))
+}
+
+// GenerateParentIndexSQL returns a CREATE INDEX statement for the parent_id + filename
+// index. This index supports ReadDir (WHERE parent_id = X) and path resolution lookups.
+func GenerateParentIndexSQL(appName string) string {
+	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(appName))
+	return fmt.Sprintf(`CREATE INDEX %s ON %s (parent_id, filename)`,
+		db.QuoteIdent("idx_"+appName+"_parent"),
+		qualifiedTable,
+	)
+}
+
 // GenerateBuildSQLWithFeatures returns SQL statements to create a synthesized app
-// with optional features like versioned history. The first statement creates the
-// tigerfs schema. The backing table, triggers, and functions are in the tigerfs
-// schema; the view is in the user's schema. When features.History is true,
-// appends history table, trigger, hypertable, and compression statements.
+// with optional features like versioned history. The first statements create the
+// tigerfs schema and the resolve_path function. The backing table, triggers, and
+// functions are in the tigerfs schema; the view is in the user's schema. When
+// features.History is true, appends history hypertable, trigger, log, and savepoint.
 func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) ([]string, error) {
 	var tableSQL string
 	switch features.Format {
@@ -146,11 +199,13 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 	}
 
 	createSchema := fmt.Sprintf(`CREATE SCHEMA IF NOT EXISTS %s`, db.QuoteIdent(TigerFSSchema))
+	resolvePathFunc := GenerateResolvePathSQL()
+	parentIndex := GenerateParentIndexSQL(appName)
 	viewSQL := GenerateViewSQL(schema, appName, TigerFSSchema, appName)
 	commentSQL := GenerateViewCommentSQLWithFeatures(schema, appName, features)
 	triggerStmts := GenerateModifiedAtTriggerSQL(schema, appName)
 
-	stmts := []string{createSchema, tableSQL, viewSQL, commentSQL}
+	stmts := []string{createSchema, resolvePathFunc, tableSQL, parentIndex, viewSQL, commentSQL}
 	stmts = append(stmts, triggerStmts...)
 
 	if features.History {
@@ -165,15 +220,15 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 // infrastructure for an existing synth app. All history infrastructure
 // (table, indexes, functions, triggers) lives in the tigerfs schema.
 // This includes:
-//   - History table mirroring the source table columns plus metadata
-//   - Index on (filename, _history_id DESC) for by-filename queries
-//   - Index on (id, _history_id DESC) for by-UUID queries
+//   - History hypertable with columnstore (file_id, parent_id, version_id, operation)
+//   - Index on (filename, version_id DESC) for by-filename queries
+//   - Index on (file_id, version_id DESC) for by-UUID queries
 //   - Archive trigger function and BEFORE UPDATE OR DELETE trigger
-//   - TimescaleDB hypertable conversion
-//   - Compression policy
+//   - Log hypertable for undo operations (create/edit/rename/delete/undo)
+//   - Savepoint table for named bookmarks
 //
 // The column list varies by format: markdown includes title, author, headers;
-// plain text only has the base columns (id, filename, filetype, body, etc.).
+// plain text only has the base columns (file_id, filename, filetype, body, etc.).
 // The archive trigger must match the source table's actual columns.
 func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
 	tableName := appName
@@ -191,48 +246,59 @@ func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
 		formatOldValues = "OLD.title, OLD.author, OLD.headers, "
 	}
 
+	// History table uses modern CREATE TABLE WITH syntax for hypertable + columnstore.
+	// This replaces the old create_hypertable() + ALTER TABLE SET + add_compression_policy() calls.
+	// Column renames from ADR-017: id->file_id, _history_id->version_id, _operation->operation.
+	// Added: parent_id, CHECK constraints on filetype/encoding/operation.
 	createTable := fmt.Sprintf(`CREATE TABLE %s (
-    id UUID,
+    file_id UUID,
+    parent_id UUID,
     filename TEXT NOT NULL,
-    filetype TEXT,%s
+    filetype TEXT CHECK (filetype IN ('file', 'directory')),%s
     body TEXT,
-    encoding TEXT,
+    encoding TEXT CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
-    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    _operation TEXT NOT NULL
+    version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    operation TEXT NOT NULL CHECK (operation IN ('UPDATE', 'DELETE'))
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'version_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'version_id DESC'
 )`, qualifiedHistory, formatColumns)
 
 	createIndexFilename := fmt.Sprintf(
-		`CREATE INDEX %s ON %s (filename, _history_id DESC)`,
+		`CREATE INDEX %s ON %s (filename, version_id DESC)`,
 		db.QuoteIdent("idx_"+historyTable+"_by_filename"),
 		qualifiedHistory,
 	)
 
 	createIndexID := fmt.Sprintf(
-		`CREATE INDEX %s ON %s (id, _history_id DESC)`,
+		`CREATE INDEX %s ON %s (file_id, version_id DESC)`,
 		db.QuoteIdent("idx_"+historyTable+"_by_id"),
 		qualifiedHistory,
 	)
 
-	// Archive trigger function — copies OLD row to history table on UPDATE or DELETE.
-	// Column list must match the source table's actual columns.
+	// Archive trigger function -- copies OLD row (including parent_id) to history
+	// table on UPDATE or DELETE. Column list must match the source table's columns.
 	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent("archive_"+historyTable))
 
 	var insertColumns, insertValues string
 	if format == FormatMarkdown {
-		insertColumns = "id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at"
-		insertValues = fmt.Sprintf("OLD.id, OLD.filename, OLD.filetype, %sOLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at", formatOldValues)
+		insertColumns = "file_id, parent_id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at"
+		insertValues = fmt.Sprintf("OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, %sOLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at", formatOldValues)
 	} else {
-		insertColumns = "id, filename, filetype, body, encoding, created_at, modified_at"
-		insertValues = "OLD.id, OLD.filename, OLD.filetype, OLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at"
+		insertColumns = "file_id, parent_id, filename, filetype, body, encoding, created_at, modified_at"
+		insertValues = "OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, OLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at"
 	}
 
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO %s
         (%s,
-         _history_id, _operation)
+         version_id, operation)
     VALUES
         (%s,
          uuidv7(), TG_OP::text);
@@ -249,26 +315,11 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
     FOR EACH ROW EXECUTE FUNCTION %s()`,
 		triggerName, qualifiedTable, funcName)
 
-	// TimescaleDB hypertable conversion — UUIDv7 as partition column
-	createHypertable := fmt.Sprintf(
-		`SELECT create_hypertable('%s.%s', '_history_id', chunk_time_interval => INTERVAL '1 month')`,
-		TigerFSSchema, historyTable,
-	)
-
-	// Compression policy — segment by filename, order by _history_id DESC
-	setCompression := fmt.Sprintf(
-		`ALTER TABLE %s SET (timescaledb.compress, timescaledb.compress_segmentby = 'filename', timescaledb.compress_orderby = '_history_id DESC')`,
-		qualifiedHistory,
-	)
-
-	addCompressionPolicy := fmt.Sprintf(
-		`SELECT add_compression_policy('%s.%s', compress_after => INTERVAL '1 day')`,
-		TigerFSSchema, historyTable,
-	)
-
-	// --- Operation log table (ADR-016 Section 1) ---
+	// --- Operation log table (ADR-016 Section 1, ADR-017 updates) ---
 	// Records every data change for undo operations. Uses UUIDv7 PKs for
 	// time-ordered entries and SkipScan-optimized queries.
+	// Column renames: history_id->version_id. Type values are filesystem-centric:
+	// create/edit/rename/delete/undo (replaces insert/update/delete/undo).
 	logTable := appName + "_log"
 	qualifiedLog := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(logTable))
 
@@ -277,11 +328,11 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 	// as the compression interval (no explicit compress_after needed).
 	createLogTable := fmt.Sprintf(`CREATE TABLE %s (
     log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    user_id TEXT,
-    type TEXT NOT NULL CHECK (type IN ('insert', 'update', 'delete', 'undo')),
     file_id UUID NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo')),
+    user_id TEXT,
     filename TEXT NOT NULL,
-    history_id UUID,
+    version_id UUID,
     description TEXT
 ) WITH (
     tsdb.hypertable,
@@ -312,15 +363,12 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 )`, qualifiedSavepoint)
 
 	return []string{
-		// History infrastructure
+		// History infrastructure (table is hypertable via WITH clause)
 		createTable,
 		createIndexFilename,
 		createIndexID,
 		createFunc,
 		createTrigger,
-		createHypertable,
-		setCompression,
-		addCompressionPolicy,
 		// Undo log infrastructure
 		createLogTable,
 		createLogIndex,

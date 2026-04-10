@@ -62,7 +62,7 @@ func TestSynth_LogEntries_Integration(t *testing.T) {
 
 	rows, err := pool.Query(ctx, `SELECT type, filename,
 		file_id IS NOT NULL AS has_file_id,
-		history_id IS NOT NULL AS has_history_id
+		version_id IS NOT NULL AS has_version_id
 		FROM tigerfs.logtest_log ORDER BY log_id ASC`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -71,44 +71,44 @@ func TestSynth_LogEntries_Integration(t *testing.T) {
 		opType       string
 		filename     string
 		hasFileID    bool
-		hasHistoryID bool
+		hasVersionID bool
 	}
 	var entries []logRow
 	for rows.Next() {
 		var r logRow
-		err := rows.Scan(&r.opType, &r.filename, &r.hasFileID, &r.hasHistoryID)
+		err := rows.Scan(&r.opType, &r.filename, &r.hasFileID, &r.hasVersionID)
 		require.NoError(t, err)
 		entries = append(entries, r)
 	}
 
-	// Should have 5 log entries: insert, update, insert, delete, update(rename)
+	// Should have 5 log entries: create, edit, create, delete, rename
 	require.Len(t, entries, 5, "expected 5 log entries, got %d: %+v", len(entries), entries)
 
-	// Entry 0: INSERT first-post.md
-	assert.Equal(t, "insert", entries[0].opType)
+	// Entry 0: CREATE first-post.md
+	assert.Equal(t, "create", entries[0].opType)
 	assert.Equal(t, "first-post.md", entries[0].filename)
-	assert.True(t, entries[0].hasFileID, "insert should have file_id")
-	assert.False(t, entries[0].hasHistoryID, "insert should NOT have history_id")
+	assert.True(t, entries[0].hasFileID, "create should have file_id")
+	assert.False(t, entries[0].hasVersionID, "create should NOT have version_id")
 
-	// Entry 1: UPDATE first-post.md
-	assert.Equal(t, "update", entries[1].opType)
+	// Entry 1: EDIT first-post.md
+	assert.Equal(t, "edit", entries[1].opType)
 	assert.Equal(t, "first-post.md", entries[1].filename)
 	assert.True(t, entries[1].hasFileID)
-	assert.True(t, entries[1].hasHistoryID, "update should have history_id")
+	assert.True(t, entries[1].hasVersionID, "edit should have version_id")
 
-	// Entry 2: INSERT second-post.md
-	assert.Equal(t, "insert", entries[2].opType)
+	// Entry 2: CREATE second-post.md
+	assert.Equal(t, "create", entries[2].opType)
 	assert.Equal(t, "second-post.md", entries[2].filename)
 
 	// Entry 3: DELETE second-post.md
 	assert.Equal(t, "delete", entries[3].opType)
 	assert.Equal(t, "second-post.md", entries[3].filename)
-	assert.True(t, entries[3].hasHistoryID, "delete should have history_id")
+	assert.True(t, entries[3].hasVersionID, "delete should have version_id")
 
-	// Entry 4: RENAME (logged as update) with NEW filename
-	assert.Equal(t, "update", entries[4].opType)
+	// Entry 4: RENAME with NEW filename
+	assert.Equal(t, "rename", entries[4].opType)
 	assert.Equal(t, "hello.md", entries[4].filename, "rename should log the new filename")
-	assert.True(t, entries[4].hasHistoryID, "rename should have history_id")
+	assert.True(t, entries[4].hasVersionID, "rename should have version_id")
 
 	// Verify the log table is a hypertable (has chunks)
 	var isHypertable bool
@@ -134,9 +134,9 @@ func TestSynth_LogEntries_Integration(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, userIDNull, "user_id should be NULL until identity is wired")
 
-	t.Logf("Log entries verified: %d entries for insert/update/insert/delete/rename", len(entries))
+	t.Logf("Log entries verified: %d entries for create/edit/create/delete/rename", len(entries))
 	for i, e := range entries {
-		t.Logf("  [%d] %s %s (file_id=%v, history_id=%v)", i, e.opType, e.filename, e.hasFileID, e.hasHistoryID)
+		t.Logf("  [%d] %s %s (file_id=%v, version_id=%v)", i, e.opType, e.filename, e.hasFileID, e.hasVersionID)
 	}
 }
 

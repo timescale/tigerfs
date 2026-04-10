@@ -107,7 +107,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, histo
 	// Add .id virtual file
 	entries = append(entries, Entry{Name: ".id", IsDir: false, Mode: 0444, Size: 36, ModTime: now})
 
-	historyIDIdx := columnIndex(columns, "_history_id")
+	historyIDIdx := columnIndex(columns, "version_id")
 	for _, row := range rows {
 		if historyIDIdx < 0 {
 			continue
@@ -155,7 +155,7 @@ func (o *Operations) readDirHistoryByID(ctx context.Context, schema, historyTabl
 	}
 
 	entries := make([]Entry, 0, len(rows))
-	historyIDIdx := columnIndex(columns, "_history_id")
+	historyIDIdx := columnIndex(columns, "version_id")
 	for _, row := range rows {
 		if historyIDIdx < 0 {
 			continue
@@ -205,7 +205,7 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 
 	// .history/.by/<uuid>/<versionID> — version file by UUID
 	if parsed.HistoryByID && parsed.HistoryVersionID != "" {
-		return o.statHistoryVersion(ctx, schema, historyTable, "id", parsed.HistoryRowID, parsed.HistoryVersionID, info, now)
+		return o.statHistoryVersion(ctx, schema, historyTable, "file_id", parsed.HistoryRowID, parsed.HistoryVersionID, info, now)
 	}
 
 	// .history/foo.md/ — filename directory
@@ -272,9 +272,9 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 		if len(rows) == 0 {
 			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("no history for %s", parsed.HistoryFile)}
 		}
-		idIdx := columnIndex(columns, "id")
+		idIdx := columnIndex(columns, "file_id")
 		if idIdx < 0 {
-			return nil, &FSError{Code: ErrIO, Message: "id column not found in history table"}
+			return nil, &FSError{Code: ErrIO, Message: "file_id column not found in history table"}
 		}
 		idStr := synth.ValueToString(rows[0][idIdx])
 		return []byte(idStr + "\n"), nil
@@ -283,7 +283,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 	// Version file: read and synthesize content
 	var filterColumn, filterValue string
 	if parsed.HistoryByID {
-		filterColumn = "id"
+		filterColumn = "file_id"
 		filterValue = parsed.HistoryRowID
 	} else {
 		filterColumn = "filename"
@@ -308,9 +308,9 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 	return content, nil
 }
 
-// findVersionRow scans rows for one whose _history_id matches the given versionID.
+// findVersionRow scans rows for one whose version_id matches the given versionID.
 func findVersionRow(columns []string, rows [][]interface{}, versionID string) []interface{} {
-	historyIDIdx := columnIndex(columns, "_history_id")
+	historyIDIdx := columnIndex(columns, "version_id")
 	if historyIDIdx < 0 {
 		return nil
 	}
@@ -333,7 +333,7 @@ func columnIndex(columns []string, name string) int {
 	return -1
 }
 
-// historyIDToVersionID converts a _history_id value (UUIDv7) to a version ID string.
+// historyIDToVersionID converts a version_id value (UUIDv7) to a display version ID string.
 func historyIDToVersionID(val interface{}) string {
 	// The value may be a [16]byte, uuid.UUID, or string
 	switch v := val.(type) {

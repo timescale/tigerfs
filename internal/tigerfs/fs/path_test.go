@@ -1360,19 +1360,29 @@ func TestSynth_ParsePathCapabilityAfterDirSegments(t *testing.T) {
 }
 
 // TestSynth_IsVersionID verifies version ID format detection.
+// Recognizes both legacy 18-char timestamps and UUIDv7 display names (ADR-016).
 func TestSynth_IsVersionID(t *testing.T) {
 	tests := []struct {
 		seg  string
 		want bool
 	}{
+		// Legacy format: "2006-01-02T150405Z" (18 chars)
 		{"2026-02-12T013000Z", true},
 		{"2025-01-01T000000Z", true},
+		{"xxxx-xx-xxTxxxxxxZ", true}, // structural match (length + separators)
+
+		// UUIDv7 display name format: "2006-01-02T150405.000Z-<base36>" (ADR-016)
+		{"2026-04-10T173000.123Z-zzz0063hd8e5r42", true},
+		{"2025-01-01T000000.000Z-0", true},
+		{"2026-12-31T235959.999Z-abc", true},
+
+		// Invalid
 		{"foo.md", false},
 		{".id", false},
 		{"", false},
 		{"2026-02-12", false},          // too short
-		{"2026-02-12T013000Zx", false}, // too long
-		{"xxxx-xx-xxTxxxxxxZ", true},   // structural match (length + separators)
+		{"2026-02-12T013000Zx", false}, // 19 chars, not legacy, not display name
+		{"not-a-timestamp.000Z-abc", false},
 	}
 
 	for _, tt := range tests {

@@ -2,12 +2,57 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 )
+
+func TestIsUniqueViolation(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "unique violation",
+			err:  &pgconn.PgError{Code: "23505"},
+			want: true,
+		},
+		{
+			name: "wrapped unique violation",
+			err:  fmt.Errorf("insert failed: %w", &pgconn.PgError{Code: "23505"}),
+			want: true,
+		},
+		{
+			name: "foreign key violation",
+			err:  &pgconn.PgError{Code: "23503"},
+			want: false,
+		},
+		{
+			name: "generic error",
+			err:  errors.New("connection refused"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isUniqueViolation(tt.err)
+			if got != tt.want {
+				t.Errorf("isUniqueViolation(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestGetRow(t *testing.T) {
 	connStr := getTestConnectionString(t)
