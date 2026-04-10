@@ -662,6 +662,18 @@ func (m *MockHistoryReader) QueryHistoryVersionByTime(ctx context.Context, schem
 	return nil, nil, nil
 }
 
+// MockPathResolver implements PathResolver for testing.
+type MockPathResolver struct {
+	ResolvePathFn func(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error)
+}
+
+func (m *MockPathResolver) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error) {
+	if m.ResolvePathFn != nil {
+		return m.ResolvePathFn(ctx, schema, table, startParentID, segments)
+	}
+	return nil, nil
+}
+
 type MockDBClient struct {
 	*MockDDLExecutor
 	*MockSchemaReader
@@ -676,6 +688,7 @@ type MockDBClient struct {
 	*MockPipelineReader
 	*MockHierarchyWriter
 	*MockHistoryReader
+	*MockPathResolver
 	*MockLogWriter
 }
 
@@ -697,6 +710,7 @@ func NewMockDBClient() *MockDBClient {
 		MockPipelineReader:   &MockPipelineReader{},
 		MockHierarchyWriter:  &MockHierarchyWriter{},
 		MockHistoryReader:    &MockHistoryReader{},
+		MockPathResolver:     &MockPathResolver{},
 		MockLogWriter:        &MockLogWriter{},
 	}
 }

@@ -285,7 +285,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Status | Task | Description | Line |
 |--------|------|-------------|------|
 | ✅ | 13.1 | Schema and DDL Changes (parent_id, version_id, resolve_path) | ~9200 |
-| ⬜ | 13.2 | Path Resolution (resolve_path + Go cache) | ~9230 |
+| ✅ | 13.2 | Path Resolution (resolve_path + Go cache) | ~9230 |
 | ⬜ | 13.3 | ReadDir by parent_id | ~9260 |
 | ⬜ | 13.4 | Write Path Updates (parent_id) | ~9280 |
 | ⬜ | 13.5 | Rename and Move (single-row operations) | ~9300 |
@@ -319,5 +319,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
 | Phase 12: Undo and Recovery | 4 | 12 | 33% |
-| Phase 13: Relational Directory Structure | 1 | 12 | 8% |
-| **Total** | **111** | **147** | **76%** |
+| Phase 13: Relational Directory Structure | 2 | 12 | 17% |
+| **Total** | **112** | **147** | **76%** |

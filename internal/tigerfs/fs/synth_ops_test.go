@@ -2,12 +2,14 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
@@ -536,4 +538,232 @@ func TestSynth_LogEntries_RenameSynthFile(t *testing.T) {
 	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
 	assert.Equal(t, "goodbye.md", mockDB.logEntries[0].filename, "rename should log the NEW filename")
 	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "rename should capture version_id")
+}
+
+// --- resolveSynthPath tests ---
+
+// TestSynth_ResolvePath_FullCacheMiss verifies that resolveSynthPath calls
+// the DB resolve_path when the cache is empty and populates the cache.
+func TestSynth_ResolvePath_FullCacheMiss(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-proj", Name: "projects"},
+			{Depth: 2, ID: "uuid-web", Name: "web"},
+			{Depth: 3, ID: "uuid-todo", Name: "todo.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-todo", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls, "should call DB once")
+
+	// Cache should now be populated -- second call should not hit DB
+	id, ok = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-todo", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls, "should still be 1 DB call (cache hit)")
+}
+
+// TestSynth_ResolvePath_PartialCacheHit verifies that resolveSynthPath
+// only queries the DB for unresolved segments.
+func TestSynth_ResolvePath_PartialCacheHit(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-notes", Name: "notes.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// Pre-populate cache for "projects" and "web"
+	ops.pathCache.put("public", "notes", "", "projects", "uuid-proj")
+	ops.pathCache.put("public", "notes", "uuid-proj", "web", "uuid-web")
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-notes", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls)
+
+	// Verify DB was called with only the remaining segment and correct startParentID
+	assert.Equal(t, "uuid-web", mockDB.lastResolveStartParent)
+	assert.Equal(t, []string{"notes.md"}, mockDB.lastResolveSegments)
+}
+
+// TestSynth_ResolvePath_NonexistentPath verifies that resolveSynthPath
+// returns false when a segment doesn't resolve.
+func TestSynth_ResolvePath_NonexistentPath(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			// Only first segment resolves, "nonexistent" doesn't
+			{Depth: 1, ID: "uuid-proj", Name: "projects"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "nonexistent", "file.md"})
+	assert.False(t, ok)
+	assert.Empty(t, id)
+}
+
+// TestSynth_ResolvePath_EmptySegments verifies root-level resolution.
+func TestSynth_ResolvePath_EmptySegments(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, &mockDBClient{})
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{})
+	assert.True(t, ok)
+	assert.Empty(t, id)
+}
+
+// TestSynth_ResolvePath_SingleSegment verifies single-level resolution.
+func TestSynth_ResolvePath_SingleSegment(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-file", Name: "hello.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"hello.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-file", id)
+	assert.Equal(t, "", mockDB.lastResolveStartParent, "root-level should pass empty start parent")
+}
+
+// TestSynth_ResolvePath_CacheInvalidation verifies that invalidation
+// forces the next resolve to hit the DB.
+func TestSynth_ResolvePath_CacheInvalidation(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-1", Name: "file.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First call populates cache
+	ops.resolveSynthPath(ctx, "public", "notes", []string{"file.md"})
+	assert.Equal(t, 1, mockDB.resolvePathCalls)
+
+	// Invalidate cache
+	ops.pathCache.invalidate("public", "notes")
+
+	// Second call should hit DB again
+	ops.resolveSynthPath(ctx, "public", "notes", []string{"file.md"})
+	assert.Equal(t, 2, mockDB.resolvePathCalls)
+}
+
+// TestSynth_ResolvePath_DeeplyNested verifies resolution of a 5-level deep path
+// (ADR-017 verification scenario #13).
+func TestSynth_ResolvePath_DeeplyNested(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-a", Name: "a"},
+			{Depth: 2, ID: "uuid-b", Name: "b"},
+			{Depth: 3, ID: "uuid-c", Name: "c"},
+			{Depth: 4, ID: "uuid-d", Name: "d"},
+			{Depth: 5, ID: "uuid-file", Name: "file.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "app", []string{"a", "b", "c", "d", "file.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-file", id)
+
+	// Verify all 5 levels are cached
+	cached, ok := ops.pathCache.lookup("public", "app", "", "a")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-a", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-a", "b")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-b", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-b", "c")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-c", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-c", "d")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-d", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-d", "file.md")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-file", cached)
+}
+
+// TestSynth_ResolvePath_SiblingAccess verifies the sibling resolution pattern
+// described in ADR-017: after resolving projects/web/todo.md, resolving
+// projects/web/notes.md should only query the DB for the last segment.
+func TestSynth_ResolvePath_SiblingAccess(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-proj", Name: "projects"},
+			{Depth: 2, ID: "uuid-web", Name: "web"},
+			{Depth: 3, ID: "uuid-todo", Name: "todo.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First access: resolve full path (cold cache)
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-todo", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls)
+
+	// Set up mock for sibling -- only returns the leaf
+	mockDB.resolvePathResults = []db.PathSegment{
+		{Depth: 1, ID: "uuid-notes", Name: "notes.md"},
+	}
+
+	// Second access: sibling file in same directory
+	id, ok = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-notes", id)
+	assert.Equal(t, 2, mockDB.resolvePathCalls)
+
+	// DB should have been called with only the leaf segment, starting from uuid-web
+	assert.Equal(t, "uuid-web", mockDB.lastResolveStartParent,
+		"should start from cached parent (web directory)")
+	assert.Equal(t, []string{"notes.md"}, mockDB.lastResolveSegments,
+		"should only query the unresolved leaf segment")
+}
+
+// TestSynth_ResolvePath_DBError verifies that a DB error returns false
+// without panicking.
+func TestSynth_ResolvePath_DBError(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathErr: fmt.Errorf("connection refused"),
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "file.md"})
+	assert.False(t, ok)
+	assert.Empty(t, id)
 }

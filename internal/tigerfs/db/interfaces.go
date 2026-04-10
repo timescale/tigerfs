@@ -292,6 +292,15 @@ type HierarchyWriter interface {
 	InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error
 }
 
+// PathResolver provides path resolution for the parent-pointer directory model (ADR-017).
+type PathResolver interface {
+	// ResolvePath resolves a sequence of path segments to row IDs by calling
+	// the tigerfs.resolve_path PL/pgSQL function. startParentID is empty for root.
+	// Returns one PathSegment per resolved segment; fewer than len(segments)
+	// means a segment didn't resolve (path doesn't exist).
+	ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error)
+}
+
 // LogWriter provides operations for the undo operation log.
 // Used by synth write operations to record changes for undo/recovery.
 type LogWriter interface {
@@ -329,6 +338,7 @@ type DBClient interface {
 	PipelineReader
 	HierarchyWriter
 	HistoryReader
+	PathResolver
 	LogWriter
 }
 

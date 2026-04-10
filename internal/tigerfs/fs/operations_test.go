@@ -1095,6 +1095,13 @@ type mockDBClient struct {
 	// Version ID return value for QueryLatestVersionID
 	latestVersionIDs map[string]string // fileID -> versionID
 
+	// ResolvePath tracking
+	resolvePathResults     []db.PathSegment
+	resolvePathErr         error
+	resolvePathCalls       int
+	lastResolveStartParent string
+	lastResolveSegments    []string
+
 	// PK match tracking for composite PK tests
 	lastPKMatch *db.PKMatch
 
@@ -1679,6 +1686,13 @@ func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, history
 		}
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *mockDBClient) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]db.PathSegment, error) {
+	m.resolvePathCalls++
+	m.lastResolveStartParent = startParentID
+	m.lastResolveSegments = segments
+	return m.resolvePathResults, m.resolvePathErr
 }
 
 // ============================================================================
