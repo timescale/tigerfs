@@ -467,6 +467,63 @@ func (o *Operations) logSynthOp(ctx context.Context, schema, tableName string, i
 	}
 }
 
+// resolveSynthPath resolves a sequence of path segments to a row ID using
+// the path cache and the resolve_path PL/pgSQL function (ADR-017).
+//
+// Walks segments from left to right, checking the cache at each level.
+// On the first cache miss, calls resolve_path with the remaining segments
+// starting from the last cached parent. Populates the cache from the results.
+//
+// Returns the final row ID and true if the full path resolved, or empty string
+// and false if any segment didn't resolve (path doesn't exist).
+func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string, segments []string) (string, bool) {
+	if len(segments) == 0 {
+		return "", true // root level — no ID, but "exists"
+	}
+
+	// Walk segments, checking cache at each level
+	parentID := "" // empty = root (NULL parent_id)
+	cacheHits := 0
+	for _, seg := range segments {
+		if id, ok := o.pathCache.lookup(schema, table, parentID, seg); ok {
+			parentID = id
+			cacheHits++
+		} else {
+			break
+		}
+	}
+
+	// All segments resolved from cache
+	if cacheHits == len(segments) {
+		return parentID, true
+	}
+
+	// Call DB for remaining segments
+	remaining := segments[cacheHits:]
+	results, err := o.db.ResolvePath(ctx, synth.TigerFSSchema, table, parentID, remaining)
+	if err != nil {
+		logging.Debug("resolve_path failed",
+			zap.String("table", table),
+			zap.Strings("segments", remaining),
+			zap.Error(err))
+		return "", false
+	}
+
+	// Populate cache from results
+	curParent := parentID
+	for _, seg := range results {
+		o.pathCache.put(schema, table, curParent, seg.Name, seg.ID)
+		curParent = seg.ID
+	}
+
+	// Check if all remaining segments resolved
+	if len(results) < len(remaining) {
+		return "", false
+	}
+
+	return results[len(results)-1].ID, true
+}
+
 // writeSynthFile handles writes to synthesized view files (create or update).
 // For views with hierarchy, auto-creates parent directory rows on insert.
 // Binary data (null bytes or invalid UTF-8) is base64-encoded for TEXT column storage.

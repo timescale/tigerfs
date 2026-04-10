@@ -903,6 +903,58 @@ func (c *Client) QueryLatestVersionID(ctx context.Context, schema, historyTable,
 	return versionID, nil
 }
 
+// PathSegment represents one resolved segment from the resolve_path function.
+type PathSegment struct {
+	Depth int    // 1-based depth in the resolved path
+	ID    string // UUID of the resolved row
+	Name  string // filename segment that was resolved
+}
+
+// ResolvePath calls the tigerfs.resolve_path PL/pgSQL function to resolve
+// a sequence of path segments to row IDs using the parent-pointer model.
+// startParentID is the UUID of the starting parent (empty string for root/NULL).
+// Returns one PathSegment per resolved segment. If a segment doesn't resolve,
+// fewer segments are returned than requested (no error).
+func (c *Client) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+
+	qualifiedTable := fmt.Sprintf("%s.%s", qi(schema), qi(table))
+
+	// Convert empty startParentID to SQL NULL
+	var parentArg interface{}
+	if startParentID != "" {
+		parentArg = startParentID
+	}
+
+	query := fmt.Sprintf(
+		`SELECT depth, resolved_id, resolved_name FROM %s.resolve_path($1::regclass, $2::uuid, $3::text[])`,
+		qi("tigerfs"),
+	)
+
+	rows, err := c.pool.Query(ctx, query, qualifiedTable, parentArg, segments)
+	if err != nil {
+		return nil, fmt.Errorf("resolve_path failed: %w", err)
+	}
+	defer rows.Close()
+
+	var result []PathSegment
+	for rows.Next() {
+		var seg PathSegment
+		var id [16]byte
+		if err := rows.Scan(&seg.Depth, &id, &seg.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan resolve_path result: %w", err)
+		}
+		// Convert UUID bytes to hex string
+		s, _ := format.ConvertValueToText(id)
+		seg.ID = s
+		result = append(result, seg)
+	}
+
+	return result, nil
+}
+
 // queryRows executes a query and returns columns and row data.
 func (c *Client) queryRows(ctx context.Context, query string, args ...interface{}) ([]string, [][]interface{}, error) {
 	rows, err := c.pool.Query(ctx, query, args...)

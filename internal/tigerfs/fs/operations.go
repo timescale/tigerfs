@@ -43,6 +43,11 @@ type Operations struct {
 	// Invalidated by write operations; 2-second TTL as safety net.
 	statCache statCache
 
+	// pathCache maps (parentID, filename) -> row ID for the parent-pointer
+	// directory model (ADR-017). Used to avoid calling resolve_path for
+	// repeated access to the same directory subtree. 2-second TTL.
+	pathCache pathCache
+
 	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
 	legacyWarnOnce sync.Once
 }
