@@ -31,31 +31,34 @@ One log table per synth app with history enabled, stored in the `tigerfs` schema
 ```sql
 CREATE TABLE tigerfs.<app>_log (
     log_id      UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    user_id     TEXT,
-    type        TEXT NOT NULL CHECK (type IN ('insert', 'update', 'delete', 'undo')),
     file_id     UUID NOT NULL,
+    type        TEXT NOT NULL CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo')),
+    user_id     TEXT,
     filename    TEXT NOT NULL,
-    history_id  UUID,
+    version_id  UUID,
     description TEXT
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'log_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'log_id ASC'
 );
 ```
 
 | Column | Description |
 |--------|-------------|
 | `log_id` | UUIDv7 primary key. Time-ordered, used as hypertable partition key. Timestamp extractable via TimescaleDB's `uuid_v7_to_timestamptz()` (works on PG17; PG18+ has built-in `uuid_extract_timestamp()`). |
+| `file_id` | Stable UUID of the affected row (the `id` column in the synth app table). Persists across renames and moves. |
+| `type` | Operation type. Filesystem-centric names (ADR-017): `create` (new file/directory), `edit` (content change), `rename` (name or parent_id change), `delete` (removal); `undo` for undo operations. |
 | `user_id` | Identity of the user/agent making the change. NULL in single-user/anonymous mode. Set from `.info/user` at the mount root. |
-| `type` | Operation type. `insert`, `update`, `delete` for normal operations; `undo` for undo operations. |
-| `file_id` | Stable UUID of the affected row (the `id` column in the synth app table). Persists across renames. |
-| `filename` | Filename at the time of the operation. Denormalized for display convenience and to preserve hypertable optimizations. An alternative (a VIEW joining the log with history to resolve filenames) was rejected because TimescaleDB optimizations (chunk exclusion, SkipScan) may not fire through views, and the data-first pipeline code works most cleanly on a real table. The denormalized filename is also historically correct -- it records what the file was called when the operation happened, even if later renamed. |
-| `history_id` | Pointer to the history table row (`_history_id`) containing the before-state. NULL for INSERT operations (no before-state exists). For UPDATE/DELETE/UNDO, this points to the row captured by the BEFORE trigger. |
+| `filename` | Denormalized full path at the time of the operation (e.g., `projects/web/todo.md`). Computed from the parent-pointer chain at log-write time. Historically correct -- records what the file was called when the operation happened, even if later renamed or moved. Note: the log's `filename` stores the full path; the source table's `filename` stores only the leaf name (ADR-017). |
+| `version_id` | Pointer to the history table row (`version_id`) containing the before-state. NULL for `create` operations (no before-state exists). For `edit`/`rename`/`delete`/`undo`, this points to the row captured by the BEFORE trigger. |
 | `description` | Optional human-readable note about the operation. |
 
 ### 1.3 Hypertable Configuration
 
-```sql
-SELECT create_hypertable('tigerfs.<app>_log', 'log_id',
-    chunk_time_interval => INTERVAL '1 month');
-```
+The log table uses the modern `CREATE TABLE WITH` syntax (see schema above) which combines hypertable creation, chunk interval, segmentby, and orderby in a single DDL statement. TimescaleDB automatically creates a columnstore compression policy matching the chunk interval.
 
 ### 1.4 Indexes
 
@@ -69,22 +72,13 @@ The `file_id` leading column enables SkipScan for the `DISTINCT ON (file_id) ...
 
 ### 1.5 Compression
 
-```sql
-ALTER TABLE tigerfs.<app>_log SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'file_id',
-    timescaledb.compress_orderby = 'log_id ASC'
-);
-
-SELECT add_compression_policy('tigerfs.<app>_log',
-    compress_after => INTERVAL '1 day');
-```
+Compression is configured inline via the `CREATE TABLE WITH` syntax: `tsdb.segmentby = 'file_id'` and `tsdb.orderby = 'log_id ASC'`. TimescaleDB automatically creates a compression policy using the chunk interval.
 
 **Design decisions:**
 
-- **`compress_segmentby = 'file_id'`**: Each file gets its own compressed segment. This aligns with SkipScan on compressed hypertables -- SkipScan jumps between segments by `file_id`, reading only the first matching entry per segment. The trade-off is slightly lower compression ratio for tables with many files (many small segments), but log rows are small (UUIDs and short text), so this is acceptable.
+- **`segmentby = 'file_id'`**: Each file gets its own compressed segment. This aligns with SkipScan on compressed hypertables -- SkipScan jumps between segments by `file_id`, reading only the first matching entry per segment. The trade-off is slightly lower compression ratio for tables with many files (many small segments), but log rows are small (UUIDs and short text), so this is acceptable.
 
-- **`compress_orderby = 'log_id ASC'`**: Matches the `ORDER BY file_id, log_id ASC` in the undo query, allowing SkipScan to work on compressed chunks without reordering.
+- **`orderby = 'log_id ASC'`**: Matches the `ORDER BY file_id, log_id ASC` in the undo query, allowing SkipScan to work on compressed chunks without reordering.
 
 ### 1.6 How Log Entries Are Created
 
@@ -92,10 +86,10 @@ Log entries are created by TigerFS's write path, not by database triggers. When 
 
 The log entry captures:
 - The `file_id` from the row being modified
-- The `filename` from the current row (for UPDATE/DELETE) or the new row (for INSERT)
-- The `history_id` from the history entry created by the BEFORE trigger (for UPDATE/DELETE). For INSERT, `history_id` is NULL because there is no before-state.
+- The `filename` as the denormalized full path (computed from the parent-pointer chain)
+- The `version_id` from the history entry created by the BEFORE trigger (for edit/rename/delete). For `create`, `version_id` is NULL because there is no before-state.
 
-**Determining `history_id` for UPDATE/DELETE:** The BEFORE trigger inserts a row into the history table with a new UUIDv7 `_history_id`. To capture this in the log, the write operation queries the most recent history entry for the file immediately after the DML. Since the trigger fires synchronously before the DML completes, the history row exists by the time the log insert runs.
+**Determining `version_id` for edit/rename/delete:** The BEFORE trigger inserts a row into the history table with a new UUIDv7 `version_id`. To capture this in the log, the write operation queries the most recent history entry for the file immediately after the DML. Since the trigger fires synchronously before the DML completes, the history row exists by the time the log insert runs.
 
 ### 1.7 Relationship Between Log and History
 
@@ -106,9 +100,9 @@ The log and history tables serve complementary purposes:
 | **What it stores** | Full row state (before-state of every change) | Operation metadata (what happened, who, when, pointer to before-state) |
 | **Created by** | PostgreSQL BEFORE trigger (automatic) | TigerFS write path (application-level) |
 | **Used for** | Reading old file content, restoring state | Ordering operations, undo sequencing, audit trail |
-| **Schema** | Matches the synth app's columns + `_history_id`, `_operation` | Fixed schema (log_id, user_id, type, file_id, filename, history_id, description) |
+| **Schema** | Matches the synth app's columns + `version_id`, `operation` | Fixed schema (log_id, file_id, type, user_id, filename, version_id, description) |
 
-The log does not duplicate the file content. It stores a `history_id` pointer to the history row that contains the full before-state. This keeps the log table small (just UUIDs and metadata) while leveraging the history table's existing compressed storage for file content.
+The log does not duplicate the file content. It stores a `version_id` pointer to the history row that contains the full before-state. This keeps the log table small (just UUIDs and metadata) while leveraging the history table's existing compressed storage for file content.
 
 ### 1.8 SkipScan Optimization
 
@@ -117,13 +111,13 @@ TimescaleDB's SkipScan is a custom executor node that transforms `DISTINCT ON` q
 The undo execution query uses `DISTINCT ON (file_id)` to find the first log entry per affected file:
 
 ```sql
-SELECT DISTINCT ON (file_id) file_id, type, history_id
+SELECT DISTINCT ON (file_id) file_id, type, version_id
 FROM tigerfs.<app>_log
 WHERE log_id > $1
 ORDER BY file_id, log_id ASC
 ```
 
-With the `(file_id, log_id ASC)` index and `compress_segmentby = 'file_id'`, SkipScan activates on both uncompressed and compressed chunks.
+With the `(file_id, log_id ASC)` index and `segmentby = 'file_id'`, SkipScan activates on both uncompressed and compressed chunks.
 
 The same `DISTINCT ON` query is used for both the undo execution and the preview summary (Section 4.3.8). One query, one code path, SkipScan throughout.
 
@@ -131,19 +125,19 @@ The same `DISTINCT ON` query is used for both the undo execution and the preview
 - TimescaleDB >= 2.20.0 (for compressed-chunk SkipScan)
 - PostgreSQL >= 16
 - The `(file_id, log_id ASC)` index with `file_id` as the leading column
-- `compress_segmentby = 'file_id'` for compressed chunks
+- `segmentby = 'file_id'` for compressed chunks
 
 **Verification:** Run `EXPLAIN ANALYZE` on the undo query and look for `Custom Scan (SkipScan)` nodes.
 
 ### 1.9 Why No `after_id` / `after_state`
 
-The log stores only a `history_id` pointing to the before-state. There is no `after_id` pointing to the after-state. This is a deliberate design choice:
+The log stores only a `version_id` pointing to the before-state. There is no `after_id` pointing to the after-state. This is a deliberate design choice:
 
-1. **The after-state doesn't exist as a history entry at log-write time.** When an UPDATE executes, the BEFORE trigger fires and creates a history entry (the before-state) -- we know its `_history_id`. But the after-state is just the live row in the current table. It won't become a history entry until the *next* operation's trigger fires. So `after_id` can't be populated at the time the log entry is created without either backfilling it retroactively (fragile) or creating an extra history entry (wasteful).
+1. **The after-state doesn't exist as a history entry at log-write time.** When an UPDATE executes, the BEFORE trigger fires and creates a history entry (the before-state) -- we know its `version_id`. But the after-state is just the live row in the current table. It won't become a history entry until the *next* operation's trigger fires. So `after_id` can't be populated at the time the log entry is created without either backfilling it retroactively (fragile) or creating an extra history entry (wasteful).
 
 2. **The before-state is sufficient for undo.** Undo restores the before-state. The after-state is never needed for the restore operation itself.
 
-3. **The after-state is derivable from the chain.** For any log entry L, the after-state is either the current row (if L is the latest operation) or the next log entry's `history_id` (the next operation's before-state IS the previous operation's after-state).
+3. **The after-state is derivable from the chain.** For any log entry L, the after-state is either the current row (if L is the latest operation) or the next log entry's `version_id` (the next operation's before-state IS the previous operation's after-state).
 
 ---
 
@@ -170,7 +164,7 @@ This is a regular PostgreSQL table, not a hypertable. Savepoints are small (tens
 
 **Why separate from the log:**
 
-1. **Clean schemas.** The log has `file_id`, `history_id`, `filename` (operation-specific). Savepoints have `name`, `description` (bookmark-specific). Combining them means every row wastes half its columns as NULLs.
+1. **Clean schemas.** The log has `file_id`, `version_id`, `filename` (operation-specific). Savepoints have `name`, `description` (bookmark-specific). Combining them means every row wastes half its columns as NULLs.
 
 2. **Natural constraints.** `name UNIQUE` is straightforward on a dedicated table. On the log table, it would require a partial unique index (`WHERE type = 'savepoint'`).
 
@@ -278,10 +272,11 @@ Rollback is the right model for TigerFS because:
 
 1. Look up the log entry by `log_id`
 2. Based on `type`:
-   - `insert`: DELETE the row (it didn't exist before)
-   - `update`: Fetch the before-state from history (`history_id`), UPDATE the row to that state
+   - `create`: DELETE the row (it didn't exist before)
+   - `edit`: Fetch the before-state from history (`version_id`), UPDATE the row to that state
+   - `rename`: Fetch the before-state from history, UPDATE the row to restore old name/parent
    - `delete`: Fetch the before-state from history, INSERT the row back
-   - `undo`: Same as update/delete -- fetch history state, restore it
+   - `undo`: Same as edit/delete -- fetch history state, restore it
 3. The BEFORE trigger fires on the restore operation, capturing the current state into history
 4. Insert a new log entry with `type = 'undo'`
 
@@ -290,7 +285,7 @@ Rollback is the right model for TigerFS because:
 The execution query finds the first log entry per affected file after the target point, using `DISTINCT ON` to leverage SkipScan (see Section 1.8):
 
 ```sql
-SELECT DISTINCT ON (file_id) file_id, type, history_id
+SELECT DISTINCT ON (file_id) file_id, type, version_id
 FROM tigerfs.<app>_log
 WHERE log_id > $1
 ORDER BY file_id, log_id ASC
@@ -298,36 +293,38 @@ ORDER BY file_id, log_id ASC
 
 Where `$1` is either the `savepoint_id` (for undo-to-savepoint) or the target `log_id` (for undo-to-ID).
 
-**Key insight:** The first log entry's `history_id` for each file IS the state at the target point, by definition. The BEFORE trigger captured the row state just before the first post-target operation.
+**Key insight:** The first log entry's `version_id` for each file IS the state at the target point, by definition. The BEFORE trigger captured the row state just before the first post-target operation.
 
 For each affected file:
 
 | First operation type | Current row state | Action |
 |---------------------|-------------------|--------|
-| INSERT | Exists | DELETE (row didn't exist at target point) |
-| INSERT | Doesn't exist (deleted later) | No-op (correct -- row didn't exist at target) |
-| UPDATE | Exists | UPSERT from history state |
-| UPDATE | Doesn't exist (deleted later) | INSERT from history state |
-| DELETE | Doesn't exist | INSERT from history state |
+| `create` | Exists | DELETE (row didn't exist at target point) |
+| `create` | Doesn't exist (deleted later) | No-op (correct -- row didn't exist at target) |
+| `edit`/`rename` | Exists | UPSERT from history state |
+| `edit`/`rename` | Doesn't exist (deleted later) | INSERT from history state |
+| `delete` | Doesn't exist | INSERT from history state |
 
 The UPSERT pattern handles the ambiguity of "does the row currently exist?" for UPDATE entries:
 
 ```sql
 -- Delete rows inserted after the target point
 DELETE FROM public.<app>
-WHERE id IN (SELECT file_id FROM affected WHERE first_type = 'insert');
+WHERE id IN (SELECT file_id FROM affected WHERE first_type = 'create');
 
--- Restore rows that were updated or deleted after the target point
-INSERT INTO public.<app> (id, filename, title, author, body, ...)
-SELECT h.id, h.filename, h.title, h.author, h.body, ...
+-- Restore rows that were edited, renamed/moved, or deleted after the target point.
+-- UPSERT must restore parent_id (ADR-017) to reverse moves.
+INSERT INTO public.<app> (id, parent_id, filename, title, author, body, ...)
+SELECT h.file_id, h.parent_id, h.filename, h.title, h.author, h.body, ...
 FROM tigerfs.<app>_history h
-JOIN affected a ON a.first_history_id = h._history_id
-WHERE a.first_type IN ('update', 'delete')
+JOIN affected a ON a.first_version_id = h.version_id
+WHERE a.first_type IN ('edit', 'rename', 'delete')
 ON CONFLICT (id) DO UPDATE SET
-    filename = EXCLUDED.filename,
-    title    = EXCLUDED.title,
-    author   = EXCLUDED.author,
-    body     = EXCLUDED.body,
+    parent_id = EXCLUDED.parent_id,
+    filename  = EXCLUDED.filename,
+    title     = EXCLUDED.title,
+    author    = EXCLUDED.author,
+    body      = EXCLUDED.body,
     ...;
 ```
 
@@ -337,15 +334,15 @@ All executed in a **single PostgreSQL transaction**. The BEFORE triggers fire fo
 
 ### 3.4 Undo of Undo
 
-Undo operations are themselves logged (with `type = 'undo'`). Each undo operation fires the BEFORE trigger, which captures the current state into history. The undo log entry's `history_id` points to that captured state.
+Undo operations are themselves logged (with `type = 'undo'`). Each undo operation fires the BEFORE trigger, which captures the current state into history. The undo log entry's `version_id` points to that captured state.
 
-To undo an undo: look up the undo log entry, fetch its `history_id` from history, restore to that state. This is identical to undoing any other operation -- no special case needed.
+To undo an undo: look up the undo log entry, fetch its `version_id` from history, restore to that state. This is identical to undoing any other operation -- no special case needed.
 
 **Traced example:**
 
-1. User updates `hello.md` to "v2". Trigger captures "v1" as H1. Log: L1 (type=update, history_id=H1).
-2. User undoes L1. TigerFS restores "v1" from H1. Trigger captures "v2" as H2. Log: L2 (type=undo, history_id=H2).
-3. User undoes L2 (undo-of-undo). TigerFS restores "v2" from H2. Trigger captures "v1" as H3. Log: L3 (type=undo, history_id=H3).
+1. User updates `hello.md` to "v2". Trigger captures "v1" as H1. Log: L1 (type=edit, version_id=H1).
+2. User undoes L1. TigerFS restores "v1" from H1. Trigger captures "v2" as H2. Log: L2 (type=undo, version_id=H2).
+3. User undoes L2 (undo-of-undo). TigerFS restores "v2" from H2. Trigger captures "v1" as H3. Log: L3 (type=undo, version_id=H3).
 
 Result: `hello.md` is back to "v2". The chain is self-consistent because every write (including undo writes) fires the same trigger.
 
@@ -355,7 +352,7 @@ Undoing to the same savepoint twice produces the same data state. On the second 
 
 - The query finds all operations after the savepoint, including the undo entries from the first undo
 - For each file, the first entry after the savepoint is still the original operation (same `log_id`)
-- That original operation's `history_id` still points to the state at the savepoint
+- That original operation's `version_id` still points to the state at the savepoint
 - The restore produces the same data (though it creates new log/history entries)
 
 This is correct and expected -- "undo to savepoint S" always means "make the data look like it did at S."
@@ -399,7 +396,7 @@ ls notes/.log/.by/type/delete
 # Single entry as directory (column access)
 cat notes/.log/<log_id>/type
 cat notes/.log/<log_id>/filename
-cat notes/.log/<log_id>/history_id
+cat notes/.log/<log_id>/version_id
 
 # Bulk export
 cat notes/.log/.export/json
@@ -417,7 +414,7 @@ notes/.log/<log_id>/
 ├── type            # column
 ├── filename        # column
 ├── file_id         # column
-├── history_id      # column
+├── version_id      # column
 ├── description     # column
 ├── before -> ../../.history/docs/hello.md/2026-04-07T143000.123Z-zzz0063hd8e5r42   # symlink
 ├── after  -> ../../.history/docs/hello.md/2026-04-07T150000.456Z-1230deadbeef1z0   # symlink
@@ -428,8 +425,8 @@ notes/.log/<log_id>/
 
 | Symlink | Points to |
 |---------|-----------|
-| `before` | `.history/<filename>/<version_id>` derived from `history_id`. If `history_id` is NULL (INSERT): `/dev/null`. |
-| `after` | Query next log entry for this `file_id` after this `log_id`. If found and its `history_id` is non-NULL: `.history/<filename>/<version_id>` from that entry. If found and its `history_id` is NULL (next op was INSERT-like): current file path. If no next entry and file exists: current file path. If no next entry and file deleted: `/dev/null`. |
+| `before` | `.history/<filename>/<version_id>` derived from `version_id`. If `version_id` is NULL (INSERT): `/dev/null`. |
+| `after` | Query next log entry for this `file_id` after this `log_id`. If found and its `version_id` is non-NULL: `.history/<filename>/<version_id>` from that entry. If found and its `version_id` is NULL (next op was INSERT-like): current file path. If no next entry and file exists: current file path. If no next entry and file deleted: `/dev/null`. |
 | `current` | The live file path `../../<filename>`. If the file has been deleted: `/dev/null`. |
 
 The `after` lookup uses the existing `(file_id, log_id ASC)` index -- a single index seek, sub-millisecond even on compressed hypertables.
@@ -669,7 +666,7 @@ cat notes/.undo/to-savepoint/before-refactor/.by/user_id/agent-7/.filter/type/de
 touch notes/.undo/to-savepoint/before-refactor/.by/user_id/agent-7/.filter/type/delete/.apply
 ```
 
-**Algorithm for filtered undo:** For any filtered set of operations, group by `file_id`. For each file, the earliest entry in the filtered set provides the `history_id` (before-state). Apply the same DELETE/UPSERT logic as unfiltered undo, scoped to only the affected files.
+**Algorithm for filtered undo:** For any filtered set of operations, group by `file_id`. For each file, the earliest entry in the filtered set provides the `version_id` (before-state). Apply the same DELETE/UPSERT logic as unfiltered undo, scoped to only the affected files.
 
 #### 4.3.8 Summary Format
 
@@ -703,7 +700,7 @@ The preview is computed lazily -- only materialized when `ls` or `cat` is called
 
 **For `ls` (ReadDir):** Run the undo query to get the list of affected files with their actions. Include all actions (restore and delete). Parse filenames to determine directory structure at the requested depth. Delete entries appear as symlinks to /dev/null.
 
-**For `cat` (ReadFile):** Check if the requested file is in the affected set. If so, fetch the before-state from history via `history_id` and render through the synth format layer. If not affected, return an error (file doesn't exist in the preview).
+**For `cat` (ReadFile):** Check if the requested file is in the affected set. If so, fetch the before-state from history via `version_id` and render through the synth format layer. If not affected, return an error (file doesn't exist in the preview).
 
 **For `.info/summary`:** Run the same `DISTINCT ON` undo query (Section 1.8) to get all affected files with their actions. Format as TSV (or JSON/CSV via format suffix).
 
@@ -897,21 +894,22 @@ Every write operation in TigerFS that modifies a history-enabled synth app table
 
 | Operation | Write Path | Log Entry Type |
 |-----------|-----------|---------------|
-| Create a file | `writeSynthFile()` / `db.InsertRow()` | `insert` |
-| Edit a file | `writeSynthFile()` / `db.UpdateRow()` | `update` |
+| Create a file | `writeSynthFile()` / `db.InsertRow()` | `create` |
+| Edit a file | `writeSynthFile()` / `db.UpdateRow()` | `edit` |
 | Delete a file | `deleteSynthFile()` / `db.DeleteRow()` | `delete` |
-| Rename a file | `renameSynthFile()` / `db.UpdateRow()` | `update` |
+| Rename a file/dir | `renameSynthFile()` / `db.UpdateRow()` | `rename` |
+| Move a file/dir | `renameSynthFile()` / `db.UpdateRow()` | `rename` |
 | Undo operation | New undo handler | `undo` |
 
-### 7.2 Determining `history_id`
+### 7.2 Determining `version_id`
 
-For UPDATE and DELETE operations, the BEFORE trigger creates a history entry synchronously. To capture the `history_id` for the log:
+For UPDATE and DELETE operations, the BEFORE trigger creates a history entry synchronously. To capture the `version_id` for the log:
 
 **Option A:** Query the history table for the most recent entry matching the `file_id` immediately after the DML.
 
 **Option B:** Modify the DML to use a CTE or RETURNING clause that captures the trigger's output.
 
-**Option C:** Use a PostgreSQL function that performs the DML and returns the generated `history_id`.
+**Option C:** Use a PostgreSQL function that performs the DML and returns the generated `version_id`.
 
 The exact mechanism is an implementation detail to be determined during development. All options are correct; they differ in complexity and round-trip count.
 
@@ -1055,7 +1053,7 @@ The display format applies **globally** wherever UUIDv7 values are used as filen
 | Data-first tables with UUIDv7 PK | hex UUID | timestamp+base36 (auto-detected) |
 | Data-first tables with UUIDv4 PK | hex UUID | hex UUID (unchanged) |
 
-**No database migration needed.** The display format is a pure presentation-layer conversion -- version IDs are computed on-the-fly from the UUIDv7 bytes stored in the `_history_id` column, never stored as strings. Changing the conversion function immediately produces the new format for all existing data. The only breakage is external scripts that cached old-format paths (e.g., `2026-04-07T143000Z`), which is acceptable.
+**No database migration needed.** The display format is a pure presentation-layer conversion -- version IDs are computed on-the-fly from the UUIDv7 bytes stored in the `_version_id` column, never stored as strings. Changing the conversion function immediately produces the new format for all existing data. The only breakage is external scripts that cached old-format paths (e.g., `2026-04-07T143000Z`), which is acceptable.
 
 ### 11.6 Visual Comparison
 
@@ -1165,13 +1163,13 @@ Should `.import/` operations create one log entry per row, or one log entry for 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Log scope | Per-table | Matches history tables. Simpler queries. No cross-table transaction complexity. |
-| Log stores | Pointer to history (`history_id`), not copies | No data duplication. History already has full row state. Log stays small. |
+| Log stores | Pointer to history (`version_id`), not copies | No data duplication. History already has full row state. Log stays small. |
 | Savepoint storage | Separate table | Clean schema. Natural UNIQUE on name. No compression concerns. |
 | Undo semantics | Rollback (git checkout), not revert (git revert) | Full row state in history. No column-level diff/merge needed. |
 | Undo interface | Preview + apply (stateless) | Preview directory tree shows affected files. `touch .apply` triggers execution. No session management. |
 | `after_id` in log | Not stored | After-state doesn't exist as a history entry at log-write time. Before-state is sufficient for undo. After-state is derivable from the chain. |
 | `filename` in log | Denormalized | Avoids JOINs in display queries. Preserves historically-correct filename. Keeps hypertable optimizations. |
-| Type column | TEXT with CHECK constraint | Matches existing `_operation` in history. Easy to extend without ALTER TYPE migration. |
+| Type column | TEXT with CHECK constraint | Matches existing `operation` in history. Easy to extend without ALTER TYPE migration. |
 | User identity | Mount-level `.info/user` | Set at mount time via --user-id or TIGERFS_USER_ID. Modifiable at runtime. In-memory storage. |
 | Multi-agent | Separate mounts | One mount per agent. Concurrency through PostgreSQL. Clean identity and isolation. |
 | Naming | "Undo" not "rollback" | Ctrl+Z mental model. "Rollback" implies uncommitted transaction. One concept, one directory. |
