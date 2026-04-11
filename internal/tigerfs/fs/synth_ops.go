@@ -138,12 +138,21 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 			}
 		}
 
-		cache[viewName] = &synth.ViewInfo{
+		info := &synth.ViewInfo{
 			Format:            format,
 			Roles:             roles,
 			CachedMountTime:   mountTime,
 			SupportsHierarchy: roles.Filetype != "",
 			HasHistory:        hasHistory,
+		}
+		cache[viewName] = info
+
+		// Warn if this app uses the legacy directory model (has filetype but no parent_id).
+		// The relational-directories migration adds parent_id for improved performance.
+		if info.SupportsHierarchy && roles.ParentID == "" {
+			logging.Warn("synth app uses legacy directory model",
+				zap.String("app", viewName),
+				zap.String("hint", "run 'tigerfs migrate' for improved directory performance"))
 		}
 	}
 
