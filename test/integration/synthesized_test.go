@@ -1254,6 +1254,422 @@ func TestSynth_MkdirAlreadyExists(t *testing.T) {
 }
 
 // ============================================================================
+// Parent-Pointer Model Tests (ADR-017)
+// ============================================================================
+
+// TestSynth_MoveFileBetweenDirs verifies moving a file from one directory
+// to another by renaming across directories (ADR-017 verification #5).
+func TestSynth_MoveFileBetweenDirs(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_move")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_move", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Create source and target directories
+	fsErr = ops.Mkdir(ctx, "/mem_move/inbox")
+	require.Nil(t, fsErr)
+	fsErr = ops.Mkdir(ctx, "/mem_move/archive")
+	require.Nil(t, fsErr)
+
+	// Create file in inbox
+	content := "---\ntitle: Task\n---\n# Task\n"
+	fsErr = ops.WriteFile(ctx, "/mem_move/inbox/task.md", []byte(content))
+	require.Nil(t, fsErr)
+
+	// Verify file is in inbox
+	entries, fsErr := ops.ReadDir(ctx, "/mem_move/inbox")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "task.md")
+
+	// Move file from inbox to archive
+	fsErr = ops.Rename(ctx, "/mem_move/inbox/task.md", "/mem_move/archive/task.md")
+	require.Nil(t, fsErr, "move file between dirs should succeed")
+
+	// Verify file is no longer in inbox
+	entries, fsErr = ops.ReadDir(ctx, "/mem_move/inbox")
+	require.Nil(t, fsErr)
+	assert.NotContains(t, fsEntryNames(entries), "task.md", "inbox should be empty after move")
+
+	// Verify file is now in archive
+	entries, fsErr = ops.ReadDir(ctx, "/mem_move/archive")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "task.md", "archive should contain moved file")
+
+	// Verify file content is preserved
+	fileContent, fsErr := ops.ReadFile(ctx, "/mem_move/archive/task.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(fileContent.Data), "# Task")
+}
+
+// TestSynth_MoveDirBetweenParents verifies moving a directory from one parent
+// to another (ADR-017 verification #9).
+func TestSynth_MoveDirBetweenParents(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_mvdir")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_mvdir", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Create: parent1/child/file.md, parent2/
+	fsErr = ops.Mkdir(ctx, "/mem_mvdir/parent1")
+	require.Nil(t, fsErr)
+	fsErr = ops.Mkdir(ctx, "/mem_mvdir/parent1/child")
+	require.Nil(t, fsErr)
+	content := "---\ntitle: File\n---\nContent\n"
+	fsErr = ops.WriteFile(ctx, "/mem_mvdir/parent1/child/file.md", []byte(content))
+	require.Nil(t, fsErr)
+	fsErr = ops.Mkdir(ctx, "/mem_mvdir/parent2")
+	require.Nil(t, fsErr)
+
+	// Move child directory from parent1 to parent2
+	fsErr = ops.Rename(ctx, "/mem_mvdir/parent1/child", "/mem_mvdir/parent2/child")
+	require.Nil(t, fsErr, "move directory should succeed")
+
+	// parent1 should no longer have child
+	entries, fsErr := ops.ReadDir(ctx, "/mem_mvdir/parent1")
+	require.Nil(t, fsErr)
+	assert.NotContains(t, fsEntryNames(entries), "child")
+
+	// parent2 should now have child
+	entries, fsErr = ops.ReadDir(ctx, "/mem_mvdir/parent2")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "child")
+
+	// File inside moved directory should still be accessible
+	entries, fsErr = ops.ReadDir(ctx, "/mem_mvdir/parent2/child")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "file.md")
+
+	fileContent, fsErr := ops.ReadFile(ctx, "/mem_mvdir/parent2/child/file.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(fileContent.Data), "Content")
+}
+
+// TestSynth_EmptyDirReadDir verifies ReadDir on an empty directory returns
+// an empty list (ADR-017 verification #20).
+func TestSynth_EmptyDirReadDir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_empty")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_empty", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	fsErr = ops.Mkdir(ctx, "/mem_empty/vacant")
+	require.Nil(t, fsErr)
+
+	entries, fsErr := ops.ReadDir(ctx, "/mem_empty/vacant")
+	require.Nil(t, fsErr, "ReadDir empty dir should succeed")
+	assert.Empty(t, entries, "empty directory should have no entries")
+}
+
+// TestSynth_SameLeafNameDifferentDirs verifies that files with the same
+// leaf name in different directories coexist independently. This is a
+// critical test for the parent-pointer model correctness.
+func TestSynth_SameLeafNameDifferentDirs(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_samename")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_samename", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Create two directories
+	fsErr = ops.Mkdir(ctx, "/mem_samename/docs")
+	require.Nil(t, fsErr)
+	fsErr = ops.Mkdir(ctx, "/mem_samename/guides")
+	require.Nil(t, fsErr)
+
+	// Create readme.md in BOTH directories with DIFFERENT content
+	docsContent := "---\ntitle: Docs Readme\n---\n# Docs\n"
+	fsErr = ops.WriteFile(ctx, "/mem_samename/docs/readme.md", []byte(docsContent))
+	require.Nil(t, fsErr)
+
+	guidesContent := "---\ntitle: Guides Readme\n---\n# Guides\n"
+	fsErr = ops.WriteFile(ctx, "/mem_samename/guides/readme.md", []byte(guidesContent))
+	require.Nil(t, fsErr)
+
+	// Both directories should list readme.md
+	entries, fsErr := ops.ReadDir(ctx, "/mem_samename/docs")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "readme.md")
+
+	entries, fsErr = ops.ReadDir(ctx, "/mem_samename/guides")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "readme.md")
+
+	// Read each and verify content is distinct
+	docsFile, fsErr := ops.ReadFile(ctx, "/mem_samename/docs/readme.md")
+	require.Nil(t, fsErr, "ReadFile docs/readme.md should succeed")
+	assert.Contains(t, string(docsFile.Data), "# Docs")
+	assert.NotContains(t, string(docsFile.Data), "# Guides")
+
+	guidesFile, fsErr := ops.ReadFile(ctx, "/mem_samename/guides/readme.md")
+	require.Nil(t, fsErr, "ReadFile guides/readme.md should succeed")
+	assert.Contains(t, string(guidesFile.Data), "# Guides")
+	assert.NotContains(t, string(guidesFile.Data), "# Docs")
+
+	// Edit one, verify the other is unaffected
+	updatedDocs := "---\ntitle: Docs Updated\n---\n# Docs Updated\n"
+	fsErr = ops.WriteFile(ctx, "/mem_samename/docs/readme.md", []byte(updatedDocs))
+	require.Nil(t, fsErr)
+
+	guidesFile, fsErr = ops.ReadFile(ctx, "/mem_samename/guides/readme.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(guidesFile.Data), "# Guides", "editing docs/readme.md should not affect guides/readme.md")
+}
+
+// TestSynth_RenameDirChildrenUnaffected verifies that renaming a directory
+// does NOT change child rows -- children are unaffected because only the
+// directory row's filename changes (ADR-017 single-row rename).
+func TestSynth_RenameDirChildrenUnaffected(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_renchild")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_renchild", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Create directory with files
+	content1 := "---\ntitle: A\n---\nFile A\n"
+	fsErr = ops.WriteFile(ctx, "/mem_renchild/mydir/a.md", []byte(content1))
+	require.Nil(t, fsErr)
+	content2 := "---\ntitle: B\n---\nFile B\n"
+	fsErr = ops.WriteFile(ctx, "/mem_renchild/mydir/b.md", []byte(content2))
+	require.Nil(t, fsErr)
+
+	// Rename directory
+	fsErr = ops.Rename(ctx, "/mem_renchild/mydir", "/mem_renchild/renamed")
+	require.Nil(t, fsErr, "rename dir should succeed")
+
+	// Children should be accessible under new name
+	entries, fsErr := ops.ReadDir(ctx, "/mem_renchild/renamed")
+	require.Nil(t, fsErr, "ReadDir renamed dir should succeed")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "a.md")
+	assert.Contains(t, names, "b.md")
+
+	// File content should be preserved
+	file, fsErr := ops.ReadFile(ctx, "/mem_renchild/renamed/a.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(file.Data), "File A")
+}
+
+// TestSynth_NestedReadDirAtEachLevel verifies ReadDir returns correct entries
+// at every level of a 3-level hierarchy.
+func TestSynth_NestedReadDirAtEachLevel(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_levels")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_levels", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Build: root-file.md, L1/L1-file.md, L1/L2/L2-file.md, L1/L2/L3/L3-file.md
+	fsErr = ops.WriteFile(ctx, "/mem_levels/root-file.md", []byte("---\ntitle: Root\n---\nRoot\n"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/mem_levels/L1/L1-file.md", []byte("---\ntitle: L1\n---\nL1\n"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/mem_levels/L1/L2/L2-file.md", []byte("---\ntitle: L2\n---\nL2\n"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/mem_levels/L1/L2/L3/L3-file.md", []byte("---\ntitle: L3\n---\nL3\n"))
+	require.Nil(t, fsErr)
+
+	// Root level: should have root-file.md and L1 directory
+	entries, fsErr := ops.ReadDir(ctx, "/mem_levels")
+	require.Nil(t, fsErr)
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "root-file.md")
+	assert.Contains(t, names, "L1")
+	assert.NotContains(t, names, "L2", "root should NOT show nested dirs")
+	assert.NotContains(t, names, "L1-file.md", "root should NOT show nested files")
+
+	// L1 level: should have L1-file.md and L2 directory
+	entries, fsErr = ops.ReadDir(ctx, "/mem_levels/L1")
+	require.Nil(t, fsErr)
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, "L1-file.md")
+	assert.Contains(t, names, "L2")
+	assert.NotContains(t, names, "root-file.md", "L1 should NOT show root files")
+	assert.NotContains(t, names, "L3", "L1 should NOT show L3")
+
+	// L2 level: should have L2-file.md and L3 directory
+	entries, fsErr = ops.ReadDir(ctx, "/mem_levels/L1/L2")
+	require.Nil(t, fsErr)
+	names = fsEntryNames(entries)
+	assert.Contains(t, names, "L2-file.md")
+	assert.Contains(t, names, "L3")
+
+	// L3 level: should have only L3-file.md
+	entries, fsErr = ops.ReadDir(ctx, "/mem_levels/L1/L2/L3")
+	require.Nil(t, fsErr)
+	names = fsEntryNames(entries)
+	assert.Equal(t, []string{"L3-file.md"}, names, "L3 should have exactly one file")
+}
+
+// TestSynth_DeleteNestedFileParentPersists verifies that deleting a file
+// in a subdirectory does not delete the parent directory.
+func TestSynth_DeleteNestedFileParentPersists(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_delnest")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_delnest", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Create two files in a directory
+	fsErr = ops.WriteFile(ctx, "/mem_delnest/mydir/a.md", []byte("---\ntitle: A\n---\nA\n"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/mem_delnest/mydir/b.md", []byte("---\ntitle: B\n---\nB\n"))
+	require.Nil(t, fsErr)
+
+	// Delete one file
+	fsErr = ops.Delete(ctx, "/mem_delnest/mydir/a.md")
+	require.Nil(t, fsErr)
+
+	// Directory should still exist with the other file
+	entries, fsErr := ops.ReadDir(ctx, "/mem_delnest/mydir")
+	require.Nil(t, fsErr, "directory should still exist after deleting a child")
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "b.md")
+	assert.NotContains(t, names, "a.md")
+
+	// Root should still show the directory
+	entries, fsErr = ops.ReadDir(ctx, "/mem_delnest")
+	require.Nil(t, fsErr)
+	assert.Contains(t, fsEntryNames(entries), "mydir")
+}
+
+// TestSynth_HistoryAfterRename verifies that .history/ shows a file under
+// its NEW name after rename, and versions are accessible (ADR-017 #38).
+func TestSynth_HistoryAfterRename(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_histren")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_histren", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+
+	// Create and edit a file (generates history)
+	v1 := "---\ntitle: V1\n---\nVersion 1\n"
+	fsErr = ops.WriteFile(ctx, "/mem_histren/original.md", []byte(v1))
+	require.Nil(t, fsErr)
+
+	time.Sleep(1100 * time.Millisecond) // ensure distinct UUIDv7
+
+	v2 := "---\ntitle: V2\n---\nVersion 2\n"
+	fsErr = ops.WriteFile(ctx, "/mem_histren/original.md", []byte(v2))
+	require.Nil(t, fsErr)
+
+	// Rename the file
+	fsErr = ops.Rename(ctx, "/mem_histren/original.md", "/mem_histren/renamed.md")
+	require.Nil(t, fsErr)
+
+	// .history/ should list the NEW filename (renamed.md)
+	// History entries are keyed by the DB filename, which is now "renamed.md"
+	entries, fsErr := ops.ReadDir(ctx, "/mem_histren/.history")
+	require.Nil(t, fsErr)
+	names := fsEntryNames(entries)
+	// The old name "original.md" had history entries -- those entries still have
+	// filename="original.md" in the history table. After rename, new entries would
+	// use "renamed.md". Both should appear in the history listing.
+	assert.Contains(t, names, "original.md", "history should show old filename (from pre-rename versions)")
+}
+
+// TestSynth_RootFilesAndDirsCoexist verifies that root-level files and
+// directories coexist correctly in ReadDir.
+func TestSynth_RootFilesAndDirsCoexist(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mem_rootmix")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/mem_rootmix", []byte("markdown\n"))
+	require.Nil(t, fsErr)
+
+	// Create root-level file
+	fsErr = ops.WriteFile(ctx, "/mem_rootmix/readme.md", []byte("---\ntitle: Root\n---\nRoot file\n"))
+	require.Nil(t, fsErr)
+
+	// Create root-level directory with a file inside
+	fsErr = ops.WriteFile(ctx, "/mem_rootmix/docs/guide.md", []byte("---\ntitle: Guide\n---\nGuide\n"))
+	require.Nil(t, fsErr)
+
+	// ReadDir root should show both
+	entries, fsErr := ops.ReadDir(ctx, "/mem_rootmix")
+	require.Nil(t, fsErr)
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, "readme.md", "root should have file")
+	assert.Contains(t, names, "docs", "root should have directory")
+
+	// Verify types
+	for _, e := range entries {
+		if e.Name == "readme.md" {
+			assert.False(t, e.IsDir, "readme.md should be a file")
+		}
+		if e.Name == "docs" {
+			assert.True(t, e.IsDir, "docs should be a directory")
+		}
+	}
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
