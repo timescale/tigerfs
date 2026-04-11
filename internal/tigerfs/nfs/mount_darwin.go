@@ -51,7 +51,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	logging.Info("Database connection established")
 
 	// Create NFS server
-	server, err := NewServer(ctx, cfg, dbClient)
+	server, err := NewServer(ctx, cfg, dbClient, absMountpoint)
 	if err != nil {
 		dbClient.Close()
 		return nil, fmt.Errorf("failed to create NFS server: %w", err)

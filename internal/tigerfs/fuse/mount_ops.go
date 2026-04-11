@@ -43,6 +43,7 @@ func MountOps(ctx context.Context, cfg *config.Config, connStr, mountpoint strin
 
 	// 2. Create shared Operations core (same as NFS uses)
 	ops := tigerfs.NewOperations(cfg, dbClient)
+	ops.SetMountPoint(mountpoint)
 
 	// 3. Create FSAdapter bridge
 	adapter := NewFSAdapter(ops)
