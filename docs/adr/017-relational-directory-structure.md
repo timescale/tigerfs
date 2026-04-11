@@ -24,7 +24,7 @@ Replace path-encoded filenames with a parent-pointer model: `filename` stores on
 
 ```sql
 CREATE TABLE tigerfs.<app> (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     parent_id UUID REFERENCES tigerfs.<app>(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -68,7 +68,7 @@ CREATE TABLE tigerfs.<app>_history (
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    operation TEXT NOT NULL CHECK (operation IN ('UPDATE', 'DELETE'))
+    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
 ) WITH (
     tsdb.hypertable,
     tsdb.partition_column = 'version_id',
@@ -274,7 +274,16 @@ BEGIN
     VALUES
         (OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, OLD.title, OLD.author, OLD.headers,
          OLD.body, OLD.encoding, OLD.created_at, OLD.modified_at,
-         uuidv7(), TG_OP::text);
+         uuidv7(),
+         CASE TG_OP
+             WHEN 'DELETE' THEN 'delete'
+             WHEN 'UPDATE' THEN
+                 CASE WHEN OLD.filename != NEW.filename
+                           OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+                      THEN 'rename'
+                      ELSE 'edit'
+                 END
+         END);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
     END IF;

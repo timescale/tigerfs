@@ -262,7 +262,7 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, "encoding TEXT CHECK (encoding IN ('utf8', 'base64'))") {
 		t.Errorf("history should have encoding CHECK constraint, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "CHECK (operation IN ('UPDATE', 'DELETE'))") {
+	if !strings.Contains(allSQL, "CHECK (operation IN ('edit', 'rename', 'delete'))") {
 		t.Errorf("history should have operation CHECK constraint, got:\n%s", allSQL)
 	}
 
@@ -323,8 +323,11 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, "version_id, operation") {
 		t.Errorf("trigger INSERT should use version_id and operation columns, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "TG_OP::text") {
-		t.Errorf("should record TG_OP as operation, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "WHEN 'DELETE' THEN 'delete'") {
+		t.Errorf("trigger should map TG_OP to filesystem-centric types, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "THEN 'rename'") {
+		t.Errorf("trigger should detect rename from filename/parent_id changes, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "OLD.encoding") {
 		t.Errorf("history trigger should copy encoding column, got:\n%s", allSQL)
