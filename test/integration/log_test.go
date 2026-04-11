@@ -140,6 +140,162 @@ func TestSynth_LogEntries_Integration(t *testing.T) {
 	}
 }
 
+// TestSynth_LogEntries_NestedFiles verifies that log entries for files in
+// subdirectories store the denormalized full path (ADR-017 Section 13.8).
+// The log's filename column has different semantics from the source table's
+// filename (leaf only) -- the log stores the full path for human-readable display.
+func TestSynth_LogEntries_NestedFiles(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logdir")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logdir", []byte("markdown,history\n"))
+	require.Nil(t, fsErr, "build logdir app: %v", fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// CREATE: nested file (auto-creates parent directories)
+	content := "---\ntitle: Todo\n---\n# Todo\n"
+	fsErr = ops.WriteFile(ctx, "/logdir/projects/web/todo.md", []byte(content))
+	require.Nil(t, fsErr, "create nested file")
+
+	// EDIT: update the nested file
+	content2 := "---\ntitle: Todo Updated\n---\n# Todo Updated\n"
+	fsErr = ops.WriteFile(ctx, "/logdir/projects/web/todo.md", []byte(content2))
+	require.Nil(t, fsErr, "edit nested file")
+
+	// RENAME: rename within same directory
+	fsErr = ops.Rename(ctx, "/logdir/projects/web/todo.md", "/logdir/projects/web/done.md")
+	require.Nil(t, fsErr, "rename nested file")
+
+	// MOVE: move to different directory
+	fsErr = ops.Mkdir(ctx, "/logdir/archive")
+	require.Nil(t, fsErr, "mkdir archive")
+	fsErr = ops.Rename(ctx, "/logdir/projects/web/done.md", "/logdir/archive/done.md")
+	require.Nil(t, fsErr, "move file to archive")
+
+	// DELETE: delete the moved file
+	fsErr = ops.Delete(ctx, "/logdir/archive/done.md")
+	require.Nil(t, fsErr, "delete file")
+
+	// Query log entries
+	pool, err := pgxpool.New(ctx, result.ConnStr)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	rows, err := pool.Query(ctx, `SELECT type, filename FROM tigerfs.logdir_log ORDER BY log_id ASC`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	type logRow struct {
+		opType   string
+		filename string
+	}
+	var entries []logRow
+	for rows.Next() {
+		var r logRow
+		require.NoError(t, rows.Scan(&r.opType, &r.filename))
+		entries = append(entries, r)
+	}
+
+	// Should have 5 log entries: create, edit, rename, rename(move), delete
+	require.Len(t, entries, 5, "expected 5 log entries, got %d: %+v", len(entries), entries)
+
+	// CREATE: full path of nested file
+	assert.Equal(t, "create", entries[0].opType)
+	assert.Equal(t, "projects/web/todo.md", entries[0].filename,
+		"create log should store denormalized full path")
+
+	// EDIT: same full path
+	assert.Equal(t, "edit", entries[1].opType)
+	assert.Equal(t, "projects/web/todo.md", entries[1].filename,
+		"edit log should store denormalized full path")
+
+	// RENAME: new filename in same directory
+	assert.Equal(t, "rename", entries[2].opType)
+	assert.Equal(t, "projects/web/done.md", entries[2].filename,
+		"rename log should store new full path")
+
+	// MOVE: new full path in different directory
+	assert.Equal(t, "rename", entries[3].opType)
+	assert.Equal(t, "archive/done.md", entries[3].filename,
+		"move log should store new full path in target directory")
+
+	// DELETE: full path at time of deletion
+	assert.Equal(t, "delete", entries[4].opType)
+	assert.Equal(t, "archive/done.md", entries[4].filename,
+		"delete log should store full path at time of deletion")
+
+	t.Logf("Nested log entries verified:")
+	for i, e := range entries {
+		t.Logf("  [%d] %s %s", i, e.opType, e.filename)
+	}
+}
+
+// TestSynth_LogEntries_DirRenameOneEntry verifies that renaming a directory
+// with children produces exactly ONE log entry (ADR-017 verification #44).
+// This is the key improvement over the old prefix-based model where directory
+// rename was an N-row UPDATE producing N log entries.
+func TestSynth_LogEntries_DirRenameOneEntry(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logdirren")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logdirren", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create directory with multiple files
+	fsErr = ops.WriteFile(ctx, "/logdirren/mydir/a.md", []byte("---\ntitle: A\n---\nA\n"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/logdirren/mydir/b.md", []byte("---\ntitle: B\n---\nB\n"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/logdirren/mydir/c.md", []byte("---\ntitle: C\n---\nC\n"))
+	require.Nil(t, fsErr)
+
+	// Count log entries before rename
+	pool, err := pgxpool.New(ctx, result.ConnStr)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	var countBefore int
+	err = pool.QueryRow(ctx, `SELECT count(*) FROM tigerfs.logdirren_log`).Scan(&countBefore)
+	require.NoError(t, err)
+
+	// Rename the directory (contains 3 files)
+	fsErr = ops.Rename(ctx, "/logdirren/mydir", "/logdirren/renamed")
+	require.Nil(t, fsErr, "rename directory should succeed")
+
+	// Count log entries after rename
+	var countAfter int
+	err = pool.QueryRow(ctx, `SELECT count(*) FROM tigerfs.logdirren_log`).Scan(&countAfter)
+	require.NoError(t, err)
+
+	// Should produce exactly ONE new log entry (single-row rename, not N entries)
+	assert.Equal(t, 1, countAfter-countBefore,
+		"directory rename should produce exactly 1 log entry (ADR-017: single-row operation)")
+
+	// Verify the entry is a rename with the new directory path
+	var opType, filename string
+	err = pool.QueryRow(ctx,
+		`SELECT type, filename FROM tigerfs.logdirren_log ORDER BY log_id DESC LIMIT 1`,
+	).Scan(&opType, &filename)
+	require.NoError(t, err)
+	assert.Equal(t, "rename", opType)
+	assert.Equal(t, "renamed", filename, "should log new directory name")
+}
+
 // cleanupTigerFSTablesWithLog extends cleanup to also drop _log and _savepoint tables.
 func cleanupLogTables(t *testing.T, connStr string, tableNames ...string) {
 	t.Helper()
