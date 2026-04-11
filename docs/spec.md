@@ -1299,17 +1299,21 @@ The `.build/` command creates a table with this schema (for markdown apps):
 ```sql
 CREATE TABLE tigerfs.notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    parent_id UUID REFERENCES tigerfs.notes(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(filename, filetype)
+    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
 );
 ```
+
+The `parent_id` column implements a parent-pointer directory model (ADR-017): `filename` stores only the leaf name (e.g., `todo.md`), and `parent_id` references the parent directory row. NULL for root-level entries. Directory renames and moves are single-row updates. The `DEFERRABLE` constraints support undo transactions.
 
 A `BEFORE UPDATE` trigger automatically sets `modified_at = now()` on every update.
 
@@ -1359,34 +1363,42 @@ Each history-enabled app gets a companion table named `tigerfs.<name>_history`:
 ```sql
 CREATE TABLE tigerfs.notes_history (
     -- Mirrors all source table columns --
-    id UUID,
+    file_id UUID,
+    parent_id UUID,
     filename TEXT NOT NULL,
-    filetype TEXT,
+    filetype TEXT CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB,
     body TEXT,
+    encoding TEXT CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     -- History metadata --
-    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    _operation TEXT NOT NULL  -- 'UPDATE' or 'DELETE'
+    version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    operation TEXT NOT NULL CHECK (operation IN ('UPDATE', 'DELETE'))
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'version_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'version_id DESC'
 );
 ```
 
-Indexes are created on `(filename, _history_id DESC)` and `(id, _history_id DESC)` for efficient lookups by filename or row UUID.
+Indexes are created on `(filename, version_id DESC)` and `(file_id, version_id DESC)` for efficient lookups by filename or row UUID.
 
 ### Trigger Mechanism
 
-A `BEFORE UPDATE OR DELETE` trigger on the source table copies the `OLD` row into the history table with a UUIDv7 `_history_id` (encoding the current timestamp) and the operation type (`UPDATE` or `DELETE`).
+A `BEFORE UPDATE OR DELETE` trigger on the source table copies the `OLD` row (including `parent_id`) into the history table with a UUIDv7 `version_id` (encoding the current timestamp) and the operation type (`UPDATE` or `DELETE`).
 
 ### TimescaleDB Integration
 
-The history table is converted to a TimescaleDB hypertable for efficient time-partitioned storage:
+The history table uses the modern `CREATE TABLE WITH` syntax to configure the hypertable and columnstore inline:
 
-- **Chunk interval:** 1 month (partitioned by `_history_id`)
-- **Compression:** `segment_by='filename'`, `order_by='_history_id DESC'`
-- **Compression policy:** After 1 day
+- **Chunk interval:** 7 days (partitioned by `version_id`)
+- **Compression:** `segmentby='file_id'`, `orderby='version_id DESC'`
+- **Compression policy:** Automatic (matches chunk interval)
 
 History requires **TimescaleDB** — it will not work on vanilla PostgreSQL.
 
@@ -1405,7 +1417,7 @@ The `.history/` directory appears inside each synthesized app:
 | `app/.history/.by/<uuid>/<timestamp>` | Read a past version by UUID |
 | `app/subdir/.history/` | Per-directory history (scoped to that directory) |
 
-Version timestamps are extracted from the UUIDv7 `_history_id`, formatted as `2006-01-02T150405Z` (filesystem-safe, no colons). Versions are listed newest-first.
+Version IDs are derived from the UUIDv7 `version_id`, displayed as a timestamp+base36 string (e.g., `2026-04-10T173000.123Z-abc123`). This display name format is lossless and case-insensitive safe (ADR-016 Section 11). Versions are listed newest-first.
 
 **Cross-rename tracking:** Every row has a stable UUID that persists across renames. The `.by/` directory enables lookups by UUID even after a file is renamed. `.by/` is only available at the root `.history/` level.
 

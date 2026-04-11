@@ -295,7 +295,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 13.9 | Migration Script | ~9390 |
 | ✅ | 13.10 | Update Existing Tests (45 verification scenarios) | ~9410 |
 | ✅ | 13.11 | Update ADR-016 and Phase 12 Tasks | ~9430 |
-| ⬜ | 13.12 | Documentation (ADR-017, spec, skills) | ~9450 |
+| ✅ | 13.12 | Documentation (ADR-017, spec, skills) | ~9450 |
 
 ---
 
@@ -319,5 +319,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
 | Phase 12: Undo and Recovery | 4 | 12 | 33% |
-| Phase 13: Relational Directory Structure | 11 | 12 | 92% |
-| **Total** | **121** | **147** | **82%** |
+| Phase 13: Relational Directory Structure | 12 | 12 | 100% |
+| **Total** | **122** | **147** | **83%** |
