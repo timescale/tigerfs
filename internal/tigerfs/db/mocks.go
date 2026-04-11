@@ -758,6 +758,14 @@ func (m *MockLogWriter) InsertLogEntry(ctx context.Context, schema, logTable, us
 	return nil
 }
 
+func (m *MockLogWriter) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
+	return "", "", nil
+}
+
+func (m *MockLogWriter) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	return false, nil
+}
+
 func (m *MockLogWriter) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
 	if m.VersionIDs != nil {
 		if id, ok := m.VersionIDs[fileID]; ok {
