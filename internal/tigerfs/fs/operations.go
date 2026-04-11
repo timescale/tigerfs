@@ -56,7 +56,8 @@ type Operations struct {
 	// Set from --user-id flag or TIGERFS_USER_ID env at mount time.
 	// Can be changed at runtime via writing to .info/user.
 	// Empty means anonymous (user_id = NULL in log entries).
-	userID string
+	userID        string
+	userIDModTime time.Time // stable mtime for .info/user Stat responses
 
 	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
 	legacyWarnOnce sync.Once
@@ -80,6 +81,7 @@ func (o *Operations) SetMountPoint(path string) {
 // SetUserID sets the mount-level user identity for undo log entries.
 func (o *Operations) SetUserID(id string) {
 	o.userID = id
+	o.userIDModTime = time.Now()
 }
 
 // GetUserID returns the current mount-level user identity.
@@ -763,9 +765,12 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 // Files match FUSE behavior: count, ddl, schema, columns, indexes (no dot prefix).
 // readDirRootInfo lists the root-level .info/ directory (mount metadata).
 func (o *Operations) readDirRootInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
-	now := time.Now()
+	modTime := o.userIDModTime
+	if modTime.IsZero() {
+		modTime = time.Now()
+	}
 	entries := []Entry{
-		{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(o.userID) + 1), ModTime: now},
+		{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(o.userID) + 1), ModTime: modTime},
 	}
 	return entries, nil
 }
@@ -776,8 +781,12 @@ func (o *Operations) statRootInfo(parsed *ParsedPath, now time.Time) (*Entry, *F
 		return &Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 	}
 	if parsed.InfoFile == FileUser {
+		modTime := o.userIDModTime
+		if modTime.IsZero() {
+			modTime = now
+		}
 		content := o.userID + "\n"
-		return &Entry{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(content)), ModTime: now}, nil
+		return &Entry{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(content)), ModTime: modTime}, nil
 	}
 	return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", parsed.InfoFile)}
 }
@@ -791,12 +800,15 @@ func (o *Operations) readRootInfoFile(parsed *ParsedPath) (*FileContent, *FSErro
 }
 
 // writeRootInfoFile writes a root-level .info/ file.
+// Writes to unknown files (e.g., editor temp files like #user#) are silently
+// ignored -- they're ephemeral artifacts that don't persist in a virtual filesystem.
 func (o *Operations) writeRootInfoFile(parsed *ParsedPath, data []byte) *FSError {
 	if parsed.InfoFile == FileUser {
 		o.userID = strings.TrimSpace(string(data))
+		o.userIDModTime = time.Now()
 		return nil
 	}
-	return &FSError{Code: ErrPermission, Message: fmt.Sprintf("cannot write to .info/%s", parsed.InfoFile)}
+	return nil // ignore unknown files (editor temp files, etc.)
 }
 
 // readDirInfo lists the table-level .info/ metadata directory.
