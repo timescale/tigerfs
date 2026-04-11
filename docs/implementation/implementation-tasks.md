@@ -8718,7 +8718,7 @@ Extend `synth/build.go` to create the log hypertable and savepoint table. **Only
 **Depends on:** Nothing
 **Files:** `internal/tigerfs/fs/synth/build.go`
 **Tasks:**
-1. Add `CREATE TABLE tigerfs.<app>_log` with all columns from ADR Section 1.2 (log_id, user_id, type, file_id, filename, history_id, description)
+1. Add `CREATE TABLE tigerfs.<app>_log` with all columns from ADR Section 1.2 (log_id, file_id, type, user_id, filename, version_id, description)
 2. Add `create_hypertable()` with `chunk_time_interval => INTERVAL '1 month'` (Section 1.3)
 3. Add composite index `(file_id, log_id ASC)` (Section 1.4)
 4. Add compression policy: `segmentby=file_id`, `orderby=log_id ASC`, compress after 1 day (Section 1.5)
@@ -8738,11 +8738,11 @@ Insert log entries on writes. Every file operation now produces a log record.
 **Files:** `internal/tigerfs/fs/write.go`, `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`
 **Tasks:**
 1. Add `InsertLogEntry()` to DB layer
-2. Determine `history_id` capture mechanism (ADR Section 7.2)
+2. Determine `version_id` capture mechanism (ADR Section 7.2)
 3. Integrate into `writeSynthFile()` (insert/update), `deleteSynthFile()`, `renameSynthFile()`
 4. user_id is NULL for now (identity not yet wired)
 5. Unit tests for log entry creation
-6. Integration tests: create/edit/delete/rename files, verify log entries with correct type, file_id, filename, history_id (NULL for insert, non-NULL for update/delete)
+6. Integration tests: create/edit/delete/rename files, verify log entries with correct type, file_id, filename, version_id (NULL for create, non-NULL for edit/rename/delete)
 **Demo data:** Create `_demo` synth app with history. Write several files across subdirectories (`docs/intro.md`, `docs/api.md`, `guides/setup.md`). Edit some files. Delete one. Rename one. Query the DB directly to confirm log entries exist with correct data.
 
 ### Task 12.5: User Identity (.info/user)
