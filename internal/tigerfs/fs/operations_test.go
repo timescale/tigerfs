@@ -1664,6 +1664,10 @@ func (m *mockDBClient) QueryHistoryDistinctFilenames(ctx context.Context, schema
 	return nil, nil
 }
 
+func (m *mockDBClient) QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockDBClient) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	return nil, nil
 }
@@ -1686,6 +1690,10 @@ func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, history
 		}
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *mockDBClient) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
+	return nil, nil, nil
 }
 
 func (m *mockDBClient) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]db.PathSegment, error) {

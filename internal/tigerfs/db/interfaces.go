@@ -272,6 +272,10 @@ type HistoryReader interface {
 	// QueryHistoryDistinctFilenames returns distinct filenames from the history table.
 	QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
 
+	// QueryHistoryDistinctFilenamesByParent returns distinct filenames from the history table
+	// filtered by parent_id. Empty parentID means root level. Used by ADR-017.
+	QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
+
 	// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
 	QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
 
@@ -283,13 +287,22 @@ type HistoryReader interface {
 // Used by synth views with filetype column for directory rename, child checks, etc.
 type HierarchyWriter interface {
 	// RenameByPrefix atomically renames all rows where column starts with oldPrefix.
+	// Deprecated: Will be removed when all tables use parent-pointer model (ADR-017).
 	RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
 
 	// HasChildrenWithPrefix checks if any rows have column values starting with prefix + "/".
+	// Deprecated: Will be removed when all tables use parent-pointer model (ADR-017).
 	HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error)
 
-	// InsertIfNotExists inserts a row only if no conflict (ON CONFLICT DO NOTHING).
+	// InsertIfNotExists inserts a row only if no conflict.
+	// Uses plain INSERT with unique-violation error handling (no ON CONFLICT)
+	// to support deferrable constraints required by undo transactions (ADR-017).
 	InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+
+	// GetRowsByParent returns all rows with the given parent_id, up to limit.
+	// Empty parentID means root level (WHERE parent_id IS NULL).
+	// Used by the parent-pointer directory model (ADR-017) for ReadDir.
+	GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error)
 }
 
 // PathResolver provides path resolution for the parent-pointer directory model (ADR-017).

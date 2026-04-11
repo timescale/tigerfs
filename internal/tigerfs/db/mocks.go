@@ -579,6 +579,7 @@ type MockHierarchyWriter struct {
 	RenameByPrefixFn        func(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
 	HasChildrenWithPrefixFn func(ctx context.Context, schema, table, column, prefix string) (bool, error)
 	InsertIfNotExistsFn     func(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+	GetRowsByParentFn       func(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error)
 }
 
 func (m *MockHierarchyWriter) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
@@ -602,15 +603,23 @@ func (m *MockHierarchyWriter) InsertIfNotExists(ctx context.Context, schema, tab
 	return nil
 }
 
+func (m *MockHierarchyWriter) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
+	if m.GetRowsByParentFn != nil {
+		return m.GetRowsByParentFn(ctx, schema, table, parentID, limit)
+	}
+	return nil, nil, nil
+}
+
 // MockHistoryReader is a mock for HistoryReader.
 type MockHistoryReader struct {
-	HasExtensionFn                  func(ctx context.Context, extName string) (bool, error)
-	TableExistsFn                   func(ctx context.Context, schema, table string) (bool, error)
-	QueryHistoryByFilenameFn        func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
-	QueryHistoryByIDFn              func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
-	QueryHistoryDistinctFilenamesFn func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
-	QueryHistoryDistinctIDsFn       func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
-	QueryHistoryVersionByTimeFn     func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+	HasExtensionFn                          func(ctx context.Context, extName string) (bool, error)
+	TableExistsFn                           func(ctx context.Context, schema, table string) (bool, error)
+	QueryHistoryByFilenameFn                func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryByIDFn                      func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryDistinctFilenamesFn         func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryDistinctFilenamesByParentFn func(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
+	QueryHistoryDistinctIDsFn               func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryVersionByTimeFn             func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
 }
 
 func (m *MockHistoryReader) HasExtension(ctx context.Context, extName string) (bool, error) {
@@ -644,6 +653,13 @@ func (m *MockHistoryReader) QueryHistoryByID(ctx context.Context, schema, histor
 func (m *MockHistoryReader) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	if m.QueryHistoryDistinctFilenamesFn != nil {
 		return m.QueryHistoryDistinctFilenamesFn(ctx, schema, historyTable, limit)
+	}
+	return nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error) {
+	if m.QueryHistoryDistinctFilenamesByParentFn != nil {
+		return m.QueryHistoryDistinctFilenamesByParentFn(ctx, schema, historyTable, parentID, limit)
 	}
 	return nil, nil
 }
