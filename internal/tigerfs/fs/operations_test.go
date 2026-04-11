@@ -1092,6 +1092,9 @@ type mockDBClient struct {
 	// Insert return value (PK of inserted row)
 	lastInsertReturnPK string
 
+	// Tracks all inserts for verification
+	insertedRows []mockInsertedRow
+
 	// Version ID return value for QueryLatestVersionID
 	latestVersionIDs map[string]string // fileID -> versionID
 
@@ -1118,6 +1121,13 @@ type mockLogEntry struct {
 	fileID    string
 	filename  string
 	versionID string
+}
+
+type mockInsertedRow struct {
+	schema  string
+	table   string
+	columns []string
+	values  []interface{}
 }
 
 type mockPK struct {
@@ -1538,6 +1548,14 @@ func (m *mockDBClient) InsertRow(ctx context.Context, schema, table string, colu
 	m.insertCalled = true
 	m.lastInsertColumns = columns
 	m.lastInsertValues = values
+	// Copy slices to avoid aliasing with caller
+	colsCopy := make([]string, len(columns))
+	copy(colsCopy, columns)
+	valsCopy := make([]interface{}, len(values))
+	copy(valsCopy, values)
+	m.insertedRows = append(m.insertedRows, mockInsertedRow{
+		schema: schema, table: table, columns: colsCopy, values: valsCopy,
+	})
 	pk := "1"
 	if m.lastInsertReturnPK != "" {
 		pk = m.lastInsertReturnPK
