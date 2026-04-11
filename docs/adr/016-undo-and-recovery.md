@@ -18,7 +18,7 @@ TigerFS already has a **history** system for synth apps: a PostgreSQL BEFORE tri
 
 ### 1.1 Purpose
 
-The operation log records every data change (INSERT, UPDATE, DELETE, UNDO) made to a synth app table. It provides:
+The operation log records every data change (create, edit, rename, delete, undo) made to a synth app table. It provides:
 
 - An audit trail of what changed, when, and by whom
 - The ordering information needed to undo operations
@@ -305,7 +305,7 @@ For each affected file:
 | `edit`/`rename` | Doesn't exist (deleted later) | INSERT from history state |
 | `delete` | Doesn't exist | INSERT from history state |
 
-The UPSERT pattern handles the ambiguity of "does the row currently exist?" for UPDATE entries:
+The UPSERT pattern handles the ambiguity of "does the row currently exist?" for `edit`/`rename` entries:
 
 ```sql
 -- Delete rows inserted after the target point
@@ -425,22 +425,22 @@ notes/.log/<log_id>/
 
 | Symlink | Points to |
 |---------|-----------|
-| `before` | `.history/<filename>/<version_id>` derived from `version_id`. If `version_id` is NULL (INSERT): `/dev/null`. |
-| `after` | Query next log entry for this `file_id` after this `log_id`. If found and its `version_id` is non-NULL: `.history/<filename>/<version_id>` from that entry. If found and its `version_id` is NULL (next op was INSERT-like): current file path. If no next entry and file exists: current file path. If no next entry and file deleted: `/dev/null`. |
+| `before` | `.history/<filename>/<version_id>` derived from `version_id`. If `version_id` is NULL (`create`): `/dev/null`. |
+| `after` | Query next log entry for this `file_id` after this `log_id`. If found and its `version_id` is non-NULL: `.history/<filename>/<version_id>` from that entry. If found and its `version_id` is NULL (next op was a `create`): current file path. If no next entry and file exists: current file path. If no next entry and file deleted: `/dev/null`. |
 | `current` | The live file path `../../<filename>`. If the file has been deleted: `/dev/null`. |
 
 The `after` lookup uses the existing `(file_id, log_id ASC)` index -- a single index seek, sub-millisecond even on compressed hypertables.
 
-**Why `/dev/null`:** When a file doesn't exist (before an INSERT, after a DELETE), the symlink points to `/dev/null`. This makes `diff` produce the right output with zero special cases:
+**Why `/dev/null`:** When a file doesn't exist (before a `create`, after a `delete`), the symlink points to `/dev/null`. This makes `diff` produce the right output with zero special cases:
 
 ```bash
-# INSERT: shows entire file as added
+# create: shows entire file as added
 diff -u --color notes/.log/<log_id>/before notes/.log/<log_id>/after
 
-# DELETE: shows entire file as removed
+# delete: shows entire file as removed
 diff -u --color notes/.log/<log_id>/before notes/.log/<log_id>/after
 
-# UPDATE: shows the actual changes
+# edit/rename: shows the actual changes
 diff -u --color notes/.log/<log_id>/before notes/.log/<log_id>/after
 ```
 
@@ -462,24 +462,22 @@ done
 diff -u --color notes/.log/<log_id>/after notes/.log/<log_id>/current
 ```
 
-**Implementation note:** TigerFS has no symlink support today. The NFS adapter (go-billy interface) explicitly rejects `Symlink` and `Readlink`. The FUSE adapter doesn't implement `Readlink`. Adding symlink support requires changes in three layers:
-
-1. **Core (`fs/`):** Add `Readlink(ctx, path) (string, *FSError)` to Operations. `Entry.Mode` must support `os.ModeSymlink`. Stat for symlink paths returns mode with `os.ModeSymlink` set.
-2. **NFS adapter:** Implement `Readlink()` → delegate to `ops.Readlink()`. `Lstat()` must return symlink entries without following. `opsFileInfo.Mode()` must return `S_IFLNK` for symlinks.
-3. **FUSE adapter:** Add `Readlink(ctx) ([]byte, syscall.Errno)` on `OpsNode`. `EntryToAttr` must handle `os.ModeSymlink` → `S_IFLNK`.
-
-Symlinks appear in two contexts: `.log/<id>/` directories (before, after, current diff symlinks) and `.undo/` preview directories (/dev/null symlinks for deleted files). They don't affect existing paths. The NFS and FUSE interfaces already define the symlink operations -- they just need to be wired through.
+**Implementation note:** Symlink support was added in Task 12.2. The `Entry` struct has a `Target` field and `IsSymlink()` method. Both NFS (`Readlink()`) and FUSE (`OpsNode.Readlink()`) adapters delegate to `Operations.Readlink()`. Symlinks appear in two contexts: `.log/<id>/` directories (before, after, current diff symlinks) and `.undo/` preview directories (`/dev/null` symlinks for deleted files).
 
 **Full state matrix:**
 
 | Log entry type | `before` | `after` | `current` |
 |---|---|---|---|
-| INSERT | `/dev/null` | history or current file | current file or `/dev/null` |
-| UPDATE | `.history/` version | history or current file | current file or `/dev/null` |
-| DELETE | `.history/` version | `/dev/null` | `/dev/null` or current file |
-| UNDO (re-insert) | `/dev/null` | history or current file | current file |
-| UNDO (re-delete) | `.history/` version | `/dev/null` | `/dev/null` |
-| UNDO (restore) | `.history/` version | history or current file | current file |
+| `create` | `/dev/null` | history or current file | current file or `/dev/null` |
+| `edit` | `.history/` version | history or current file | current file or `/dev/null` |
+| `rename` | `.history/` version | history or current file | current file or `/dev/null` |
+| `delete` | `.history/` version | `/dev/null` | `/dev/null` |
+| `undo` | depends on `version_id` | depends on next entry | current file or `/dev/null` |
+
+**Simplified resolution:** The `type` column is not needed for symlink resolution. The two rules are:
+- **`before`**: `version_id` is NULL → `/dev/null`. Otherwise → `.history/<filename>/<version_id>`.
+- **`after`**: Find next log entry for same `file_id`. Use its `version_id` to point to `.history/`, or fall back to current file path, or `/dev/null` if file deleted.
+- **`current`**: File exists in source table → live path. Doesn't exist → `/dev/null`.
 
 ### 4.2 `.savepoint/` -- Savepoint Management
 
@@ -868,7 +866,7 @@ The root-level `.info/` can be expanded later with other mount-level metadata.
 
 ## 6. DDL Limitations
 
-The undo system tracks DML operations only (INSERT, UPDATE, DELETE). It cannot reverse DDL changes:
+The undo system tracks DML operations only (create, edit, rename, delete). It cannot reverse DDL changes:
 
 | DDL Change | Risk |
 |------------|------|
@@ -903,7 +901,7 @@ Every write operation in TigerFS that modifies a history-enabled synth app table
 
 ### 7.2 Determining `version_id`
 
-For UPDATE and DELETE operations, the BEFORE trigger creates a history entry synchronously. To capture the `version_id` for the log:
+For edit, rename, and delete operations, the BEFORE trigger creates a history entry synchronously. To capture the `version_id` for the log:
 
 **Option A:** Query the history table for the most recent entry matching the `file_id` immediately after the DML.
 
@@ -932,7 +930,7 @@ This extends the existing DDL generation in `synth/build.go` which already creat
 
 ### 9.1 Write Overhead
 
-Each write to a history-enabled table now requires one additional INSERT (the log entry) in addition to the existing DML + trigger. This is a small overhead -- one extra row insert into a hypertable.
+Each write to a history-enabled table now requires one additional insert (the log entry) in addition to the existing DML + trigger. This is a small overhead -- one extra row insert into a hypertable.
 
 ### 9.2 Undo-to-Savepoint Query Performance
 
@@ -1053,7 +1051,7 @@ The display format applies **globally** wherever UUIDv7 values are used as filen
 | Data-first tables with UUIDv7 PK | hex UUID | timestamp+base36 (auto-detected) |
 | Data-first tables with UUIDv4 PK | hex UUID | hex UUID (unchanged) |
 
-**No database migration needed.** The display format is a pure presentation-layer conversion -- version IDs are computed on-the-fly from the UUIDv7 bytes stored in the `_version_id` column, never stored as strings. Changing the conversion function immediately produces the new format for all existing data. The only breakage is external scripts that cached old-format paths (e.g., `2026-04-07T143000Z`), which is acceptable.
+**No database migration needed.** The display format is a pure presentation-layer conversion -- version IDs are computed on-the-fly from the UUIDv7 bytes stored in the `version_id` column, never stored as strings. Changing the conversion function immediately produces the new format for all existing data. The only breakage is external scripts that cached old-format paths (e.g., `2026-04-07T143000Z`), which is acceptable.
 
 ### 11.6 Visual Comparison
 
