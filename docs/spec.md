@@ -1298,7 +1298,7 @@ The `.build/` command creates a table with this schema (for markdown apps):
 
 ```sql
 CREATE TABLE tigerfs.notes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     parent_id UUID REFERENCES tigerfs.notes(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -1376,7 +1376,7 @@ CREATE TABLE tigerfs.notes_history (
     modified_at TIMESTAMPTZ,
     -- History metadata --
     version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    operation TEXT NOT NULL CHECK (operation IN ('UPDATE', 'DELETE'))
+    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
 ) WITH (
     tsdb.hypertable,
     tsdb.partition_column = 'version_id',

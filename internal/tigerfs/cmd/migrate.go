@@ -267,6 +267,10 @@ func addParentPointerMigration() migration {
 
 				// --- Source table ---
 
+				// Switch id column from UUIDv4 to UUIDv7 (time-ordered)
+				stmts = append(stmts, fmt.Sprintf(
+					`ALTER TABLE %s ALTER COLUMN id SET DEFAULT uuidv7()`, qt))
+
 				// Add parent_id column
 				stmts = append(stmts, fmt.Sprintf(
 					`ALTER TABLE %s ADD COLUMN parent_id UUID`, qt))
@@ -380,7 +384,11 @@ END $migrate$`, qt, qt, qt, qt))
 					stmts = append(stmts, fmt.Sprintf(
 						`UPDATE %s SET filename = split_part(filename, '/', array_length(string_to_array(filename, '/'), 1)) WHERE filename LIKE '%%/%%'`, htQt))
 
-					// Recreate trigger with new column names
+					// Migrate operation values: UPDATE -> edit, DELETE -> delete
+					stmts = append(stmts, fmt.Sprintf(
+						`UPDATE %s SET operation = CASE operation WHEN 'UPDATE' THEN 'edit' WHEN 'DELETE' THEN 'delete' ELSE operation END WHERE operation IN ('UPDATE', 'DELETE')`, htQt))
+
+					// Recreate trigger with new column names and operation logic
 					stmts = append(stmts, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON %s`,
 						db.QuoteIdent("trg_"+appName+"_history_archive"), qt))
 					stmts = append(stmts, fmt.Sprintf(`DROP FUNCTION IF EXISTS %s.%s()`,

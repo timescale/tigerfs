@@ -26,7 +26,7 @@ const TigerFSSchema = "tigerfs"
 func GenerateMarkdownTableSQL(schema, name string) string {
 	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
 	return fmt.Sprintf(`CREATE TABLE %s (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     parent_id UUID REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -55,7 +55,7 @@ func GenerateMarkdownTableSQL(schema, name string) string {
 func GeneratePlainTextTableSQL(schema, name string) string {
 	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(name))
 	return fmt.Sprintf(`CREATE TABLE %s (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     parent_id UUID REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
@@ -260,7 +260,7 @@ func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    operation TEXT NOT NULL CHECK (operation IN ('UPDATE', 'DELETE'))
+    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
 ) WITH (
     tsdb.hypertable,
     tsdb.partition_column = 'version_id',
@@ -301,7 +301,16 @@ BEGIN
          version_id, operation)
     VALUES
         (%s,
-         uuidv7(), TG_OP::text);
+         uuidv7(),
+         CASE TG_OP
+             WHEN 'DELETE' THEN 'delete'
+             WHEN 'UPDATE' THEN
+                 CASE WHEN OLD.filename != NEW.filename
+                           OR OLD.parent_id IS DISTINCT FROM NEW.parent_id
+                      THEN 'rename'
+                      ELSE 'edit'
+                 END
+         END);
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
     END IF;
