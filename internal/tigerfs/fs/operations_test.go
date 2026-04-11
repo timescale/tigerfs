@@ -1702,6 +1702,14 @@ func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, use
 	return nil
 }
 
+func (m *mockDBClient) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
+	return "", "", nil
+}
+
+func (m *mockDBClient) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
 	if m.latestVersionIDs != nil {
 		if vid, ok := m.latestVersionIDs[fileID]; ok {

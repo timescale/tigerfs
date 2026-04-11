@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -294,6 +295,177 @@ func TestSynth_LogEntries_DirRenameOneEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "rename", opType)
 	assert.Equal(t, "renamed", filename, "should log new directory name")
+}
+
+// TestSynth_LogInterface_ReadDir verifies that .log/ appears in synth app
+// ReadDir listings and that the .log/ pipeline works end-to-end.
+func TestSynth_LogInterface_ReadDir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logui")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Create app with history
+	fsErr := ops.WriteFile(ctx, "/.build/logui", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// .log/ should appear in the app ReadDir
+	entries, fsErr := ops.ReadDir(ctx, "/logui")
+	require.Nil(t, fsErr)
+	names := fsEntryNames(entries)
+	assert.Contains(t, names, ".log", "synth app should show .log/")
+	assert.Contains(t, names, ".savepoint", "synth app should show .savepoint/")
+	assert.Contains(t, names, ".undo", "synth app should show .undo/")
+	assert.Contains(t, names, ".history", "synth app should show .history/")
+
+	// Create some files to generate log entries
+	fsErr = ops.WriteFile(ctx, "/logui/hello.md", []byte("---\ntitle: Hello\n---\n# Hello\n"))
+	require.Nil(t, fsErr)
+
+	time.Sleep(50 * time.Millisecond)
+
+	fsErr = ops.WriteFile(ctx, "/logui/hello.md", []byte("---\ntitle: Updated\n---\n# Updated\n"))
+	require.Nil(t, fsErr)
+
+	// .log/ listing should have entries
+	logEntries, fsErr := ops.ReadDir(ctx, "/logui/.log")
+	require.Nil(t, fsErr, "ReadDir .log/ should succeed")
+	assert.GreaterOrEqual(t, len(logEntries), 2, "should have at least 2 log entries (create + edit)")
+
+	// Log entries should be directories (rows-as-directories)
+	for _, e := range logEntries {
+		assert.True(t, e.IsDir, "log entries should be directories, got: %s", e.Name)
+	}
+
+	// Find an actual log entry (skip capability directories like .all, .by, etc.)
+	var entryName string
+	for _, e := range logEntries {
+		if !strings.HasPrefix(e.Name, ".") {
+			entryName = e.Name
+			break
+		}
+	}
+	require.NotEmpty(t, entryName, "should find a non-capability log entry")
+
+	entryEntries, fsErr := ops.ReadDir(ctx, "/logui/.log/"+entryName)
+	require.Nil(t, fsErr, "ReadDir .log/<entry> should succeed")
+
+	entryNames := fsEntryNames(entryEntries)
+	// Should have column files + diff symlinks
+	assert.Contains(t, entryNames, "before", "log entry should have 'before' symlink")
+	assert.Contains(t, entryNames, "after", "log entry should have 'after' symlink")
+	assert.Contains(t, entryNames, "current", "log entry should have 'current' symlink")
+
+	// Read a column value
+	typeContent, fsErr := ops.ReadFile(ctx, "/logui/.log/"+entryName+"/type")
+	require.Nil(t, fsErr, "ReadFile .log/<entry>/type should succeed")
+	typeStr := strings.TrimSpace(string(typeContent.Data))
+	assert.Contains(t, []string{"create", "edit", "rename", "delete", "undo"}, typeStr,
+		"type column should be a valid operation type")
+}
+
+// TestSynth_LogInterface_DiffSymlinks verifies the before/after/current
+// diff symlinks on log entries resolve correctly.
+func TestSynth_LogInterface_DiffSymlinks(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logdiff")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logdiff", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create a file (log: type=create, version_id=NULL)
+	fsErr = ops.WriteFile(ctx, "/logdiff/hello.md", []byte("---\ntitle: V1\n---\n# V1\n"))
+	require.Nil(t, fsErr)
+
+	time.Sleep(1100 * time.Millisecond) // distinct UUIDv7
+
+	// Edit the file (log: type=edit, version_id=non-NULL)
+	fsErr = ops.WriteFile(ctx, "/logdiff/hello.md", []byte("---\ntitle: V2\n---\n# V2\n"))
+	require.Nil(t, fsErr)
+
+	// Get log entries
+	logEntries, fsErr := ops.ReadDir(ctx, "/logdiff/.log")
+	require.Nil(t, fsErr)
+	require.GreaterOrEqual(t, len(logEntries), 2)
+
+	// Find create and edit entries (oldest first since ReadDir returns by PK order)
+	// Sort to find create vs edit
+	var createEntry, editEntry string
+	for _, e := range logEntries {
+		typeContent, err := ops.ReadFile(ctx, "/logdiff/.log/"+e.Name+"/type")
+		if err != nil {
+			continue
+		}
+		tp := strings.TrimSpace(string(typeContent.Data))
+		switch tp {
+		case "create":
+			createEntry = e.Name
+		case "edit":
+			editEntry = e.Name
+		}
+	}
+	require.NotEmpty(t, createEntry, "should find a create log entry")
+	require.NotEmpty(t, editEntry, "should find an edit log entry")
+
+	// Create entry: before should be /dev/null (no before-state)
+	beforeTarget, fsErr := ops.Readlink(ctx, "/logdiff/.log/"+createEntry+"/before")
+	require.Nil(t, fsErr, "Readlink before on create should succeed")
+	assert.Equal(t, "/dev/null", beforeTarget, "create's before should be /dev/null")
+
+	// Edit entry: before should point to .history/ (has version_id)
+	beforeTarget, fsErr = ops.Readlink(ctx, "/logdiff/.log/"+editEntry+"/before")
+	require.Nil(t, fsErr, "Readlink before on edit should succeed")
+	assert.Contains(t, beforeTarget, ".history/", "edit's before should point to .history/")
+	assert.Contains(t, beforeTarget, "hello.md", "edit's before should reference hello.md")
+
+	// Current on edit: file still exists
+	currentTarget, fsErr := ops.Readlink(ctx, "/logdiff/.log/"+editEntry+"/current")
+	require.Nil(t, fsErr, "Readlink current should succeed")
+	assert.Contains(t, currentTarget, "hello.md", "current should point to live file")
+	assert.NotEqual(t, "/dev/null", currentTarget, "current should not be /dev/null for existing file")
+
+	// Delete the file to test /dev/null current
+	fsErr = ops.Delete(ctx, "/logdiff/hello.md")
+	require.Nil(t, fsErr)
+
+	// Find the delete log entry
+	logEntries, fsErr = ops.ReadDir(ctx, "/logdiff/.log")
+	require.Nil(t, fsErr)
+	var deleteEntry string
+	for _, e := range logEntries {
+		typeContent, err := ops.ReadFile(ctx, "/logdiff/.log/"+e.Name+"/type")
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(typeContent.Data)) == "delete" {
+			deleteEntry = e.Name
+		}
+	}
+	require.NotEmpty(t, deleteEntry, "should find a delete log entry")
+
+	// Delete entry: current should be /dev/null (file deleted)
+	currentTarget, fsErr = ops.Readlink(ctx, "/logdiff/.log/"+deleteEntry+"/current")
+	require.Nil(t, fsErr, "Readlink current on delete should succeed")
+	assert.Equal(t, "/dev/null", currentTarget, "current should be /dev/null for deleted file")
+
+	// Delete entry: after should be /dev/null (nothing after delete)
+	afterTarget, fsErr := ops.Readlink(ctx, "/logdiff/.log/"+deleteEntry+"/after")
+	require.Nil(t, fsErr, "Readlink after on delete should succeed")
+	assert.Equal(t, "/dev/null", afterTarget, "delete's after should be /dev/null")
 }
 
 // cleanupTigerFSTablesWithLog extends cleanup to also drop _log and _savepoint tables.

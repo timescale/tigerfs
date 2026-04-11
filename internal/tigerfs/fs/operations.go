@@ -329,6 +329,9 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirViews(ctx)
 	case PathTable:
 		return o.readDirTable(ctx, parsed)
+	case PathLog, PathSavepoint:
+		// Data-first pipeline on redirected table (.log/ → _log, .savepoint/ → _savepoint)
+		return o.readDirTable(ctx, parsed)
 	case PathRootInfo:
 		return o.readDirRootInfo(ctx, parsed)
 	case PathInfo:
@@ -758,7 +761,135 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		o.statCache.prime(fsCtx.Schema, fsCtx.TableName+"/"+parsed.PrimaryKey, cacheEntries)
 	}
 
+	// Add diff symlinks for log entry rows (before/after/current)
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_log") {
+		entries = append(entries,
+			Entry{Name: "before", IsDir: false, Mode: os.ModeSymlink | 0777, ModTime: now},
+			Entry{Name: "after", IsDir: false, Mode: os.ModeSymlink | 0777, ModTime: now},
+			Entry{Name: "current", IsDir: false, Mode: os.ModeSymlink | 0777, ModTime: now},
+		)
+	}
+
 	return entries, nil
+}
+
+// resolveLogDiffSymlink resolves a before/after/current symlink on a log entry.
+// The symlink targets are relative paths from .log/<log_id>/ to the app root (../../).
+func (o *Operations) resolveLogDiffSymlink(ctx context.Context, parsed *ParsedPath) (string, *FSError) {
+	fsCtx := parsed.Context
+	logTable := fsCtx.TableName
+	appName := parsed.OrigTableName
+
+	// Fetch the log entry to get version_id, file_id, filename
+	pk, pkErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, logTable)
+	if pkErr != nil {
+		return "", &FSError{Code: ErrIO, Message: "failed to get log table PK", Cause: pkErr}
+	}
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return "", &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid log_id: %v", decodeErr)}
+	}
+	row, rowErr := o.db.GetRow(ctx, fsCtx.Schema, logTable, match)
+	if rowErr != nil {
+		return "", &FSError{Code: ErrIO, Message: "failed to fetch log entry", Cause: rowErr}
+	}
+	if row == nil {
+		return "", &FSError{Code: ErrNotExist, Message: "log entry not found"}
+	}
+
+	// Extract fields from the row
+	rowMap := make(map[string]interface{}, len(row.Columns))
+	for i, col := range row.Columns {
+		rowMap[col] = row.Values[i]
+	}
+
+	versionID, _ := format.ConvertValueToText(rowMap["version_id"])
+	fileID, _ := format.ConvertValueToText(rowMap["file_id"])
+	filename, _ := format.ConvertValueToText(rowMap["filename"])
+	logID, _ := format.ConvertValueToText(rowMap["log_id"])
+
+	switch parsed.Column {
+	case "before":
+		if versionID == "" {
+			return "/dev/null", nil
+		}
+		// Convert version_id UUID to display name for .history/ path
+		displayName := o.uuidToDisplayName(versionID)
+		return "../../.history/" + filename + "/" + displayName, nil
+
+	case "after":
+		// Find next log entry for this file
+		nextVersionID, nextFilename, err := o.db.QueryNextLogEntry(ctx, synth.TigerFSSchema, logTable, fileID, logID)
+		if err != nil {
+			return "", &FSError{Code: ErrIO, Message: "failed to query next log entry", Cause: err}
+		}
+		if nextVersionID != "" {
+			// Next entry has a version_id → point to that history version
+			displayName := o.uuidToDisplayName(nextVersionID)
+			fn := nextFilename
+			if fn == "" {
+				fn = filename
+			}
+			return "../../.history/" + fn + "/" + displayName, nil
+		}
+		if nextFilename != "" {
+			// Next entry exists but version_id is NULL (was a create) → current file
+			return "../../" + nextFilename, nil
+		}
+		// No next entry → file is either current or deleted
+		exists, _ := o.db.QueryFileExists(ctx, synth.TigerFSSchema, appName, fileID)
+		if exists {
+			return "../../" + filename, nil
+		}
+		return "/dev/null", nil
+
+	case "current":
+		exists, _ := o.db.QueryFileExists(ctx, synth.TigerFSSchema, appName, fileID)
+		if exists {
+			return "../../" + filename, nil
+		}
+		return "/dev/null", nil
+	}
+
+	return "", &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown symlink: %s", parsed.Column)}
+}
+
+// uuidToDisplayName converts a hex UUID string to a UUIDv7 display name.
+// Returns the original string if it's not a valid UUIDv7.
+func (o *Operations) uuidToDisplayName(hexUUID string) string {
+	_, err := format.DisplayNameToUUIDv7(hexUUID)
+	if err == nil {
+		// It's already a display name
+		return hexUUID
+	}
+	// Try to parse as hex UUID
+	if len(hexUUID) == 36 {
+		var id [16]byte
+		b, parseErr := parseUUIDBytes(hexUUID)
+		if parseErr == nil {
+			copy(id[:], b)
+			if format.IsUUIDv7(id) {
+				return format.UUIDv7ToDisplayName(id)
+			}
+		}
+	}
+	return hexUUID
+}
+
+// parseUUIDBytes parses a hex UUID string to bytes.
+func parseUUIDBytes(s string) ([]byte, error) {
+	s = strings.ReplaceAll(s, "-", "")
+	if len(s) != 32 {
+		return nil, fmt.Errorf("invalid UUID length: %d", len(s))
+	}
+	b := make([]byte, 16)
+	for i := 0; i < 16; i++ {
+		_, err := fmt.Sscanf(s[i*2:i*2+2], "%02x", &b[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return b, nil
 }
 
 // readDirInfo lists the .info metadata directory.
@@ -1319,6 +1450,15 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 	case PathRootInfo:
 		return o.statRootInfo(parsed, now)
 
+	case PathLog:
+		return &Entry{Name: DirLog, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now}, nil
+
+	case PathSavepoint:
+		return &Entry{Name: DirSavepoint, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
+	case PathUndo:
+		return &Entry{Name: DirUndo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
 	case PathSchemaList:
 		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
@@ -1565,6 +1705,24 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
 			Message: "missing context for column path",
+		}
+	}
+
+	// Diff symlinks on log entry rows (before/after/current)
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_log") {
+		switch parsed.Column {
+		case "before", "after", "current":
+			target, fsErr := o.resolveLogDiffSymlink(ctx, parsed)
+			if fsErr != nil {
+				return nil, fsErr
+			}
+			return &Entry{
+				Name:    parsed.Column,
+				IsDir:   false,
+				Mode:    os.ModeSymlink | 0777,
+				Target:  target,
+				ModTime: time.Now(),
+			}, nil
 		}
 	}
 

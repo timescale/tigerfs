@@ -818,6 +818,50 @@ func (c *Client) GetRowByParentAndName(ctx context.Context, schema, table, paren
 	return columns, rows[0], nil
 }
 
+// QueryNextLogEntry finds the next log entry for a file after a given log_id.
+// Returns the version_id and filename of the next entry, or empty strings if none.
+// Used by diff symlink resolution to determine the "after" state.
+func (c *Client) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
+	if c.pool == nil {
+		return "", "", fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT COALESCE("version_id"::text, ''), "filename" FROM %s WHERE "file_id" = $1 AND "log_id" > $2 ORDER BY "log_id" ASC LIMIT 1`,
+		qt(schema, logTable),
+	)
+
+	var versionID, filename string
+	err := c.pool.QueryRow(ctx, query, fileID, afterLogID).Scan(&versionID, &filename)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return "", "", nil // No next entry
+		}
+		return "", "", fmt.Errorf("failed to query next log entry: %w", err)
+	}
+	return versionID, filename, nil
+}
+
+// QueryFileExists checks if a row with the given id exists in the source table.
+// Used by diff symlink resolution to determine if a file still exists.
+func (c *Client) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	if c.pool == nil {
+		return false, fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT EXISTS(SELECT 1 FROM %s WHERE "id" = $1)`,
+		qt(schema, table),
+	)
+
+	var exists bool
+	err := c.pool.QueryRow(ctx, query, fileID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check file existence: %w", err)
+	}
+	return exists, nil
+}
+
 // HasExtension checks if a PostgreSQL extension is installed in the database.
 func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
 	var exists bool

@@ -211,6 +211,21 @@ func extractModTime(columns []string, values []interface{}, info *synth.ViewInfo
 	return info.CachedMountTime
 }
 
+// synthUndoDirs returns the undo-related directory entries (.history/, .log/, .savepoint/, .undo/)
+// for a history-enabled synth app. Returns nil if history is not enabled.
+func synthUndoDirs(info *synth.ViewInfo) []Entry {
+	if !info.HasHistory {
+		return nil
+	}
+	t := info.CachedMountTime
+	return []Entry{
+		{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: t},
+		{Name: DirLog, IsDir: true, Mode: os.ModeDir | 0555, ModTime: t},
+		{Name: DirSavepoint, IsDir: true, Mode: os.ModeDir | 0755, ModTime: t},
+		{Name: DirUndo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: t},
+	}
+}
+
 // primeSynthStatCache populates the stat cache from row data.
 // pathPrefix is prepended to leaf filenames for the cache key (e.g., "projects/web"
 // for subdirectory entries). Empty for root-level entries.
@@ -310,9 +325,7 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 		}
 		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, "", columns, rows, info)
 		children := o.buildEntriesFromRows(columns, rows, info)
-		if info.HasHistory {
-			children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
-		}
+		children = append(synthUndoDirs(info), children...)
 		return children, nil
 	}
 
@@ -331,18 +344,14 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 	// Old hierarchy model (path-encoded filenames, pre-ADR-017): filter to root-level
 	if info.SupportsHierarchy {
 		children := o.filterHierarchicalChildren(columns, rows, "", info)
-		if info.HasHistory {
-			children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
-		}
+		children = append(synthUndoDirs(info), children...)
 		return children, nil
 	}
 
 	entries := make([]Entry, 0, len(rows)+1)
 
-	// Add .history/ if versioned history is enabled
-	if info.HasHistory {
-		entries = append(entries, Entry{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime})
-	}
+	// Add undo-related directories if versioned history is enabled
+	entries = append(entries, synthUndoDirs(info)...)
 
 	for _, row := range rows {
 		var filename string
@@ -1198,9 +1207,7 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 
 		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
 		children := o.buildEntriesFromRows(columns, rows, info)
-		if info.HasHistory {
-			children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
-		}
+		children = append(synthUndoDirs(info), children...)
 		return children, nil
 	}
 

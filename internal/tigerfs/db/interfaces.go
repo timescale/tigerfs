@@ -333,6 +333,13 @@ type LogWriter interface {
 	//   - description: optional human-readable note
 	InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error
 
+	// QueryNextLogEntry finds the next log entry for a file after a given log_id.
+	// Returns (version_id, filename) of the next entry, or empty strings if none.
+	QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error)
+
+	// QueryFileExists checks if a row with the given id exists in the source table.
+	QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error)
+
 	// QueryLatestVersionID returns the most recent version_id for a given
 	// file_id from the history table. Used to capture the before-state pointer
 	// after an UPDATE/DELETE fires the BEFORE trigger.
