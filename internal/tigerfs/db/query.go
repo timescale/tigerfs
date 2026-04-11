@@ -783,6 +783,41 @@ func (c *Client) GetRowsByParent(ctx context.Context, schema, table, parentID st
 	return c.queryRows(ctx, query, args...)
 }
 
+// GetRowByParentAndName returns a single row matching parent_id + filename.
+// Empty parentID means root level (WHERE parent_id IS NULL).
+// Returns (columns, row, error); row is nil if not found.
+// Used by ReadFile to combine path resolution with row fetch in one query (ADR-017).
+func (c *Client) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
+	if c.pool == nil {
+		return nil, nil, fmt.Errorf("database connection not initialized")
+	}
+
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" IS NULL AND "filename" = $1 LIMIT 1`,
+			qt(schema, table),
+		)
+		args = []interface{}{filename}
+	} else {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" = $1 AND "filename" = $2 LIMIT 1`,
+			qt(schema, table),
+		)
+		args = []interface{}{parentID, filename}
+	}
+
+	columns, rows, err := c.queryRows(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rows) == 0 {
+		return columns, nil, nil
+	}
+	return columns, rows[0], nil
+}
+
 // HasExtension checks if a PostgreSQL extension is installed in the database.
 func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
 	var exists bool

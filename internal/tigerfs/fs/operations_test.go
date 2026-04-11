@@ -1710,6 +1710,10 @@ func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, history
 	return "", fmt.Errorf("no history entry for %s", fileID)
 }
 
+func (m *mockDBClient) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
+	return nil, nil, nil
+}
+
 func (m *mockDBClient) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
 	return nil, nil, nil
 }
