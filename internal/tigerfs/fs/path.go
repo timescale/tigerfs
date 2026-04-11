@@ -64,6 +64,10 @@ const (
 
 	// PathTablesList is the /.tables/ directory listing backing tables in tigerfs schema.
 	PathTablesList
+
+	// PathRootInfo is the root-level /.info/ directory for mount metadata (user identity).
+	// Distinct from PathInfo which is table-level /{table}/.info/.
+	PathRootInfo
 )
 
 // ParsedPath holds the result of parsing a filesystem path.
@@ -209,6 +213,9 @@ func ParsePath(path string) (*ParsedPath, *FSError) {
 		return parseBuildPath(segments)
 	case ".tables":
 		return parseTablesPath(segments)
+	case DirInfo:
+		// Root-level .info/ (mount metadata: user identity, etc.)
+		return parseRootInfoPath(segments)
 	}
 
 	// Otherwise, it's a table path (possibly with schema prefix)
@@ -225,6 +232,18 @@ func splitPath(path string) []string {
 		}
 	}
 	return segments
+}
+
+// parseRootInfoPath handles root-level /.info/ paths (mount metadata).
+// Supports:
+//   - /.info/ → list metadata files (user)
+//   - /.info/user → read/write mount-level user identity
+func parseRootInfoPath(segments []string) (*ParsedPath, *FSError) {
+	result := &ParsedPath{Type: PathRootInfo}
+	if len(segments) >= 2 {
+		result.InfoFile = segments[1]
+	}
+	return result, nil
 }
 
 // parseSchemaPath handles /.schemas/ paths.

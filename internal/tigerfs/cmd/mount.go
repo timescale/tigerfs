@@ -45,6 +45,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var dirFilterLimit int
 	var legacyFuse bool
 	var insecureNoSSL bool
+	var userID string
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] [MOUNTPOINT]",
@@ -159,6 +160,13 @@ Examples:
 				cfg.InsecureNoSSL = true
 			}
 
+			// User identity: flag > env > empty (anonymous)
+			if userID != "" {
+				cfg.UserID = userID
+			} else if envID := os.Getenv("TIGERFS_USER_ID"); envID != "" {
+				cfg.UserID = envID
+			}
+
 			// Mount the filesystem using platform-specific method
 			// (NFS on macOS, FUSE on Linux).
 			fs, err := mountFilesystem(ctx, cfg, connStr, absMountpoint)
@@ -215,6 +223,7 @@ Examples:
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
+	cmd.Flags().StringVar(&userID, "user-id", "", "user identity for undo log entries (also: TIGERFS_USER_ID env)")
 
 	return cmd
 }

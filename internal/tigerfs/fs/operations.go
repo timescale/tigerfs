@@ -52,6 +52,12 @@ type Operations struct {
 	// Used for user-facing log messages. Empty if not set.
 	mountPoint string
 
+	// userID is the current mount-level identity for undo log entries.
+	// Set from --user-id flag or TIGERFS_USER_ID env at mount time.
+	// Can be changed at runtime via writing to .info/user.
+	// Empty means anonymous (user_id = NULL in log entries).
+	userID string
+
 	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
 	legacyWarnOnce sync.Once
 }
@@ -69,6 +75,16 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 // SetMountPoint records the filesystem mount path for user-facing log messages.
 func (o *Operations) SetMountPoint(path string) {
 	o.mountPoint = path
+}
+
+// SetUserID sets the mount-level user identity for undo log entries.
+func (o *Operations) SetUserID(id string) {
+	o.userID = id
+}
+
+// GetUserID returns the current mount-level user identity.
+func (o *Operations) GetUserID() string {
+	return o.userID
 }
 
 // statCache caches Entry metadata from ReadDir results.
@@ -311,6 +327,8 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirViews(ctx)
 	case PathTable:
 		return o.readDirTable(ctx, parsed)
+	case PathRootInfo:
+		return o.readDirRootInfo(ctx, parsed)
 	case PathInfo:
 		return o.readDirInfo(ctx, parsed)
 	case PathRow:
@@ -386,6 +404,7 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 	entries = append(entries,
 		Entry{Name: ".build", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".tables", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
@@ -742,6 +761,45 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 
 // readDirInfo lists the .info metadata directory.
 // Files match FUSE behavior: count, ddl, schema, columns, indexes (no dot prefix).
+// readDirRootInfo lists the root-level .info/ directory (mount metadata).
+func (o *Operations) readDirRootInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
+	entries := []Entry{
+		{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(o.userID) + 1), ModTime: now},
+	}
+	return entries, nil
+}
+
+// statRootInfo returns metadata for root-level .info/ paths.
+func (o *Operations) statRootInfo(parsed *ParsedPath, now time.Time) (*Entry, *FSError) {
+	if parsed.InfoFile == "" {
+		return &Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+	if parsed.InfoFile == FileUser {
+		content := o.userID + "\n"
+		return &Entry{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(content)), ModTime: now}, nil
+	}
+	return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", parsed.InfoFile)}
+}
+
+// readRootInfoFile reads a root-level .info/ file.
+func (o *Operations) readRootInfoFile(parsed *ParsedPath) (*FileContent, *FSError) {
+	if parsed.InfoFile == FileUser {
+		return &FileContent{Data: []byte(o.userID + "\n")}, nil
+	}
+	return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", parsed.InfoFile)}
+}
+
+// writeRootInfoFile writes a root-level .info/ file.
+func (o *Operations) writeRootInfoFile(parsed *ParsedPath, data []byte) *FSError {
+	if parsed.InfoFile == FileUser {
+		o.userID = strings.TrimSpace(string(data))
+		return nil
+	}
+	return &FSError{Code: ErrPermission, Message: fmt.Sprintf("cannot write to .info/%s", parsed.InfoFile)}
+}
+
+// readDirInfo lists the table-level .info/ metadata directory.
 func (o *Operations) readDirInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	now := time.Now()
 	entries := []Entry{
@@ -1245,6 +1303,9 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 	switch parsed.Type {
 	case PathRoot:
 		return &Entry{Name: "", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
+	case PathRootInfo:
+		return o.statRootInfo(parsed, now)
 
 	case PathSchemaList:
 		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
@@ -1920,6 +1981,8 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return o.readRowFile(ctx, parsed)
 	case PathColumn:
 		return o.readColumnFile(ctx, parsed)
+	case PathRootInfo:
+		return o.readRootInfoFile(parsed)
 	case PathInfo:
 		return o.readInfoFile(ctx, parsed)
 	case PathExport:

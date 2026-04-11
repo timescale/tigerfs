@@ -67,6 +67,9 @@ type Config struct {
 	DefaultFormat  string `mapstructure:"default_format"`
 	BinaryEncoding string `mapstructure:"binary_encoding"`
 
+	// Identity
+	UserID string `mapstructure:"user_id"` // Mount-level user identity for log entries (--user-id or TIGERFS_USER_ID)
+
 	// FUSE backend selection (Linux only)
 	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
 

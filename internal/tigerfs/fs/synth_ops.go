@@ -560,8 +560,7 @@ func (o *Operations) logSynthOp(ctx context.Context, schema, tableName string, i
 		}
 	}
 
-	// TODO(12.5): Wire user_id from Operations.userID field
-	userID := ""
+	userID := o.userID
 
 	err := o.db.InsertLogEntry(ctx, synth.TigerFSSchema, logTable, userID, opType, fileID, filename, versionID, "")
 	if err != nil {
