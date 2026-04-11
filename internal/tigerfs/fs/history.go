@@ -416,10 +416,15 @@ func parseUUID(s string) ([16]byte, error) {
 // At root level (dirPrefix=""), returns just the localName.
 // In subdirectories, returns "dirPrefix/localName".
 // historyDBFilename returns the filename to use for history table queries.
-// For parent-pointer model: uses the leaf name (history stores leaf names).
+// For parent-pointer model: extracts the leaf name (history stores leaf names).
+// The greedy history path parser may produce multi-segment localName like
+// "inbox/task.md" -- only the leaf "task.md" is in the history table.
 // For old model: builds full path from directory prefix + local filename.
 func historyDBFilename(info *synth.ViewInfo, dirPrefix, localName string) string {
 	if info.Roles.ParentID != "" {
+		if idx := strings.LastIndex(localName, "/"); idx >= 0 {
+			return localName[idx+1:]
+		}
 		return localName
 	}
 	return buildHistoryFilename(dirPrefix, localName)
