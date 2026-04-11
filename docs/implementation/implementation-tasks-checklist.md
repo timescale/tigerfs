@@ -291,7 +291,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 13.5 | Rename and Move (single-row operations) | ~9300 |
 | ✅ | 13.6 | Delete Path Updates | ~9330 |
 | ✅ | 13.7 | History and .history/ Updates | ~9350 |
-| ⬜ | 13.8 | Log Entry Updates (FS-centric types, version_id) | ~9370 |
+| ✅ | 13.8 | Log Entry Updates (FS-centric types, version_id) | ~9370 |
 | ⬜ | 13.9 | Migration Script | ~9390 |
 | ⬜ | 13.10 | Update Existing Tests (45 verification scenarios) | ~9410 |
 | ⬜ | 13.11 | Update ADR-016 and Phase 12 Tasks | ~9430 |
@@ -319,5 +319,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
 | Phase 12: Undo and Recovery | 4 | 12 | 33% |
-| Phase 13: Relational Directory Structure | 7 | 12 | 58% |
-| **Total** | **117** | **147** | **80%** |
+| Phase 13: Relational Directory Structure | 8 | 12 | 67% |
+| **Total** | **118** | **147** | **80%** |
