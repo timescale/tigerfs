@@ -34,8 +34,10 @@ type migration struct {
 }
 
 // migrations is the ordered list of all registered migrations.
+// Order matters: earlier migrations run first.
 var migrations = []migration{
 	moveBackingTablesMigration(),
+	addParentPointerMigration(),
 }
 
 // moveBackingTablesMigration returns the migration that moves synth backing tables
@@ -187,6 +189,245 @@ func moveBackingTablesMigration() migration {
 						`ALTER TABLE %s RENAME TO %s`,
 						db.QuoteTable(synth.TigerFSSchema, historyOldName),
 						db.QuoteIdent(historyNewName)))
+				}
+			}
+			return stmts, nil
+		},
+	}
+}
+
+// addParentPointerMigration returns the migration that converts synth apps from
+// path-encoded filenames (ADR-011) to the parent-pointer directory model (ADR-017).
+// For each app, it adds parent_id, populates it from existing path hierarchy,
+// strips filenames to leaf names, updates constraints/indexes, migrates history
+// and log table column names, and recreates the BEFORE trigger.
+func addParentPointerMigration() migration {
+	return migration{
+		Name:    "relational-directories",
+		Summary: "Convert synth apps from path-encoded filenames to parent-pointer directory model (ADR-017)",
+		Detect: func(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
+			// Find synth apps in tigerfs schema that DON'T have parent_id yet
+			rows, err := pool.Query(ctx,
+				`SELECT c.relname, d.description
+				 FROM pg_class c
+				 JOIN pg_namespace n ON n.oid = c.relnamespace
+				 LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
+				 WHERE n.nspname = $1 AND c.relkind = 'v'
+				   AND d.description LIKE 'tigerfs:%'`, schema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list synth views: %w", err)
+			}
+			defer rows.Close()
+
+			var items []string
+			for rows.Next() {
+				var viewName string
+				var comment *string
+				if err := rows.Scan(&viewName, &comment); err != nil {
+					return nil, fmt.Errorf("failed to scan view: %w", err)
+				}
+
+				// Check if backing table in tigerfs schema has parent_id
+				var hasParentID bool
+				err := pool.QueryRow(ctx,
+					`SELECT EXISTS(
+						SELECT 1 FROM information_schema.columns
+						WHERE table_schema = 'tigerfs' AND table_name = $1
+						  AND column_name = 'parent_id'
+					)`, viewName).Scan(&hasParentID)
+				if err != nil {
+					return nil, fmt.Errorf("failed to check parent_id for %s: %w", viewName, err)
+				}
+
+				// Also check the table actually exists in tigerfs schema
+				var tableExists bool
+				err = pool.QueryRow(ctx,
+					`SELECT EXISTS(
+						SELECT 1 FROM pg_tables
+						WHERE schemaname = 'tigerfs' AND tablename = $1
+					)`, viewName).Scan(&tableExists)
+				if err != nil {
+					return nil, fmt.Errorf("failed to check table existence for %s: %w", viewName, err)
+				}
+
+				if tableExists && !hasParentID {
+					items = append(items, viewName)
+				}
+			}
+			return items, nil
+		},
+		Plan: func(ctx context.Context, pool *pgxpool.Pool, schema string, items []string) ([]string, error) {
+			var stmts []string
+
+			// Create resolve_path function (idempotent)
+			stmts = append(stmts, synth.GenerateResolvePathSQL())
+
+			for _, appName := range items {
+				qt := fmt.Sprintf("%s.%s", db.QuoteIdent(synth.TigerFSSchema), db.QuoteIdent(appName))
+
+				// --- Source table ---
+
+				// Add parent_id column
+				stmts = append(stmts, fmt.Sprintf(
+					`ALTER TABLE %s ADD COLUMN parent_id UUID`, qt))
+
+				// Populate parent_id from path hierarchy (PL/pgSQL DO block).
+				// Processes rows shallowest first; looks up parent by old full-path filename.
+				stmts = append(stmts, fmt.Sprintf(`DO $migrate$
+DECLARE
+    r RECORD;
+    parts TEXT[];
+    parent_path TEXT;
+    found_parent_id UUID;
+BEGIN
+    FOR r IN SELECT id, filename FROM %s
+             WHERE filename LIKE '%%/%%'
+             ORDER BY length(filename) - length(replace(filename, '/', ''))
+    LOOP
+        parts := string_to_array(r.filename, '/');
+        parent_path := array_to_string(parts[1:array_length(parts,1)-1], '/');
+        IF parent_path = '' OR parent_path IS NULL THEN
+            SELECT id INTO found_parent_id FROM %s
+            WHERE filename = parts[1] AND filetype = 'directory' LIMIT 1;
+        ELSE
+            SELECT id INTO found_parent_id FROM %s
+            WHERE filename = parent_path AND filetype = 'directory' LIMIT 1;
+        END IF;
+        UPDATE %s SET parent_id = found_parent_id WHERE id = r.id;
+    END LOOP;
+END $migrate$`, qt, qt, qt, qt))
+
+				// Strip filenames to leaf names
+				stmts = append(stmts, fmt.Sprintf(
+					`UPDATE %s SET filename = split_part(filename, '/', array_length(string_to_array(filename, '/'), 1)) WHERE filename LIKE '%%/%%'`, qt))
+
+				// Add FK constraint
+				stmts = append(stmts, fmt.Sprintf(
+					`ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (parent_id) REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE`,
+					qt, db.QuoteIdent("fk_"+appName+"_parent"), qt))
+
+				// Find and drop old UNIQUE constraint, add new one
+				var oldConstraint *string
+				_ = pool.QueryRow(ctx,
+					`SELECT conname FROM pg_constraint
+					 WHERE conrelid = $1::regclass AND contype = 'u'
+					   AND array_length(conkey, 1) = 2 LIMIT 1`,
+					fmt.Sprintf("tigerfs.%s", appName)).Scan(&oldConstraint)
+				if oldConstraint != nil {
+					stmts = append(stmts, fmt.Sprintf(
+						`ALTER TABLE %s DROP CONSTRAINT %s`, qt, db.QuoteIdent(*oldConstraint)))
+				}
+				stmts = append(stmts, fmt.Sprintf(
+					`ALTER TABLE %s ADD CONSTRAINT %s UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE`,
+					qt, db.QuoteIdent("uq_"+appName+"_parent_filename")))
+
+				// Parent index
+				stmts = append(stmts, fmt.Sprintf(
+					`CREATE INDEX IF NOT EXISTS %s ON %s (parent_id, filename)`,
+					db.QuoteIdent("idx_"+appName+"_parent"), qt))
+
+				// Recreate view to pick up the new parent_id column.
+				// PostgreSQL views with SELECT * snapshot columns at creation time;
+				// ALTER TABLE ADD COLUMN does NOT update existing views.
+				stmts = append(stmts, fmt.Sprintf(
+					`DROP VIEW IF EXISTS %s`, db.QuoteTable(schema, appName)))
+				stmts = append(stmts, synth.GenerateViewSQL(schema, appName, synth.TigerFSSchema, appName))
+				// Preserve the view comment
+				var viewComment string
+				_ = pool.QueryRow(ctx,
+					`SELECT obj_description(c.oid, 'pg_class')
+					 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+					 WHERE n.nspname = $1 AND c.relname = $2`, schema, appName).Scan(&viewComment)
+				if viewComment != "" {
+					stmts = append(stmts, fmt.Sprintf(
+						`COMMENT ON VIEW %s IS '%s'`,
+						db.QuoteTable(schema, appName), viewComment))
+				}
+
+				// --- History table (if exists) ---
+				var hasHistory bool
+				_ = pool.QueryRow(ctx,
+					`SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = 'tigerfs' AND tablename = $1)`,
+					appName+"_history").Scan(&hasHistory)
+
+				if hasHistory {
+					htQt := fmt.Sprintf("%s.%s", db.QuoteIdent(synth.TigerFSSchema), db.QuoteIdent(appName+"_history"))
+
+					stmts = append(stmts, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS parent_id UUID`, htQt))
+
+					// Rename columns (check existence first in Plan since we can query)
+					var hasOldID, hasOldHistID, hasOldOp bool
+					_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='tigerfs' AND table_name=$1 AND column_name='id')`, appName+"_history").Scan(&hasOldID)
+					_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='tigerfs' AND table_name=$1 AND column_name='_history_id')`, appName+"_history").Scan(&hasOldHistID)
+					_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='tigerfs' AND table_name=$1 AND column_name='_operation')`, appName+"_history").Scan(&hasOldOp)
+
+					if hasOldID {
+						stmts = append(stmts, fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN id TO file_id`, htQt))
+					}
+					if hasOldHistID {
+						stmts = append(stmts, fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN _history_id TO version_id`, htQt))
+					}
+					if hasOldOp {
+						stmts = append(stmts, fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN _operation TO operation`, htQt))
+					}
+
+					// Populate parent_id from source table
+					stmts = append(stmts, fmt.Sprintf(
+						`UPDATE %s h SET parent_id = (SELECT parent_id FROM %s s WHERE s.id = h.file_id)`,
+						htQt, qt))
+
+					// Strip history filenames to leaf names
+					stmts = append(stmts, fmt.Sprintf(
+						`UPDATE %s SET filename = split_part(filename, '/', array_length(string_to_array(filename, '/'), 1)) WHERE filename LIKE '%%/%%'`, htQt))
+
+					// Recreate trigger with new column names
+					stmts = append(stmts, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON %s`,
+						db.QuoteIdent("trg_"+appName+"_history_archive"), qt))
+					stmts = append(stmts, fmt.Sprintf(`DROP FUNCTION IF EXISTS %s.%s()`,
+						db.QuoteIdent(synth.TigerFSSchema), db.QuoteIdent("archive_"+appName+"_history")))
+
+					// Determine format from view comment
+					var comment string
+					_ = pool.QueryRow(ctx,
+						`SELECT obj_description(c.oid, 'pg_class')
+						 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+						 WHERE n.nspname = $1 AND c.relname = $2`, schema, appName).Scan(&comment)
+
+					features := synth.DetectFeaturesFromComment(comment)
+					historyStmts := synth.GenerateHistorySQL(schema, appName, features.Format)
+					// Only take the trigger function and trigger (indices 3 and 4)
+					if len(historyStmts) >= 5 {
+						stmts = append(stmts, historyStmts[3]) // archive function
+						stmts = append(stmts, historyStmts[4]) // trigger
+					}
+				}
+
+				// --- Log table (if exists) ---
+				var hasLog bool
+				_ = pool.QueryRow(ctx,
+					`SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = 'tigerfs' AND tablename = $1)`,
+					appName+"_log").Scan(&hasLog)
+
+				if hasLog {
+					logQt := fmt.Sprintf("%s.%s", db.QuoteIdent(synth.TigerFSSchema), db.QuoteIdent(appName+"_log"))
+
+					var hasOldHistoryID bool
+					_ = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='tigerfs' AND table_name=$1 AND column_name='history_id')`, appName+"_log").Scan(&hasOldHistoryID)
+					if hasOldHistoryID {
+						stmts = append(stmts, fmt.Sprintf(`ALTER TABLE %s RENAME COLUMN history_id TO version_id`, logQt))
+					}
+
+					// Drop old CHECK, rename values, THEN add new CHECK (order matters:
+					// can't add new constraint while old values still exist)
+					stmts = append(stmts, fmt.Sprintf(
+						`ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s`,
+						logQt, db.QuoteIdent(appName+"_log_type_check")))
+					stmts = append(stmts, fmt.Sprintf(
+						`UPDATE %s SET type = CASE type WHEN 'insert' THEN 'create' WHEN 'update' THEN 'edit' ELSE type END`,
+						logQt))
+					stmts = append(stmts, fmt.Sprintf(
+						`ALTER TABLE %s ADD CONSTRAINT %s CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo'))`,
+						logQt, db.QuoteIdent(appName+"_log_type_check")))
 				}
 			}
 			return stmts, nil

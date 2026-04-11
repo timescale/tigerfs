@@ -335,7 +335,7 @@ All use the standard DISTINCT ON + UPSERT undo pattern. No special cases for dir
 
 ### Migration
 
-A SQL migration script (`scripts/migrate-parent-id.sql`) handles existing databases. TigerFS creates new apps with the new schema automatically; migration is only needed for databases created before ADR-017.
+The `tigerfs migrate` command includes a `relational-directories` migration that handles existing databases. TigerFS creates new apps with the new schema automatically; migration is only needed for databases created before ADR-017. Run `tigerfs migrate <connection> --describe` to check for pending migrations, or `tigerfs migrate <connection>` to execute.
 
 Migration steps per synth app table (order matters):
 
@@ -443,7 +443,7 @@ UPDATE tigerfs.<app>_log SET type = CASE type
     ELSE type END;
 ```
 
-The migration script auto-discovers all synth app tables by querying view comments in the `tigerfs` schema. Step 2's DO block processes rows in depth-first order to ensure parents exist before children reference them.
+The `relational-directories` migration auto-discovers synth apps by querying view comments. It also recreates views after adding the `parent_id` column (PostgreSQL's `SELECT *` in views snapshots columns at creation time). Step 2's DO block processes rows in depth-first order to ensure parents are resolved before their children.
 
 **Note:** The history parent_id migration (step 9) uses the source table's CURRENT parent_id for each file_id. This is correct for files that haven't moved, but for files that were moved, earlier history entries will have the current parent_id rather than the historical one. This is an acceptable trade-off since the full path was also not preserved in the old history model -- the leaf name + current parent gives a reasonable approximation.
 
@@ -504,8 +504,8 @@ Implement ADR-017 as **Phase 13** before continuing Phase 12 undo tasks (12.5+).
 - Update `InsertLogEntry` for `version_id` column name
 - Unit tests
 
-**13.9 Migration script**
-- `scripts/migrate-parent-id.sql`: auto-discovers synth apps, migrates each
+**13.9 Migration**
+- `relational-directories` migration in `tigerfs migrate` framework (`cmd/migrate.go`)
 - Test with existing demo data
 
 **13.10 Update existing tests**

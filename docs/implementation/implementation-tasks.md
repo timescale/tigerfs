@@ -9107,17 +9107,17 @@ Replaces path-encoded filenames with a parent-pointer model. Must be completed b
 4. Update `QueryLatestHistoryID` for `version_id` column name
 5. Unit and integration tests
 
-### Task 13.9: Migration Script
+### Task 13.9: Migration
 
-**Objective:** Create migration for existing databases.
+**Objective:** Add `relational-directories` migration to `tigerfs migrate` framework.
 
 **Depends on:** 13.1-13.8
-**Files:** `scripts/migrate-parent-id.sql`
+**Files:** `internal/tigerfs/cmd/migrate.go`, `test/integration/migrate_test.go`
 **Tasks:**
-1. Auto-discover synth apps from view comments
-2. For each app: add parent_id, populate from path parsing, strip filename to leaf, add FK/UNIQUE, rename history/log columns
-3. Test with existing demo data
-4. Document migration in README or docs
+1. Add `relational-directories` migration to the `migrations` slice in `cmd/migrate.go`
+2. Detect: find synth apps in tigerfs schema without parent_id column
+3. Plan: add parent_id, populate from path parsing, strip to leaf names, replace constraints, recreate view, rename history/log columns, update log type values
+4. Integration test: create old-schema tables, run migration, verify parent_id chain + leaf filenames + column renames + TigerFS operations work on migrated data + idempotency
 
 ### Task 13.10: Update Existing Tests
 
@@ -9158,4 +9158,4 @@ Replaces path-encoded filenames with a parent-pointer model. Must be completed b
 1. `go fmt ./... && go vet ./... && go test ./...` passes after every task
 2. All 45 verification scenarios from ADR-017 covered by tests
 3. Demo: directory rename produces one log entry, undo restores correctly
-4. Migration script tested against demo data
+4. `tigerfs migrate` relational-directories migration tested with integration test
