@@ -46,7 +46,7 @@ var migrations = []migration{
 func moveBackingTablesMigration() migration {
 	return migration{
 		Name:    "move-backing-tables",
-		Summary: "Move synth backing tables from _name in user schema to name in tigerfs schema",
+		Summary: "Move backing tables from user schema to tigerfs schema",
 		Detect: func(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
 			// Get all tables in user schema
 			rows, err := pool.Query(ctx,
@@ -204,7 +204,7 @@ func moveBackingTablesMigration() migration {
 func addParentPointerMigration() migration {
 	return migration{
 		Name:    "relational-directories",
-		Summary: "Convert synth apps from path-encoded filenames to parent-pointer directory model (ADR-017)",
+		Summary: "Upgrade directory structure for improved performance and undo support",
 		Detect: func(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
 			// Find synth apps in tigerfs schema that DON'T have parent_id yet
 			rows, err := pool.Query(ctx,
@@ -570,7 +570,7 @@ Examples:
 				if err := tx.Commit(ctx); err != nil {
 					return fmt.Errorf("migration %s: failed to commit: %w", m.Name, err)
 				}
-				fmt.Fprintf(w, "  Migrated %d items\n", len(items))
+				fmt.Fprintf(w, "  Migrated %d views\n", len(items))
 			}
 
 			if !anyPending {

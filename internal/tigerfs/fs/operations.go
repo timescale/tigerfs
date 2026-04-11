@@ -48,6 +48,10 @@ type Operations struct {
 	// repeated access to the same directory subtree. 2-second TTL.
 	pathCache pathCache
 
+	// mountPoint is the filesystem mount path (e.g., "/mnt/tigerfs").
+	// Used for user-facing log messages. Empty if not set.
+	mountPoint string
+
 	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
 	legacyWarnOnce sync.Once
 }
@@ -60,6 +64,11 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 		ddl:       NewDDLManager(dbClient, cfg.DDLGracePeriod),
 		metaCache: NewMetadataCache(cfg, dbClient),
 	}
+}
+
+// SetMountPoint records the filesystem mount path for user-facing log messages.
+func (o *Operations) SetMountPoint(path string) {
+	o.mountPoint = path
 }
 
 // statCache caches Entry metadata from ReadDir results.
