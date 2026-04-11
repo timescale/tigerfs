@@ -1098,6 +1098,11 @@ type mockDBClient struct {
 	// Version ID return value for QueryLatestVersionID
 	latestVersionIDs map[string]string // fileID -> versionID
 
+	// NextLogEntry return values (for diff symlink tests)
+	nextLogVersionID string
+	nextLogFilename  string
+	fileExistsResult bool
+
 	// ResolvePath tracking
 	resolvePathResults     []db.PathSegment
 	resolvePathErr         error
@@ -1703,11 +1708,11 @@ func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, use
 }
 
 func (m *mockDBClient) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
-	return "", "", nil
+	return m.nextLogVersionID, m.nextLogFilename, nil
 }
 
 func (m *mockDBClient) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
-	return false, nil
+	return m.fileExistsResult, nil
 }
 
 func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {

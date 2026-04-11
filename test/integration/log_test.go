@@ -468,6 +468,178 @@ func TestSynth_LogInterface_DiffSymlinks(t *testing.T) {
 	assert.Equal(t, "/dev/null", afterTarget, "delete's after should be /dev/null")
 }
 
+// TestSynth_LogInterface_AfterChain verifies the "after" symlink points to
+// .history/ (not current file) when there's a subsequent edit entry.
+func TestSynth_LogInterface_AfterChain(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logchain")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logchain", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create → Edit1 → Edit2 (three log entries)
+	fsErr = ops.WriteFile(ctx, "/logchain/hello.md", []byte("---\ntitle: V1\n---\nV1\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(1100 * time.Millisecond)
+	fsErr = ops.WriteFile(ctx, "/logchain/hello.md", []byte("---\ntitle: V2\n---\nV2\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(1100 * time.Millisecond)
+	fsErr = ops.WriteFile(ctx, "/logchain/hello.md", []byte("---\ntitle: V3\n---\nV3\n"))
+	require.Nil(t, fsErr)
+
+	// Find the first edit entry (middle of the chain)
+	logEntries, fsErr := ops.ReadDir(ctx, "/logchain/.log")
+	require.Nil(t, fsErr)
+
+	var editEntries []string
+	for _, e := range logEntries {
+		if strings.HasPrefix(e.Name, ".") {
+			continue
+		}
+		typeContent, err := ops.ReadFile(ctx, "/logchain/.log/"+e.Name+"/type")
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(typeContent.Data)) == "edit" {
+			editEntries = append(editEntries, e.Name)
+		}
+	}
+	require.GreaterOrEqual(t, len(editEntries), 2, "should have at least 2 edit entries")
+
+	// First edit's "after" should point to .history/ (because there's a subsequent edit)
+	afterTarget, fsErr := ops.Readlink(ctx, "/logchain/.log/"+editEntries[0]+"/after")
+	require.Nil(t, fsErr, "Readlink after on first edit should succeed")
+	assert.Contains(t, afterTarget, ".history/", "first edit's after should point to .history/ (next edit's before-state)")
+}
+
+// TestSynth_LogInterface_Pipeline verifies that pipeline operations work on .log/.
+func TestSynth_LogInterface_Pipeline(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logpipe")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logpipe", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create 5 files to generate 5 log entries
+	for i := 1; i <= 5; i++ {
+		content := fmt.Sprintf("---\ntitle: File %d\n---\nContent %d\n", i, i)
+		fsErr = ops.WriteFile(ctx, fmt.Sprintf("/logpipe/file%d.md", i), []byte(content))
+		require.Nil(t, fsErr)
+	}
+
+	// .last/2 should return exactly 2 entries (plus capability dirs)
+	entries, fsErr := ops.ReadDir(ctx, "/logpipe/.log/.last/2")
+	require.Nil(t, fsErr, "ReadDir .log/.last/2 should succeed")
+
+	var rowEntries []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			rowEntries = append(rowEntries, e.Name)
+		}
+	}
+	assert.Equal(t, 2, len(rowEntries), ".last/2 should return exactly 2 log entries")
+}
+
+// TestSynth_LogInterface_NestedFilename verifies that log entries for nested files
+// store the denormalized full path in the filename column.
+func TestSynth_LogInterface_NestedFilename(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logpath")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logpath", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create nested file
+	fsErr = ops.WriteFile(ctx, "/logpath/docs/guide.md", []byte("---\ntitle: Guide\n---\n# Guide\n"))
+	require.Nil(t, fsErr)
+
+	// Find the log entry
+	logEntries, fsErr := ops.ReadDir(ctx, "/logpath/.log")
+	require.Nil(t, fsErr)
+	var entryName string
+	for _, e := range logEntries {
+		if !strings.HasPrefix(e.Name, ".") {
+			entryName = e.Name
+			break
+		}
+	}
+	require.NotEmpty(t, entryName)
+
+	// Read the filename column -- should be full denormalized path
+	fnContent, fsErr := ops.ReadFile(ctx, "/logpath/.log/"+entryName+"/filename")
+	require.Nil(t, fsErr, "ReadFile .log/<id>/filename should succeed")
+	assert.Equal(t, "docs/guide.md", strings.TrimSpace(string(fnContent.Data)),
+		"log filename should be denormalized full path")
+}
+
+// TestSynth_LogInterface_UserIdentity verifies that log entries include the user_id
+// when set via .info/user.
+func TestSynth_LogInterface_UserIdentity(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "loguser")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/loguser", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Set user identity
+	fsErr = ops.WriteFile(ctx, "/.info/user", []byte("agent-7\n"))
+	require.Nil(t, fsErr)
+
+	// Create a file
+	fsErr = ops.WriteFile(ctx, "/loguser/hello.md", []byte("---\ntitle: Hello\n---\n# Hello\n"))
+	require.Nil(t, fsErr)
+
+	// Find the log entry
+	logEntries, fsErr := ops.ReadDir(ctx, "/loguser/.log")
+	require.Nil(t, fsErr)
+	var entryName string
+	for _, e := range logEntries {
+		if !strings.HasPrefix(e.Name, ".") {
+			entryName = e.Name
+			break
+		}
+	}
+	require.NotEmpty(t, entryName)
+
+	// Read user_id column
+	userContent, fsErr := ops.ReadFile(ctx, "/loguser/.log/"+entryName+"/user_id")
+	require.Nil(t, fsErr, "ReadFile .log/<id>/user_id should succeed")
+	assert.Equal(t, "agent-7", strings.TrimSpace(string(userContent.Data)),
+		"log entry should include the user identity")
+}
+
 // cleanupTigerFSTablesWithLog extends cleanup to also drop _log and _savepoint tables.
 func cleanupLogTables(t *testing.T, connStr string, tableNames ...string) {
 	t.Helper()
