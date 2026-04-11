@@ -1,6 +1,6 @@
 # ADR-017: Relational Directory Structure for Synth Apps
 
-**Status:** Draft
+**Status:** Accepted
 **Date:** 2026-04-10
 **Author:** Mike Freedman
 
@@ -135,8 +135,11 @@ DECLARE
 BEGIN
     FOREACH seg IN ARRAY segments LOOP
         i := i + 1;
-        SELECT id INTO current_id FROM tbl
-        WHERE filename = seg AND parent_id IS NOT DISTINCT FROM current_id;
+        -- EXECUTE required because PL/pgSQL doesn't support variables as table names.
+        -- format('%s', tbl) produces the properly schema-qualified name from REGCLASS.
+        EXECUTE format('SELECT id FROM %s WHERE filename = $1 AND parent_id IS NOT DISTINCT FROM $2', tbl)
+        INTO current_id
+        USING seg, current_id;
         IF current_id IS NULL THEN RETURN; END IF;
         depth := i;
         resolved_id := current_id;
@@ -169,8 +172,8 @@ For the multi-agent task board use case (file moves between fixed directories), 
 |---|---|---|
 | Rename directory | `RenameByPrefix` (N rows) | `UPDATE SET filename='new' WHERE id=dir_id` (1 row) |
 | Move directory | `RenameByPrefix` with new prefix (N rows) | `UPDATE SET parent_id=new_parent WHERE id=dir_id` (1 row) |
-| Rename file | `UpdateColumnCAS` on filename (full path) | `UpdateColumnCAS` on filename (leaf only) |
-| Move file | `UpdateColumnCAS` on filename (full path) | `UPDATE SET parent_id=new_dir WHERE id=file_id` |
+| Rename file | `UpdateColumnCAS` on filename (full path) | `UPDATE SET filename='new' WHERE id=file_id` (1 row) |
+| Move file | `UpdateColumnCAS` on filename (full path) | `UPDATE SET parent_id=new_dir, filename='new' WHERE id=file_id` (1 row) |
 | ReadDir | `GetAllRows` + in-memory prefix filter O(all_rows) | `SELECT * WHERE parent_id = dir_id` O(children) |
 | Stat/ReadFile | `WHERE filename = 'full/path'` O(1) | Path cache hit: O(0) network + 1 query for leaf. Cache miss: `resolve_path` O(1 round-trip) |
 | mkdir | `INSERT (filename='full/path', filetype='directory')` | `INSERT (filename='dirname', parent_id=X, filetype='directory')` |
@@ -310,14 +313,18 @@ All use the standard DISTINCT ON + UPSERT undo pattern. No special cases for dir
 
 **Unfiltered undo-to-savepoint always succeeds** because ALL affected rows (including deleted parent directories) are restored within the same transaction. The DEFERRABLE FK allows intermediate states; all constraints are satisfied at COMMIT.
 
-**UNIQUE constraint at commit.** Both the FK and UNIQUE constraints are `DEFERRABLE INITIALLY IMMEDIATE`, so intermediate violations within the undo transaction are OK. At COMMIT, PostgreSQL checks all deferred constraints. If the final state has a UNIQUE violation (e.g., two rows with the same name in the same directory that weren't both handled by the undo), the transaction rolls back. This is a genuine conflict requiring manual resolution, but it can only happen with filtered undos -- unfiltered undo-to-savepoint restores the savepoint state exactly, which was valid.
+**UNIQUE constraint at commit.** Both the FK and UNIQUE constraints are `DEFERRABLE INITIALLY IMMEDIATE`. In normal operations, they check immediately. Undo transactions explicitly call `SET CONSTRAINTS ALL DEFERRED` at the start of the transaction, deferring all constraint checks to COMMIT. This allows intermediate violations within the undo transaction (e.g., restoring a filename before deleting the row that currently holds it). At COMMIT, PostgreSQL checks all deferred constraints. If the final state has a UNIQUE violation (e.g., two rows with the same name in the same directory that weren't both handled by the undo), the transaction rolls back. This is a genuine conflict requiring manual resolution, but it can only happen with filtered undos -- unfiltered undo-to-savepoint restores the savepoint state exactly, which was valid.
 
-### Removed code
+### Deprecated code (kept for backward compatibility)
 
-- `RenameByPrefix` query and all callers
+The following are superseded by the parent-pointer model but retained behind `info.Roles.ParentID == ""` guards for pre-migration databases:
+
+- `RenameByPrefix` query and callers (replaced by single-row `UPDATE WHERE id`)
 - `HasChildrenWithPrefix` query (replaced by `WHERE parent_id = X`)
-- `filterHierarchicalChildren` (ReadDir queries directly by parent_id)
-- Path-based prefix matching logic throughout synth_ops.go
+- `filterHierarchicalChildren` (replaced by `GetRowsByParent` queries)
+- Path-based prefix matching logic in synth_ops.go
+
+These code paths are exercised only when a synth app lacks the `parent_id` column (old schema). After running `tigerfs migrate`, all apps use the parent-pointer model and these paths become dead code. They can be removed once backward compatibility with pre-ADR-017 databases is no longer needed.
 
 ### Files requiring changes
 
@@ -337,115 +344,20 @@ All use the standard DISTINCT ON + UPSERT undo pattern. No special cases for dir
 
 The `tigerfs migrate` command includes a `relational-directories` migration that handles existing databases. TigerFS creates new apps with the new schema automatically; migration is only needed for databases created before ADR-017. Run `tigerfs migrate <connection> --describe` to check for pending migrations, or `tigerfs migrate <connection>` to execute.
 
-Migration steps per synth app table (order matters):
+The `relational-directories` migration in `cmd/migrate.go` performs these steps per app (in a single transaction):
 
-```sql
--- 1. Add parent_id column to source table (nullable, no FK yet)
-ALTER TABLE tigerfs.<app> ADD COLUMN parent_id UUID;
+1. **Add parent_id column** to source table
+2. **Populate parent_id** via PL/pgSQL DO block: processes rows with "/" in filename, shallowest first. For each row, looks up the parent directory by its old full-path filename (which still exists at this point) and sets parent_id to that directory's UUID
+3. **Strip filenames** to leaf names (`split_part` on last "/")
+4. **Add FK constraint** (DEFERRABLE INITIALLY IMMEDIATE)
+5. **Replace UNIQUE constraint** with `UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE`
+6. **Create parent index** on `(parent_id, filename)`
+7. **Recreate view** -- PostgreSQL views with `SELECT *` snapshot columns at creation time; `ALTER TABLE ADD COLUMN` does NOT update existing views. The migration drops and recreates the view, preserving the tigerfs comment
+8. **Migrate history table** (if exists): add parent_id, rename columns (`id` -> `file_id`, `_history_id` -> `version_id`, `_operation` -> `operation`), populate parent_id from source table, strip filenames, recreate BEFORE trigger with new column names
+9. **Migrate log table** (if exists): rename `history_id` -> `version_id`, rename type values (`insert` -> `create`, `update` -> `edit`), update CHECK constraint. Order matters: drop old CHECK, rename values, then add new CHECK
+10. **Create resolve_path function** (idempotent, shared across all apps)
 
--- 2. Populate parent_id by walking the path hierarchy (WHILE filename still has full path).
---    For each row with a '/' in filename, find or create parent directory rows
---    and set parent_id. Process top-down (shallowest paths first).
-DO $$
-DECLARE
-    r RECORD;
-    parts TEXT[];
-    current_parent UUID;
-    parent_path TEXT;
-    parent_row RECORD;
-BEGIN
-    -- Process rows ordered by path depth (shallowest first)
-    FOR r IN SELECT id, filename, filetype FROM tigerfs.<app>
-             WHERE filename LIKE '%/%' ORDER BY length(filename) - length(replace(filename, '/', ''))
-    LOOP
-        parts := string_to_array(r.filename, '/');
-        current_parent := NULL;
-        -- Walk ancestors, creating directory rows as needed
-        FOR i IN 1..array_length(parts, 1) - 1 LOOP
-            parent_path := array_to_string(parts[1:i], '/');
-            SELECT id INTO parent_row FROM tigerfs.<app>
-            WHERE filename = parent_path AND filetype = 'directory' LIMIT 1;
-            IF parent_row IS NULL THEN
-                INSERT INTO tigerfs.<app> (filename, filetype, parent_id)
-                VALUES (parts[i], 'directory', current_parent)
-                ON CONFLICT DO NOTHING
-                RETURNING id INTO parent_row;
-                -- Re-fetch if ON CONFLICT hit
-                IF parent_row IS NULL THEN
-                    SELECT id INTO parent_row FROM tigerfs.<app>
-                    WHERE filename = parts[i] AND filetype = 'directory'
-                    AND parent_id IS NOT DISTINCT FROM current_parent;
-                END IF;
-            END IF;
-            current_parent := parent_row.id;
-        END LOOP;
-        -- Set parent_id for this row
-        UPDATE tigerfs.<app> SET parent_id = current_parent WHERE id = r.id;
-    END LOOP;
-END $$;
-
--- 3. Update parent_id for existing directory rows that already exist
---    (they were created with the old full-path filename)
---    Similar logic: find parent from the path prefix, set parent_id
--- (Handled by the DO block above)
-
--- 4. Strip filename to leaf name only (NOW safe since parent_id is set)
-UPDATE tigerfs.<app> SET filename = 
-    CASE WHEN filename LIKE '%/%' 
-         THEN substr(filename, length(filename) - length(split_part(reverse(filename), '/', 1)) + 1)
-         ELSE filename 
-    END;
-
--- 5. Add FK constraint
-ALTER TABLE tigerfs.<app> ADD CONSTRAINT fk_parent 
-    FOREIGN KEY (parent_id) REFERENCES tigerfs.<app>(id);
-
--- 6. Replace UNIQUE constraint
-ALTER TABLE tigerfs.<app> DROP CONSTRAINT <app>_filename_filetype_key;
-ALTER TABLE tigerfs.<app> ADD CONSTRAINT uq_parent_filename_filetype 
-    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE;
-
--- 7. Create index for ReadDir and path resolution
-CREATE INDEX idx_<app>_parent ON tigerfs.<app>(parent_id, filename);
-
--- 8. Create resolve_path function (if not exists)
--- (See Path resolution section above)
-
--- 9. Migrate history table
-ALTER TABLE tigerfs.<app>_history ADD COLUMN parent_id UUID;
-ALTER TABLE tigerfs.<app>_history RENAME COLUMN id TO file_id;
-ALTER TABLE tigerfs.<app>_history RENAME COLUMN _history_id TO version_id;
-ALTER TABLE tigerfs.<app>_history RENAME COLUMN _operation TO operation;
--- Set parent_id from the source table's current parent_id for each file_id
-UPDATE tigerfs.<app>_history h SET parent_id = (
-    SELECT parent_id FROM tigerfs.<app> s WHERE s.id = h.file_id
-);
--- Strip history filenames to leaf names
-UPDATE tigerfs.<app>_history SET filename = 
-    CASE WHEN filename LIKE '%/%' 
-         THEN substr(filename, length(filename) - length(split_part(reverse(filename), '/', 1)) + 1)
-         ELSE filename 
-    END;
-
--- 10. Update BEFORE trigger to use new column names and copy parent_id
--- (Drop old trigger, create new one -- see BEFORE trigger section above)
-
--- 11. Migrate log table (if exists)
-ALTER TABLE tigerfs.<app>_log RENAME COLUMN history_id TO version_id;
--- Update CHECK constraint for new type names
-ALTER TABLE tigerfs.<app>_log DROP CONSTRAINT IF EXISTS <app>_log_type_check;
-ALTER TABLE tigerfs.<app>_log ADD CONSTRAINT <app>_log_type_check
-    CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo'));
--- Rename existing type values
-UPDATE tigerfs.<app>_log SET type = CASE type
-    WHEN 'insert' THEN 'create'
-    WHEN 'update' THEN 'edit'
-    ELSE type END;
-```
-
-The `relational-directories` migration auto-discovers synth apps by querying view comments. It also recreates views after adding the `parent_id` column (PostgreSQL's `SELECT *` in views snapshots columns at creation time). Step 2's DO block processes rows in depth-first order to ensure parents are resolved before their children.
-
-**Note:** The history parent_id migration (step 9) uses the source table's CURRENT parent_id for each file_id. This is correct for files that haven't moved, but for files that were moved, earlier history entries will have the current parent_id rather than the historical one. This is an acceptable trade-off since the full path was also not preserved in the old history model -- the leaf name + current parent gives a reasonable approximation.
+**Note:** The history parent_id migration uses the source table's CURRENT parent_id for each file_id. This is correct for files that haven't moved, but for files that were moved, earlier history entries will have the current parent_id rather than the historical one. This is an acceptable trade-off since the full path was also not preserved in the old history model.
 
 ## Sequencing
 

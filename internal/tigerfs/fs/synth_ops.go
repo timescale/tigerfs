@@ -361,6 +361,37 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 	return entries, nil
 }
 
+// fetchSynthRowByPath resolves a parent path via cache, then fetches the leaf row
+// with a combined parent_id + filename query. This is one round-trip for the leaf
+// (vs resolve_path + GetRow = two round-trips). Used by ReadFile where the leaf
+// must always be fetched fresh from DB (consistency model: "ReadFile must always hit the DB").
+func (o *Operations) fetchSynthRowByPath(ctx context.Context, schema, table string, info *synth.ViewInfo, fullPath string) ([]string, []interface{}, *FSError) {
+	parts := strings.Split(fullPath, "/")
+	leafName := parts[len(parts)-1]
+	parentSegments := parts[:len(parts)-1]
+
+	// Resolve parent path via cache (0 DB calls if fully cached)
+	var parentID string
+	if len(parentSegments) > 0 {
+		var ok bool
+		parentID, ok = o.resolveSynthPath(ctx, schema, table, parentSegments)
+		if !ok {
+			return nil, nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", strings.Join(parentSegments, "/"))}
+		}
+	}
+
+	// Single query: SELECT * WHERE parent_id = X AND filename = leaf
+	columns, row, err := o.db.GetRowByParentAndName(ctx, schema, table, parentID, leafName)
+	if err != nil {
+		return nil, nil, &FSError{Code: ErrIO, Message: "failed to fetch row", Cause: err}
+	}
+	if row == nil {
+		return nil, nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found: %s", fullPath)}
+	}
+
+	return columns, row, nil
+}
+
 // resolveSynthRow resolves a full path to its row data using the path cache and DB.
 // For parent-pointer model only. Returns (columns, row, pkValue, error).
 func (o *Operations) resolveSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, fullPath string) ([]string, []interface{}, string, *FSError) {
@@ -453,6 +484,9 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 }
 
 // readFileSynthView reads synthesized file content.
+// For parent-pointer model: resolves parent path via cache, then fetches the
+// leaf row with a combined parent_id + filename query (one round-trip for the
+// leaf instead of resolve_path + GetRow). ADR-017 Section "ReadFile / Stat".
 func (o *Operations) readFileSynthView(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]byte, *FSError) {
 	filename := parsed.PrimaryKey
 
@@ -460,7 +494,7 @@ func (o *Operations) readFileSynthView(ctx context.Context, parsed *ParsedPath, 
 	var row []interface{}
 	var fsErr *FSError
 	if info.Roles.ParentID != "" {
-		columns, row, _, fsErr = o.resolveSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
+		columns, row, fsErr = o.fetchSynthRowByPath(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
 	} else {
 		columns, row, fsErr = o.getSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
 	}

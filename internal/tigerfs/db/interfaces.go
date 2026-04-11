@@ -299,6 +299,11 @@ type HierarchyWriter interface {
 	// to support deferrable constraints required by undo transactions (ADR-017).
 	InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error
 
+	// GetRowByParentAndName returns a single row matching parent_id + filename.
+	// Empty parentID means root level (WHERE parent_id IS NULL).
+	// Combines path resolution with row fetch for ReadFile (ADR-017).
+	GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error)
+
 	// GetRowsByParent returns all rows with the given parent_id, up to limit.
 	// Empty parentID means root level (WHERE parent_id IS NULL).
 	// Used by the parent-pointer directory model (ADR-017) for ReadDir.

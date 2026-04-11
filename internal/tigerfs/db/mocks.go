@@ -579,6 +579,7 @@ type MockHierarchyWriter struct {
 	RenameByPrefixFn        func(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
 	HasChildrenWithPrefixFn func(ctx context.Context, schema, table, column, prefix string) (bool, error)
 	InsertIfNotExistsFn     func(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+	GetRowByParentAndNameFn func(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error)
 	GetRowsByParentFn       func(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error)
 }
 
@@ -601,6 +602,13 @@ func (m *MockHierarchyWriter) InsertIfNotExists(ctx context.Context, schema, tab
 		return m.InsertIfNotExistsFn(ctx, schema, table, columns, values)
 	}
 	return nil
+}
+
+func (m *MockHierarchyWriter) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
+	if m.GetRowByParentAndNameFn != nil {
+		return m.GetRowByParentAndNameFn(ctx, schema, table, parentID, filename)
+	}
+	return nil, nil, nil
 }
 
 func (m *MockHierarchyWriter) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
