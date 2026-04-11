@@ -1117,6 +1117,7 @@ type mockDBClient struct {
 }
 
 type mockLogEntry struct {
+	userID    string
 	opType    string
 	fileID    string
 	filename  string
@@ -1696,7 +1697,7 @@ func (m *mockDBClient) QueryHistoryVersionByTime(ctx context.Context, schema, hi
 
 func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
 	m.logEntries = append(m.logEntries, mockLogEntry{
-		opType: opType, fileID: fileID, filename: filename, versionID: versionID,
+		userID: userID, opType: opType, fileID: fileID, filename: filename, versionID: versionID,
 	})
 	return nil
 }

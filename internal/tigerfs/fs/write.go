@@ -50,6 +50,8 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 		return o.writeImportFile(ctx, parsed, data)
 	case PathDDL:
 		return o.writeDDLFile(ctx, parsed, data)
+	case PathRootInfo:
+		return o.writeRootInfoFile(parsed, data)
 	case PathBuild:
 		return o.writeBuildFile(ctx, parsed, data)
 	case PathFormat:

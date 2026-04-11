@@ -7,7 +7,7 @@ package fs
 // Metadata directory
 const DirInfo = ".info"
 
-// Metadata files (under .info/ directory)
+// Metadata files (under table-level .info/ directory)
 // Note: These files do NOT have dot prefixes, matching FUSE behavior.
 const (
 	FileCount   = "count"   // Row count
@@ -15,6 +15,11 @@ const (
 	FileSchema  = "schema"  // Table schema (columns, types)
 	FileColumns = "columns" // Column listing
 	FileIndexes = "indexes" // Index listing
+)
+
+// Root-level .info/ files (mount metadata)
+const (
+	FileUser = "user" // Mount-level user identity for undo log entries
 )
 
 // Navigation capabilities
