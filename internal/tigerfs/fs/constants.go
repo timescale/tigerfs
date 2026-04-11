@@ -72,6 +72,20 @@ const (
 	DirTables  = ".tables"  // Backing tables in tigerfs schema
 )
 
+// Undo and recovery capabilities (ADR-016)
+// Directories for operation log, savepoints, and undo operations.
+const (
+	DirLog       = ".log"       // Operation log (data-first on _log table)
+	DirSavepoint = ".savepoint" // Named savepoints (data-first on _savepoint table)
+	DirUndo      = ".undo"      // Undo operations (preview-then-apply)
+)
+
+// Undo control files
+const (
+	FileApply   = ".apply"  // Trigger file to execute an undo operation
+	FileSummary = "summary" // TSV listing of affected files with actions
+)
+
 // Control files (DDL staging)
 // Content files are visible (no dot prefix), trigger files are hidden (dot prefix).
 const (
@@ -105,17 +119,20 @@ const (
 // capabilityDirectories lists all pipeline capability directory names.
 // Used to prevent these names from being interpreted as column values.
 var capabilityDirectories = map[string]bool{
-	DirBy:      true,
-	DirColumns: true,
-	DirFilter:  true,
-	DirFirst:   true,
-	DirLast:    true,
-	DirSample:  true,
-	DirAll:     true,
-	DirOrder:   true,
-	DirExport:  true,
-	DirImport:  true,
-	DirInfo:    true,
+	DirBy:        true,
+	DirColumns:   true,
+	DirFilter:    true,
+	DirFirst:     true,
+	DirLast:      true,
+	DirSample:    true,
+	DirAll:       true,
+	DirOrder:     true,
+	DirExport:    true,
+	DirImport:    true,
+	DirInfo:      true,
+	DirLog:       true,
+	DirSavepoint: true,
+	DirUndo:      true,
 }
 
 // IsCapabilityDirectory returns true if name is a reserved capability directory.
