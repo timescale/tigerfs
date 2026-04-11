@@ -190,10 +190,10 @@ func extractModTime(columns []string, values []interface{}, info *synth.ViewInfo
 	return info.CachedMountTime
 }
 
-// primeSynthStatCache builds and stores a Stat cache from raw query results.
-// Called by ReadDir after GetAllRows. Subsequent Stat calls use the cached entries
-// instead of re-querying the database, eliminating ~36 of 37 queries for `ls -l`.
-func (o *Operations) primeSynthStatCache(schema, table string, columns []string, rows [][]interface{}, info *synth.ViewInfo) {
+// primeSynthStatCache populates the stat cache from row data.
+// pathPrefix is prepended to leaf filenames for the cache key (e.g., "projects/web"
+// for subdirectory entries). Empty for root-level entries.
+func (o *Operations) primeSynthStatCache(schema, table, pathPrefix string, columns []string, rows [][]interface{}, info *synth.ViewInfo) {
 	entries := make(map[string]Entry, len(rows))
 
 	for _, row := range rows {
@@ -207,11 +207,12 @@ func (o *Operations) primeSynthStatCache(schema, table string, columns []string,
 				}
 			}
 			if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
-				// Cache directory entry keyed by its filename path
-				fn := synth.ValueToString(row[findColIdx(columns, info.Roles.Filename)])
+				// Cache directory entry keyed by its full path
+				leafName := synth.ValueToString(row[findColIdx(columns, info.Roles.Filename)])
+				fullPath := joinPathPrefix(pathPrefix, leafName)
 				modTime := extractModTime(columns, row, info)
-				entries[fn] = Entry{
-					Name:    fn,
+				entries[fullPath] = Entry{
+					Name:    leafName,
 					IsDir:   true,
 					Mode:    0755,
 					ModTime: modTime,
@@ -231,13 +232,14 @@ func (o *Operations) primeSynthStatCache(schema, table string, columns []string,
 			continue
 		}
 
+		fullPath := joinPathPrefix(pathPrefix, filename)
 		modTime := extractModTime(columns, row, info)
 		var size int64
 		if content, err := o.synthesizeContent(columns, row, info); err == nil {
 			size = int64(len(content))
 		}
 
-		entries[filename] = Entry{
+		entries[fullPath] = Entry{
 			Name:    filename,
 			IsDir:   false,
 			Mode:    0644,
@@ -247,6 +249,15 @@ func (o *Operations) primeSynthStatCache(schema, table string, columns []string,
 	}
 
 	o.statCache.prime(schema, table, entries)
+}
+
+// joinPathPrefix joins a directory prefix with a leaf name.
+// Returns leaf unchanged when prefix is empty (root level).
+func joinPathPrefix(prefix, leaf string) string {
+	if prefix == "" {
+		return leaf
+	}
+	return prefix + "/" + leaf
 }
 
 // findColIdx returns the index of a column name, or -1 if not found.
@@ -270,6 +281,20 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 		limit = 10000
 	}
 
+	// Parent-pointer model (ADR-017): query only root-level entries
+	if info.SupportsHierarchy && info.Roles.ParentID != "" {
+		columns, rows, err := o.db.GetRowsByParent(ctx, fsCtx.Schema, fsCtx.TableName, "", limit)
+		if err != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to list root entries", Cause: err}
+		}
+		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, "", columns, rows, info)
+		children := o.buildEntriesFromRows(columns, rows, info)
+		if info.HasHistory {
+			children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
+		}
+		return children, nil
+	}
+
 	columns, rows, err := o.db.GetAllRows(ctx, fsCtx.Schema, fsCtx.TableName, limit)
 	if err != nil {
 		return nil, &FSError{
@@ -280,9 +305,9 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 	}
 
 	// Prime Stat cache so subsequent Stat calls avoid DB queries
-	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, columns, rows, info)
+	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, "", columns, rows, info)
 
-	// For hierarchical views, filter to root-level entries only
+	// Old hierarchy model (path-encoded filenames, pre-ADR-017): filter to root-level
 	if info.SupportsHierarchy {
 		children := o.filterHierarchicalChildren(columns, rows, "", info)
 		if info.HasHistory {
@@ -327,12 +352,30 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 	return entries, nil
 }
 
+// resolveSynthRow resolves a full path to its row data using the path cache and DB.
+// For parent-pointer model only. Returns (columns, row, pkValue, error).
+func (o *Operations) resolveSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, fullPath string) ([]string, []interface{}, string, *FSError) {
+	parts := strings.Split(fullPath, "/")
+	fileID, ok := o.resolveSynthPath(ctx, schema, table, parts)
+	if !ok {
+		return nil, nil, "", &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found: %s", fullPath)}
+	}
+
+	row, err := o.db.GetRow(ctx, schema, table, db.SinglePKMatch(info.Roles.PrimaryKey, fileID))
+	if err != nil {
+		return nil, nil, "", &FSError{Code: ErrIO, Message: "failed to fetch row by ID", Cause: err}
+	}
+	if row == nil {
+		return nil, nil, "", &FSError{Code: ErrNotExist, Message: fmt.Sprintf("row not found: %s", fileID)}
+	}
+
+	return row.Columns, row.Values, fileID, nil
+}
+
 // statSynthFile returns metadata for a synthesized file.
 // For views with hierarchy, also handles directory stat (filetype='directory').
 func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) (*Entry, *FSError) {
-	// The PrimaryKey field contains the filename (e.g., "hello-world.md")
 	filename := parsed.PrimaryKey
-
 	schema := parsed.Context.Schema
 	table := parsed.Context.TableName
 
@@ -343,18 +386,19 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 
 	// Check negative cache (file known to not exist)
 	if o.statCache.isNegative(schema, table, filename) {
-		return nil, &FSError{
-			Code:    ErrNotExist,
-			Message: fmt.Sprintf("file not found: %s (cached)", filename),
-		}
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found: %s (cached)", filename)}
 	}
 
-	// Single query: look up by filename. For hierarchical views, this may return
-	// a directory row — we check filetype in the result rather than doing a
-	// separate existence query.
-	columns, row, fsErr := o.statSynthRowByFilename(ctx, schema, table, info, filename)
+	// Parent-pointer model: resolve path to UUID, then fetch row
+	var columns []string
+	var row []interface{}
+	var fsErr *FSError
+	if info.Roles.ParentID != "" {
+		columns, row, _, fsErr = o.resolveSynthRow(ctx, schema, table, info, filename)
+	} else {
+		columns, row, fsErr = o.statSynthRowByFilename(ctx, schema, table, info, filename)
+	}
 	if fsErr != nil {
-		// Cache the negative result so subsequent stats don't re-query
 		if fsErr.Code == ErrNotExist {
 			o.statCache.setNegative(schema, table, filename)
 		}
@@ -403,7 +447,14 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 func (o *Operations) readFileSynthView(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]byte, *FSError) {
 	filename := parsed.PrimaryKey
 
-	columns, row, fsErr := o.getSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
+	var columns []string
+	var row []interface{}
+	var fsErr *FSError
+	if info.Roles.ParentID != "" {
+		columns, row, _, fsErr = o.resolveSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
+	} else {
+		columns, row, fsErr = o.getSynthRow(ctx, parsed.Context.Schema, parsed.Context.TableName, info, filename)
+	}
 	if fsErr != nil {
 		return nil, fsErr
 	}
@@ -559,13 +610,66 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		}
 	}
 
-	// Set the filename column from the path (FS name == DB name)
-	colValues[info.Roles.Filename] = filename
-
 	// For hierarchical views, set filetype='file' explicitly
 	if info.SupportsHierarchy {
 		colValues[info.Roles.Filetype] = "file"
 	}
+
+	// Parent-pointer model (ADR-017): use leaf filename + parent_id
+	if info.Roles.ParentID != "" {
+		parts := strings.Split(filename, "/")
+		leafName := parts[len(parts)-1]
+		colValues[info.Roles.Filename] = leafName
+
+		// Check if file exists by resolving full path
+		fileID, fileExists := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, parts)
+
+		// Build columns/values slices
+		columns := make([]string, 0, len(colValues))
+		values := make([]interface{}, 0, len(colValues))
+		for col, val := range colValues {
+			columns = append(columns, col)
+			values = append(values, val)
+		}
+
+		if fileExists {
+			// UPDATE by UUID — parent_id and filename don't change on content edit
+			dbErr := o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, fileID), columns, values)
+			if dbErr != nil {
+				return &FSError{Code: ErrIO, Message: "failed to update synth file", Cause: dbErr}
+			}
+			o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "edit", fileID, filename)
+		} else {
+			// Ensure parent directories exist, get parent UUID
+			parentID, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
+			if fsErr != nil {
+				return fsErr
+			}
+			if parentID != "" {
+				colValues[info.Roles.ParentID] = parentID
+				// Rebuild columns/values with parent_id
+				columns = columns[:0]
+				values = values[:0]
+				for col, val := range colValues {
+					columns = append(columns, col)
+					values = append(values, val)
+				}
+			}
+
+			insertedPK, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+			if dbErr != nil {
+				return &FSError{Code: ErrIO, Message: "failed to create synth file", Cause: dbErr}
+			}
+			o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "create", insertedPK, filename)
+		}
+
+		o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
+		o.pathCache.invalidate(fsCtx.Schema, fsCtx.TableName)
+		return nil
+	}
+
+	// Old model (pre-ADR-017): full-path filenames
+	colValues[info.Roles.Filename] = filename
 
 	// Convert map to columns/values slices
 	columns := make([]string, 0, len(colValues))
@@ -580,7 +684,6 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 	rowExists := lookupErr == nil
 
 	if rowExists {
-		// UPDATE existing row — need to find the PK value
 		pkValue, fsErr := o.getSynthRowPK(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
 		if fsErr != nil {
 			return fsErr
@@ -588,32 +691,20 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 
 		dbErr := o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue), columns, values)
 		if dbErr != nil {
-			return &FSError{
-				Code:    ErrIO,
-				Message: "failed to update synth file",
-				Cause:   dbErr,
-			}
+			return &FSError{Code: ErrIO, Message: "failed to update synth file", Cause: dbErr}
 		}
-
 		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "edit", pkValue, filename)
 	} else {
-		// For hierarchical views, auto-create parent directories before inserting
 		if info.SupportsHierarchy {
-			if fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, filename); fsErr != nil {
+			if _, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, filename); fsErr != nil {
 				return fsErr
 			}
 		}
 
-		// INSERT new row — capture the returned PK for the log entry
 		insertedPK, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 		if dbErr != nil {
-			return &FSError{
-				Code:    ErrIO,
-				Message: "failed to create synth file",
-				Cause:   dbErr,
-			}
+			return &FSError{Code: ErrIO, Message: "failed to create synth file", Cause: dbErr}
 		}
-
 		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "create", insertedPK, filename)
 	}
 
@@ -627,43 +718,59 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 	fsCtx := parsed.Context
 	filename := parsed.PrimaryKey
 
-	// For hierarchical views, check if this is a directory
+	// Parent-pointer model (ADR-017): resolve path then check/delete by UUID
+	if info.Roles.ParentID != "" {
+		columns, row, fileID, fsErr := o.resolveSynthRow(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
+		if fsErr != nil {
+			return fsErr
+		}
+
+		// Check if it's a directory
+		filetypeIdx := findColIdx(columns, info.Roles.Filetype)
+		if filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory" {
+			// Check for children by parent_id (ADR-017: WHERE parent_id = dir_id)
+			_, childRows, err := o.db.GetRowsByParent(ctx, fsCtx.Schema, fsCtx.TableName, fileID, 1)
+			if err != nil {
+				return &FSError{Code: ErrIO, Message: "failed to check directory children", Cause: err}
+			}
+			if len(childRows) > 0 {
+				return &FSError{Code: ErrNotEmpty, Message: "directory not empty"}
+			}
+		}
+
+		err := o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, fileID))
+		if err != nil {
+			return &FSError{Code: ErrIO, Message: "failed to delete synth file", Cause: err}
+		}
+		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "delete", fileID, filename)
+		o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
+		o.pathCache.invalidate(fsCtx.Schema, fsCtx.TableName)
+		return nil
+	}
+
+	// Old model: path-encoded filenames
 	if info.SupportsHierarchy {
 		dirPath := filename
-
 		exists, fsErr := o.synthRowExists(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
 		if fsErr != nil {
 			return fsErr
 		}
 		if exists {
-			// It's a directory — check for children
 			hasChildren, err := o.db.HasChildrenWithPrefix(ctx, fsCtx.Schema, fsCtx.TableName, info.Roles.Filename, dirPath)
 			if err != nil {
-				return &FSError{
-					Code:    ErrIO,
-					Message: "failed to check directory children",
-					Cause:   err,
-				}
+				return &FSError{Code: ErrIO, Message: "failed to check directory children", Cause: err}
 			}
 			if hasChildren {
-				return &FSError{
-					Code:    ErrNotEmpty,
-					Message: "directory not empty",
-				}
+				return &FSError{Code: ErrNotEmpty, Message: "directory not empty"}
 			}
 
-			// Delete the directory row by looking up its PK
 			pkValue, lookupErr := o.getSynthRowPKByFiletype(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
 			if lookupErr != nil {
 				return lookupErr
 			}
 			err = o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue))
 			if err != nil {
-				return &FSError{
-					Code:    ErrIO,
-					Message: "failed to delete directory",
-					Cause:   err,
-				}
+				return &FSError{Code: ErrIO, Message: "failed to delete directory", Cause: err}
 			}
 			o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "delete", pkValue, dirPath)
 			o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
@@ -671,7 +778,6 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 		}
 	}
 
-	// Regular file delete
 	pkValue, fsErr := o.getSynthRowPK(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
 	if fsErr != nil {
 		return fsErr
@@ -679,13 +785,8 @@ func (o *Operations) deleteSynthFile(ctx context.Context, parsed *ParsedPath, in
 
 	err := o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue))
 	if err != nil {
-		return &FSError{
-			Code:    ErrIO,
-			Message: "failed to delete synth file",
-			Cause:   err,
-		}
+		return &FSError{Code: ErrIO, Message: "failed to delete synth file", Cause: err}
 	}
-
 	o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "delete", pkValue, filename)
 	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil
@@ -914,7 +1015,56 @@ func (o *Operations) synthesizeContent(columns []string, row []interface{}, info
 // For directories in hierarchical views, performs an atomic prefix rename
 // that updates the directory row and all its descendants.
 func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, info *synth.ViewInfo, oldFilename, newFilename string) *FSError {
-	// For hierarchical views, check if old path is a directory
+	// Parent-pointer model (ADR-017): rename is a single-row UPDATE
+	if info.Roles.ParentID != "" {
+		_, _, fileID, fsErr := o.resolveSynthRow(ctx, schema, table, info, oldFilename)
+		if fsErr != nil {
+			return fsErr
+		}
+
+		// Extract new leaf name (same directory → just change filename)
+		newParts := strings.Split(newFilename, "/")
+		newLeaf := newParts[len(newParts)-1]
+		oldParts := strings.Split(oldFilename, "/")
+
+		// UPDATE filename (and parent_id if moving to different directory)
+		updateCols := []string{info.Roles.Filename}
+		updateVals := []interface{}{newLeaf}
+
+		// Check if parent directory changed (move vs rename)
+		oldParentPath := strings.Join(oldParts[:len(oldParts)-1], "/")
+		newParentPath := strings.Join(newParts[:len(newParts)-1], "/")
+		if oldParentPath != newParentPath {
+			// Move to different directory — resolve new parent
+			var newParentID string
+			if newParentPath != "" {
+				newParentSegs := strings.Split(newParentPath, "/")
+				var ok bool
+				newParentID, ok = o.resolveSynthPath(ctx, schema, table, newParentSegs)
+				if !ok {
+					return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("target directory not found: %s", newParentPath)}
+				}
+			}
+			updateCols = append(updateCols, info.Roles.ParentID)
+			if newParentID != "" {
+				updateVals = append(updateVals, newParentID)
+			} else {
+				updateVals = append(updateVals, nil) // root level
+			}
+		}
+
+		err := o.db.UpdateRow(ctx, schema, table, db.SinglePKMatch(info.Roles.PrimaryKey, fileID), updateCols, updateVals)
+		if err != nil {
+			return &FSError{Code: ErrIO, Message: "failed to rename synth file", Cause: err}
+		}
+
+		o.logSynthOp(ctx, schema, table, info, "rename", fileID, newFilename)
+		o.statCache.invalidate(schema, table)
+		o.pathCache.invalidate(schema, table)
+		return nil
+	}
+
+	// Old model: path-encoded filenames
 	if info.SupportsHierarchy {
 		oldDirPath := oldFilename
 		newDirPath := newFilename
@@ -924,35 +1074,23 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 			return fsErr
 		}
 		if exists {
-			// Directory rename — atomic prefix swap.
-			// RenameByPrefix WHERE matches old value, so concurrent renames
-			// are safe: the loser gets rowsAffected=0.
 			rowsAffected, err := o.db.RenameByPrefix(ctx, schema, table, info.Roles.Filename, oldDirPath, newDirPath)
 			if err != nil {
-				return &FSError{
-					Code:    ErrIO,
-					Message: "failed to rename directory",
-					Cause:   err,
-				}
+				return &FSError{Code: ErrIO, Message: "failed to rename directory", Cause: err}
 			}
 			if rowsAffected == 0 {
-				return &FSError{
-					Code:    ErrNotExist,
-					Message: "directory already moved by another process",
-				}
+				return &FSError{Code: ErrNotExist, Message: "directory already moved by another process"}
 			}
 			o.statCache.invalidate(schema, table)
 			return nil
 		}
 	}
 
-	// Regular file rename — FS name == DB name, no extension normalization needed.
 	columns, row, fsErr := o.getSynthRow(ctx, schema, table, info, oldFilename)
 	if fsErr != nil {
 		return fsErr
 	}
 
-	// Extract PK and raw filename from the actual DB row
 	var pkValue, rawOldFilename string
 	for i, col := range columns {
 		switch col {
@@ -963,33 +1101,17 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 		}
 	}
 	if pkValue == "" {
-		return &FSError{
-			Code:    ErrIO,
-			Message: fmt.Sprintf("primary key column %q not found in view", info.Roles.PrimaryKey),
-		}
+		return &FSError{Code: ErrIO, Message: fmt.Sprintf("primary key column %q not found in view", info.Roles.PrimaryKey)}
 	}
 
-	// Atomic rename: UPDATE SET filename = new WHERE pk = X AND filename = old.
-	// If another process already renamed this file, the WHERE won't match
-	// and we get "row not found" — exactly one concurrent rename wins.
 	err := o.db.UpdateColumnCAS(ctx, schema, table, db.SinglePKMatch(info.Roles.PrimaryKey, pkValue), info.Roles.Filename, newFilename, info.Roles.Filename, rawOldFilename)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			return &FSError{
-				Code:    ErrNotExist,
-				Message: "file already moved by another process",
-				Cause:   err,
-			}
+			return &FSError{Code: ErrNotExist, Message: "file already moved by another process", Cause: err}
 		}
-		return &FSError{
-			Code:    ErrIO,
-			Message: "failed to rename synth file",
-			Cause:   err,
-		}
+		return &FSError{Code: ErrIO, Message: "failed to rename synth file", Cause: err}
 	}
 
-	// Log rename operation. The filename recorded is the NEW name
-	// (the historically-correct name at the time of this operation).
 	o.logSynthOp(ctx, schema, table, info, "rename", pkValue, newFilename)
 	o.statCache.invalidate(schema, table)
 	return nil
@@ -1002,12 +1124,33 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 	fsCtx := parsed.Context
 	prefix := parsed.PrimaryKey
 
-	// Get all rows from the view
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
 		limit = 10000
 	}
 
+	// Parent-pointer model (ADR-017): resolve directory path, then query children
+	if info.Roles.ParentID != "" {
+		segments := strings.Split(prefix, "/")
+		parentID, ok := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, segments)
+		if !ok {
+			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", prefix)}
+		}
+
+		columns, rows, err := o.db.GetRowsByParent(ctx, fsCtx.Schema, fsCtx.TableName, parentID, limit)
+		if err != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to list directory entries", Cause: err}
+		}
+
+		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
+		children := o.buildEntriesFromRows(columns, rows, info)
+		if info.HasHistory {
+			children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
+		}
+		return children, nil
+	}
+
+	// Old hierarchy model (path-encoded filenames, pre-ADR-017)
 	columns, rows, err := o.db.GetAllRows(ctx, fsCtx.Schema, fsCtx.TableName, limit)
 	if err != nil {
 		return nil, &FSError{
@@ -1017,14 +1160,60 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 		}
 	}
 
-	// Prime Stat cache so subsequent Stat calls avoid DB queries
-	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, columns, rows, info)
-
+	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
 	children := o.filterHierarchicalChildren(columns, rows, prefix, info)
 	if info.HasHistory {
 		children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
 	}
 	return children, nil
+}
+
+// buildEntriesFromRows converts query result rows into Entry slices for ReadDir.
+// Used by the parent-pointer model where GetRowsByParent already filtered to the
+// correct directory -- no in-memory filtering needed. Each row's filename column
+// contains the leaf name.
+func (o *Operations) buildEntriesFromRows(columns []string, rows [][]interface{}, info *synth.ViewInfo) []Entry {
+	filetypeIdx := findColIdx(columns, info.Roles.Filetype)
+	entries := make([]Entry, 0, len(rows))
+
+	for _, row := range rows {
+		isDir := filetypeIdx >= 0 && synth.ValueToString(row[filetypeIdx]) == "directory"
+		modTime := extractModTime(columns, row, info)
+
+		if isDir {
+			leafName := synth.ValueToString(row[findColIdx(columns, info.Roles.Filename)])
+			entries = append(entries, Entry{
+				Name:    leafName,
+				IsDir:   true,
+				Mode:    0755,
+				ModTime: modTime,
+			})
+		} else {
+			var filename string
+			switch info.Format {
+			case synth.FormatMarkdown:
+				filename = synth.GetMarkdownFilename(columns, row, info.Roles)
+			case synth.FormatPlainText:
+				filename = synth.GetPlainTextFilename(columns, row, info.Roles)
+			default:
+				continue
+			}
+
+			var size int64
+			if content, err := o.synthesizeContent(columns, row, info); err == nil {
+				size = int64(len(content))
+			}
+			entries = append(entries, Entry{
+				Name:    filename,
+				IsDir:   false,
+				Mode:    0644,
+				Size:    size,
+				ModTime: modTime,
+			})
+		}
+	}
+
+	return entries
 }
 
 // filterHierarchicalChildren filters rows to immediate children of a prefix.
@@ -1117,33 +1306,57 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 	fsCtx := parsed.Context
 	dirPath := parsed.PrimaryKey
 
-	// Check if directory already exists
+	// Parent-pointer model (ADR-017): use leaf name + parent_id
+	if info.Roles.ParentID != "" {
+		parts := strings.Split(dirPath, "/")
+		leafName := parts[len(parts)-1]
+
+		// Check if directory already exists by resolving full path
+		if _, ok := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, parts); ok {
+			return &FSError{Code: ErrExists, Message: "directory already exists"}
+		}
+
+		// Ensure parent directories exist, get parent UUID
+		parentID, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath)
+		if fsErr != nil {
+			return fsErr
+		}
+
+		columns := []string{info.Roles.Filename, info.Roles.Filetype}
+		values := []interface{}{leafName, "directory"}
+		if parentID != "" {
+			columns = append(columns, info.Roles.ParentID)
+			values = append(values, parentID)
+		}
+
+		_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+		if dbErr != nil {
+			return &FSError{Code: ErrIO, Message: "failed to create directory", Cause: dbErr}
+		}
+
+		o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
+		o.pathCache.invalidate(fsCtx.Schema, fsCtx.TableName)
+		return nil
+	}
+
+	// Old model (pre-ADR-017): full-path filenames
 	exists, err := o.synthRowExists(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath, "directory")
 	if err != nil {
 		return err
 	}
 	if exists {
-		return &FSError{
-			Code:    ErrExists,
-			Message: "directory already exists",
-		}
+		return &FSError{Code: ErrExists, Message: "directory already exists"}
 	}
 
-	// Auto-create parent directories
-	if fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath); fsErr != nil {
+	if _, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath); fsErr != nil {
 		return fsErr
 	}
 
-	// Insert the directory row
 	columns := []string{info.Roles.Filename, info.Roles.Filetype}
 	values := []interface{}{dirPath, "directory"}
 	_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 	if dbErr != nil {
-		return &FSError{
-			Code:    ErrIO,
-			Message: "failed to create directory",
-			Cause:   dbErr,
-		}
+		return &FSError{Code: ErrIO, Message: "failed to create directory", Cause: dbErr}
 	}
 
 	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
@@ -1152,20 +1365,60 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 
 // ensureSynthParentDirs auto-creates parent directory rows for a given path.
 // For "projects/web/todo", creates "projects" and "projects/web" directory rows.
-func (o *Operations) ensureSynthParentDirs(ctx context.Context, schema, table string, info *synth.ViewInfo, path string) *FSError {
+//
+// Returns the parent UUID for the leaf entry. Empty string for root level.
+// When parent_id column exists (ADR-017), creates directories with proper
+// parent_id chain. Otherwise falls back to the old path-encoded model.
+func (o *Operations) ensureSynthParentDirs(ctx context.Context, schema, table string, info *synth.ViewInfo, path string) (string, *FSError) {
 	parts := strings.Split(path, "/")
 	if len(parts) <= 1 {
-		return nil // No parents to create
+		return "", nil // Root level, no parents to create
 	}
 
-	// Create each ancestor directory
+	// Parent-pointer model (ADR-017): chain parent_id values
+	if info.Roles.ParentID != "" {
+		parentID := "" // Start from root (NULL parent_id)
+		for i := 0; i < len(parts)-1; i++ {
+			segName := parts[i]
+
+			// Check cache first
+			if id, ok := o.pathCache.lookup(schema, table, parentID, segName); ok {
+				parentID = id
+				continue
+			}
+
+			// Insert directory if not exists
+			cols := []string{info.Roles.Filename, info.Roles.Filetype}
+			vals := []interface{}{segName, "directory"}
+			if parentID != "" {
+				cols = append(cols, info.Roles.ParentID)
+				vals = append(vals, parentID)
+			}
+			if err := o.db.InsertIfNotExists(ctx, schema, table, cols, vals); err != nil {
+				return "", &FSError{Code: ErrIO, Message: "failed to create parent directory", Cause: err}
+			}
+
+			// Resolve to get the UUID (either just-created or already-existed)
+			results, err := o.db.ResolvePath(ctx, synth.TigerFSSchema, table, parentID, []string{segName})
+			if err != nil || len(results) == 0 {
+				return "", &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve parent directory: %s", segName)}
+			}
+
+			dirID := results[0].ID
+			o.pathCache.put(schema, table, parentID, segName, dirID)
+			parentID = dirID
+		}
+		return parentID, nil
+	}
+
+	// Old path-encoded model (pre-ADR-017)
 	for i := 1; i < len(parts); i++ {
 		parentPath := strings.Join(parts[:i], "/")
 		columns := []string{info.Roles.Filename, info.Roles.Filetype}
 		values := []interface{}{parentPath, "directory"}
 		err := o.db.InsertIfNotExists(ctx, schema, table, columns, values)
 		if err != nil {
-			return &FSError{
+			return "", &FSError{
 				Code:    ErrIO,
 				Message: "failed to create parent directory",
 				Cause:   err,
@@ -1173,7 +1426,7 @@ func (o *Operations) ensureSynthParentDirs(ctx context.Context, schema, table st
 		}
 	}
 
-	return nil
+	return "", nil
 }
 
 // synthRowExists checks if a row exists in a synth view with the given filename and filetype.

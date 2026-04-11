@@ -756,6 +756,33 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 	return nil
 }
 
+// GetRowsByParent returns rows with a specific parent_id, up to limit.
+// Empty parentID means root level (WHERE parent_id IS NULL).
+// Used by the parent-pointer directory model (ADR-017) for ReadDir.
+func (c *Client) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
+	if c.pool == nil {
+		return nil, nil, fmt.Errorf("database connection not initialized")
+	}
+
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" IS NULL LIMIT $1`,
+			qt(schema, table),
+		)
+		args = []interface{}{limit}
+	} else {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" = $1 LIMIT $2`,
+			qt(schema, table),
+		)
+		args = []interface{}{parentID, limit}
+	}
+
+	return c.queryRows(ctx, query, args...)
+}
+
 // HasExtension checks if a PostgreSQL extension is installed in the database.
 func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
 	var exists bool
@@ -814,6 +841,42 @@ func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, hist
 	rows, err := c.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query distinct filenames: %w", err)
+	}
+	defer rows.Close()
+
+	var filenames []string
+	for rows.Next() {
+		var fn string
+		if err := rows.Scan(&fn); err != nil {
+			return nil, fmt.Errorf("failed to scan filename: %w", err)
+		}
+		filenames = append(filenames, fn)
+	}
+	return filenames, nil
+}
+
+// QueryHistoryDistinctFilenamesByParent returns distinct filenames from the history table
+// filtered by parent_id. Empty parentID means root level (WHERE parent_id IS NULL).
+// Used by the parent-pointer model (ADR-017) for per-directory .history/ listing.
+func (c *Client) QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error) {
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT DISTINCT "filename" FROM %s WHERE "parent_id" IS NULL ORDER BY "filename" LIMIT %d`,
+			qt(schema, historyTable), limit,
+		)
+	} else {
+		query = fmt.Sprintf(
+			`SELECT DISTINCT "filename" FROM %s WHERE "parent_id" = $1 ORDER BY "filename" LIMIT %d`,
+			qt(schema, historyTable), limit,
+		)
+		args = []interface{}{parentID}
+	}
+
+	rows, err := c.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct filenames by parent: %w", err)
 	}
 	defer rows.Close()
 
