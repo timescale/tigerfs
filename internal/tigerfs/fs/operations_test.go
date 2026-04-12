@@ -1098,6 +1098,9 @@ type mockDBClient struct {
 	// Version ID return value for QueryLatestVersionID
 	latestVersionIDs map[string]string // fileID -> versionID
 
+	// Row-by-columns lookup data (for savepoint name-based tests)
+	rowByColumnsData map[string]*mockRowByColumns
+
 	// NextLogEntry return values (for diff symlink tests)
 	nextLogVersionID string
 	nextLogFilename  string
@@ -1127,6 +1130,11 @@ type mockLogEntry struct {
 	fileID    string
 	filename  string
 	versionID string
+}
+
+type mockRowByColumns struct {
+	columns []string
+	values  []interface{}
 }
 
 type mockInsertedRow struct {
@@ -1499,6 +1507,14 @@ func (m *mockDBClient) RowExistsByColumns(ctx context.Context, schema, table str
 }
 
 func (m *mockDBClient) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error) {
+	// Check override map first (for savepoint name-based lookups)
+	if m.rowByColumnsData != nil && len(columns) > 0 {
+		overrideKey := fmt.Sprintf("%s.%s.%s=%v", schema, table, columns[0], values[0])
+		if data, ok := m.rowByColumnsData[overrideKey]; ok {
+			return data.columns, data.values, nil
+		}
+	}
+
 	key := schema + "." + table
 	data, ok := m.allRowsData[key]
 	if !ok {

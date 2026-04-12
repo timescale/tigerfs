@@ -1545,6 +1545,15 @@ func (f *memFile) Close() error {
 			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
 		}
 
+		// For virtual directory entries (savepoints, .info/), remove the file
+		// cache immediately after write. These paths appear as directories in
+		// ReadDir but the write created a file handle -- keeping the stale file
+		// cache entry causes go-nfs handle type conflicts (file vs directory).
+		if strings.Contains(filePath, "/.savepoint/") || strings.Contains(filePath, "/.info/") {
+			f.fs.removeFromCache(filePath)
+			return nil
+		}
+
 		// Mark cache entry clean but keep it alive for Stat to use.
 		// The reaper will evict it after idle timeout.
 		f.cached.mu.Lock()
