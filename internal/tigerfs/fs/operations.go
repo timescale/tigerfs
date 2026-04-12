@@ -329,9 +329,11 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirViews(ctx)
 	case PathTable:
 		return o.readDirTable(ctx, parsed)
-	case PathLog, PathSavepoint:
-		// Data-first pipeline on redirected table (.log/ → _log, .savepoint/ → _savepoint)
+	case PathLog:
+		// Data-first pipeline on log table
 		return o.readDirTable(ctx, parsed)
+	case PathSavepoint:
+		return o.readDirSavepoint(ctx, parsed)
 	case PathRootInfo:
 		return o.readDirRootInfo(ctx, parsed)
 	case PathInfo:
@@ -890,6 +892,153 @@ func parseUUIDBytes(s string) ([]byte, error) {
 		}
 	}
 	return b, nil
+}
+
+// readDirSavepoint lists savepoints by name (chronologically ordered).
+// Unlike readDirTable which uses the PK for entry names, this uses the `name` column
+// so users see human-readable savepoint names instead of UUIDv7 savepoint_ids.
+func (o *Operations) readDirSavepoint(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	fsCtx := parsed.Context
+
+	limit := o.config.DirListingLimit
+	if limit <= 0 {
+		limit = 10000
+	}
+	if fsCtx.Limit > 0 {
+		limit = fsCtx.Limit
+	}
+
+	// Extract filter from pipeline Context (e.g., .by/user_id/agent-7)
+	var filterCol, filterVal string
+	if len(fsCtx.Filters) > 0 {
+		filterCol = fsCtx.Filters[0].Column
+		filterVal = fsCtx.Filters[0].Value
+	}
+
+	ascending := fsCtx.LimitType == LimitFirst
+	names, err := o.db.QuerySavepointNames(ctx, fsCtx.Schema, fsCtx.TableName, filterCol, filterVal, limit, ascending)
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to list savepoints", Cause: err}
+	}
+
+	now := time.Now()
+	entries := make([]Entry, 0, len(names))
+	for _, name := range names {
+		entries = append(entries, Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	}
+	return entries, nil
+}
+
+// getSavepointRowByName looks up a savepoint row by the `name` column.
+// Returns (columns, row, error). Row is nil if not found.
+func (o *Operations) getSavepointRowByName(ctx context.Context, schema, table, name string) ([]string, []interface{}, error) {
+	return o.db.GetRowByColumns(ctx, schema, table, []string{"name"}, []interface{}{name})
+}
+
+// writeSavepoint creates or updates a savepoint via .savepoint/name.
+// touch creates with NULL description. echo "desc" creates with description.
+// If savepoint already exists, updates the description.
+func (o *Operations) writeSavepoint(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
+	fsCtx := parsed.Context
+	name := parsed.PrimaryKey
+	desc := strings.TrimSpace(string(data))
+
+	// Check if savepoint already exists
+	_, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, name)
+	if err != nil {
+		return &FSError{Code: ErrIO, Message: "failed to check savepoint", Cause: err}
+	}
+
+	if row != nil {
+		// Update existing: set description
+		if desc != "" {
+			return o.writeSavepointColumn(ctx, &ParsedPath{
+				Context:       fsCtx,
+				PrimaryKey:    name,
+				Column:        "description",
+				OrigTableName: parsed.OrigTableName,
+			}, data)
+		}
+		return nil // touch on existing savepoint is a no-op
+	}
+
+	// Create new savepoint
+	columns := []string{"name"}
+	values := []interface{}{name}
+	if desc != "" {
+		columns = append(columns, "description")
+		values = append(values, desc)
+	}
+	if o.userID != "" {
+		columns = append(columns, "user_id")
+		values = append(values, o.userID)
+	}
+
+	_, insertErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+	if insertErr != nil {
+		return &FSError{Code: ErrIO, Message: "failed to create savepoint", Cause: insertErr}
+	}
+	return nil
+}
+
+// writeSavepointColumn updates a column on an existing savepoint.
+func (o *Operations) writeSavepointColumn(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
+	fsCtx := parsed.Context
+	name := parsed.PrimaryKey
+	value := strings.TrimSpace(string(data))
+
+	// Look up savepoint by name to get the actual PK (savepoint_id)
+	columns, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, name)
+	if err != nil || row == nil {
+		return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", name)}
+	}
+
+	// Find savepoint_id in the row
+	var savepointID string
+	for i, col := range columns {
+		if col == "savepoint_id" {
+			savepointID, _ = format.ConvertValueToText(row[i])
+			break
+		}
+	}
+	if savepointID == "" {
+		return &FSError{Code: ErrIO, Message: "savepoint_id not found in row"}
+	}
+
+	updateErr := o.db.UpdateRow(ctx, fsCtx.Schema, fsCtx.TableName,
+		db.SinglePKMatch("savepoint_id", savepointID),
+		[]string{parsed.Column}, []interface{}{value})
+	if updateErr != nil {
+		return &FSError{Code: ErrIO, Message: "failed to update savepoint", Cause: updateErr}
+	}
+	return nil
+}
+
+// deleteSavepoint deletes a savepoint by name.
+func (o *Operations) deleteSavepoint(ctx context.Context, parsed *ParsedPath) *FSError {
+	fsCtx := parsed.Context
+	name := parsed.PrimaryKey
+
+	// Look up by name to get PK
+	columns, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, name)
+	if err != nil || row == nil {
+		return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", name)}
+	}
+
+	var savepointID string
+	for i, col := range columns {
+		if col == "savepoint_id" {
+			savepointID, _ = format.ConvertValueToText(row[i])
+			break
+		}
+	}
+
+	deleteErr := o.db.DeleteRow(ctx, fsCtx.Schema, fsCtx.TableName,
+		db.SinglePKMatch("savepoint_id", savepointID))
+	if deleteErr != nil {
+		return &FSError{Code: ErrIO, Message: "failed to delete savepoint", Cause: deleteErr}
+	}
+	return nil
 }
 
 // readDirInfo lists the .info metadata directory.
@@ -1623,6 +1772,19 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 		}
 	}
 
+	// Savepoint rows: lookup by name column, not PK
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_savepoint") {
+		_, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey)
+		if err != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to query savepoint", Cause: err}
+		}
+		if row == nil {
+			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", parsed.PrimaryKey)}
+		}
+		now := time.Now()
+		return &Entry{Name: parsed.PrimaryKey, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
 	// Check if this is a synthesized view — synth files are always files, not directories
 	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
 		return o.statSynthFile(ctx, parsed, info)
@@ -2188,6 +2350,32 @@ func (o *Operations) readRowFile(ctx context.Context, parsed *ParsedPath) (*File
 		}
 	}
 
+	// Savepoint rows: lookup by name, serialize in requested format
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_savepoint") {
+		columns, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey)
+		if err != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to query savepoint", Cause: err}
+		}
+		if row == nil {
+			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", parsed.PrimaryKey)}
+		}
+		var data []byte
+		switch parsed.Format {
+		case "json":
+			data, err = format.RowToJSON(columns, row)
+		case "csv":
+			data, err = format.RowToCSV(columns, row)
+		case "yaml":
+			data, err = format.RowToYAML(columns, row)
+		default:
+			data, err = format.RowToTSV(columns, row)
+		}
+		if err != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to format savepoint", Cause: err}
+		}
+		return &FileContent{Data: data}, nil
+	}
+
 	// Check if this is a synthesized view
 	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
 		data, fsErr := o.readFileSynthView(ctx, parsed, info)
@@ -2263,6 +2451,21 @@ func (o *Operations) readColumnFile(ctx context.Context, parsed *ParsedPath) (*F
 			Code:    ErrInvalidPath,
 			Message: "missing context for column path",
 		}
+	}
+
+	// Savepoint column: lookup row by name, extract column
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_savepoint") {
+		columns, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey)
+		if err != nil || row == nil {
+			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", parsed.PrimaryKey)}
+		}
+		for i, col := range columns {
+			if col == parsed.Column {
+				text, _ := format.ConvertValueToText(row[i])
+				return &FileContent{Data: []byte(text + "\n")}, nil
+			}
+		}
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("column not found: %s", parsed.Column)}
 	}
 
 	// Get columns to resolve the filename

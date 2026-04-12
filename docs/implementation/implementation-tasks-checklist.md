@@ -272,7 +272,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 12.5 | User Identity (.info/user) | ~8860 |
 | ✅ | 12.6 | Path Parsing for .log/, .savepoint/, .undo/ | ~8900 |
 | ✅ | 12.7 | .log/ Interface (Data-First on Log Table + Diff Symlinks) | ~8930 |
-| ⬜ | 12.8 | .savepoint/ Interface (Data-First + Write Support) | ~8970 |
+| ✅ | 12.8 | .savepoint/ Interface (Data-First + Write Support) | ~8970 |
 | ⬜ | 12.9 | Auto-Savepoints (Session-Based) | ~9000 |
 | ⬜ | 12.10 | Undo Execution Logic (Core Engine) | ~9030 |
 | ⬜ | 12.11 | .undo/ Interface (Preview + Apply) | ~9080 |
@@ -318,6 +318,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| Phase 12: Undo and Recovery | 7 | 12 | 58% |
+| Phase 12: Undo and Recovery | 8 | 12 | 67% |
 | Phase 13: Relational Directory Structure | 12 | 12 | 100% |
-| **Total** | **125** | **147** | **85%** |
+| **Total** | **126** | **147** | **86%** |
