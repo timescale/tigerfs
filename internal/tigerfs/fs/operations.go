@@ -333,7 +333,14 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		// Data-first pipeline on log table
 		return o.readDirTable(ctx, parsed)
 	case PathSavepoint:
-		return o.readDirSavepoint(ctx, parsed)
+		// NOTE: readDirSavepoint provides name-based display (human-readable) and
+		// works correctly in integration tests (ops.ReadDir). However, it causes
+		// empty listings via NFS mount due to a go-nfs handle management issue
+		// where entries returned by custom ReadDir handlers don't get proper NFS
+		// file handles. Using readDirTable as fallback shows savepoint_id UUIDs
+		// instead of names. Fix requires investigating go-nfs READDIRPLUS handle
+		// generation for virtual directories.
+		return o.readDirTable(ctx, parsed)
 	case PathRootInfo:
 		return o.readDirRootInfo(ctx, parsed)
 	case PathInfo:
@@ -922,10 +929,17 @@ func (o *Operations) readDirSavepoint(ctx context.Context, parsed *ParsedPath) (
 	}
 
 	now := time.Now()
-	entries := make([]Entry, 0, len(names))
+	entries := make([]Entry, 0, len(names)+1)
+	cacheEntries := make(map[string]Entry, len(names))
 	for _, name := range names {
-		entries = append(entries, Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+		entry := Entry{Name: name, IsDir: true, Mode: 0755, ModTime: now}
+		entries = append(entries, entry)
+		cacheEntries[name] = entry
 	}
+
+	// Prime stat cache so subsequent GETATTR calls (ls -l) don't re-query the DB
+	o.statCache.prime(fsCtx.Schema, fsCtx.TableName, cacheEntries)
+
 	return entries, nil
 }
 
@@ -1774,6 +1788,10 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 
 	// Savepoint rows: lookup by name column, not PK
 	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_savepoint") {
+		// Check ReadDir-primed cache first
+		if entry, ok := o.statCache.lookup(fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey); ok {
+			return &entry, nil
+		}
 		_, row, err := o.getSavepointRowByName(ctx, fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to query savepoint", Cause: err}
