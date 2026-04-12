@@ -744,7 +744,7 @@ cat /tmp/testmount/users/.schema
 go run ./cmd/tigerfs postgres://... /tmp/testmount
 
 # Test TSV update
-echo -e "1\tnew@example.com" > /tmp/testmount/users/1
+echo -e "id\temail\n1\tnew@example.com" > /tmp/testmount/users/1.tsv
 cat /tmp/testmount/users/1/email
 # Should show: new@example.com
 

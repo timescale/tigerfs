@@ -152,7 +152,35 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 			}
 		}
 	} else {
-		// INSERT new row
+		// INSERT new row -- require format suffix (.tsv, .json, .csv) for new rows.
+		// On macOS NFS, bare-path writes (no extension) create a FILE inode that conflicts
+		// with the DIRECTORY inode returned by READDIRPLUS, causing the entry to silently
+		// disappear from ls. Format suffixes avoid this because the write path (e.g.,
+		// "test-cat.tsv") differs from the listing name ("test-cat").
+		if parsed.Format == "" {
+			return &FSError{
+				Code:    ErrInvalidArgument,
+				Message: "format suffix required to create new rows (use .tsv, .json, or .csv)",
+			}
+		}
+
+		// Merge PK columns from the path if not already in the data.
+		// e.g., writing to /categories/test-cat.tsv with body "name\tvalue" should
+		// include slug=test-cat in the INSERT even though it's not in the TSV body.
+		for i, pkCol := range match.Columns {
+			found := false
+			for _, col := range columns {
+				if col == pkCol {
+					found = true
+					break
+				}
+			}
+			if !found {
+				columns = append(columns, pkCol)
+				values = append(values, match.Values[i])
+			}
+		}
+
 		_, err = o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 		if err != nil {
 			return &FSError{
