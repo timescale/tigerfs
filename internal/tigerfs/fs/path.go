@@ -636,7 +636,9 @@ func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 	column := remaining[1]
 	value := remaining[2]
 	result.Context = result.Context.WithFilter(column, value, true)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 3, nil
 }
 
@@ -676,7 +678,9 @@ func processColumns(result *ParsedPath, remaining []string) (int, *FSError) {
 	}
 
 	result.Context = result.Context.WithColumns(columns)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 2, nil
 }
 
@@ -708,7 +712,9 @@ func processFilter(result *ParsedPath, remaining []string) (int, *FSError) {
 	column := remaining[1]
 	value := remaining[2]
 	result.Context = result.Context.WithFilter(column, value, false)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 3, nil
 }
 
@@ -745,7 +751,9 @@ func processOrder(result *ParsedPath, remaining []string) (int, *FSError) {
 		desc = true
 	}
 	result.Context = result.Context.WithOrder(col, desc)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 2, nil
 }
 
@@ -794,7 +802,11 @@ func processLimit(result *ParsedPath, remaining []string, limitType LimitType) (
 	}
 
 	result.Context = result.Context.WithLimit(n, limitType)
-	result.Type = PathTable
+	// Preserve the original type for .log/.savepoint/.undo redirected tables.
+	// Only reset to PathTable if already a table path.
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 2, nil
 }
 

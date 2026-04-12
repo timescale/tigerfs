@@ -1707,6 +1707,10 @@ func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, use
 	return nil
 }
 
+func (m *mockDBClient) QuerySavepointNames(ctx context.Context, schema, table, filterCol, filterVal string, limit int, ascending bool) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockDBClient) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
 	return m.nextLogVersionID, m.nextLogFilename, nil
 }
