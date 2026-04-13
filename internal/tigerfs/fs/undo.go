@@ -492,3 +492,209 @@ func (o *Operations) statUndo(ctx context.Context, parsed *ParsedPath) (*Entry, 
 
 	return nil, &FSError{Code: ErrNotExist, Message: "invalid .undo/ path"}
 }
+
+// readFileUndo handles ReadFile for .undo/ paths.
+func (o *Operations) readFileUndo(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
+	// .info/summary (or summary.json, summary.csv, etc.)
+	if parsed.InfoFile != "" {
+		return o.readUndoSummary(ctx, parsed)
+	}
+
+	// .apply -- write-only, return empty for NFS SETATTR compatibility
+	if parsed.UndoApply {
+		return &FileContent{Data: []byte{}}, nil
+	}
+
+	// Preview file content
+	if parsed.UndoFile != "" {
+		return o.readUndoPreviewFile(ctx, parsed)
+	}
+
+	return nil, &FSError{Code: ErrInvalidPath, Message: "cannot read .undo/ directory as file"}
+}
+
+// readUndoSummary returns the .info/summary file for an undo preview.
+func (o *Operations) readUndoSummary(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
+	affected, err := o.queryUndoAffected(ctx, parsed)
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to query undo summary", Cause: err}
+	}
+
+	// Determine output format from InfoFile name (summary.json, summary.csv, etc.)
+	outputFormat := "tsv"
+	infoFile := parsed.InfoFile
+	if idx := strings.LastIndex(infoFile, "."); idx > 0 {
+		ext := infoFile[idx:]
+		switch ext {
+		case ".json":
+			outputFormat = "json"
+		case ".csv":
+			outputFormat = "csv"
+		case ".yaml":
+			outputFormat = "yaml"
+		}
+	}
+
+	// Build summary data
+	type summaryRow struct {
+		Action   string `json:"action"`
+		Filename string `json:"filename"`
+	}
+	var rows []summaryRow
+	for _, f := range affected {
+		action := "restore"
+		if f.Type == "create" {
+			action = "delete"
+		}
+		rows = append(rows, summaryRow{Action: action, Filename: f.Filename})
+	}
+
+	var data []byte
+	switch outputFormat {
+	case "json":
+		// Build JSON array manually to match format package patterns
+		columns := []string{"action", "filename"}
+		var jsonRows [][]interface{}
+		for _, r := range rows {
+			jsonRows = append(jsonRows, []interface{}{r.Action, r.Filename})
+		}
+		data, err = format.RowsToJSON(columns, jsonRows)
+	case "csv":
+		var lines []string
+		lines = append(lines, "action,filename")
+		for _, r := range rows {
+			lines = append(lines, r.Action+","+r.Filename)
+		}
+		data = []byte(strings.Join(lines, "\n") + "\n")
+	case "yaml":
+		var lines []string
+		for _, r := range rows {
+			lines = append(lines, fmt.Sprintf("- action: %s\n  filename: %s", r.Action, r.Filename))
+		}
+		data = []byte(strings.Join(lines, "\n") + "\n")
+	default: // tsv
+		var lines []string
+		for _, r := range rows {
+			lines = append(lines, r.Action+"\t"+r.Filename)
+		}
+		data = []byte(strings.Join(lines, "\n") + "\n")
+	}
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to format undo summary", Cause: err}
+	}
+
+	return &FileContent{Data: data}, nil
+}
+
+// readUndoPreviewFile returns the content of a file in the undo preview.
+// For restore actions: returns the before-state from history.
+// For delete actions: returns current file content (the file that will be deleted).
+func (o *Operations) readUndoPreviewFile(ctx context.Context, parsed *ParsedPath) (*FileContent, *FSError) {
+	affected, err := o.queryUndoAffected(ctx, parsed)
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to query undo preview", Cause: err}
+	}
+
+	// Find the matching file
+	for _, f := range affected {
+		if f.Filename != parsed.UndoFile {
+			continue
+		}
+
+		if f.Type == "create" {
+			// File will be deleted on apply -- return current content
+			tableName := parsed.OrigTableName
+			return o.readSynthFileByID(ctx, synth.TigerFSSchema, tableName, f.FileID)
+		}
+
+		// Restore: return before-state from history
+		if f.VersionID == "" {
+			return nil, &FSError{Code: ErrIO, Message: "no history version for undo preview"}
+		}
+		tableName := parsed.OrigTableName
+		historyTable := tableName + "_history"
+		return o.readHistoryByVersionID(ctx, synth.TigerFSSchema, historyTable, tableName, f.VersionID)
+	}
+
+	return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found in undo preview: %s", parsed.UndoFile)}
+}
+
+// readSynthFileByID reads a synth file by its UUID (for preview of files to be deleted).
+func (o *Operations) readSynthFileByID(ctx context.Context, schema, tableName, fileID string) (*FileContent, *FSError) {
+	row, err := o.db.GetRow(ctx, schema, tableName, db.SinglePKMatch("id", fileID))
+	if err != nil {
+		return nil, &FSError{Code: ErrNotExist, Message: "file not found"}
+	}
+
+	// Get synth view info to render the content
+	info := o.getSynthViewInfo(ctx, schema, tableName)
+	if info == nil {
+		// Fallback: return raw TSV
+		data, fmtErr := format.RowToTSV(row.Columns, interfaceSlice(row.Values))
+		if fmtErr != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to format row", Cause: fmtErr}
+		}
+		return &FileContent{Data: data}, nil
+	}
+
+	// Render through synth format layer
+	return o.renderSynthContent(row, info)
+}
+
+// readHistoryByVersionID reads a history entry and renders it as synth content.
+func (o *Operations) readHistoryByVersionID(ctx context.Context, schema, historyTable, sourceTable, versionID string) (*FileContent, *FSError) {
+	row, err := o.db.GetRow(ctx, schema, historyTable, db.SinglePKMatch("version_id", versionID))
+	if err != nil {
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("history entry not found: %s", versionID)}
+	}
+
+	// Map history columns to source columns (file_id -> id, skip version_id/operation)
+	var columns []string
+	var values []interface{}
+	for i, col := range row.Columns {
+		if col == "version_id" || col == "operation" {
+			continue
+		}
+		if col == "file_id" {
+			col = "id"
+		}
+		columns = append(columns, col)
+		values = append(values, row.Values[i])
+	}
+
+	// Get synth view info to render
+	info := o.getSynthViewInfo(ctx, schema, sourceTable)
+	if info == nil {
+		data, fmtErr := format.RowToTSV(columns, values)
+		if fmtErr != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to format history row", Cause: fmtErr}
+		}
+		return &FileContent{Data: data}, nil
+	}
+
+	mappedRow := &db.Row{Columns: columns, Values: values}
+	return o.renderSynthContent(mappedRow, info)
+}
+
+// renderSynthContent renders a row through the synth format layer.
+func (o *Operations) renderSynthContent(row *db.Row, info *synth.ViewInfo) (*FileContent, *FSError) {
+	var data []byte
+	var err error
+	switch info.Format {
+	case synth.FormatMarkdown:
+		data, err = synth.SynthesizeMarkdown(row.Columns, interfaceSlice(row.Values), info.Roles)
+	case synth.FormatPlainText:
+		data, err = synth.SynthesizePlainText(row.Columns, interfaceSlice(row.Values), info.Roles)
+	default:
+		data, err = format.RowToTSV(row.Columns, interfaceSlice(row.Values))
+	}
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to synthesize content", Cause: err}
+	}
+	return &FileContent{Data: data}, nil
+}
+
+// interfaceSlice converts []interface{} (already the right type) for format functions.
+func interfaceSlice(vals []interface{}) []interface{} {
+	return vals
+}
