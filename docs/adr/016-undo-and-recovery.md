@@ -153,12 +153,14 @@ Savepoints are stored in a **separate table** from the log (not as log entries w
 
 ```sql
 CREATE TABLE tigerfs.<app>_savepoint (
-    savepoint_id  UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    name          TEXT NOT NULL PRIMARY KEY,
+    savepoint_id  UUID NOT NULL DEFAULT uuidv7() UNIQUE,
     user_id       TEXT,
-    name          TEXT NOT NULL UNIQUE,
     description   TEXT
 );
 ```
+
+`name` is the PK so standard filesystem operations (list, read, write, delete) work without savepoint-specific code. `savepoint_id` (UUIDv7) is retained with a UNIQUE constraint for undo time-ordering (`log_id > savepoint_id`).
 
 This is a regular PostgreSQL table, not a hypertable. Savepoints are small (tens to hundreds, not millions) and don't need time-series features.
 
@@ -180,11 +182,11 @@ Savepoints are exposed as a data-first directory under each synth app table. The
 
 **Creating a savepoint:**
 ```bash
-echo "Starting agent exploration" > notes/.savepoint/before-exploration
-# Inserts: savepoint_id=uuidv7(), name='before-exploration', description='Starting agent exploration'
+echo -e "description\nStarting agent exploration" > notes/.savepoint/before-exploration.tsv
+# Inserts: name='before-exploration', savepoint_id=uuidv7(), description='Starting agent exploration'
 
-touch notes/.savepoint/quick-mark
-# Inserts with NULL description
+echo '{}' > notes/.savepoint/quick-mark.json
+# Inserts: name='quick-mark', savepoint_id=uuidv7(), description=NULL
 ```
 
 **Listing savepoints:**
@@ -1119,7 +1121,7 @@ Add to the quick reference table:
 
 | Goal | Tool Call |
 |------|-----------|
-| Create savepoint | `Bash "touch mount/app/.savepoint/name"` |
+| Create savepoint | `Bash "echo '{}' > mount/app/.savepoint/name.json"` |
 | Preview undo | `Read "mount/app/.undo/to-savepoint/name/.info/summary"` |
 | Apply undo | `Bash "touch mount/app/.undo/to-savepoint/name/.apply"` |
 | View log | `Read "mount/app/.log/.last/10/.export/json"` |

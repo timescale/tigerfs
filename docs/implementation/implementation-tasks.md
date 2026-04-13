@@ -8827,34 +8827,32 @@ Expose savepoints using existing data-first pipeline code (FSContext targets sav
 **Files:** `internal/tigerfs/fs/operations.go`, `internal/tigerfs/fs/write.go`
 **Tasks:**
 1. Add `readDirSavepoint()`, `statSavepoint()`, `readFileSavepoint()` -- delegate to pipeline with `name` as display filename
-2. Add `writeSavepoint()` (create/update), `deleteSavepoint()` (rm), rename via mv. When creating, populate `user_id` from current `.info/user` value.
+2. With `name` as PK, savepoints use standard `writeRowFile` (no custom CRUD functions). A thin `writeSavepoint` wrapper injects `user_id` from mount identity. Format suffix required for creation (`.tsv`, `.json`, `.csv`) to avoid macOS NFS inode cache conflicts.
 3. Wire into dispatch switch statements
 4. Unit tests
 5. Integration tests -- CRUD operations:
-   - `touch .savepoint/my-checkpoint` -- creates with NULL description
-   - `echo "desc" > .savepoint/my-checkpoint` -- creates with description (or upserts if exists)
+   - `echo '{}' > .savepoint/my-checkpoint.json` -- creates with name only
+   - `echo -e "description\nmy desc" > .savepoint/my-checkpoint.tsv` -- creates with description
+   - `echo '{"description":"my desc","user_id":"agent-7"}' > .savepoint/my-checkpoint.json` -- creates with all fields
    - `cat .savepoint/my-checkpoint/description` -- read individual field
-   - `cat .savepoint/my-checkpoint/savepoint_id` -- read PK
+   - `cat .savepoint/my-checkpoint/savepoint_id` -- read auto-generated UUIDv7
    - `cat .savepoint/my-checkpoint.json` -- read full row as JSON
    - `echo "new desc" > .savepoint/my-checkpoint/description` -- update description
-   - `mv .savepoint/old-name .savepoint/new-name` -- rename (savepoint_id unchanged)
    - `rm .savepoint/my-checkpoint` -- delete
    - Verify delete only removes bookmark, not log entries
 6. Integration tests -- pipeline operations:
    - `ls .savepoint/.last/5` -- most recent
    - `ls .savepoint/.by/user_id/demo-user` -- filter by user
    - `cat .savepoint/.export/json` -- bulk export
-   - `cat .savepoint/*.json` -- format suffix
    - `ls .savepoint/.order/name` -- sorted
    - `ls .savepoint/.all/` -- full listing
 **Demo step:** With demo data:
-- `touch mount/demo/.savepoint/initial-data`
+- `echo -e "description\nInitial data loaded" > mount/demo/.savepoint/initial-data.tsv`
 - Make more edits (update files, delete one, create new one)
-- `touch mount/demo/.savepoint/after-edits`
-- `ls mount/demo/.savepoint/` -- see both savepoints
+- `echo -e "description\nAfter edits" > mount/demo/.savepoint/after-edits.tsv`
+- `ls mount/demo/.savepoint/` -- see both savepoints listed by name
 - `cat mount/demo/.savepoint/initial-data.json` -- see details
-- `mv mount/demo/.savepoint/initial-data mount/demo/.savepoint/first-checkpoint` -- rename
-- `rm mount/demo/.savepoint/first-checkpoint` -- delete
+- `rm mount/demo/.savepoint/initial-data` -- delete
 
 ### Task 12.9: Auto-Savepoints
 Implement session-based auto-savepoint creation.

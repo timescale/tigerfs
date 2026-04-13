@@ -377,11 +377,11 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, `"tigerfs"."memory_savepoint"`) {
 		t.Errorf("should create savepoint table in tigerfs schema, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "savepoint_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY") {
-		t.Errorf("savepoint table should have savepoint_id UUIDv7 PK, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "name TEXT NOT NULL PRIMARY KEY") {
+		t.Errorf("savepoint table should have name as PK, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "name TEXT NOT NULL UNIQUE") {
-		t.Errorf("savepoint table should have unique name column, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "savepoint_id UUID NOT NULL DEFAULT uuidv7() UNIQUE") {
+		t.Errorf("savepoint table should have savepoint_id UUIDv7 UNIQUE, got:\n%s", allSQL)
 	}
 }
 

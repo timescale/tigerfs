@@ -1134,7 +1134,15 @@ func processSegmentsFrom(result *ParsedPath, segments []string) (int, *FSError) 
 
 		// Not a capability -- treat as row PK (data-first table access)
 		result.Type = PathRow
-		result.PrimaryKey = seg
+		pk := seg
+		for ext, fmt := range knownFormats {
+			if strings.HasSuffix(pk, ext) {
+				pk = strings.TrimSuffix(pk, ext)
+				result.Format = fmt
+				break
+			}
+		}
+		result.PrimaryKey = pk
 		consumed++
 
 		// If there are more segments, next one is a column name

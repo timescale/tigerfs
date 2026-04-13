@@ -333,10 +333,6 @@ type LogWriter interface {
 	//   - description: optional human-readable note
 	InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error
 
-	// QuerySavepointNames returns savepoint names ordered by creation time.
-	// ascending=false for most recent first (.last/N), true for oldest first (.first/N).
-	QuerySavepointNames(ctx context.Context, schema, table, filterCol, filterVal string, limit int, ascending bool) ([]string, error)
-
 	// QueryNextLogEntry finds the next log entry for a file after a given log_id.
 	// Returns (version_id, filename) of the next entry, or empty strings if none.
 	QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error)

@@ -862,53 +862,6 @@ func (c *Client) QueryFileExists(ctx context.Context, schema, table, fileID stri
 	return exists, nil
 }
 
-// QuerySavepointNames returns savepoint names ordered by creation time.
-// ascending=false gives most recent first (.last/N), ascending=true gives oldest first (.first/N).
-// Supports optional filter column/value for pipeline .by/ operations.
-func (c *Client) QuerySavepointNames(ctx context.Context, schema, table string, filterCol, filterVal string, limit int, ascending bool) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
-	}
-
-	order := "DESC"
-	if ascending {
-		order = "ASC"
-	}
-
-	var query string
-	var args []interface{}
-
-	if filterCol != "" && filterVal != "" {
-		query = fmt.Sprintf(
-			`SELECT "name" FROM %s WHERE %s = $1 ORDER BY "savepoint_id" %s LIMIT $2`,
-			qt(schema, table), qi(filterCol), order,
-		)
-		args = []interface{}{filterVal, limit}
-	} else {
-		query = fmt.Sprintf(
-			`SELECT "name" FROM %s ORDER BY "savepoint_id" %s LIMIT $1`,
-			qt(schema, table), order,
-		)
-		args = []interface{}{limit}
-	}
-
-	rows, err := c.pool.Query(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query savepoint names: %w", err)
-	}
-	defer rows.Close()
-
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("failed to scan savepoint name: %w", err)
-		}
-		names = append(names, name)
-	}
-	return names, nil
-}
-
 // HasExtension checks if a PostgreSQL extension is installed in the database.
 func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
 	var exists bool
