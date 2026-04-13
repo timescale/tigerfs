@@ -862,6 +862,239 @@ func (c *Client) QueryFileExists(ctx context.Context, schema, table, fileID stri
 	return exists, nil
 }
 
+// QueryUndoAffectedFiles returns the first log entry per file after a target point.
+// Uses DISTINCT ON to find one entry per file_id, ordered by log_id ASC (oldest first).
+// TimescaleDB's SkipScan optimizes this on the (file_id, log_id ASC) index.
+func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
+	// Build WHERE clause
+	conditions := []string{fmt.Sprintf("%s > $1", qi("log_id"))}
+	args := []interface{}{afterID}
+	argIdx := 2
+
+	if userID != "" {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", qi("user_id"), argIdx))
+		args = append(args, userID)
+		argIdx++
+	}
+
+	for _, f := range filters {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", qi(f.Column), argIdx))
+		args = append(args, f.Value)
+		argIdx++
+	}
+
+	where := strings.Join(conditions, " AND ")
+
+	query := fmt.Sprintf(
+		`SELECT DISTINCT ON (%s) %s, %s, %s, %s FROM %s WHERE %s ORDER BY %s, %s ASC`,
+		qi("file_id"),
+		qi("file_id"), qi("type"), qi("version_id"), qi("filename"),
+		qt(schema, logTable),
+		where,
+		qi("file_id"), qi("log_id"),
+	)
+
+	rows, err := c.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query undo affected files: %w", err)
+	}
+	defer rows.Close()
+
+	var result []UndoAffectedFile
+	for rows.Next() {
+		var f UndoAffectedFile
+		var versionID *string
+		if err := rows.Scan(&f.FileID, &f.Type, &versionID, &f.Filename); err != nil {
+			return nil, fmt.Errorf("failed to scan undo affected file: %w", err)
+		}
+		if versionID != nil {
+			f.VersionID = *versionID
+		}
+		result = append(result, f)
+	}
+	return result, nil
+}
+
+// QueryLogEntry fetches a single log entry by log_id.
+func (c *Client) QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT %s, %s, %s, %s FROM %s WHERE %s = $1`,
+		qi("file_id"), qi("type"), qi("version_id"), qi("filename"),
+		qt(schema, logTable),
+		qi("log_id"),
+	)
+
+	var f UndoAffectedFile
+	var versionID *string
+	err := c.pool.QueryRow(ctx, query, logID).Scan(&f.FileID, &f.Type, &versionID, &f.Filename)
+	if err != nil {
+		return nil, fmt.Errorf("log entry not found: %s", logID)
+	}
+	if versionID != nil {
+		f.VersionID = *versionID
+	}
+	return &f, nil
+}
+
+// ExecuteUndoTransaction executes a batch of undo operations atomically.
+// Within a single transaction: deletes created rows, upserts from history,
+// and inserts undo log entries. BEFORE triggers fire on each restore,
+// creating history entries for the undo itself.
+func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error {
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin undo transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	sourceTable := qt("public", params.SourceTable)
+	historyTable := qt(params.Schema, params.HistoryTable)
+	logTable := qt(params.Schema, params.LogTable)
+
+	// Step 1: DELETE rows that were created after the target point.
+	for _, fileID := range params.DeleteFileIDs {
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE %s = $1`, sourceTable, qi("id")),
+			fileID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to delete created row %s: %w", fileID, err)
+		}
+	}
+
+	// Step 2: UPSERT rows from history for edits/renames/deletes.
+	// Fetch each history row by version_id and restore it.
+	for i, versionID := range params.RestoreVersionIDs {
+		fileID := params.RestoreFileIDs[i]
+
+		// Fetch history row -- get all columns dynamically
+		historyRow, err := tx.Query(ctx,
+			fmt.Sprintf(`SELECT * FROM %s WHERE %s = $1`, historyTable, qi("version_id")),
+			versionID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to fetch history for version %s: %w", versionID, err)
+		}
+
+		if !historyRow.Next() {
+			historyRow.Close()
+			return fmt.Errorf("history entry not found for version_id %s", versionID)
+		}
+
+		// Get column descriptions from the result set
+		fieldDescs := historyRow.FieldDescriptions()
+		values, err := historyRow.Values()
+		historyRow.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read history row for version %s: %w", versionID, err)
+		}
+
+		// Build column/value maps, excluding history-only columns
+		var sourceCols []string
+		var sourceVals []interface{}
+		for j, fd := range fieldDescs {
+			colName := string(fd.Name)
+			// Skip history-only columns (version_id, operation are not in the source table)
+			if colName == "version_id" || colName == "operation" {
+				continue
+			}
+			sourceCols = append(sourceCols, colName)
+			sourceVals = append(sourceVals, values[j])
+		}
+
+		// Build UPSERT: INSERT ... ON CONFLICT (id) DO UPDATE SET ...
+		placeholders := make([]string, len(sourceCols))
+		quotedCols := make([]string, len(sourceCols))
+		updateSet := make([]string, 0, len(sourceCols))
+		for j, col := range sourceCols {
+			placeholders[j] = fmt.Sprintf("$%d", j+1)
+			quotedCols[j] = qi(col)
+			if col != "id" { // Don't update the PK
+				updateSet = append(updateSet, fmt.Sprintf("%s = EXCLUDED.%s", qi(col), qi(col)))
+			}
+		}
+
+		upsertSQL := fmt.Sprintf(
+			`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s`,
+			sourceTable,
+			strings.Join(quotedCols, ", "),
+			strings.Join(placeholders, ", "),
+			qi("id"),
+			strings.Join(updateSet, ", "),
+		)
+
+		_, err = tx.Exec(ctx, upsertSQL, sourceVals...)
+		if err != nil {
+			return fmt.Errorf("failed to restore file %s from history: %w", fileID, err)
+		}
+	}
+
+	// Step 3: Insert undo log entries for each affected file.
+	// DELETE targets get a log entry too (we're undoing the creation).
+	for _, fileID := range params.DeleteFileIDs {
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (%s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3)`,
+				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("description"),
+			),
+			fileID, params.UserID, params.Description,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert undo log entry for delete: %w", err)
+		}
+	}
+	for i, fileID := range params.RestoreFileIDs {
+		// Capture version_id of the state just before our restore (the BEFORE trigger has fired)
+		var latestVersionID *string
+		err := tx.QueryRow(ctx,
+			fmt.Sprintf(
+				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
+				qi("version_id"), qt(params.Schema, params.HistoryTable),
+				qi("file_id"), qi("version_id"),
+			),
+			fileID,
+		).Scan(&latestVersionID)
+		if err != nil {
+			latestVersionID = nil
+		}
+
+		versionIDVal := ""
+		if latestVersionID != nil {
+			versionIDVal = *latestVersionID
+		}
+
+		_, err = tx.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
+				logTable,
+				qi("log_id"), qi("file_id"), qi("type"), qi("user_id"),
+				qi("filename"), qi("version_id"), qi("description"),
+			),
+			fileID, params.UserID, params.RestoreFilenames[i], versionIDVal, params.Description,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert undo log entry for restore: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit undo transaction: %w", err)
+	}
+	return nil
+}
+
 // HasExtension checks if a PostgreSQL extension is installed in the database.
 func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
 	var exists bool

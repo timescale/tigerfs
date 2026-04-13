@@ -774,3 +774,15 @@ func (m *MockLogWriter) QueryLatestVersionID(ctx context.Context, schema, histor
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)
 }
+
+func (m *MockLogWriter) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
+	return nil, nil
+}
+
+func (m *MockLogWriter) QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error) {
+	return nil, fmt.Errorf("log entry not found: %s", logID)
+}
+
+func (m *MockLogWriter) ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error {
+	return nil
+}
