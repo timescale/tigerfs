@@ -344,6 +344,54 @@ type LogWriter interface {
 	// file_id from the history table. Used to capture the before-state pointer
 	// after an UPDATE/DELETE fires the BEFORE trigger.
 	QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error)
+
+	// QueryUndoAffectedFiles returns the first log entry per file after a target point.
+	// Uses DISTINCT ON with SkipScan on the (file_id, log_id ASC) index.
+	// The version_id on each entry is the before-state at the target point.
+	// Optional userID filter limits to operations by a specific user.
+	QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error)
+
+	// QueryLogEntry fetches a single log entry by log_id.
+	QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error)
+
+	// ExecuteUndoTransaction executes a batch of undo operations in a single transaction.
+	// Deletes rows that were created after the target, upserts rows from history
+	// for edits/renames/deletes, and inserts undo log entries -- all atomically.
+	ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error
+}
+
+// UndoAffectedFile represents a file affected by operations after the undo target.
+type UndoAffectedFile struct {
+	FileID    string // stable UUID of the affected row
+	Type      string // first operation type after target (create, edit, rename, delete, undo)
+	VersionID string // version_id of the before-state (empty for creates)
+	Filename  string // filename at time of operation
+}
+
+// UndoFilter narrows the scope of an undo operation.
+type UndoFilter struct {
+	Column string // e.g., "user_id", "type", "filename"
+	Value  string
+}
+
+// UndoTransactionParams holds all parameters for an atomic undo transaction.
+type UndoTransactionParams struct {
+	Schema       string
+	SourceTable  string // e.g., "blog" (the synth app source table)
+	LogTable     string // e.g., "blog_log"
+	HistoryTable string // e.g., "blog_history"
+	Description  string // description for undo log entries
+
+	// Files to DELETE (created after target point)
+	DeleteFileIDs []string
+
+	// Files to UPSERT from history (edited/renamed/deleted after target)
+	RestoreVersionIDs []string // version_ids to fetch from history and restore
+	RestoreFileIDs    []string // corresponding file_ids (parallel array)
+	RestoreFilenames  []string // corresponding filenames for log entries
+
+	// Identity for undo log entries
+	UserID string
 }
 
 // DBClient is the composite interface combining all database capabilities.

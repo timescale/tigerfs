@@ -1106,6 +1106,13 @@ type mockDBClient struct {
 	nextLogFilename  string
 	fileExistsResult bool
 
+	// Undo test tracking
+	undoAffectedFiles    []db.UndoAffectedFile
+	undoLogEntry         *db.UndoAffectedFile
+	undoTransactionCalls int
+	lastUndoParams       *db.UndoTransactionParams
+	fileExistsMap        map[string]bool // fileID -> exists (overrides fileExistsResult)
+
 	// ResolvePath tracking
 	resolvePathResults     []db.PathSegment
 	resolvePathErr         error
@@ -1728,6 +1735,11 @@ func (m *mockDBClient) QueryNextLogEntry(ctx context.Context, schema, logTable, 
 }
 
 func (m *mockDBClient) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	if m.fileExistsMap != nil {
+		if v, ok := m.fileExistsMap[fileID]; ok {
+			return v, nil
+		}
+	}
 	return m.fileExistsResult, nil
 }
 
@@ -1738,6 +1750,32 @@ func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, history
 		}
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *mockDBClient) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []db.UndoFilter) ([]db.UndoAffectedFile, error) {
+	return m.undoAffectedFiles, nil
+}
+
+func (m *mockDBClient) QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*db.UndoAffectedFile, error) {
+	if m.undoLogEntry != nil {
+		return m.undoLogEntry, nil
+	}
+	return nil, fmt.Errorf("log entry not found: %s", logID)
+}
+
+func (m *mockDBClient) ExecuteUndoTransaction(ctx context.Context, params *db.UndoTransactionParams) error {
+	m.undoTransactionCalls++
+	m.lastUndoParams = params
+	return nil
+}
+
+func (m *mockDBClient) QueryFileExistsForUndo(fileID string) bool {
+	if m.fileExistsMap != nil {
+		if v, ok := m.fileExistsMap[fileID]; ok {
+			return v
+		}
+	}
+	return m.fileExistsResult
 }
 
 func (m *mockDBClient) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
