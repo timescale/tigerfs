@@ -278,6 +278,11 @@ func (o *Operations) readDirUndo(ctx context.Context, parsed *ParsedPath) ([]Ent
 		}, nil
 	}
 
+	// Level 3: subdirectory within the preview tree (e.g., tutorials/)
+	if parsed.UndoFile != "" {
+		return o.readDirUndoSubdir(ctx, parsed)
+	}
+
 	return nil, &FSError{Code: ErrInvalidPath, Message: "invalid .undo/ path for ReadDir"}
 }
 
@@ -324,53 +329,83 @@ func (o *Operations) readDirUndoPreview(ctx context.Context, parsed *ParsedPath)
 		{Name: FileApply, IsDir: false, Mode: 0644, ModTime: now},
 	}
 
-	// Build file entries from affected files.
-	// Track directories we've seen to add intermediate dir entries.
+	// Build top-level entries only. Nested files appear inside their directories.
 	seenDirs := make(map[string]bool)
 
 	for _, f := range affected {
-		filename := f.Filename
+		parts := strings.Split(f.Filename, "/")
 
-		// Add intermediate directories
-		parts := strings.Split(filename, "/")
 		if len(parts) > 1 {
-			for i := 1; i < len(parts); i++ {
-				dir := strings.Join(parts[:i], "/")
-				if !seenDirs[dir] {
-					seenDirs[dir] = true
-					// Only add top-level directory entries
-					if !strings.Contains(parts[0], "/") {
-						entries = append(entries, Entry{
-							Name:    parts[0],
-							IsDir:   true,
-							Mode:    os.ModeDir | 0755,
-							ModTime: now,
-						})
-					}
-				}
+			// Nested file -- add top-level directory if not seen
+			topDir := parts[0]
+			if !seenDirs[topDir] {
+				seenDirs[topDir] = true
+				entries = append(entries, Entry{
+					Name: topDir, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now,
+				})
+			}
+		} else {
+			// Root-level file
+			if f.Type == "create" {
+				entries = append(entries, Entry{
+					Name: f.Filename, IsDir: false, Mode: os.ModeSymlink | 0777, Target: "/dev/null", ModTime: now,
+				})
+			} else {
+				entries = append(entries, Entry{
+					Name: f.Filename, IsDir: false, Mode: 0444, ModTime: now,
+				})
 			}
 		}
+	}
 
-		// Determine if this is a delete (symlink to /dev/null) or restore (regular file)
-		if f.Type == "create" {
-			// File was created after target -- will be deleted on apply.
-			// Show as symlink to /dev/null in preview.
-			entries = append(entries, Entry{
-				Name:    filename,
-				IsDir:   false,
-				Mode:    os.ModeSymlink | 0777,
-				Target:  "/dev/null",
-				ModTime: now,
-			})
-		} else {
-			// File will be restored from history -- show as regular file
-			entries = append(entries, Entry{
-				Name:    filename,
-				IsDir:   false,
-				Mode:    0444,
-				ModTime: now,
-			})
+	return entries, nil
+}
+
+// readDirUndoSubdir lists files within a subdirectory of the undo preview tree.
+func (o *Operations) readDirUndoSubdir(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
+	prefix := parsed.UndoFile + "/"
+
+	affected, err := o.queryUndoAffected(ctx, parsed)
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to query undo preview", Cause: err}
+	}
+
+	// Collect entries that are direct children of this directory prefix
+	seenDirs := make(map[string]bool)
+	var entries []Entry
+
+	for _, f := range affected {
+		if !strings.HasPrefix(f.Filename, prefix) {
+			continue
 		}
+		// Get the relative path after the prefix
+		rel := f.Filename[len(prefix):]
+		// If rel contains a slash, the immediate child is a directory
+		if idx := strings.Index(rel, "/"); idx >= 0 {
+			dirName := rel[:idx]
+			if !seenDirs[dirName] {
+				seenDirs[dirName] = true
+				entries = append(entries, Entry{
+					Name: dirName, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now,
+				})
+			}
+		} else {
+			// Direct child file
+			if f.Type == "create" {
+				entries = append(entries, Entry{
+					Name: rel, IsDir: false, Mode: os.ModeSymlink | 0777, Target: "/dev/null", ModTime: now,
+				})
+			} else {
+				entries = append(entries, Entry{
+					Name: rel, IsDir: false, Mode: 0444, ModTime: now,
+				})
+			}
+		}
+	}
+
+	if len(entries) == 0 {
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found in undo preview: %s", parsed.UndoFile)}
 	}
 
 	return entries, nil
