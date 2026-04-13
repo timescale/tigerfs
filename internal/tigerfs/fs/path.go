@@ -1233,6 +1233,7 @@ func processUndo(result *ParsedPath, remaining []string) (int, *FSError) {
 				result.InfoFile = remaining[i+1]
 				consumed = i + 2
 			} else {
+				result.InfoFile = "." // sentinel: inside .info/ directory
 				consumed = i + 1
 			}
 			return consumed, nil

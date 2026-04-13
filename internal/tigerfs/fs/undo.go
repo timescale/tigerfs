@@ -272,7 +272,7 @@ func (o *Operations) readDirUndo(ctx context.Context, parsed *ParsedPath) ([]Ent
 	}
 
 	// Level 3: .undo/<mode>/<target>/.info/ -- info directory
-	if parsed.InfoFile == "" && parsed.UndoFile == "" {
+	if parsed.InfoFile == "." {
 		return []Entry{
 			{Name: FileSummary, IsDir: false, Mode: 0444, ModTime: now},
 		}, nil
@@ -498,15 +498,21 @@ func (o *Operations) statUndo(ctx context.Context, parsed *ParsedPath) (*Entry, 
 	}
 
 	// .info directory
-	if parsed.InfoFile == "" && parsed.UndoFile == "" {
+	if parsed.InfoFile == "." {
 		return &Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 	}
 
 	// .info/summary
-	if parsed.InfoFile != "" {
+	if parsed.InfoFile != "" && parsed.InfoFile != "." {
 		name := parsed.InfoFile
 		if name == FileSummary || strings.HasPrefix(name, FileSummary+".") {
-			return &Entry{Name: name, IsDir: false, Mode: 0444, ModTime: now}, nil
+			// Compute actual size by generating the summary content
+			fc, summaryErr := o.readUndoSummary(ctx, parsed)
+			size := int64(0)
+			if summaryErr == nil {
+				size = int64(len(fc.Data))
+			}
+			return &Entry{Name: name, IsDir: false, Size: size, Mode: 0444, ModTime: now}, nil
 		}
 		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", name)}
 	}
@@ -523,7 +529,13 @@ func (o *Operations) statUndo(ctx context.Context, parsed *ParsedPath) (*Entry, 
 				if f.Type == "create" {
 					return &Entry{Name: parsed.UndoFile, IsDir: false, Mode: os.ModeSymlink | 0777, Target: "/dev/null", ModTime: now}, nil
 				}
-				return &Entry{Name: parsed.UndoFile, IsDir: false, Mode: 0444, ModTime: now}, nil
+				// Compute actual size by rendering the preview content
+				fc, previewErr := o.readUndoPreviewFile(ctx, parsed)
+				size := int64(0)
+				if previewErr == nil {
+					size = int64(len(fc.Data))
+				}
+				return &Entry{Name: parsed.UndoFile, IsDir: false, Size: size, Mode: 0444, ModTime: now}, nil
 			}
 			// Check if UndoFile is a directory prefix
 			if strings.HasPrefix(f.Filename, parsed.UndoFile+"/") {
