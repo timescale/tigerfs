@@ -2240,6 +2240,8 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return &FileContent{Data: []byte{}}, nil
 	case PathHistory:
 		return o.readHistoryFileDispatch(ctx, parsed)
+	case PathUndo:
+		return o.readFileUndo(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
