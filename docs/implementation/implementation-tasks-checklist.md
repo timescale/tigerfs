@@ -275,7 +275,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 12.8 | .savepoint/ Interface (Data-First + Write Support) | ~8970 |
 | ✅ | 12.9 | Auto-Savepoints (Session-Based) | ~9000 |
 | ✅ | 12.10 | Undo Execution Logic (Core Engine) | ~9030 |
-| ⬜ | 12.11 | .undo/ Interface (Preview + Apply) | ~9080 |
+| ✅ | 12.11 | .undo/ Interface (Preview + Apply) | ~9080 |
 | ⬜ | 12.12 | Skills and Documentation | ~9150 |
 
 ---

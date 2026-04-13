@@ -498,3 +498,233 @@ func TestUndo_FilterByType(t *testing.T) {
 
 // Note: Rename undo (parent_id restoration) requires the NFS adapter's Rename method,
 // which is not exposed on fs.Operations. Tested via mount-based integration tests.
+
+// --- .undo/ filesystem interface tests ---
+
+func TestUndo_Interface_ReadDirRoot(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// ReadDir .undo/ should list id/, to-id/, to-savepoint/
+	entries, fsErr := ops.ReadDir(ctx, "/undoui/.undo")
+	require.Nil(t, fsErr)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name)
+	}
+	assert.Contains(t, names, "id")
+	assert.Contains(t, names, "to-id")
+	assert.Contains(t, names, "to-savepoint")
+}
+
+func TestUndo_Interface_ReadDirSavepoints(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui2")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui2", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui2/.savepoint/sp1.json", []byte("{}"))
+	ops.WriteFile(ctx, "/undoui2/.savepoint/sp2.json", []byte("{}"))
+
+	// ReadDir .undo/to-savepoint/ should list savepoints
+	entries, fsErr := ops.ReadDir(ctx, "/undoui2/.undo/to-savepoint")
+	require.Nil(t, fsErr)
+	var names []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			names = append(names, e.Name)
+		}
+	}
+	assert.Contains(t, names, "sp1")
+	assert.Contains(t, names, "sp2")
+}
+
+func TestUndo_Interface_Summary(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui3")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui3", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui3/existing.md", []byte("---\ntitle: Existing\n---\nOriginal\n"))
+	ops.WriteFile(ctx, "/undoui3/.savepoint/checkpoint.json", []byte("{}"))
+	time.Sleep(50 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui3/new-file.md", []byte("---\ntitle: New\n---\nNew content\n"))
+	ops.WriteFile(ctx, "/undoui3/existing.md", []byte("---\ntitle: Existing\n---\nModified\n"))
+
+	// Read .info/summary
+	fc, fsErr := ops.ReadFile(ctx, "/undoui3/.undo/to-savepoint/checkpoint/.info/summary")
+	require.Nil(t, fsErr, "ReadFile .info/summary should succeed")
+	summary := string(fc.Data)
+	t.Logf("Summary:\n%s", summary)
+	// Should have entries for new-file (delete) and existing (restore)
+	assert.Contains(t, summary, "new-file.md")
+	assert.Contains(t, summary, "existing.md")
+}
+
+func TestUndo_Interface_PreviewContent(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui4")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui4", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui4/hello.md", []byte("---\ntitle: Hello\n---\nVersion 1\n"))
+	ops.WriteFile(ctx, "/undoui4/.savepoint/checkpoint.json", []byte("{}"))
+	time.Sleep(50 * time.Millisecond)
+	ops.WriteFile(ctx, "/undoui4/hello.md", []byte("---\ntitle: Hello\n---\nVersion 2\n"))
+
+	// Preview should show Version 1 (the before-state)
+	fc, fsErr := ops.ReadFile(ctx, "/undoui4/.undo/to-savepoint/checkpoint/hello.md")
+	require.Nil(t, fsErr, "ReadFile preview should succeed")
+	assert.Contains(t, string(fc.Data), "Version 1", "preview should show before-state")
+	assert.NotContains(t, string(fc.Data), "Version 2")
+}
+
+func TestUndo_Interface_ApplyViaSavepoint(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui5")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui5", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui5/hello.md", []byte("---\ntitle: Hello\n---\nOriginal\n"))
+	ops.WriteFile(ctx, "/undoui5/.savepoint/checkpoint.json", []byte("{}"))
+	time.Sleep(50 * time.Millisecond)
+	ops.WriteFile(ctx, "/undoui5/hello.md", []byte("---\ntitle: Hello\n---\nModified\n"))
+
+	// Apply undo via .apply
+	fsErr = ops.WriteFile(ctx, "/undoui5/.undo/to-savepoint/checkpoint/.apply", []byte(""))
+	require.Nil(t, fsErr, "WriteFile .apply should succeed")
+
+	// Verify content restored
+	fc, fsErr := ops.ReadFile(ctx, "/undoui5/hello.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(fc.Data), "Original", "content should be restored after .apply")
+}
+
+func TestUndo_Interface_ApplyViaID(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui6")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui6", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui6/hello.md", []byte("---\ntitle: Hello\n---\nV1\n"))
+	ops.WriteFile(ctx, "/undoui6/hello.md", []byte("---\ntitle: Hello\n---\nV2\n"))
+
+	// Find the edit log entry
+	entries, fsErr := ops.ReadDir(ctx, "/undoui6/.log/.by/type/edit")
+	require.Nil(t, fsErr)
+	var logIDs []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			logIDs = append(logIDs, e.Name)
+		}
+	}
+	require.GreaterOrEqual(t, len(logIDs), 1)
+
+	// Apply single undo via .undo/id/<log_id>/.apply
+	fsErr = ops.WriteFile(ctx, "/undoui6/.undo/id/"+logIDs[len(logIDs)-1]+"/.apply", []byte(""))
+	require.Nil(t, fsErr, "WriteFile .apply via id should succeed")
+
+	fc, fsErr := ops.ReadFile(ctx, "/undoui6/hello.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(fc.Data), "V1", "should be restored to V1")
+}
+
+func TestUndo_Interface_ApplyNoOp(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui7")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui7", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoui7/hello.md", []byte("---\ntitle: Hello\n---\nContent\n"))
+	ops.WriteFile(ctx, "/undoui7/.savepoint/latest.json", []byte("{}"))
+
+	// .apply on empty set should succeed (no-op)
+	fsErr = ops.WriteFile(ctx, "/undoui7/.undo/to-savepoint/latest/.apply", []byte(""))
+	require.Nil(t, fsErr, ".apply on empty set should be a no-op")
+}
+
+func TestUndo_Interface_InvalidTarget(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoui8")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoui8", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// .apply with invalid savepoint should fail
+	fsErr = ops.WriteFile(ctx, "/undoui8/.undo/to-savepoint/nonexistent/.apply", []byte(""))
+	require.NotNil(t, fsErr, ".apply with invalid savepoint should fail")
+}

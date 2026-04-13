@@ -694,6 +694,69 @@ func (o *Operations) renderSynthContent(row *db.Row, info *synth.ViewInfo) (*Fil
 	return &FileContent{Data: data}, nil
 }
 
+// writeUndoApply triggers an undo operation when .apply is written.
+func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
+	if !parsed.UndoApply {
+		return &FSError{
+			Code:    ErrPermission,
+			Message: ".undo/ is read-only except for .apply",
+		}
+	}
+
+	// Reject .sample/ + .apply
+	if parsed.Context != nil && parsed.Context.LimitType == LimitSample {
+		return &FSError{
+			Code:    ErrInvalidArgument,
+			Message: ".sample/ cannot be combined with .apply (random undo is not supported)",
+		}
+	}
+
+	tableName := parsed.OrigTableName
+	if tableName == "" {
+		return &FSError{Code: ErrInvalidPath, Message: ".undo/ requires a table context"}
+	}
+
+	// Build filters from pipeline context
+	var filters []db.UndoFilter
+	if parsed.Context != nil {
+		for _, f := range parsed.Context.Filters {
+			filters = append(filters, db.UndoFilter{Column: f.Column, Value: f.Value})
+		}
+	}
+
+	var result *UndoResult
+	var err error
+
+	switch parsed.UndoMode {
+	case "id":
+		result, err = o.ExecuteUndoSingle(ctx, "public", tableName, parsed.UndoTarget)
+	case "to-id":
+		result, err = o.ExecuteUndoToLogID(ctx, "public", tableName, parsed.UndoTarget, filters)
+	case "to-savepoint":
+		result, err = o.ExecuteUndoToSavepoint(ctx, "public", tableName, parsed.UndoTarget, filters)
+	default:
+		return &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown undo mode: %s", parsed.UndoMode)}
+	}
+
+	if err != nil {
+		return &FSError{Code: ErrIO, Message: "undo failed", Cause: err}
+	}
+
+	logging.Info("undo applied via .apply",
+		zap.String("table", tableName),
+		zap.String("mode", parsed.UndoMode),
+		zap.String("target", parsed.UndoTarget),
+		zap.Int("files_restored", result.FilesRestored),
+		zap.Int("files_deleted", result.FilesDeleted),
+		zap.Int("files_skipped", result.FilesSkipped))
+
+	// Invalidate caches after undo
+	o.statCache.invalidate(synth.TigerFSSchema, tableName)
+	o.pathCache.invalidate(synth.TigerFSSchema, tableName)
+
+	return nil
+}
+
 // interfaceSlice converts []interface{} (already the right type) for format functions.
 func interfaceSlice(vals []interface{}) []interface{} {
 	return vals
