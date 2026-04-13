@@ -61,6 +61,8 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 		return o.writeBuildFile(ctx, parsed, data)
 	case PathFormat:
 		return o.writeFormatFile(ctx, parsed, data)
+	case PathUndo:
+		return o.writeUndoApply(ctx, parsed, data)
 	case PathHistory:
 		return &FSError{
 			Code:    ErrPermission,
