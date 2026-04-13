@@ -550,6 +550,9 @@ func (o *Operations) logSynthOp(ctx context.Context, schema, tableName string, i
 		return
 	}
 
+	// Check for auto-savepoint before logging the operation.
+	o.maybeCreateAutoSavepoint(ctx, schema, tableName)
+
 	logTable := tableName + "_log"
 	historyTable := tableName + "_history"
 
@@ -579,6 +582,88 @@ func (o *Operations) logSynthOp(ctx context.Context, schema, tableName string, i
 			zap.String("filename", filename),
 			zap.Error(err))
 	}
+
+	// Update last write time after successful log entry.
+	now := o.now()
+	o.lastWriteMu.Lock()
+	if o.lastWriteTime == nil {
+		o.lastWriteTime = make(map[string]time.Time)
+	}
+	o.lastWriteTime[schema+"."+tableName] = now
+	o.lastWriteMu.Unlock()
+}
+
+// maybeCreateAutoSavepoint checks if the gap since the last write exceeds
+// the configured threshold and creates an auto-savepoint if so.
+func (o *Operations) maybeCreateAutoSavepoint(ctx context.Context, schema, tableName string) {
+	interval := o.config.AutoSavepointInterval
+	if interval <= 0 {
+		return
+	}
+
+	key := schema + "." + tableName
+	now := o.now()
+
+	o.lastWriteMu.Lock()
+	if o.lastWriteTime == nil {
+		o.lastWriteTime = make(map[string]time.Time)
+	}
+	lastTime, exists := o.lastWriteTime[key]
+	o.lastWriteMu.Unlock()
+
+	if !exists {
+		// First write after mount -- nothing to bookmark.
+		return
+	}
+
+	if now.Sub(lastTime) < interval {
+		return
+	}
+
+	// Gap exceeds threshold -- create auto-savepoint.
+	name := o.autoSavepointName(now)
+	savepointTable := tableName + "_savepoint"
+
+	columns := []string{"name"}
+	values := []interface{}{name}
+	if o.userID != "" {
+		columns = append(columns, "user_id")
+		values = append(values, o.userID)
+	}
+	columns = append(columns, "description")
+	values = append(values, fmt.Sprintf("Auto-savepoint after %s inactivity", now.Sub(lastTime).Truncate(time.Second)))
+
+	_, err := o.db.InsertRow(ctx, synth.TigerFSSchema, savepointTable, columns, values)
+	if err != nil {
+		logging.Warn("failed to create auto-savepoint",
+			zap.String("table", tableName),
+			zap.String("name", name),
+			zap.Error(err))
+		return
+	}
+
+	logging.Info("auto-savepoint created",
+		zap.String("table", tableName),
+		zap.String("name", name),
+		zap.Duration("gap", now.Sub(lastTime)))
+}
+
+// autoSavepointName generates a name like "auto-agent-7-20260408T143000Z"
+// or "auto-20260408T143000Z" for anonymous users.
+func (o *Operations) autoSavepointName(t time.Time) string {
+	ts := t.UTC().Format("20060102T150405Z")
+	if o.userID != "" {
+		return fmt.Sprintf("auto-%s-%s", o.userID, ts)
+	}
+	return fmt.Sprintf("auto-%s", ts)
+}
+
+// now returns the current time, using the injectable nowFunc if set.
+func (o *Operations) now() time.Time {
+	if o.nowFunc != nil {
+		return o.nowFunc()
+	}
+	return time.Now()
 }
 
 // resolveSynthPath resolves a sequence of path segments to a row ID using

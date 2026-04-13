@@ -61,6 +61,14 @@ type Operations struct {
 
 	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
 	legacyWarnOnce sync.Once
+
+	// Auto-savepoints: track last write time per app to detect inactivity gaps.
+	// Key is "schema.tableName" (the source table, not _log or _savepoint).
+	lastWriteTime map[string]time.Time
+	lastWriteMu   sync.Mutex
+
+	// nowFunc returns the current time. Overridable in tests for deterministic timing.
+	nowFunc func() time.Time
 }
 
 // NewOperations creates a new Operations instance.
@@ -76,6 +84,11 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 // SetMountPoint records the filesystem mount path for user-facing log messages.
 func (o *Operations) SetMountPoint(path string) {
 	o.mountPoint = path
+}
+
+// SetNowFunc overrides the clock for testing. Pass nil to restore real time.
+func (o *Operations) SetNowFunc(fn func() time.Time) {
+	o.nowFunc = fn
 }
 
 // SetUserID sets the mount-level user identity for undo log entries.

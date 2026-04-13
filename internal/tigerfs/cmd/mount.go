@@ -46,6 +46,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var legacyFuse bool
 	var insecureNoSSL bool
 	var userID string
+	var autoSavepointInterval time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] [MOUNTPOINT]",
@@ -167,6 +168,14 @@ Examples:
 				cfg.UserID = envID
 			}
 
+			// Auto-savepoint interval: flag overrides config
+			if autoSavepointInterval != 0 {
+				cfg.AutoSavepointInterval = autoSavepointInterval
+			}
+			if cfg.AutoSavepointInterval < 0 {
+				return fmt.Errorf("auto-savepoint-interval must be >= 0")
+			}
+
 			// Mount the filesystem using platform-specific method
 			// (NFS on macOS, FUSE on Linux).
 			fs, err := mountFilesystem(ctx, cfg, connStr, absMountpoint)
@@ -224,6 +233,7 @@ Examples:
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
 	cmd.Flags().StringVar(&userID, "user-id", "", "user identity for undo log entries (also: TIGERFS_USER_ID env)")
+	cmd.Flags().DurationVar(&autoSavepointInterval, "auto-savepoint-interval", 0, "inactivity gap before auto-savepoint (e.g., 30m); 0 uses config default")
 
 	return cmd
 }
