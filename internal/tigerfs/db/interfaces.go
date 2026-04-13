@@ -366,6 +366,8 @@ type UndoAffectedFile struct {
 	Type      string // first operation type after target (create, edit, rename, delete, undo)
 	VersionID string // version_id of the before-state (empty for creates)
 	Filename  string // filename at time of operation
+	LogID     string // log_id of the first operation (UUIDv7, encodes timestamp)
+	UserID    string // user who performed the operation
 }
 
 // UndoFilter narrows the scope of an undo operation.
