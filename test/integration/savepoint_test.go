@@ -267,3 +267,212 @@ func TestSynth_Savepoint_MultipleFormats(t *testing.T) {
 		assert.Equal(t, tc.desc, strings.TrimSpace(string(d.Data)), "description for %s", tc.name)
 	}
 }
+
+// TestSynth_Savepoint_NameBasedListing verifies that ReadDir returns human-readable
+// names (not UUIDs) now that name is the PK.
+func TestSynth_Savepoint_NameBasedListing(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spnames")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/spnames", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	fsErr = ops.WriteFile(ctx, "/spnames/.savepoint/alpha.json", []byte(`{"description":"first"}`))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/spnames/.savepoint/beta.json", []byte(`{"description":"second"}`))
+	require.Nil(t, fsErr)
+
+	entries, fsErr := ops.ReadDir(ctx, "/spnames/.savepoint")
+	require.Nil(t, fsErr)
+
+	var names []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			names = append(names, e.Name)
+		}
+	}
+	assert.Contains(t, names, "alpha", "should list by human-readable name")
+	assert.Contains(t, names, "beta", "should list by human-readable name")
+	// Names should NOT look like UUIDs
+	for _, n := range names {
+		assert.Less(t, len(n), 36, "entry %q should be a name, not a UUID", n)
+	}
+}
+
+// TestSynth_Savepoint_FormatFileRead verifies that cat .savepoint/name/.json
+// returns the full row serialized in the requested format.
+func TestSynth_Savepoint_FormatFileRead(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spfmtrd")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/spfmtrd", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	fsErr = ops.WriteFile(ctx, "/spfmtrd/.savepoint/my-save.tsv", []byte("description\nTest checkpoint\n"))
+	require.Nil(t, fsErr)
+
+	// Read as JSON
+	content, fsErr := ops.ReadFile(ctx, "/spfmtrd/.savepoint/my-save/.json")
+	require.Nil(t, fsErr, "ReadFile .json should succeed")
+	data := string(content.Data)
+	assert.Contains(t, data, "my-save", "JSON should contain name")
+	assert.Contains(t, data, "Test checkpoint", "JSON should contain description")
+
+	// Read as TSV
+	content, fsErr = ops.ReadFile(ctx, "/spfmtrd/.savepoint/my-save/.tsv")
+	require.Nil(t, fsErr, "ReadFile .tsv should succeed")
+	assert.Contains(t, string(content.Data), "my-save", "TSV should contain name")
+}
+
+// TestSynth_Savepoint_YAMLFormat verifies savepoint creation with .yaml suffix.
+func TestSynth_Savepoint_YAMLFormat(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spyaml")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/spyaml", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	fsErr = ops.WriteFile(ctx, "/spyaml/.savepoint/yaml-test.yaml", []byte("description: Created via YAML\n"))
+	require.Nil(t, fsErr, "YAML savepoint creation should succeed")
+
+	desc, fsErr := ops.ReadFile(ctx, "/spyaml/.savepoint/yaml-test/description")
+	require.Nil(t, fsErr)
+	assert.Equal(t, "Created via YAML", strings.TrimSpace(string(desc.Data)))
+}
+
+// TestSynth_Savepoint_EmptyBodyCreation verifies that echo "" > .savepoint/name.tsv
+// creates a savepoint with just the name PK.
+func TestSynth_Savepoint_EmptyBodyCreation(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spempty")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/spempty", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Empty body -- should create with just name + auto-generated savepoint_id
+	fsErr = ops.WriteFile(ctx, "/spempty/.savepoint/empty-save.json", []byte("{}"))
+	require.Nil(t, fsErr, "empty body savepoint creation should succeed")
+
+	// Verify name column
+	name, fsErr := ops.ReadFile(ctx, "/spempty/.savepoint/empty-save/name")
+	require.Nil(t, fsErr)
+	assert.Equal(t, "empty-save", strings.TrimSpace(string(name.Data)))
+
+	// Verify savepoint_id was auto-generated
+	spID, fsErr := ops.ReadFile(ctx, "/spempty/.savepoint/empty-save/savepoint_id")
+	require.Nil(t, fsErr)
+	assert.GreaterOrEqual(t, len(strings.TrimSpace(string(spID.Data))), 36, "should have auto-generated UUID")
+}
+
+// TestSynth_Savepoint_DeleteAndRecreate verifies that a savepoint can be deleted
+// and a new one created with the same name.
+func TestSynth_Savepoint_DeleteAndRecreate(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spreuse")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/spreuse", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create
+	fsErr = ops.WriteFile(ctx, "/spreuse/.savepoint/reusable.tsv", []byte("description\nOriginal\n"))
+	require.Nil(t, fsErr)
+
+	desc, fsErr := ops.ReadFile(ctx, "/spreuse/.savepoint/reusable/description")
+	require.Nil(t, fsErr)
+	assert.Equal(t, "Original", strings.TrimSpace(string(desc.Data)))
+
+	// Delete
+	fsErr = ops.Delete(ctx, "/spreuse/.savepoint/reusable")
+	require.Nil(t, fsErr)
+
+	_, fsErr = ops.Stat(ctx, "/spreuse/.savepoint/reusable")
+	require.NotNil(t, fsErr, "deleted savepoint should not be found")
+
+	// Recreate with same name, different description
+	fsErr = ops.WriteFile(ctx, "/spreuse/.savepoint/reusable.tsv", []byte("description\nRecreated\n"))
+	require.Nil(t, fsErr, "recreating deleted savepoint should succeed")
+
+	desc, fsErr = ops.ReadFile(ctx, "/spreuse/.savepoint/reusable/description")
+	require.Nil(t, fsErr)
+	assert.Equal(t, "Recreated", strings.TrimSpace(string(desc.Data)))
+}
+
+// TestSynth_Savepoint_Ordering verifies that .last/N returns entries in
+// descending PK order (alphabetical by name since name is PK).
+func TestSynth_Savepoint_Ordering(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spord")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/spord", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create savepoints with names that sort alphabetically
+	fsErr = ops.WriteFile(ctx, "/spord/.savepoint/aaa-first.json", []byte("{}"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/spord/.savepoint/bbb-second.json", []byte("{}"))
+	require.Nil(t, fsErr)
+	fsErr = ops.WriteFile(ctx, "/spord/.savepoint/ccc-third.json", []byte("{}"))
+	require.Nil(t, fsErr)
+
+	// .last/2 should return the last 2 alphabetically (bbb, ccc)
+	entries, fsErr := ops.ReadDir(ctx, "/spord/.savepoint/.last/2")
+	require.Nil(t, fsErr)
+	var names []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			names = append(names, e.Name)
+		}
+	}
+	assert.Equal(t, 2, len(names), ".last/2 should return 2 entries")
+	assert.Contains(t, names, "bbb-second")
+	assert.Contains(t, names, "ccc-third")
+	assert.NotContains(t, names, "aaa-first", "aaa-first should not be in .last/2")
+}

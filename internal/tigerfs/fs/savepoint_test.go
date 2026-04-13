@@ -310,6 +310,51 @@ func TestSynth_Savepoint_YAML_EmptyBody(t *testing.T) {
 	assert.Equal(t, "agent-7", m["user_id"])
 }
 
+// -- Format file path parsing --
+
+func TestSynth_Savepoint_ParsePath_FormatFile(t *testing.T) {
+	// cat .savepoint/name/.json should parse as PathRow with Format="json"
+	for _, tc := range []struct {
+		path, format string
+	}{
+		{"/notes/.savepoint/before-exploration/.json", "json"},
+		{"/notes/.savepoint/before-exploration/.tsv", "tsv"},
+		{"/notes/.savepoint/before-exploration/.csv", "csv"},
+		{"/notes/.savepoint/before-exploration/.yaml", "yaml"},
+	} {
+		parsed, err := ParsePath(tc.path)
+		require.Nil(t, err, "ParsePath(%s)", tc.path)
+		assert.Equal(t, PathRow, parsed.Type, "should be PathRow for %s", tc.path)
+		assert.Equal(t, "before-exploration", parsed.PrimaryKey, "PK for %s", tc.path)
+		assert.Equal(t, tc.format, parsed.Format, "Format for %s", tc.path)
+	}
+}
+
+// -- Duplicate name --
+
+func TestSynth_Savepoint_DuplicateName(t *testing.T) {
+	mockDB := newSavepointMock()
+	// First insert succeeds
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	data := []byte(`{"description":"first"}`)
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-save.json", data)
+	require.Nil(t, fsErr)
+
+	// Second insert with same name -- row exists, so writeRowFile does UPDATE
+	mockDB.rowData = map[string]*mockRow{
+		"tigerfs.notes_savepoint.my-save": {
+			columns: []string{"name", "savepoint_id", "user_id", "description"},
+			values:  []interface{}{"my-save", "sp-uuid-1", nil, "first"},
+		},
+	}
+	data = []byte(`{"description":"updated"}`)
+	fsErr = ops.WriteFile(context.Background(), "/notes/.savepoint/my-save.json", data)
+	require.Nil(t, fsErr, "writing to existing savepoint should update, not fail")
+	assert.True(t, mockDB.updateCalled, "should have called UpdateRow")
+}
+
 // -- Bare path rejection --
 
 func TestSynth_Savepoint_BarePathRejected(t *testing.T) {
