@@ -8957,19 +8957,47 @@ Expose undo preview and apply through the filesystem. Full end-to-end demo. The 
 - Undo the undo: `touch mount/demo/.undo/id/<undo_log_id>/.apply`
 - Per-user undo: `touch mount/demo/.undo/to-savepoint/initial-data/.by/user_id/agent-explorer/.apply`
 
-### Task 12.12: Skills and Documentation
-Update skills, spec, and implementation docs.
+### Task 12.12: Short-Lived Caching for Undo, Log, and Savepoint Queries
+Add short-lived caching to reduce redundant DB queries across undo preview, log symlink resolution, and savepoint lookups. NFS/FUSE make multiple RPCs (GETATTR, LOOKUP, READ) per user operation, and each RPC independently runs the full query chain. A single `cat` on a preview file generates ~20 queries; target is ~5.
 
-**Depends on:** 12.1-12.11 (all features complete)
-**Files:** `skills/tigerfs/SKILL.md`, `skills/tigerfs/files.md`, `skills/tigerfs/recipes.md`, `skills/tigerfs/data.md`, `skills/tigerfs/ops.md`, `docs/spec.md`, `docs/implementation/`
+**Depends on:** 12.11 (.undo/ interface)
+**Files:** `internal/tigerfs/fs/undo.go`, `internal/tigerfs/fs/operations.go`
+
+**Caches to implement (2-second TTL, matching statCache/pathCache patterns):**
+
+1. **queryUndoAffected cache** (highest impact): Cache the DISTINCT ON query result by (undoMode, target, filters). The same affected-files list is queried 3-6 times per preview file access: stat computes size by rendering content, readFile renders content again, and NFS repeats GETATTR multiple times. This is a read-only query on the append-only log table. Stale data means the preview might miss an operation written by another mount during the 2s window, but apply re-queries fresh, so execution is always correct. **Risk: Very low.**
+
+2. **Savepoint name-to-ID cache**: Cache the savepoint row (including savepoint_id) by (schema, table, name). The same savepoint is looked up 4+ times per preview navigation: validateUndoTarget, queryUndoAffected (to resolve savepoint_id), statUndo, and readFileUndo each independently call GetRow. Savepoint rows are rarely modified -- the savepoint_id is immutable once created. The only risk is a savepoint deleted during the 2s window, which would fail at apply time with a clear error. **Risk: None.**
+
+3. **Log entry cache**: Cache QueryLogEntry result by (schema, logTable, logID). The same log entry is fetched 3-4 times per `id/` operation: validateUndoTarget, queryUndoAffected (for single-op mode), readUndoPreviewFile, and during log diff symlink resolution. Log entries are append-only and immutable -- once written, file_id, type, version_id, and filename never change. **Risk: None.**
+
+**Rejected: File existence cache (QueryFileExists).** Evaluated and rejected due to concurrent write risk. QueryFileExists is used in undo execution (to decide DELETE vs skip for create-type entries) and log diff symlink resolution (current symlink). Caching could cause stale data under concurrent multi-mount writes: undo might skip deleting a file it thinks doesn't exist, or try to delete an already-deleted file. The cost of not caching is low -- undo apply runs the check once per file (not repeated), and symlink resolution adds only 2-3 extra queries per log entry listing.
+
+**Implementation:**
+1. Follow established patterns: mutex-protected map, per-table namespace, 2-second TTL, explicit invalidation on undo execution and writes.
+2. Unit tests for cache hit/miss behavior
+3. Verify query reduction: `cat .undo/to-savepoint/X/file.md` should go from ~20 queries to ~5
+
+### Task 12.13: Skills
+Update agent skills for undo and recovery features.
+
+**Depends on:** 12.1-12.12 (all features complete)
+**Files:** `skills/tigerfs/SKILL.md`, `skills/tigerfs/files.md`, `skills/tigerfs/recipes.md`, `skills/tigerfs/data.md`, `skills/tigerfs/ops.md`
 **Tasks:**
 1. SKILL.md: "Safe Editing with Savepoints" section; undo in "What you can build"; Quick Reference; anti-pattern
 2. files.md: Operation Log, Savepoints, Undo sections; update history for UUIDv7 format
 3. recipes.md: Recipe 5 (Safe Agent Exploration), Recipe 6 (Multi-Agent Selective Undo)
 4. data.md: `.info/user`, UUIDv7 display format
 5. ops.md: `--user-id`, `TIGERFS_USER_ID`, `--auto-savepoint-interval`, `--undo-list-limit`
-6. spec.md: `.log/`, `.savepoint/`, `.undo/`, user identity, DDL limitations (undo doesn't cross schema changes)
-7. implementation-tasks.md and checklist with Phase 12
+
+### Task 12.14: Documentation
+Update spec and implementation docs for undo and recovery.
+
+**Depends on:** 12.1-12.12 (all features complete)
+**Files:** `docs/spec.md`, `docs/implementation/`
+**Tasks:**
+1. spec.md: `.log/`, `.savepoint/`, `.undo/`, user identity, DDL limitations (undo doesn't cross schema changes)
+2. implementation-tasks.md and checklist with Phase 12
 
 
 ---

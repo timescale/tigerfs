@@ -276,7 +276,9 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 12.9 | Auto-Savepoints (Session-Based) | ~9000 |
 | ✅ | 12.10 | Undo Execution Logic (Core Engine) | ~9030 |
 | ✅ | 12.11 | .undo/ Interface (Preview + Apply) | ~9080 |
-| ⬜ | 12.12 | Skills and Documentation | ~9150 |
+| ⬜ | 12.12 | Short-Lived Caching (Undo, Log, Savepoint) | ~9100 |
+| ⬜ | 12.13 | Skills | ~9150 |
+| ⬜ | 12.14 | Documentation | ~9180 |
 
 ---
 
@@ -318,6 +320,6 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| Phase 12: Undo and Recovery | 8 | 12 | 67% |
+| Phase 12: Undo and Recovery | 11 | 14 | 79% |
 | Phase 13: Relational Directory Structure | 12 | 12 | 100% |
-| **Total** | **126** | **147** | **86%** |
+| **Total** | **128** | **149** | **86%** |
