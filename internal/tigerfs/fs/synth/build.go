@@ -365,9 +365,9 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 	qualifiedSavepoint := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(savepointTable))
 
 	createSavepointTable := fmt.Sprintf(`CREATE TABLE %s (
-    savepoint_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    name TEXT NOT NULL PRIMARY KEY,
+    savepoint_id UUID NOT NULL DEFAULT uuidv7() UNIQUE,
     user_id TEXT,
-    name TEXT NOT NULL UNIQUE,
     description TEXT
 )`, qualifiedSavepoint)
 

@@ -43,16 +43,13 @@ func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *F
 func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	switch parsed.Type {
 	case PathRow:
-		// Savepoint create: echo "description" > .savepoint/name
+		// Savepoint create: echo -e "description\nStarting" > .savepoint/name.tsv
+		// Thin wrapper injects user_id then delegates to writeRowFile.
 		if parsed.OrigTableName != "" && strings.HasSuffix(parsed.Context.TableName, "_savepoint") {
 			return o.writeSavepoint(ctx, parsed, data)
 		}
 		return o.writeRowFile(ctx, parsed, data)
 	case PathColumn:
-		// Savepoint column update: echo "new desc" > .savepoint/name/description
-		if parsed.OrigTableName != "" && strings.HasSuffix(parsed.Context.TableName, "_savepoint") {
-			return o.writeSavepointColumn(ctx, parsed, data)
-		}
 		return o.writeColumnFile(ctx, parsed, data)
 	case PathImport:
 		return o.writeImportFile(ctx, parsed, data)
@@ -673,10 +670,7 @@ func (o *Operations) Delete(ctx context.Context, path string) *FSError {
 func (o *Operations) deleteWithParsed(ctx context.Context, parsed *ParsedPath) *FSError {
 	switch parsed.Type {
 	case PathRow:
-		// Savepoint delete: rm .savepoint/name
-		if parsed.OrigTableName != "" && strings.HasSuffix(parsed.Context.TableName, "_savepoint") {
-			return o.deleteSavepoint(ctx, parsed)
-		}
+		// With name as PK, standard deleteRow works for savepoints too.
 		return o.deleteRow(ctx, parsed)
 	case PathColumn:
 		return o.deleteColumn(ctx, parsed)

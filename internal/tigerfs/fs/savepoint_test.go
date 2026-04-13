@@ -12,7 +12,6 @@ import (
 // --- readDirSavepoint unit tests ---
 
 func TestReadDirSavepoint_PassesAscendingForFirst(t *testing.T) {
-	// Parse .savepoint/.first/3
 	parsed, err := ParsePath("/notes/.savepoint/.first/3")
 	require.Nil(t, err)
 	assert.Equal(t, PathSavepoint, parsed.Type)
@@ -31,7 +30,7 @@ func TestReadDirSavepoint_PassesDescendingForLast(t *testing.T) {
 func TestReadDirSavepoint_PreservesTypeWithFilter(t *testing.T) {
 	parsed, err := ParsePath("/notes/.savepoint/.by/user_id/agent-7")
 	require.Nil(t, err)
-	assert.Equal(t, PathSavepoint, parsed.Type, "Type should stay PathSavepoint through .by/ pipeline")
+	assert.Equal(t, PathSavepoint, parsed.Type)
 	require.Len(t, parsed.Context.Filters, 1)
 	assert.Equal(t, "user_id", parsed.Context.Filters[0].Column)
 	assert.Equal(t, "agent-7", parsed.Context.Filters[0].Value)
@@ -40,192 +39,211 @@ func TestReadDirSavepoint_PreservesTypeWithFilter(t *testing.T) {
 func TestReadDirSavepoint_PreservesTypeWithFilterAndLimit(t *testing.T) {
 	parsed, err := ParsePath("/notes/.savepoint/.by/user_id/agent-7/.last/3")
 	require.Nil(t, err)
-	assert.Equal(t, PathSavepoint, parsed.Type, "Type should stay PathSavepoint through .by/.last chain")
+	assert.Equal(t, PathSavepoint, parsed.Type)
 	assert.Equal(t, LimitLast, parsed.Context.LimitType)
 	assert.Equal(t, 3, parsed.Context.Limit)
 }
 
-// --- writeSavepoint unit tests ---
+// --- writeSavepoint unit tests (name as PK, format suffix required) ---
 
-func TestWriteSavepoint_CreateWithDescription(t *testing.T) {
-	mockDB := &mockDBClient{
-		primaryKeys: map[string]*mockPK{
-			"tigerfs.notes_savepoint": {column: "savepoint_id"},
-		},
-		lastInsertReturnPK: "sp-uuid-1",
+// Helper to extract column map from inserted row
+func insertedColMap(t *testing.T, mockDB *mockDBClient) map[string]interface{} {
+	t.Helper()
+	require.Len(t, mockDB.insertedRows, 1)
+	row := mockDB.insertedRows[0]
+	m := make(map[string]interface{})
+	for i, col := range row.columns {
+		m[col] = row.values[i]
 	}
-	cfg := &config.Config{DirListingLimit: 1000}
-	ops := NewOperations(cfg, mockDB)
+	return m
+}
+
+func newSavepointMock() *mockDBClient {
+	return &mockDBClient{
+		primaryKeys: map[string]*mockPK{
+			"tigerfs.notes_savepoint": {column: "name"},
+		},
+		lastInsertReturnPK: "my-checkpoint",
+	}
+}
+
+func newSavepointMockWithColumns() *mockDBClient {
+	m := newSavepointMock()
+	m.columns = map[string][]mockColumn{
+		"tigerfs.notes_savepoint": {
+			{name: "name", dataType: "text"},
+			{name: "savepoint_id", dataType: "uuid"},
+			{name: "user_id", dataType: "text"},
+			{name: "description", dataType: "text"},
+		},
+	}
+	return m
+}
+
+// -- TSV format tests --
+
+func TestSynth_Savepoint_JSON_NameOnlyEmpty(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+
+	// Empty JSON body -- just creates savepoint with name from filename PK
+	data := []byte(`{}`)
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/quick-mark.json", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "quick-mark", m["name"])
+}
+
+func TestSynth_Savepoint_TSV_NameAndDescription(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+
+	data := []byte("description\nBefore refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.tsv", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "my-checkpoint", m["name"])
+	assert.Equal(t, "Before refactoring", m["description"])
+}
+
+func TestSynth_Savepoint_TSV_NameDescriptionUserID(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+
+	data := []byte("description\tuser_id\nBefore refactoring\tagent-9\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.tsv", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "my-checkpoint", m["name"])
+	assert.Equal(t, "Before refactoring", m["description"])
+	assert.Equal(t, "agent-9", m["user_id"])
+}
+
+func TestSynth_Savepoint_TSV_InjectsUserID(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
 	ops.SetUserID("agent-7")
 
-	parsed := &ParsedPath{
-		Type:          PathRow,
-		Context:       &FSContext{Schema: "tigerfs", TableName: "notes_savepoint"},
-		PrimaryKey:    "my-checkpoint",
-		OrigTableName: "notes",
-	}
-
-	fsErr := ops.writeSavepoint(context.Background(), parsed, []byte("Before refactoring\n"))
+	// user_id NOT in body -- should be auto-injected from mount identity
+	data := []byte("description\nBefore refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.tsv", data)
 	require.Nil(t, fsErr)
 
-	// Verify INSERT was called with name, description, user_id
-	require.Len(t, mockDB.insertedRows, 1)
-	row := mockDB.insertedRows[0]
-
-	nameIdx := -1
-	descIdx := -1
-	userIdx := -1
-	for i, col := range row.columns {
-		switch col {
-		case "name":
-			nameIdx = i
-		case "description":
-			descIdx = i
-		case "user_id":
-			userIdx = i
-		}
-	}
-
-	require.GreaterOrEqual(t, nameIdx, 0, "should have name column")
-	assert.Equal(t, "my-checkpoint", row.values[nameIdx])
-
-	require.GreaterOrEqual(t, descIdx, 0, "should have description column")
-	assert.Equal(t, "Before refactoring", row.values[descIdx])
-
-	require.GreaterOrEqual(t, userIdx, 0, "should have user_id column")
-	assert.Equal(t, "agent-7", row.values[userIdx])
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "agent-7", m["user_id"])
+	assert.Equal(t, "Before refactoring", m["description"])
+	assert.Equal(t, "my-checkpoint", m["name"])
 }
 
-func TestWriteSavepoint_CreateWithoutDescription(t *testing.T) {
-	mockDB := &mockDBClient{
-		primaryKeys: map[string]*mockPK{
-			"tigerfs.notes_savepoint": {column: "savepoint_id"},
-		},
-		lastInsertReturnPK: "sp-uuid-1",
-	}
-	cfg := &config.Config{DirListingLimit: 1000}
-	ops := NewOperations(cfg, mockDB)
+func TestSynth_Savepoint_TSV_ExplicitUserIDNotOverridden(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
 
-	parsed := &ParsedPath{
-		Type:          PathRow,
-		Context:       &FSContext{Schema: "tigerfs", TableName: "notes_savepoint"},
-		PrimaryKey:    "quick-mark",
-		OrigTableName: "notes",
-	}
-
-	fsErr := ops.writeSavepoint(context.Background(), parsed, []byte(""))
+	// user_id in body should NOT be overridden by mount identity
+	data := []byte("description\tuser_id\nBefore refactoring\tagent-9\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.tsv", data)
 	require.Nil(t, fsErr)
 
-	require.Len(t, mockDB.insertedRows, 1)
-	row := mockDB.insertedRows[0]
-
-	// Should have name but NOT description (empty data = touch)
-	hasDesc := false
-	for _, col := range row.columns {
-		if col == "description" {
-			hasDesc = true
-		}
-	}
-	assert.False(t, hasDesc, "touch (empty data) should not include description column")
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "agent-9", m["user_id"], "explicit user_id should not be overridden")
 }
 
-func TestWriteSavepoint_CreateWithoutUserID(t *testing.T) {
-	mockDB := &mockDBClient{
-		primaryKeys: map[string]*mockPK{
-			"tigerfs.notes_savepoint": {column: "savepoint_id"},
-		},
-		lastInsertReturnPK: "sp-uuid-1",
-	}
-	cfg := &config.Config{DirListingLimit: 1000}
-	ops := NewOperations(cfg, mockDB)
-	// No SetUserID -- anonymous
+// -- JSON format tests --
 
-	parsed := &ParsedPath{
-		Type:          PathRow,
-		Context:       &FSContext{Schema: "tigerfs", TableName: "notes_savepoint"},
-		PrimaryKey:    "anon-save",
-		OrigTableName: "notes",
-	}
+func TestSynth_Savepoint_JSON_NameOnly(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
 
-	fsErr := ops.writeSavepoint(context.Background(), parsed, []byte(""))
+	data := []byte(`{}`)
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/quick-mark.json", data)
 	require.Nil(t, fsErr)
 
-	require.Len(t, mockDB.insertedRows, 1)
-	row := mockDB.insertedRows[0]
-
-	hasUserID := false
-	for _, col := range row.columns {
-		if col == "user_id" {
-			hasUserID = true
-		}
-	}
-	assert.False(t, hasUserID, "anonymous user should not include user_id column")
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "quick-mark", m["name"])
 }
 
-// --- deleteSavepoint unit tests ---
+func TestSynth_Savepoint_JSON_NameAndDescription(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
 
-func TestDeleteSavepoint_ByName(t *testing.T) {
-	mockDB := &mockDBClient{
-		primaryKeys: map[string]*mockPK{
-			"tigerfs.notes_savepoint": {column: "savepoint_id"},
-		},
-		// GetRowByColumns returns this row when looking up by name
-		rowByColumnsData: map[string]*mockRowByColumns{
-			"tigerfs.notes_savepoint.name=my-save": {
-				columns: []string{"savepoint_id", "user_id", "name", "description"},
-				values:  []interface{}{"sp-uuid-1", "agent-7", "my-save", "checkpoint"},
-			},
-		},
-		// DeleteRow checks rowData for existence
-		rowData: map[string]*mockRow{
-			"tigerfs.notes_savepoint.sp-uuid-1": {
-				columns: []string{"savepoint_id"},
-				values:  []interface{}{"sp-uuid-1"},
-			},
-		},
-	}
-	cfg := &config.Config{DirListingLimit: 1000}
-	ops := NewOperations(cfg, mockDB)
-
-	parsed := &ParsedPath{
-		Type:          PathRow,
-		Context:       &FSContext{Schema: "tigerfs", TableName: "notes_savepoint"},
-		PrimaryKey:    "my-save",
-		OrigTableName: "notes",
-	}
-
-	fsErr := ops.deleteSavepoint(context.Background(), parsed)
+	data := []byte(`{"description":"Before refactoring"}`)
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.json", data)
 	require.Nil(t, fsErr)
-	assert.True(t, mockDB.deleteCalled, "should call DeleteRow")
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "my-checkpoint", m["name"])
+	assert.Equal(t, "Before refactoring", m["description"])
 }
 
-// --- getSavepointRowByName unit tests ---
+func TestSynth_Savepoint_JSON_NameDescriptionUserID(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
 
-func TestGetSavepointRowByName_Found(t *testing.T) {
-	mockDB := &mockDBClient{
-		rowByColumnsData: map[string]*mockRowByColumns{
-			"tigerfs.notes_savepoint.name=before-exploration": {
-				columns: []string{"savepoint_id", "name", "description"},
-				values:  []interface{}{"sp-uuid-1", "before-exploration", "Starting exploration"},
-			},
-		},
-	}
-	cfg := &config.Config{DirListingLimit: 1000}
-	ops := NewOperations(cfg, mockDB)
+	data := []byte(`{"description":"Before refactoring","user_id":"agent-9"}`)
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.json", data)
+	require.Nil(t, fsErr)
 
-	columns, row, err := ops.getSavepointRowByName(context.Background(), "tigerfs", "notes_savepoint", "before-exploration")
-	require.NoError(t, err)
-	require.NotNil(t, row)
-	assert.Equal(t, "name", columns[1])
-	assert.Equal(t, "before-exploration", row[1])
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "my-checkpoint", m["name"])
+	assert.Equal(t, "Before refactoring", m["description"])
+	assert.Equal(t, "agent-9", m["user_id"])
 }
 
-func TestGetSavepointRowByName_NotFound(t *testing.T) {
-	mockDB := &mockDBClient{}
-	cfg := &config.Config{DirListingLimit: 1000}
-	ops := NewOperations(cfg, mockDB)
+func TestSynth_Savepoint_JSON_InjectsUserID(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
 
-	_, row, err := ops.getSavepointRowByName(context.Background(), "tigerfs", "notes_savepoint", "nonexistent")
-	require.NoError(t, err)
-	assert.Nil(t, row)
+	data := []byte(`{"description":"Before refactoring"}`)
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.json", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "agent-7", m["user_id"])
+}
+
+// -- CSV format tests --
+
+func TestSynth_Savepoint_CSV_NameAndDescription(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+
+	data := []byte("description\nBefore refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.csv", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "my-checkpoint", m["name"])
+	assert.Equal(t, "Before refactoring", m["description"])
+}
+
+func TestSynth_Savepoint_CSV_InjectsUserID(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
+
+	data := []byte("description\nBefore refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.csv", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "agent-7", m["user_id"])
+	assert.Equal(t, "my-checkpoint", m["name"])
+}
+
+// -- Bare path rejection --
+
+func TestSynth_Savepoint_BarePathRejected(t *testing.T) {
+	mockDB := newSavepointMockWithColumns()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+
+	data := []byte("Before refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint", data)
+	require.NotNil(t, fsErr)
+	assert.Equal(t, ErrInvalidArgument, fsErr.Code)
+	assert.Contains(t, fsErr.Message, "format suffix required")
 }

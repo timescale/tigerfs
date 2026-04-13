@@ -758,10 +758,6 @@ func (m *MockLogWriter) InsertLogEntry(ctx context.Context, schema, logTable, us
 	return nil
 }
 
-func (m *MockLogWriter) QuerySavepointNames(ctx context.Context, schema, table, filterCol, filterVal string, limit int, ascending bool) ([]string, error) {
-	return nil, nil
-}
-
 func (m *MockLogWriter) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
 	return "", "", nil
 }
