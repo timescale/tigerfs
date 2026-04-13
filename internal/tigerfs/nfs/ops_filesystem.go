@@ -498,22 +498,6 @@ func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	filename = normalizePath(filename)
 	logging.Info("OpsFilesystem.Create", zap.String("filename", filename))
 
-	// Reject bare-path row creates (no format suffix) early so the NFS
-	// client sees an error. Without this, the error only surfaces at Close
-	// time, which NFS v3 cannot propagate back to the shell.
-	// go-nfs maps all Create errors to NFSStatusAccess ("Permission denied").
-	if parsed, err := fs.ParsePath(filename); err == nil && parsed.Type == fs.PathRow && parsed.Format == "" {
-		cctx, ccancel := ctx()
-		_, statErr := f.ops.Stat(cctx, filename)
-		ccancel()
-		if statErr != nil {
-			logging.Error("format suffix required to create new rows",
-				zap.String("path", filename),
-				zap.String("hint", "use .tsv, .json, or .csv (e.g., echo data > path.tsv)"))
-			return nil, os.ErrPermission
-		}
-	}
-
 	// Get or create cached file entry with O_CREATE|O_TRUNC semantics
 	cached := f.getOrCreateCachedFile(filename, os.O_CREATE|os.O_TRUNC)
 
