@@ -675,14 +675,17 @@ func (o *Operations) readUndoPreviewFile(ctx context.Context, parsed *ParsedPath
 }
 
 // readSynthFileByID reads a synth file by its UUID (for preview of files to be deleted).
+// The backing table is in the tigerfs schema, but the synth view info is registered
+// under the public schema (where the view lives).
 func (o *Operations) readSynthFileByID(ctx context.Context, schema, tableName, fileID string) (*FileContent, *FSError) {
 	row, err := o.db.GetRow(ctx, schema, tableName, db.SinglePKMatch("id", fileID))
 	if err != nil {
 		return nil, &FSError{Code: ErrNotExist, Message: "file not found"}
 	}
 
-	// Get synth view info to render the content
-	info := o.getSynthViewInfo(ctx, schema, tableName)
+	// Synth view is registered under public schema, not tigerfs schema.
+	viewSchema := o.cachedSchema
+	info := o.getSynthViewInfo(ctx, viewSchema, tableName)
 	if info == nil {
 		// Fallback: return raw TSV
 		data, fmtErr := format.RowToTSV(row.Columns, interfaceSlice(row.Values))
@@ -717,8 +720,10 @@ func (o *Operations) readHistoryByVersionID(ctx context.Context, schema, history
 		values = append(values, row.Values[i])
 	}
 
-	// Get synth view info to render
-	info := o.getSynthViewInfo(ctx, schema, sourceTable)
+	// Synth view is registered under public schema (where the view lives),
+	// not the tigerfs schema (where the backing table lives).
+	viewSchema := o.cachedSchema
+	info := o.getSynthViewInfo(ctx, viewSchema, sourceTable)
 	if info == nil {
 		data, fmtErr := format.RowToTSV(columns, values)
 		if fmtErr != nil {
@@ -784,11 +789,11 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 
 	switch parsed.UndoMode {
 	case "id":
-		result, err = o.ExecuteUndoSingle(ctx, "public", tableName, parsed.UndoTarget)
+		result, err = o.ExecuteUndoSingle(ctx, synth.TigerFSSchema, tableName, parsed.UndoTarget)
 	case "to-id":
-		result, err = o.ExecuteUndoToLogID(ctx, "public", tableName, parsed.UndoTarget, filters)
+		result, err = o.ExecuteUndoToLogID(ctx, synth.TigerFSSchema, tableName, parsed.UndoTarget, filters)
 	case "to-savepoint":
-		result, err = o.ExecuteUndoToSavepoint(ctx, "public", tableName, parsed.UndoTarget, filters)
+		result, err = o.ExecuteUndoToSavepoint(ctx, synth.TigerFSSchema, tableName, parsed.UndoTarget, filters)
 	default:
 		return &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown undo mode: %s", parsed.UndoMode)}
 	}

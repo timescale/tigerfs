@@ -814,7 +814,7 @@ func (o *Operations) resolveLogDiffSymlink(ctx context.Context, parsed *ParsedPa
 	if decodeErr != nil {
 		return "", &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid log_id: %v", decodeErr)}
 	}
-	row, rowErr := o.db.GetRow(ctx, fsCtx.Schema, logTable, match)
+	row, rowErr := o.db.GetRow(ctx, synth.TigerFSSchema, logTable, match)
 	if rowErr != nil {
 		return "", &FSError{Code: ErrIO, Message: "failed to fetch log entry", Cause: rowErr}
 	}
