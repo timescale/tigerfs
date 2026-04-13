@@ -348,6 +348,8 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 	case PathSavepoint:
 		// With name as PK, readDirTable naturally lists by human-readable name.
 		return o.readDirTable(ctx, parsed)
+	case PathUndo:
+		return o.readDirUndo(ctx, parsed)
 	case PathRootInfo:
 		return o.readDirRootInfo(ctx, parsed)
 	case PathInfo:
@@ -1526,7 +1528,7 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		return &Entry{Name: DirSavepoint, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathUndo:
-		return &Entry{Name: DirUndo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+		return o.statUndo(ctx, parsed)
 
 	case PathSchemaList:
 		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil

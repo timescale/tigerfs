@@ -3,6 +3,9 @@ package fs
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
@@ -241,4 +244,251 @@ func (o *Operations) ExecuteUndoSingle(ctx context.Context, schema, tableName, l
 		FilesRestored: len(restoreVersionIDs),
 		FilesSkipped:  skipped,
 	}, nil
+}
+
+// --- Filesystem interface (.undo/ navigation, preview, apply) ---
+
+// readDirUndo handles ReadDir for .undo/ paths.
+func (o *Operations) readDirUndo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
+
+	// Level 0: .undo/ -- list modes
+	if parsed.UndoMode == "" {
+		return []Entry{
+			{Name: "id", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+			{Name: "to-id", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+			{Name: "to-savepoint", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		}, nil
+	}
+
+	// Level 1: .undo/<mode>/ -- list targets (log entries or savepoints)
+	if parsed.UndoTarget == "" {
+		return o.readDirUndoTargets(ctx, parsed)
+	}
+
+	// Level 2: .undo/<mode>/<target>/ -- preview directory
+	if parsed.UndoFile == "" && parsed.InfoFile == "" && !parsed.UndoApply {
+		return o.readDirUndoPreview(ctx, parsed)
+	}
+
+	// Level 3: .undo/<mode>/<target>/.info/ -- info directory
+	if parsed.InfoFile == "" && parsed.UndoFile == "" {
+		return []Entry{
+			{Name: FileSummary, IsDir: false, Mode: 0444, ModTime: now},
+		}, nil
+	}
+
+	return nil, &FSError{Code: ErrInvalidPath, Message: "invalid .undo/ path for ReadDir"}
+}
+
+// readDirUndoTargets lists log entries or savepoints for a given undo mode.
+func (o *Operations) readDirUndoTargets(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	// Redirect context to the appropriate table
+	switch parsed.UndoMode {
+	case "id", "to-id":
+		parsed.Context.TableName = parsed.OrigTableName + "_log"
+		parsed.Context.Schema = synth.TigerFSSchema
+	case "to-savepoint":
+		parsed.Context.TableName = parsed.OrigTableName + "_savepoint"
+		parsed.Context.Schema = synth.TigerFSSchema
+	}
+
+	// Apply default limit if none set by pipeline
+	if parsed.Context.Limit == 0 {
+		limit := o.config.UndoListLimit
+		if limit <= 0 {
+			limit = 100
+		}
+		parsed.Context.Limit = limit
+		// Default to most recent (descending)
+		if parsed.Context.LimitType == 0 {
+			parsed.Context.LimitType = LimitLast
+		}
+	}
+
+	return o.readDirTable(ctx, parsed)
+}
+
+// readDirUndoPreview builds a virtual directory listing for the undo preview.
+func (o *Operations) readDirUndoPreview(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	now := time.Now()
+
+	affected, err := o.queryUndoAffected(ctx, parsed)
+	if err != nil {
+		return nil, &FSError{Code: ErrIO, Message: "failed to query undo preview", Cause: err}
+	}
+
+	// Start with .info/ and .apply
+	entries := []Entry{
+		{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		{Name: FileApply, IsDir: false, Mode: 0644, ModTime: now},
+	}
+
+	// Build file entries from affected files.
+	// Track directories we've seen to add intermediate dir entries.
+	seenDirs := make(map[string]bool)
+
+	for _, f := range affected {
+		filename := f.Filename
+
+		// Add intermediate directories
+		parts := strings.Split(filename, "/")
+		if len(parts) > 1 {
+			for i := 1; i < len(parts); i++ {
+				dir := strings.Join(parts[:i], "/")
+				if !seenDirs[dir] {
+					seenDirs[dir] = true
+					// Only add top-level directory entries
+					if !strings.Contains(parts[0], "/") {
+						entries = append(entries, Entry{
+							Name:    parts[0],
+							IsDir:   true,
+							Mode:    os.ModeDir | 0755,
+							ModTime: now,
+						})
+					}
+				}
+			}
+		}
+
+		// Determine if this is a delete (symlink to /dev/null) or restore (regular file)
+		if f.Type == "create" {
+			// File was created after target -- will be deleted on apply.
+			// Show as symlink to /dev/null in preview.
+			entries = append(entries, Entry{
+				Name:    filename,
+				IsDir:   false,
+				Mode:    os.ModeSymlink | 0777,
+				Target:  "/dev/null",
+				ModTime: now,
+			})
+		} else {
+			// File will be restored from history -- show as regular file
+			entries = append(entries, Entry{
+				Name:    filename,
+				IsDir:   false,
+				Mode:    0444,
+				ModTime: now,
+			})
+		}
+	}
+
+	return entries, nil
+}
+
+// queryUndoAffected returns the affected files for the current undo path.
+func (o *Operations) queryUndoAffected(ctx context.Context, parsed *ParsedPath) ([]db.UndoAffectedFile, error) {
+	tableName := parsed.OrigTableName
+	logTable := tableName + "_log"
+
+	// Build filters from pipeline context
+	var filters []db.UndoFilter
+	var userID string
+	if parsed.Context != nil {
+		for _, f := range parsed.Context.Filters {
+			if f.Column == "user_id" {
+				userID = f.Value
+			} else {
+				filters = append(filters, db.UndoFilter{Column: f.Column, Value: f.Value})
+			}
+		}
+	}
+
+	switch parsed.UndoMode {
+	case "id":
+		// Single operation: return one entry
+		logID := resolveLogID(parsed.UndoTarget)
+		entry, err := o.db.QueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
+		if err != nil {
+			return nil, err
+		}
+		return []db.UndoAffectedFile{*entry}, nil
+
+	case "to-id":
+		afterID := resolveLogID(parsed.UndoTarget)
+		return o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, afterID, userID, filters)
+
+	case "to-savepoint":
+		// Look up savepoint_id by name
+		savepointTable := tableName + "_savepoint"
+		row, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
+		if err != nil {
+			return nil, fmt.Errorf("savepoint not found: %s", parsed.UndoTarget)
+		}
+		var savepointID string
+		for i, col := range row.Columns {
+			if col == "savepoint_id" {
+				savepointID, _ = format.ConvertValueToText(row.Values[i])
+				break
+			}
+		}
+		if savepointID == "" {
+			return nil, fmt.Errorf("savepoint %s has no savepoint_id", parsed.UndoTarget)
+		}
+		return o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, savepointID, userID, filters)
+	}
+
+	return nil, fmt.Errorf("unknown undo mode: %s", parsed.UndoMode)
+}
+
+// statUndo handles Stat for .undo/ paths beyond the basic directory entry.
+func (o *Operations) statUndo(ctx context.Context, parsed *ParsedPath) (*Entry, *FSError) {
+	now := time.Now()
+
+	// .undo/ root or .undo/<mode>/
+	if parsed.UndoTarget == "" {
+		name := DirUndo
+		if parsed.UndoMode != "" {
+			name = parsed.UndoMode
+		}
+		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// .undo/<mode>/<target>/
+	if parsed.UndoFile == "" && parsed.InfoFile == "" && !parsed.UndoApply {
+		return &Entry{Name: parsed.UndoTarget, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// .apply
+	if parsed.UndoApply {
+		return &Entry{Name: FileApply, IsDir: false, Mode: 0644, ModTime: now}, nil
+	}
+
+	// .info directory
+	if parsed.InfoFile == "" && parsed.UndoFile == "" {
+		return &Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// .info/summary
+	if parsed.InfoFile != "" {
+		name := parsed.InfoFile
+		if name == FileSummary || strings.HasPrefix(name, FileSummary+".") {
+			return &Entry{Name: name, IsDir: false, Mode: 0444, ModTime: now}, nil
+		}
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", name)}
+	}
+
+	// Preview file
+	if parsed.UndoFile != "" {
+		// Check if it's an intermediate directory in the preview tree
+		affected, qErr := o.queryUndoAffected(ctx, parsed)
+		if qErr != nil {
+			return nil, &FSError{Code: ErrIO, Message: "failed to query undo preview", Cause: qErr}
+		}
+		for _, f := range affected {
+			if f.Filename == parsed.UndoFile {
+				if f.Type == "create" {
+					return &Entry{Name: parsed.UndoFile, IsDir: false, Mode: os.ModeSymlink | 0777, Target: "/dev/null", ModTime: now}, nil
+				}
+				return &Entry{Name: parsed.UndoFile, IsDir: false, Mode: 0444, ModTime: now}, nil
+			}
+			// Check if UndoFile is a directory prefix
+			if strings.HasPrefix(f.Filename, parsed.UndoFile+"/") {
+				return &Entry{Name: parsed.UndoFile, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+			}
+		}
+		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found in undo preview: %s", parsed.UndoFile)}
+	}
+
+	return nil, &FSError{Code: ErrNotExist, Message: "invalid .undo/ path"}
 }
