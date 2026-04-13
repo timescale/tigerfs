@@ -70,6 +70,9 @@ type Config struct {
 	// Identity
 	UserID string `mapstructure:"user_id"` // Mount-level user identity for log entries (--user-id or TIGERFS_USER_ID)
 
+	// Auto-savepoints (ADR-016 Section 4.4)
+	AutoSavepointInterval time.Duration `mapstructure:"auto_savepoint_interval"` // Inactivity gap before auto-savepoint (default: 30m, 0 disables)
+
 	// FUSE backend selection (Linux only)
 	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
 
@@ -106,6 +109,7 @@ func Init() error {
 	viper.SetDefault("legacy_fuse", false)
 	viper.SetDefault("default_backend", "")
 	viper.SetDefault("default_mount_dir", "/tmp")
+	viper.SetDefault("auto_savepoint_interval", 30*time.Minute)
 	viper.SetDefault("config_dir", GetDefaultConfigDir())
 
 	// Setup config file

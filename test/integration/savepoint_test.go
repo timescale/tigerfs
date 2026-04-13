@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
@@ -475,4 +477,134 @@ func TestSynth_Savepoint_Ordering(t *testing.T) {
 	assert.Contains(t, names, "bbb-second")
 	assert.Contains(t, names, "ccc-third")
 	assert.NotContains(t, names, "aaa-first", "aaa-first should not be in .last/2")
+}
+
+// TestSynth_AutoSavepoint_CreatedOnGap verifies that an auto-savepoint is created
+// when the inactivity gap exceeds the configured threshold. Uses injectable clock
+// to avoid real sleeps.
+func TestSynth_AutoSavepoint_CreatedOnGap(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spauto")
+
+	// Create ops with auto-savepoint interval of 5 minutes
+	cfg := &config.Config{
+		DirListingLimit:       10000,
+		QueryTimeout:          30,
+		PoolSize:              5,
+		PoolMaxIdle:           2,
+		InsecureNoSSL:         true,
+		AutoSavepointInterval: 5 * time.Minute,
+	}
+	ctx := context.Background()
+	dbClient, err := db.NewClient(ctx, cfg, result.ConnStr)
+	require.NoError(t, err)
+	t.Cleanup(func() { dbClient.Close() })
+
+	ops := fs.NewOperations(cfg, dbClient)
+
+	// Injectable clock
+	baseTime := time.Date(2026, 4, 8, 14, 0, 0, 0, time.UTC)
+	currentTime := baseTime
+	ops.SetNowFunc(func() time.Time { return currentTime })
+
+	// Create the app
+	fsErr := ops.WriteFile(ctx, "/.build/spauto", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// First write at T+0 -- no auto-savepoint (first write, no previous session)
+	fsErr = ops.WriteFile(ctx, "/spauto/first.md", []byte("---\ntitle: First\n---\nContent\n"))
+	require.Nil(t, fsErr)
+
+	// Second write at T+1m -- within interval, no auto-savepoint
+	currentTime = baseTime.Add(1 * time.Minute)
+	fsErr = ops.WriteFile(ctx, "/spauto/second.md", []byte("---\ntitle: Second\n---\nContent\n"))
+	require.Nil(t, fsErr)
+
+	// Verify no auto-savepoints yet
+	entries, fsErr := ops.ReadDir(ctx, "/spauto/.savepoint")
+	require.Nil(t, fsErr)
+	var autoNames []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name, "auto-") {
+			autoNames = append(autoNames, e.Name)
+		}
+	}
+	assert.Empty(t, autoNames, "no auto-savepoints should exist yet")
+
+	// Third write at T+10m -- exceeds 5m interval, should trigger auto-savepoint
+	currentTime = baseTime.Add(10 * time.Minute)
+	fsErr = ops.WriteFile(ctx, "/spauto/third.md", []byte("---\ntitle: Third\n---\nContent\n"))
+	require.Nil(t, fsErr)
+
+	// Verify auto-savepoint was created
+	entries, fsErr = ops.ReadDir(ctx, "/spauto/.savepoint")
+	require.Nil(t, fsErr)
+	autoNames = nil
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name, "auto-") {
+			autoNames = append(autoNames, e.Name)
+		}
+	}
+	assert.Equal(t, 1, len(autoNames), "should have exactly 1 auto-savepoint")
+	if len(autoNames) > 0 {
+		assert.Contains(t, autoNames[0], "auto-", "name should start with auto-")
+		// Verify it has a description mentioning inactivity
+		desc, fsErr := ops.ReadFile(ctx, "/spauto/.savepoint/"+autoNames[0]+"/description")
+		require.Nil(t, fsErr)
+		assert.Contains(t, string(desc.Data), "inactivity")
+	}
+}
+
+// TestSynth_AutoSavepoint_DisabledWhenZero verifies that interval=0 disables auto-savepoints.
+func TestSynth_AutoSavepoint_DisabledWhenZero(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spnone")
+
+	cfg := &config.Config{
+		DirListingLimit:       10000,
+		QueryTimeout:          30,
+		PoolSize:              5,
+		PoolMaxIdle:           2,
+		InsecureNoSSL:         true,
+		AutoSavepointInterval: 0, // disabled
+	}
+	ctx := context.Background()
+	dbClient, err := db.NewClient(ctx, cfg, result.ConnStr)
+	require.NoError(t, err)
+	t.Cleanup(func() { dbClient.Close() })
+
+	ops := fs.NewOperations(cfg, dbClient)
+
+	baseTime := time.Date(2026, 4, 8, 14, 0, 0, 0, time.UTC)
+	currentTime := baseTime
+	ops.SetNowFunc(func() time.Time { return currentTime })
+
+	fsErr := ops.WriteFile(ctx, "/.build/spnone", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// First write
+	fsErr = ops.WriteFile(ctx, "/spnone/first.md", []byte("---\ntitle: First\n---\nContent\n"))
+	require.Nil(t, fsErr)
+
+	// Second write with huge gap -- should NOT trigger auto-savepoint
+	currentTime = baseTime.Add(24 * time.Hour)
+	fsErr = ops.WriteFile(ctx, "/spnone/second.md", []byte("---\ntitle: Second\n---\nContent\n"))
+	require.Nil(t, fsErr)
+
+	entries, fsErr := ops.ReadDir(ctx, "/spnone/.savepoint")
+	require.Nil(t, fsErr)
+	for _, e := range entries {
+		assert.False(t, strings.HasPrefix(e.Name, "auto-"),
+			"no auto-savepoints should exist when interval=0, found: %s", e.Name)
+	}
 }
