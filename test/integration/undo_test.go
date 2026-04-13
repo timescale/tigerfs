@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // --- Single operation undo ---
@@ -727,4 +728,93 @@ func TestUndo_Interface_InvalidTarget(t *testing.T) {
 	// .apply with invalid savepoint should fail
 	fsErr = ops.WriteFile(ctx, "/undoui8/.undo/to-savepoint/nonexistent/.apply", []byte(""))
 	require.NotNil(t, fsErr, ".apply with invalid savepoint should fail")
+}
+
+// --- Target validation tests (cd into nonexistent targets should fail) ---
+
+func TestUndo_Interface_StatInvalidSavepoint(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoval1")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoval1", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Stat on nonexistent savepoint should return ENOENT
+	_, fsErr = ops.Stat(ctx, "/undoval1/.undo/to-savepoint/nonexistent")
+	require.NotNil(t, fsErr, "Stat on nonexistent savepoint should fail")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+}
+
+func TestUndo_Interface_StatInvalidLogID(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoval2")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoval2", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Stat on nonexistent log_id in id/ should return ENOENT
+	_, fsErr = ops.Stat(ctx, "/undoval2/.undo/id/nonexistent")
+	require.NotNil(t, fsErr, "Stat on nonexistent log_id should fail")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+}
+
+func TestUndo_Interface_StatInvalidToID(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoval3")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoval3", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Stat on nonexistent log_id in to-id/ should return ENOENT
+	_, fsErr = ops.Stat(ctx, "/undoval3/.undo/to-id/nonexistent")
+	require.NotNil(t, fsErr, "Stat on nonexistent to-id target should fail")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code)
+}
+
+func TestUndo_Interface_StatValidSavepoint(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoval4")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undoval4", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undoval4/.savepoint/valid-sp.json", []byte("{}"))
+
+	// Stat on existing savepoint should succeed
+	entry, fsErr := ops.Stat(ctx, "/undoval4/.undo/to-savepoint/valid-sp")
+	require.Nil(t, fsErr, "Stat on existing savepoint should succeed")
+	assert.True(t, entry.IsDir)
+	assert.Equal(t, "valid-sp", entry.Name)
 }

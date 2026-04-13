@@ -444,9 +444,17 @@ func (o *Operations) statUndo(ctx context.Context, parsed *ParsedPath) (*Entry, 
 		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 	}
 
-	// .undo/<mode>/<target>/
+	// .undo/<mode>/<target>/ -- validate target exists
 	if parsed.UndoFile == "" && parsed.InfoFile == "" && !parsed.UndoApply {
+		if err := o.validateUndoTarget(ctx, parsed); err != nil {
+			return nil, err
+		}
 		return &Entry{Name: parsed.UndoTarget, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+
+	// For all sub-paths under a target, validate the target exists first
+	if err := o.validateUndoTarget(ctx, parsed); err != nil {
+		return nil, err
 	}
 
 	// .apply
@@ -754,6 +762,28 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 	o.statCache.invalidate(synth.TigerFSSchema, tableName)
 	o.pathCache.invalidate(synth.TigerFSSchema, tableName)
 
+	return nil
+}
+
+// validateUndoTarget checks that the undo target (savepoint name or log_id) exists.
+func (o *Operations) validateUndoTarget(ctx context.Context, parsed *ParsedPath) *FSError {
+	tableName := parsed.OrigTableName
+
+	switch parsed.UndoMode {
+	case "to-savepoint":
+		savepointTable := tableName + "_savepoint"
+		_, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
+		if err != nil {
+			return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", parsed.UndoTarget)}
+		}
+	case "id", "to-id":
+		logTable := tableName + "_log"
+		logID := resolveLogID(parsed.UndoTarget)
+		_, err := o.db.QueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
+		if err != nil {
+			return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("log entry not found: %s", parsed.UndoTarget)}
+		}
+	}
 	return nil
 }
 
