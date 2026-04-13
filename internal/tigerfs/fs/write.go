@@ -127,10 +127,17 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 	}
 
 	if parseErr != nil {
-		return &FSError{
-			Code:    ErrInvalidPath,
-			Message: "failed to parse write data",
-			Cause:   parseErr,
+		// Empty body with a format suffix is valid -- creates a row with just the PK
+		// and DEFAULTs for all other columns. e.g., echo "" > .savepoint/name.tsv
+		if parsed.Format != "" && len(strings.TrimSpace(string(data))) == 0 {
+			columns = nil
+			values = nil
+		} else {
+			return &FSError{
+				Code:    ErrInvalidPath,
+				Message: "failed to parse write data",
+				Cause:   parseErr,
+			}
 		}
 	}
 

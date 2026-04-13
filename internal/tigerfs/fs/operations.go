@@ -759,6 +759,13 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		cacheEntries[filename] = entry
 	}
 
+	// Include format entries in cache so Stat works for .json, .tsv, .csv, .yaml
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name, ".") {
+			cacheEntries[e.Name] = e
+		}
+	}
+
 	// Prime row-level stat cache so statColumn can use it
 	if len(cacheEntries) > 0 {
 		o.statCache.prime(fsCtx.Schema, fsCtx.TableName+"/"+parsed.PrimaryKey, cacheEntries)
@@ -905,18 +912,36 @@ func (o *Operations) writeSavepoint(ctx context.Context, parsed *ParsedPath, dat
 		if parsed.Format == "csv" {
 			sep = ","
 		}
-		lines := strings.SplitN(strings.TrimRight(string(data), "\n"), "\n", 2)
+		trimmed := strings.TrimRight(string(data), "\n")
+		lines := strings.SplitN(trimmed, "\n", 2)
 		if len(lines) == 2 && !strings.Contains(lines[0], "user_id") {
 			lines[0] += sep + "user_id"
 			lines[1] += sep + o.userID
 			data = []byte(lines[0] + "\n" + lines[1] + "\n")
+		} else if trimmed == "" || len(lines) < 2 {
+			// Empty body -- create minimal TSV with just user_id
+			data = []byte("user_id\n" + o.userID + "\n")
 		}
 	} else if o.userID != "" && parsed.Format == "json" {
 		// Inject user_id into JSON data if not already present.
 		s := strings.TrimSpace(string(data))
-		if strings.HasPrefix(s, "{") && !strings.Contains(s, "\"user_id\"") {
-			s = s[:len(s)-1] + ",\"user_id\":\"" + o.userID + "\"}"
-			data = []byte(s)
+		if s == "" {
+			data = []byte(`{"user_id":"` + o.userID + `"}`)
+		} else if strings.HasPrefix(s, "{") && !strings.Contains(s, "\"user_id\"") {
+			if s == "{}" {
+				data = []byte(`{"user_id":"` + o.userID + `"}`)
+			} else {
+				s = s[:len(s)-1] + ",\"user_id\":\"" + o.userID + "\"}"
+				data = []byte(s)
+			}
+		}
+	} else if o.userID != "" && parsed.Format == "yaml" {
+		// Inject user_id into YAML data if not already present.
+		s := strings.TrimSpace(string(data))
+		if s == "" {
+			data = []byte("user_id: " + o.userID + "\n")
+		} else if !strings.Contains(s, "user_id:") {
+			data = []byte(s + "\nuser_id: " + o.userID + "\n")
 		}
 	}
 	// Delegate to standard row write (handles INSERT/UPDATE, PK merge, format check)

@@ -1145,14 +1145,19 @@ func processSegmentsFrom(result *ParsedPath, segments []string) (int, *FSError) 
 		result.PrimaryKey = pk
 		consumed++
 
-		// If there are more segments, next one is a column name
+		// If there are more segments, check if it's a format file or column name
 		if consumed < len(segments) {
 			nextSeg := segments[consumed]
 			if strings.HasPrefix(nextSeg, ".") && isKnownCapability(nextSeg) {
 				continue // pipeline after row
 			}
-			result.Type = PathColumn
-			result.Column = nextSeg
+			// Check if it's a row format file (.json, .csv, .tsv, .yaml)
+			if fmt, ok := knownFormats[nextSeg]; ok {
+				result.Format = fmt
+			} else {
+				result.Type = PathColumn
+				result.Column = nextSeg
+			}
 			consumed++
 		}
 		break

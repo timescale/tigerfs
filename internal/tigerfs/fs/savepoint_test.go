@@ -80,13 +80,43 @@ func newSavepointMockWithColumns() *mockDBClient {
 	return m
 }
 
-// -- TSV format tests --
+// -- Empty body tests (echo "" > name.tsv) --
 
-func TestSynth_Savepoint_JSON_NameOnlyEmpty(t *testing.T) {
+func TestSynth_Savepoint_TSV_EmptyBody(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
+
+	// echo "" > .savepoint/name.tsv -- empty body, should create with just PK + user_id
+	data := []byte("\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/quick-mark.tsv", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "quick-mark", m["name"])
+	assert.Equal(t, "agent-7", m["user_id"])
+}
+
+func TestSynth_Savepoint_JSON_EmptyBody(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
+
+	// echo "" > .savepoint/name.json -- empty body
+	data := []byte("\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/quick-mark.json", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "quick-mark", m["name"])
+	assert.Equal(t, "agent-7", m["user_id"])
+}
+
+func TestSynth_Savepoint_JSON_EmptyObject(t *testing.T) {
 	mockDB := newSavepointMock()
 	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
 
-	// Empty JSON body -- just creates savepoint with name from filename PK
+	// echo '{}' > .savepoint/name.json -- empty JSON object, name from PK
 	data := []byte(`{}`)
 	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/quick-mark.json", data)
 	require.Nil(t, fsErr)
@@ -94,6 +124,8 @@ func TestSynth_Savepoint_JSON_NameOnlyEmpty(t *testing.T) {
 	m := insertedColMap(t, mockDB)
 	assert.Equal(t, "quick-mark", m["name"])
 }
+
+// -- TSV format tests --
 
 func TestSynth_Savepoint_TSV_NameAndDescription(t *testing.T) {
 	mockDB := newSavepointMock()
@@ -233,6 +265,49 @@ func TestSynth_Savepoint_CSV_InjectsUserID(t *testing.T) {
 	m := insertedColMap(t, mockDB)
 	assert.Equal(t, "agent-7", m["user_id"])
 	assert.Equal(t, "my-checkpoint", m["name"])
+}
+
+// -- YAML format tests --
+
+func TestSynth_Savepoint_YAML_NameAndDescription(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+
+	data := []byte("description: Before refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.yaml", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "my-checkpoint", m["name"])
+	assert.Equal(t, "Before refactoring", m["description"])
+}
+
+func TestSynth_Savepoint_YAML_InjectsUserID(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
+
+	data := []byte("description: Before refactoring\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint.yaml", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "agent-7", m["user_id"])
+	assert.Equal(t, "my-checkpoint", m["name"])
+}
+
+func TestSynth_Savepoint_YAML_EmptyBody(t *testing.T) {
+	mockDB := newSavepointMock()
+	ops := NewOperations(&config.Config{DirListingLimit: 1000}, mockDB)
+	ops.SetUserID("agent-7")
+
+	data := []byte("\n")
+	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/quick-mark.yaml", data)
+	require.Nil(t, fsErr)
+
+	m := insertedColMap(t, mockDB)
+	assert.Equal(t, "quick-mark", m["name"])
+	assert.Equal(t, "agent-7", m["user_id"])
 }
 
 // -- Bare path rejection --
