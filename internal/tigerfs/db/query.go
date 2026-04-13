@@ -899,9 +899,9 @@ func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, a
 	where := strings.Join(conditions, " AND ")
 
 	query := fmt.Sprintf(
-		`SELECT DISTINCT ON (%s) %s, %s, %s, %s FROM %s WHERE %s ORDER BY %s, %s ASC`,
+		`SELECT DISTINCT ON (%s) %s, %s, %s, %s, %s, %s FROM %s WHERE %s ORDER BY %s, %s ASC`,
 		qi("file_id"),
-		qi("file_id"), qi("type"), qi("version_id"), qi("filename"),
+		qi("file_id"), qi("type"), qi("version_id"), qi("filename"), qi("log_id"), qi("user_id"),
 		qt(schema, logTable),
 		where,
 		qi("file_id"), qi("log_id"),
@@ -917,11 +917,15 @@ func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, a
 	for rows.Next() {
 		var f UndoAffectedFile
 		var versionID *string
-		if err := rows.Scan(&f.FileID, &f.Type, &versionID, &f.Filename); err != nil {
+		var userID *string
+		if err := rows.Scan(&f.FileID, &f.Type, &versionID, &f.Filename, &f.LogID, &userID); err != nil {
 			return nil, fmt.Errorf("failed to scan undo affected file: %w", err)
 		}
 		if versionID != nil {
 			f.VersionID = *versionID
+		}
+		if userID != nil {
+			f.UserID = *userID
 		}
 		result = append(result, f)
 	}
@@ -935,20 +939,23 @@ func (c *Client) QueryLogEntry(ctx context.Context, schema, logTable, logID stri
 	}
 
 	query := fmt.Sprintf(
-		`SELECT %s, %s, %s, %s FROM %s WHERE %s = $1`,
-		qi("file_id"), qi("type"), qi("version_id"), qi("filename"),
+		`SELECT %s, %s, %s, %s, %s, %s FROM %s WHERE %s = $1`,
+		qi("file_id"), qi("type"), qi("version_id"), qi("filename"), qi("log_id"), qi("user_id"),
 		qt(schema, logTable),
 		qi("log_id"),
 	)
 
 	var f UndoAffectedFile
-	var versionID *string
-	err := c.pool.QueryRow(ctx, query, logID).Scan(&f.FileID, &f.Type, &versionID, &f.Filename)
+	var versionID, userID *string
+	err := c.pool.QueryRow(ctx, query, logID).Scan(&f.FileID, &f.Type, &versionID, &f.Filename, &f.LogID, &userID)
 	if err != nil {
 		return nil, fmt.Errorf("log entry not found: %s", logID)
 	}
 	if versionID != nil {
 		f.VersionID = *versionID
+	}
+	if userID != nil {
+		f.UserID = *userID
 	}
 	return &f, nil
 }

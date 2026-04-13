@@ -582,14 +582,166 @@ func TestUndo_Interface_Summary(t *testing.T) {
 	ops.WriteFile(ctx, "/undoui3/new-file.md", []byte("---\ntitle: New\n---\nNew content\n"))
 	ops.WriteFile(ctx, "/undoui3/existing.md", []byte("---\ntitle: Existing\n---\nModified\n"))
 
-	// Read .info/summary
+	// Read .info/summary (TSV)
 	fc, fsErr := ops.ReadFile(ctx, "/undoui3/.undo/to-savepoint/checkpoint/.info/summary")
 	require.Nil(t, fsErr, "ReadFile .info/summary should succeed")
 	summary := string(fc.Data)
-	t.Logf("Summary:\n%s", summary)
-	// Should have entries for new-file (delete) and existing (restore)
-	assert.Contains(t, summary, "new-file.md")
-	assert.Contains(t, summary, "existing.md")
+	t.Logf("Summary TSV:\n%s", summary)
+
+	// Metadata headers
+	assert.Contains(t, summary, "# savepoint: checkpoint")
+	assert.Contains(t, summary, "# affected: 2 files")
+
+	// Column header comment
+	assert.Contains(t, summary, "# type\tfilename\tuser\ttimestamp")
+
+	// Data rows with operation type (not "restore"/"delete")
+	assert.Contains(t, summary, "create\tnew-file.md")
+	assert.Contains(t, summary, "edit\texisting.md")
+
+	// Timestamps should be present (RFC3339 format)
+	assert.Contains(t, summary, "202") // year prefix in timestamp
+}
+
+func TestUndo_Interface_SummaryJSON(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undojs")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undojs", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undojs/hello.md", []byte("---\ntitle: Hello\n---\nV1\n"))
+	ops.WriteFile(ctx, "/undojs/.savepoint/sp1.tsv", []byte("description\nTest savepoint\n"))
+	time.Sleep(50 * time.Millisecond)
+	ops.WriteFile(ctx, "/undojs/hello.md", []byte("---\ntitle: Hello\n---\nV2\n"))
+
+	fc, fsErr := ops.ReadFile(ctx, "/undojs/.undo/to-savepoint/sp1/.info/summary.json")
+	require.Nil(t, fsErr, "ReadFile summary.json should succeed")
+	summary := string(fc.Data)
+	t.Logf("Summary JSON:\n%s", summary)
+
+	// Structured fields
+	assert.Contains(t, summary, `"savepoint"`)
+	assert.Contains(t, summary, `"sp1"`)
+	assert.Contains(t, summary, `"description"`)
+	assert.Contains(t, summary, `"Test savepoint"`)
+	assert.Contains(t, summary, `"affected"`)
+	assert.Contains(t, summary, `"files"`)
+	assert.Contains(t, summary, `"type"`)
+	assert.Contains(t, summary, `"edit"`)
+	assert.Contains(t, summary, `"hello.md"`)
+}
+
+func TestUndo_Interface_SummaryCSV(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undocsv")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undocsv", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undocsv/hello.md", []byte("---\ntitle: Hello\n---\nV1\n"))
+	ops.WriteFile(ctx, "/undocsv/.savepoint/sp1.json", []byte("{}"))
+	time.Sleep(50 * time.Millisecond)
+	ops.WriteFile(ctx, "/undocsv/hello.md", []byte("---\ntitle: Hello\n---\nV2\n"))
+
+	fc, fsErr := ops.ReadFile(ctx, "/undocsv/.undo/to-savepoint/sp1/.info/summary.csv")
+	require.Nil(t, fsErr, "ReadFile summary.csv should succeed")
+	summary := string(fc.Data)
+	t.Logf("Summary CSV:\n%s", summary)
+
+	// Header row (no # comments in CSV)
+	assert.True(t, strings.HasPrefix(summary, "type,filename,user,timestamp\n"),
+		"CSV should start with header row")
+	// No metadata comments
+	assert.NotContains(t, summary, "#")
+	// Data row
+	assert.Contains(t, summary, "edit,hello.md,")
+}
+
+func TestUndo_Interface_SummaryToID(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undotid")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undotid", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.WriteFile(ctx, "/undotid/hello.md", []byte("---\ntitle: Hello\n---\nV1\n"))
+	ops.WriteFile(ctx, "/undotid/hello.md", []byte("---\ntitle: Hello\n---\nV2\n"))
+
+	// Get a log entry to use as to-id target
+	entries, fsErr := ops.ReadDir(ctx, "/undotid/.log/.first/1")
+	require.Nil(t, fsErr)
+	var logIDs []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			logIDs = append(logIDs, e.Name)
+		}
+	}
+	require.GreaterOrEqual(t, len(logIDs), 1)
+
+	fc, fsErr := ops.ReadFile(ctx, "/undotid/.undo/to-id/"+logIDs[0]+"/.info/summary")
+	require.Nil(t, fsErr, "ReadFile to-id summary should succeed")
+	summary := string(fc.Data)
+	t.Logf("Summary to-id:\n%s", summary)
+
+	// to-id mode should show # target: instead of # savepoint:
+	assert.Contains(t, summary, "# target:")
+	assert.NotContains(t, summary, "# savepoint:")
+	assert.Contains(t, summary, "# affected:")
+}
+
+func TestUndo_Interface_SummaryWithUserID(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undouid")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undouid", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	ops.SetUserID("agent-7")
+	ops.WriteFile(ctx, "/undouid/hello.md", []byte("---\ntitle: Hello\n---\nV1\n"))
+	ops.WriteFile(ctx, "/undouid/.savepoint/sp1.json", []byte("{}"))
+	time.Sleep(50 * time.Millisecond)
+	ops.WriteFile(ctx, "/undouid/hello.md", []byte("---\ntitle: Hello\n---\nV2\n"))
+
+	fc, fsErr := ops.ReadFile(ctx, "/undouid/.undo/to-savepoint/sp1/.info/summary")
+	require.Nil(t, fsErr)
+	summary := string(fc.Data)
+	t.Logf("Summary with user:\n%s", summary)
+
+	// Per-file user column should show agent-7
+	assert.Contains(t, summary, "agent-7")
 }
 
 func TestUndo_Interface_PreviewContent(t *testing.T) {

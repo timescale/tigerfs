@@ -2,11 +2,13 @@ package fs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
@@ -590,55 +592,209 @@ func (o *Operations) readUndoSummary(ctx context.Context, parsed *ParsedPath) (*
 		}
 	}
 
-	// Build summary data
-	type summaryRow struct {
-		Action   string `json:"action"`
-		Filename string `json:"filename"`
-	}
-	var rows []summaryRow
+	// Gather metadata about the target
+	meta := o.undoSummaryMetadata(ctx, parsed)
+
+	// Build file rows with enriched columns
+	var rows []summaryFileRow
 	for _, f := range affected {
-		action := "restore"
-		if f.Type == "create" {
-			action = "delete"
-		}
-		rows = append(rows, summaryRow{Action: action, Filename: f.Filename})
+		ts := uuidTimestamp(f.LogID)
+		rows = append(rows, summaryFileRow{
+			Type:      f.Type,
+			Filename:  f.Filename,
+			User:      f.UserID,
+			Timestamp: ts,
+		})
 	}
 
 	var data []byte
 	switch outputFormat {
 	case "json":
-		// Build JSON array manually to match format package patterns
-		columns := []string{"action", "filename"}
-		var jsonRows [][]interface{}
-		for _, r := range rows {
-			jsonRows = append(jsonRows, []interface{}{r.Action, r.Filename})
-		}
-		data, err = format.RowsToJSON(columns, jsonRows)
+		data, err = o.formatSummaryJSON(meta, rows)
 	case "csv":
-		var lines []string
-		lines = append(lines, "action,filename")
-		for _, r := range rows {
-			lines = append(lines, r.Action+","+r.Filename)
-		}
-		data = []byte(strings.Join(lines, "\n") + "\n")
+		data = o.formatSummaryCSV(rows)
 	case "yaml":
-		var lines []string
-		for _, r := range rows {
-			lines = append(lines, fmt.Sprintf("- action: %s\n  filename: %s", r.Action, r.Filename))
-		}
-		data = []byte(strings.Join(lines, "\n") + "\n")
+		data = o.formatSummaryYAML(meta, rows)
 	default: // tsv
-		var lines []string
-		for _, r := range rows {
-			lines = append(lines, r.Action+"\t"+r.Filename)
-		}
-		data = []byte(strings.Join(lines, "\n") + "\n")
+		data = o.formatSummaryTSV(meta, rows)
 	}
 	if err != nil {
 		return nil, &FSError{Code: ErrIO, Message: "failed to format undo summary", Cause: err}
 	}
 
 	return &FileContent{Data: data}, nil
+}
+
+// undoSummaryMeta holds metadata about the undo target for summary headers.
+type undoSummaryMeta struct {
+	Mode        string // "id", "to-id", "to-savepoint"
+	Target      string // savepoint name or log_id display name
+	TargetTime  string // timestamp of the target (from UUIDv7)
+	User        string // user who created the savepoint (empty for log targets)
+	Description string // savepoint description (empty for log targets)
+	Affected    int    // number of affected files
+}
+
+// undoSummaryMetadata gathers metadata about the undo target.
+func (o *Operations) undoSummaryMetadata(ctx context.Context, parsed *ParsedPath) undoSummaryMeta {
+	meta := undoSummaryMeta{
+		Mode:   parsed.UndoMode,
+		Target: parsed.UndoTarget,
+	}
+
+	if parsed.UndoMode == "to-savepoint" {
+		savepointTable := parsed.OrigTableName + "_savepoint"
+		row, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
+		if err == nil {
+			for i, col := range row.Columns {
+				switch col {
+				case "savepoint_id":
+					id, _ := format.ConvertValueToText(row.Values[i])
+					meta.TargetTime = uuidTimestamp(id)
+				case "user_id":
+					if row.Values[i] != nil {
+						meta.User, _ = format.ConvertValueToText(row.Values[i])
+					}
+				case "description":
+					if row.Values[i] != nil {
+						meta.Description, _ = format.ConvertValueToText(row.Values[i])
+					}
+				}
+			}
+		}
+	} else {
+		// For id/ and to-id/, extract timestamp from the target log_id
+		meta.TargetTime = uuidTimestamp(resolveLogID(parsed.UndoTarget))
+	}
+
+	return meta
+}
+
+// uuidTimestamp extracts a UTC timestamp string from a UUID string.
+func uuidTimestamp(uuidStr string) string {
+	parsed, err := uuid.Parse(uuidStr)
+	if err != nil {
+		return ""
+	}
+	return format.ExtractUUIDv7Time(parsed).UTC().Format(time.RFC3339)
+}
+
+type summaryFileRow struct {
+	Type      string
+	Filename  string
+	User      string
+	Timestamp string
+}
+
+func (o *Operations) formatSummaryTSV(meta undoSummaryMeta, rows []summaryFileRow) []byte {
+	var lines []string
+
+	// Metadata headers as # comments
+	switch meta.Mode {
+	case "to-savepoint":
+		lines = append(lines, "# savepoint: "+meta.Target)
+		if meta.TargetTime != "" {
+			lines = append(lines, "# created: "+meta.TargetTime)
+		}
+		if meta.User != "" {
+			lines = append(lines, "# user: "+meta.User)
+		}
+		if meta.Description != "" {
+			lines = append(lines, "# description: "+meta.Description)
+		}
+	default: // id, to-id
+		if meta.TargetTime != "" {
+			lines = append(lines, "# target: "+meta.TargetTime)
+		}
+	}
+
+	fileWord := "files"
+	if len(rows) == 1 {
+		fileWord = "file"
+	}
+	lines = append(lines, fmt.Sprintf("# affected: %d %s", len(rows), fileWord))
+	lines = append(lines, "# type\tfilename\tuser\ttimestamp")
+
+	for _, r := range rows {
+		lines = append(lines, r.Type+"\t"+r.Filename+"\t"+r.User+"\t"+r.Timestamp)
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func (o *Operations) formatSummaryCSV(rows []summaryFileRow) []byte {
+	var lines []string
+	lines = append(lines, "type,filename,user,timestamp")
+	for _, r := range rows {
+		lines = append(lines, r.Type+","+r.Filename+","+r.User+","+r.Timestamp)
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func (o *Operations) formatSummaryJSON(meta undoSummaryMeta, rows []summaryFileRow) ([]byte, error) {
+	// Build a structured JSON object
+	obj := map[string]interface{}{}
+	switch meta.Mode {
+	case "to-savepoint":
+		obj["savepoint"] = meta.Target
+		if meta.TargetTime != "" {
+			obj["created"] = meta.TargetTime
+		}
+		if meta.User != "" {
+			obj["user"] = meta.User
+		}
+		if meta.Description != "" {
+			obj["description"] = meta.Description
+		}
+	default:
+		if meta.TargetTime != "" {
+			obj["target"] = meta.TargetTime
+		}
+	}
+	obj["affected"] = len(rows)
+
+	var files []map[string]string
+	for _, r := range rows {
+		files = append(files, map[string]string{
+			"type": r.Type, "filename": r.Filename, "user": r.User, "timestamp": r.Timestamp,
+		})
+	}
+	obj["files"] = files
+
+	data, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func (o *Operations) formatSummaryYAML(meta undoSummaryMeta, rows []summaryFileRow) []byte {
+	var lines []string
+
+	switch meta.Mode {
+	case "to-savepoint":
+		lines = append(lines, "savepoint: "+meta.Target)
+		if meta.TargetTime != "" {
+			lines = append(lines, "created: "+meta.TargetTime)
+		}
+		if meta.User != "" {
+			lines = append(lines, "user: "+meta.User)
+		}
+		if meta.Description != "" {
+			lines = append(lines, "description: "+meta.Description)
+		}
+	default:
+		if meta.TargetTime != "" {
+			lines = append(lines, "target: "+meta.TargetTime)
+		}
+	}
+
+	lines = append(lines, fmt.Sprintf("affected: %d", len(rows)))
+	lines = append(lines, "files:")
+	for _, r := range rows {
+		lines = append(lines, fmt.Sprintf("  - type: %s\n    filename: %s\n    user: %s\n    timestamp: %s",
+			r.Type, r.Filename, r.User, r.Timestamp))
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
 }
 
 // readUndoPreviewFile returns the content of a file in the undo preview.
