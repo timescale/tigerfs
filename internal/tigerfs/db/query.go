@@ -19,6 +19,15 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// asPgError extracts a pgconn.PgError from an error chain, or returns nil.
+func asPgError(err error) *pgconn.PgError {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr
+	}
+	return nil
+}
+
 // Row represents a database row with column names and values
 type Row struct {
 	Columns []string
@@ -959,7 +968,7 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 	}
 	defer tx.Rollback(ctx)
 
-	sourceTable := qt("public", params.SourceTable)
+	sourceTable := qt(params.Schema, params.SourceTable)
 	historyTable := qt(params.Schema, params.HistoryTable)
 	logTable := qt(params.Schema, params.LogTable)
 
@@ -1001,14 +1010,20 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 			return fmt.Errorf("failed to read history row for version %s: %w", versionID, err)
 		}
 
-		// Build column/value maps, excluding history-only columns
+		// Build column/value maps, mapping history columns to source columns.
+		// History has: version_id, file_id, operation, + all source columns.
+		// Source has: id, + all other columns. file_id in history = id in source.
 		var sourceCols []string
 		var sourceVals []interface{}
 		for j, fd := range fieldDescs {
 			colName := string(fd.Name)
-			// Skip history-only columns (version_id, operation are not in the source table)
+			// Skip history-only columns
 			if colName == "version_id" || colName == "operation" {
 				continue
+			}
+			// Map file_id (history) → id (source)
+			if colName == "file_id" {
+				colName = "id"
 			}
 			sourceCols = append(sourceCols, colName)
 			sourceVals = append(sourceVals, values[j])
@@ -1037,19 +1052,30 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 
 		_, err = tx.Exec(ctx, upsertSQL, sourceVals...)
 		if err != nil {
+			// Detect DDL schema mismatch: column removed/renamed after the savepoint.
+			// PostgreSQL returns SQLSTATE 42703 (undefined_column) or 42P01 (undefined_table).
+			if pgErr := asPgError(err); pgErr != nil && (pgErr.Code == "42703" || pgErr.Code == "42P01") {
+				return fmt.Errorf("cannot undo: table schema has changed since the target point "+
+					"(a column or table may have been added or removed). "+
+					"Original error: %w", err)
+			}
 			return fmt.Errorf("failed to restore file %s from history: %w", fileID, err)
 		}
 	}
 
 	// Step 3: Insert undo log entries for each affected file.
 	// DELETE targets get a log entry too (we're undoing the creation).
-	for _, fileID := range params.DeleteFileIDs {
+	for i, fileID := range params.DeleteFileIDs {
+		filename := ""
+		if i < len(params.DeleteFilenames) {
+			filename = params.DeleteFilenames[i]
+		}
 		_, err := tx.Exec(ctx,
 			fmt.Sprintf(
-				`INSERT INTO %s (%s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3)`,
-				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("description"),
+				`INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4)`,
+				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("filename"), qi("description"),
 			),
-			fileID, params.UserID, params.Description,
+			fileID, params.UserID, filename, params.Description,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert undo log entry for delete: %w", err)

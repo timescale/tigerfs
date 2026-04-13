@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
@@ -28,15 +29,11 @@ func (o *Operations) ExecuteUndoToSavepoint(ctx context.Context, schema, tableNa
 		return nil, fmt.Errorf("savepoint not found: %s", savepointName)
 	}
 
-	// Extract savepoint_id from the row
+	// Extract savepoint_id from the row (pgx returns UUIDs as [16]byte)
 	var savepointID string
 	for i, col := range row.Columns {
 		if col == "savepoint_id" {
-			if v, ok := row.Values[i].(string); ok {
-				savepointID = v
-			} else {
-				savepointID = fmt.Sprintf("%v", row.Values[i])
-			}
+			savepointID, _ = format.ConvertValueToText(row.Values[i])
 			break
 		}
 	}
@@ -56,6 +53,7 @@ func (o *Operations) ExecuteUndoToLogID(ctx context.Context, schema, tableName, 
 
 // ExecuteUndo undoes all operations after a target point (savepoint_id or log_id).
 // Executes all changes in a single PostgreSQL transaction.
+// The schema parameter is unused -- synth backing tables are always in the tigerfs schema.
 func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID, description string, filters []db.UndoFilter) (*UndoResult, error) {
 	logTable := tableName + "_log"
 	historyTable := tableName + "_history"
@@ -82,7 +80,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 	}
 
 	// Classify affected files by action
-	var deleteFileIDs []string
+	var deleteFileIDs, deleteFilenames []string
 	var restoreVersionIDs, restoreFileIDs, restoreFilenames []string
 	skipped := 0
 
@@ -90,7 +88,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 		switch f.Type {
 		case "create":
 			// Row was created after target -- check if it still exists
-			exists, err := o.db.QueryFileExists(ctx, schema, tableName, f.FileID)
+			exists, err := o.db.QueryFileExists(ctx, synth.TigerFSSchema, tableName, f.FileID)
 			if err != nil {
 				logging.Warn("failed to check file existence during undo",
 					zap.String("file_id", f.FileID), zap.Error(err))
@@ -99,6 +97,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 			}
 			if exists {
 				deleteFileIDs = append(deleteFileIDs, f.FileID)
+				deleteFilenames = append(deleteFilenames, f.Filename)
 			} else {
 				skipped++ // Created then already deleted -- no-op
 			}
@@ -133,6 +132,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 		HistoryTable:      historyTable,
 		Description:       description,
 		DeleteFileIDs:     deleteFileIDs,
+		DeleteFilenames:   deleteFilenames,
 		RestoreVersionIDs: restoreVersionIDs,
 		RestoreFileIDs:    restoreFileIDs,
 		RestoreFilenames:  restoreFilenames,
@@ -143,7 +143,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 	}
 
 	// Invalidate caches
-	o.statCache.invalidate(schema, tableName)
+	o.statCache.invalidate(synth.TigerFSSchema, tableName)
 
 	result := &UndoResult{
 		FilesDeleted:  len(deleteFileIDs),
@@ -160,10 +160,24 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 	return result, nil
 }
 
+// resolveLogID converts a display name (e.g., "2026-04-08T143015.234Z-i9j0k1l2m3n4b")
+// to a raw UUID string. If already a UUID, returns as-is.
+func resolveLogID(id string) string {
+	if format.IsDisplayName(id) {
+		uuid, err := format.DisplayNameToUUIDv7(id)
+		if err == nil {
+			return uuid.String()
+		}
+	}
+	return id
+}
+
 // ExecuteUndoSingle undoes a single log entry.
 func (o *Operations) ExecuteUndoSingle(ctx context.Context, schema, tableName, logID string) (*UndoResult, error) {
 	logTable := tableName + "_log"
 	historyTable := tableName + "_history"
+
+	logID = resolveLogID(logID)
 
 	// Fetch the log entry
 	entry, err := o.db.QueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
@@ -173,17 +187,18 @@ func (o *Operations) ExecuteUndoSingle(ctx context.Context, schema, tableName, l
 
 	desc := fmt.Sprintf("Undo single operation %s", logID)
 
-	var deleteFileIDs []string
+	var deleteFileIDs, deleteFilenames []string
 	var restoreVersionIDs, restoreFileIDs, restoreFilenames []string
 	skipped := 0
 
 	switch entry.Type {
 	case "create":
-		exists, err := o.db.QueryFileExists(ctx, schema, tableName, entry.FileID)
+		exists, err := o.db.QueryFileExists(ctx, synth.TigerFSSchema, tableName, entry.FileID)
 		if err != nil || !exists {
 			skipped = 1
 		} else {
 			deleteFileIDs = append(deleteFileIDs, entry.FileID)
+			deleteFilenames = append(deleteFilenames, entry.Filename)
 		}
 
 	case "edit", "rename", "delete", "undo":
@@ -209,6 +224,7 @@ func (o *Operations) ExecuteUndoSingle(ctx context.Context, schema, tableName, l
 		HistoryTable:      historyTable,
 		Description:       desc,
 		DeleteFileIDs:     deleteFileIDs,
+		DeleteFilenames:   deleteFilenames,
 		RestoreVersionIDs: restoreVersionIDs,
 		RestoreFileIDs:    restoreFileIDs,
 		RestoreFilenames:  restoreFilenames,
