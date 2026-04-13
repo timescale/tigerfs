@@ -47,6 +47,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var insecureNoSSL bool
 	var userID string
 	var autoSavepointInterval time.Duration
+	var undoListLimit int
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] [MOUNTPOINT]",
@@ -176,6 +177,11 @@ Examples:
 				return fmt.Errorf("auto-savepoint-interval must be >= 0")
 			}
 
+			// Undo list limit: flag overrides config
+			if undoListLimit > 0 {
+				cfg.UndoListLimit = undoListLimit
+			}
+
 			// Mount the filesystem using platform-specific method
 			// (NFS on macOS, FUSE on Linux).
 			fs, err := mountFilesystem(ctx, cfg, connStr, absMountpoint)
@@ -234,6 +240,7 @@ Examples:
 	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
 	cmd.Flags().StringVar(&userID, "user-id", "", "user identity for undo log entries (also: TIGERFS_USER_ID env)")
 	cmd.Flags().DurationVar(&autoSavepointInterval, "auto-savepoint-interval", 0, "inactivity gap before auto-savepoint (e.g., 30m); 0 uses config default")
+	cmd.Flags().IntVar(&undoListLimit, "undo-list-limit", 0, "default listing limit for .undo/ sub-directories; 0 uses config default (100)")
 
 	return cmd
 }

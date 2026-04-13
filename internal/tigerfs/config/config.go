@@ -73,6 +73,9 @@ type Config struct {
 	// Auto-savepoints (ADR-016 Section 4.4)
 	AutoSavepointInterval time.Duration `mapstructure:"auto_savepoint_interval"` // Inactivity gap before auto-savepoint (default: 30m, 0 disables)
 
+	// Undo (ADR-016 Section 4.3)
+	UndoListLimit int `mapstructure:"undo_list_limit"` // Default listing limit for .undo/ sub-directories (default: 100)
+
 	// FUSE backend selection (Linux only)
 	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
 
@@ -110,6 +113,7 @@ func Init() error {
 	viper.SetDefault("default_backend", "")
 	viper.SetDefault("default_mount_dir", "/tmp")
 	viper.SetDefault("auto_savepoint_interval", 30*time.Minute)
+	viper.SetDefault("undo_list_limit", 100)
 	viper.SetDefault("config_dir", GetDefaultConfigDir())
 
 	// Setup config file
