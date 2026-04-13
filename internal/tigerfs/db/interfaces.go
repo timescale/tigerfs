@@ -383,7 +383,8 @@ type UndoTransactionParams struct {
 	Description  string // description for undo log entries
 
 	// Files to DELETE (created after target point)
-	DeleteFileIDs []string
+	DeleteFileIDs   []string
+	DeleteFilenames []string // corresponding filenames for log entries (parallel array)
 
 	// Files to UPSERT from history (edited/renamed/deleted after target)
 	RestoreVersionIDs []string // version_ids to fetch from history and restore
