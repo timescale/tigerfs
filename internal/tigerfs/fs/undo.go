@@ -270,6 +270,14 @@ func (o *Operations) readDirUndo(ctx context.Context, parsed *ParsedPath) ([]Ent
 
 	// Level 2: .undo/<mode>/<target>/ -- preview directory
 	if parsed.UndoFile == "" && parsed.InfoFile == "" && !parsed.UndoApply {
+		// id/ mode: single operation, just show .info/ and .apply (no preview tree).
+		// Use .log/<id>/before and .log/<id>/after for diffing.
+		if parsed.UndoMode == "id" {
+			return []Entry{
+				{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+				{Name: FileApply, IsDir: false, Mode: 0644, ModTime: now},
+			}, nil
+		}
 		return o.readDirUndoPreview(ctx, parsed)
 	}
 
@@ -519,7 +527,10 @@ func (o *Operations) statUndo(ctx context.Context, parsed *ParsedPath) (*Entry, 
 		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", name)}
 	}
 
-	// Preview file
+	// Preview file (not available in id/ mode -- use .log/<id>/before instead)
+	if parsed.UndoFile != "" && parsed.UndoMode == "id" {
+		return nil, &FSError{Code: ErrNotExist, Message: "preview files not available in .undo/id/ mode; use .log/<id>/before for diffs"}
+	}
 	if parsed.UndoFile != "" {
 		// Check if it's an intermediate directory in the preview tree
 		affected, qErr := o.queryUndoAffected(ctx, parsed)
@@ -562,8 +573,11 @@ func (o *Operations) readFileUndo(ctx context.Context, parsed *ParsedPath) (*Fil
 		return &FileContent{Data: []byte{}}, nil
 	}
 
-	// Preview file content
+	// Preview file content (not available in id/ mode)
 	if parsed.UndoFile != "" {
+		if parsed.UndoMode == "id" {
+			return nil, &FSError{Code: ErrNotExist, Message: "preview files not available in .undo/id/ mode; use .log/<id>/before for diffs"}
+		}
 		return o.readUndoPreviewFile(ctx, parsed)
 	}
 

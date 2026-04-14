@@ -542,25 +542,25 @@ ls notes/.undo/id/                       # default 100 most recent log entries
 ...
 ```
 
-Each entry is a preview directory:
+Each entry contains summary and apply (no preview tree -- single operations affect one file, use `.log/<id>/before` and `.log/<id>/after` for diffs):
 
 ```
 notes/.undo/id/<log_id>/
 ├── .info/
 │   └── summary
-├── docs/                    # directory structure mirrors the synth app
-│   └── hello.md             # restored content
 └── .apply
 ```
 
 ```bash
 cat notes/.undo/id/<log_id>/.info/summary
-restore	docs/hello.md
+# target: 2026-04-08T14:30:15Z
+# affected: 1 file
+# type	filename	user	timestamp
+edit	docs/hello.md	agent-7	2026-04-08T14:30:15Z
 
-cat notes/.undo/id/<log_id>/.info/summary.json
-[{"action":"restore","filename":"docs/hello.md"}]
+# Diff using .log/ symlinks (not .undo/ preview tree)
+diff -u --color notes/.log/<log_id>/before notes/.log/<log_id>/after
 
-diff -u --color <(cat notes/.undo/id/<log_id>/docs/hello.md) notes/docs/hello.md
 touch notes/.undo/id/<log_id>/.apply
 ```
 
