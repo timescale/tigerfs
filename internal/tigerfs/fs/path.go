@@ -187,6 +187,17 @@ var knownFormats = map[string]string{
 	".yaml": "yaml",
 }
 
+// IsRowFormatFile returns true if the filename has a known row format extension
+// (.json, .csv, .tsv, .yaml). Used by adapters to detect row-level writes.
+func IsRowFormatFile(filename string) bool {
+	for ext := range knownFormats {
+		if strings.HasSuffix(filename, ext) {
+			return true
+		}
+	}
+	return false
+}
+
 // ParsePath converts a filesystem path to a ParsedPath.
 //
 // Examples:

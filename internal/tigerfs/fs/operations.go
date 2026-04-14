@@ -838,9 +838,10 @@ func (o *Operations) resolveLogDiffSymlink(ctx context.Context, parsed *ParsedPa
 		if versionID == "" {
 			return "/dev/null", nil
 		}
-		// Convert version_id UUID to display name for .history/ path
+		// Convert version_id UUID to display name for .history/ path.
+		// .history/ is per-directory: tutorials/foo.md → ../../tutorials/.history/foo.md/<version>
 		displayName := o.uuidToDisplayName(versionID)
-		return "../../.history/" + filename + "/" + displayName, nil
+		return "../../" + historySymlinkPath(filename, displayName), nil
 
 	case "after":
 		// Find next log entry for this file
@@ -855,7 +856,7 @@ func (o *Operations) resolveLogDiffSymlink(ctx context.Context, parsed *ParsedPa
 			if fn == "" {
 				fn = filename
 			}
-			return "../../.history/" + fn + "/" + displayName, nil
+			return "../../" + historySymlinkPath(fn, displayName), nil
 		}
 		if nextFilename != "" {
 			// Next entry exists but version_id is NULL (was a create) → current file
@@ -915,6 +916,18 @@ func parseUUIDBytes(s string) ([]byte, error) {
 		}
 	}
 	return b, nil
+}
+
+// historySymlinkPath constructs the correct .history/ path for a file.
+// .history/ is per-directory, so "tutorials/foo.md" becomes "tutorials/.history/foo.md/<version>"
+// and root-level "hello.md" becomes ".history/hello.md/<version>".
+func historySymlinkPath(filename, version string) string {
+	if idx := strings.LastIndex(filename, "/"); idx >= 0 {
+		dir := filename[:idx]
+		leaf := filename[idx+1:]
+		return dir + "/.history/" + leaf + "/" + version
+	}
+	return ".history/" + filename + "/" + version
 }
 
 // writeSavepoint injects user_id from mount identity then delegates to writeRowFile.

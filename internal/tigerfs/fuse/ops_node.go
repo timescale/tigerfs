@@ -21,6 +21,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	fsops "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -105,14 +106,15 @@ func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 		}
 	}
 
-	// DDL trigger files: fire on touch (mtime update without open file handle).
+	// Trigger files: fire on touch (mtime update without open file handle).
 	// FUSE `touch` uses utimensat which sends SETATTR with ATIME/MTIME, not OPEN.
 	if fh == nil {
 		if _, ok := in.GetMTime(); ok {
 			baseName := path.Base(n.path)
-			isTrigger := (baseName == ".test" || baseName == ".commit" || baseName == ".abort") && isDDLOpsPath(n.path)
-			if isTrigger {
-				logging.Debug("OpsNode.Setattr: triggering DDL operation via touch",
+			isTrigger := (baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort) && isDDLOpsPath(n.path)
+			isUndoApply := baseName == fsops.FileApply && strings.Contains(n.path, "/"+fsops.DirUndo+"/")
+			if isTrigger || isUndoApply {
+				logging.Debug("OpsNode.Setattr: triggering operation via touch",
 					zap.String("path", n.path))
 				if errno := n.adapter.WriteFile(ctx, n.path, []byte{}); errno != 0 {
 					return errno
@@ -177,7 +179,7 @@ func (n *OpsNode) Create(ctx context.Context, name string, flags uint32, mode ui
 	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter, childPath), fs.StableAttr{Mode: syscall.S_IFREG})
 
 	// Detect trigger and DDL sql files (same logic as Open)
-	isTrigger := name == ".test" || name == ".commit" || name == ".abort"
+	isTrigger := name == fsops.FileTest || name == fsops.FileCommit || name == fsops.FileAbort
 	isDDLSQL := name == "sql" && isDDLOpsPath(childPath)
 
 	handle := &OpsFileHandle{
@@ -247,7 +249,7 @@ func (n *OpsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32
 
 	// DDL trigger files (.test, .commit, .abort) should fire on close
 	baseName := path.Base(n.path)
-	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
+	isTrigger := baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort
 	isDDLSQL := baseName == "sql" && isDDLOpsPath(n.path)
 
 	if isWrite || isTrigger {
@@ -285,7 +287,7 @@ func (n *OpsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32
 
 // isDDLOpsPath checks if a path is within a DDL staging directory.
 func isDDLOpsPath(p string) bool {
-	return strings.Contains(p, "/.create/") || strings.Contains(p, "/.modify/") || strings.Contains(p, "/.delete/")
+	return strings.Contains(p, "/"+fsops.DirCreate+"/") || strings.Contains(p, "/"+fsops.DirModify+"/") || strings.Contains(p, "/"+fsops.DirDelete+"/")
 }
 
 // OpsFileHandle is a FUSE file handle that buffers writes and commits on Flush.

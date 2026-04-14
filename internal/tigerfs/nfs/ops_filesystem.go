@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
-	"github.com/timescale/tigerfs/internal/tigerfs/fs"
+	fsops "github.com/timescale/tigerfs/internal/tigerfs/fs"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	nfsfile "github.com/willscott/go-nfs/file"
 	"go.uber.org/zap"
@@ -33,7 +33,7 @@ import (
 // See cachedFile for cache entry lifecycle details and docs/spec.md § NFS Write
 // Limitations for the O(n²) write amplification discussion.
 type OpsFilesystem struct {
-	ops *fs.Operations
+	ops *fsops.Operations
 	cfg *config.Config
 
 	// cacheMu protects fileCache for concurrent access.
@@ -90,7 +90,7 @@ type cachedFile struct {
 	streamed     bool      // True if file has been partially committed via streaming (append mode)
 
 	// Database connection for commit operations
-	ops *fs.Operations
+	ops *fsops.Operations
 
 	// File type flags (determine write behavior)
 	isTrigger bool // DDL trigger files (.test, .commit, .abort) - always fire on close
@@ -106,7 +106,7 @@ type cachedFile struct {
 //
 // The cfg parameter provides NFS cache tuning settings (NFSStreamingThreshold,
 // NFSMaxRandomWriteSize, NFSCacheReaperInterval, NFSCacheIdleTimeout).
-func NewOpsFilesystem(ops *fs.Operations, cfg *config.Config) *OpsFilesystem {
+func NewOpsFilesystem(ops *fsops.Operations, cfg *config.Config) *OpsFilesystem {
 	return &OpsFilesystem{
 		ops:       ops,
 		cfg:       cfg,
@@ -196,7 +196,7 @@ func (f *OpsFilesystem) getOrCreateCachedFile(filePath string, flags int) *cache
 
 	// Determine file type from path
 	baseName := path.Base(filePath)
-	isTrigger := baseName == ".test" || baseName == ".commit" || baseName == ".abort"
+	isTrigger := baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort
 	isDDLSQL := baseName == "sql" && isDDLPath(filePath)
 	rowFile := isRowFile(baseName)
 
@@ -636,7 +636,7 @@ func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (b
 	defer rcancel()
 	content, fsErr := f.ops.ReadFile(rctx, filename)
 	if fsErr != nil {
-		if fsErr.Code == fs.ErrNotExist {
+		if fsErr.Code == fsops.ErrNotExist {
 			// If O_CREATE was set, create empty file
 			if flag&os.O_CREATE != 0 {
 				cached = f.getOrCreateCachedFile(filename, flag)
@@ -750,11 +750,11 @@ func (f *OpsFilesystem) Stat(filename string) (os.FileInfo, error) {
 			zap.Error(fsErr.Cause))
 		// Map FSError codes to appropriate OS errors
 		switch fsErr.Code {
-		case fs.ErrNotExist:
+		case fsops.ErrNotExist:
 			return nil, os.ErrNotExist
-		case fs.ErrPermission:
+		case fsops.ErrPermission:
 			return nil, os.ErrPermission
-		case fs.ErrInvalidPath, fs.ErrInvalidArgument:
+		case fsops.ErrInvalidPath, fsops.ErrInvalidArgument:
 			return nil, os.ErrInvalid
 		default:
 			// For other errors, return not exist to avoid false permission denied
@@ -786,11 +786,11 @@ func (f *OpsFilesystem) Rename(oldpath, newpath string) error {
 			zap.Int("code", int(fsErr.Code)),
 			zap.String("message", fsErr.Message))
 		switch fsErr.Code {
-		case fs.ErrNotExist:
+		case fsops.ErrNotExist:
 			return os.ErrNotExist
-		case fs.ErrPermission:
+		case fsops.ErrPermission:
 			return os.ErrPermission
-		case fs.ErrInvalidPath, fs.ErrInvalidArgument:
+		case fsops.ErrInvalidPath, fsops.ErrInvalidArgument:
 			return os.ErrInvalid
 		default:
 			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
@@ -828,7 +828,7 @@ func (f *OpsFilesystem) Remove(filename string) error {
 	defer dcancel()
 	fsErr := f.ops.Delete(dctx, filename)
 	if fsErr != nil {
-		if fsErr.Code == fs.ErrNotExist {
+		if fsErr.Code == fsops.ErrNotExist {
 			return os.ErrNotExist
 		}
 		return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
@@ -863,11 +863,11 @@ func (f *OpsFilesystem) ReadDir(dirname string) ([]os.FileInfo, error) {
 		// Map FSError codes to appropriate OS errors
 		// Use errors that NFS will interpret correctly
 		switch fsErr.Code {
-		case fs.ErrNotExist:
+		case fsops.ErrNotExist:
 			return nil, os.ErrNotExist
-		case fs.ErrPermission:
+		case fsops.ErrPermission:
 			return nil, os.ErrPermission
-		case fs.ErrInvalidPath, fs.ErrInvalidArgument:
+		case fsops.ErrInvalidPath, fsops.ErrInvalidArgument:
 			return nil, os.ErrInvalid
 		default:
 			// For other errors (IO, internal), return a generic error
@@ -906,7 +906,7 @@ func (f *OpsFilesystem) MkdirAll(filename string, perm os.FileMode) error {
 	defer mcancel()
 	fsErr := f.ops.Mkdir(mctx, filename)
 	if fsErr != nil {
-		if fsErr.Code == fs.ErrAlreadyExists {
+		if fsErr.Code == fsops.ErrAlreadyExists {
 			return nil // MkdirAll doesn't fail if directory exists
 		}
 		return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
@@ -985,11 +985,12 @@ func (f *OpsFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) e
 	name = normalizePath(name)
 	logging.Debug("OpsFilesystem.Chtimes", zap.String("name", name), zap.Time("atime", atime), zap.Time("mtime", mtime))
 
-	// Check if this is a DDL trigger file
+	// Check if this is a trigger file (DDL or undo .apply)
 	baseName := path.Base(name)
-	isTrigger := (baseName == ".test" || baseName == ".commit" || baseName == ".abort") && isDDLPath(name)
+	isTrigger := (baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort) && isDDLPath(name)
+	isUndoApply := baseName == fsops.FileApply && strings.Contains(name, "/"+fsops.DirUndo+"/")
 
-	if isTrigger {
+	if isTrigger || isUndoApply {
 		// Check if the trigger was already fired by memFile.Close() (NFS touch
 		// causes both OpenFile+Close and Chtimes, both of which would fire).
 		cached := f.getCachedFile(name)
@@ -1023,7 +1024,7 @@ func (f *OpsFilesystem) Chtimes(name string, atime time.Time, mtime time.Time) e
 
 // opsFileInfo implements os.FileInfo using fs.Entry.
 type opsFileInfo struct {
-	entry *fs.Entry
+	entry *fsops.Entry
 	path  string // Full path for generating unique file IDs
 }
 
@@ -1195,16 +1196,13 @@ func ctx() (context.Context, context.CancelFunc) {
 
 // isDDLPath checks if a path is within a DDL staging directory (.create, .modify, .delete).
 func isDDLPath(p string) bool {
-	return strings.Contains(p, "/.create/") || strings.Contains(p, "/.modify/") || strings.Contains(p, "/.delete/")
+	return strings.Contains(p, "/"+fsops.DirCreate+"/") || strings.Contains(p, "/"+fsops.DirModify+"/") || strings.Contains(p, "/"+fsops.DirDelete+"/")
 }
 
 // isRowFile checks if a filename is a row format file (JSON, CSV, TSV, YAML).
 // Row files represent entire database rows and writes should replace the full content.
 func isRowFile(filename string) bool {
-	return strings.HasSuffix(filename, ".json") ||
-		strings.HasSuffix(filename, ".csv") ||
-		strings.HasSuffix(filename, ".tsv") ||
-		strings.HasSuffix(filename, ".yaml")
+	return fsops.IsRowFormatFile(filename)
 }
 
 // memFile is an in-memory file handle for reading and writing row data.
@@ -1550,7 +1548,7 @@ func (f *memFile) Close() error {
 		// cache immediately after write. These paths appear as directories in
 		// ReadDir but the write created a file handle -- keeping the stale file
 		// cache entry causes go-nfs handle type conflicts (file vs directory).
-		if strings.Contains(filePath, "/.savepoint/") || strings.Contains(filePath, "/.info/") {
+		if strings.Contains(filePath, "/"+fsops.DirSavepoint+"/") || strings.Contains(filePath, "/"+fsops.DirInfo+"/") {
 			f.fs.removeFromCache(filePath)
 			return nil
 		}
