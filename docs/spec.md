@@ -1209,7 +1209,7 @@ ls /mnt/db/events/.first/200/.last/100/
 cat /mnt/db/orders/.by/status/pending/.filter/priority/high/.order/amount/.last/20/.export/json
 ```
 
-For complete documentation, see [docs/native-tables.md](../docs/native-tables.md).
+For complete documentation, see [docs/data-first.md](../docs/data-first.md).
 
 ---
 
@@ -1221,7 +1221,7 @@ Synthesized apps present database rows as domain-specific files — markdown doc
 
 This is the primary user interface for content-oriented workflows: blog posts, knowledge bases, meeting notes, and agent-generated documents are all managed as plain files while being stored transactionally in PostgreSQL.
 
-For the complete user guide with examples, see [docs/markdown-app.md](../docs/markdown-app.md).
+For the complete user guide with examples, see [docs/file-first.md](../docs/file-first.md).
 
 ### Creation: `.build/` and `.format/`
 
@@ -4075,9 +4075,9 @@ go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 
 ### Phase 2: Feature Documentation (Shipped)
 
-- [docs/markdown-app.md](../docs/markdown-app.md) — Markdown synthesized app guide (creation, usage, column mapping)
+- [docs/file-first.md](../docs/file-first.md) — Markdown synthesized app guide (creation, usage, column mapping)
 - [docs/history.md](../docs/history.md) — Version history feature (browsing, recovery, UUID tracking)
-- [docs/native-tables.md](../docs/native-tables.md) — Native table access reference (pipeline queries, DDL)
+- [docs/data-first.md](../docs/data-first.md) — Native table access reference (pipeline queries, DDL)
 - [docs/quickstart.md](../docs/quickstart.md) — Guided scenarios with sample data
 
 ### Phase 3: Advanced Documentation
