@@ -50,6 +50,21 @@ Read-only files describing the table. **Check `.info/count` first** to choose th
 | `columns` | Column names, one per line | `id\nname\nemail\nage` |
 | `indexes` | Index descriptions | `PRIMARY KEY: id\nUNIQUE: email` |
 
+### Mount-Level Metadata (mount/.info/)
+
+| File | Content | Read/Write |
+|------|---------|------------|
+| `user` | Current user identity for log entries | Read/Write |
+
+```
+Read "mount/.info/user"                    # Current identity
+Bash "echo 'agent-7' > mount/.info/user"   # Change identity at runtime
+```
+
+### UUIDv7 Display Format
+
+Log entries, history versions, and other UUIDs use a human-readable display format: `2026-04-07T143000.123Z-zzz0063hd8e5r42` (UTC timestamp + base36 suffix). These are filesystem-safe, case-insensitive, and sort chronologically.
+
 ## Data Formats
 
 All rows can be read and written in four formats by using the corresponding file extension:
