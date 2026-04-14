@@ -2,18 +2,18 @@
 
 Reference for file-first mode -- reading and writing markdown and plain text files backed by a database.
 
-## Creating Apps
+## Creating Workspaces
 
-Apps create a file-first workspace -- a directory of markdown or text files backed by a database table. Create an app when you need a new shared workspace, knowledge base, or document store.
+Create a workspace when you need a new shared directory of files backed by a database.
 
 ```bash
 Bash "echo 'markdown' > mount/.build/notes"          # Markdown with frontmatter
 Bash "echo 'markdown,history' > mount/.build/notes"  # With versioned history
 Bash "echo 'plaintext' > mount/.build/snippets"      # Plain text, no frontmatter
-Bash "echo 'history' > mount/.build/notes"           # Add history to existing app
+Bash "echo 'history' > mount/.build/notes"           # Add history to existing workspace
 ```
 
-Each app creates a file-first directory (`mount/notes/`) backed by a table in the `tigerfs` schema. Access the backing table via `mount/.tables/notes/`. To add file-first access to an existing data-first table: `echo 'markdown' > mount/posts/.format/markdown`
+Each workspace creates a directory (`mount/notes/`) backed by a table in the `tigerfs` schema. Access the backing table via `mount/.tables/notes/`. To add file-first access to an existing data-first table: `echo 'markdown' > mount/posts/.format/markdown`
 
 ## File Structure
 
@@ -87,7 +87,7 @@ Writing `mount/notes/a/b/file.md` auto-creates `a/` and `a/b/`. No need to `mkdi
 
 ## Backing Table
 
-Every file-first app has a backing table in the `tigerfs` schema, accessible via the `.tables/` directory.
+Every workspace has a backing table in the `tigerfs` schema, accessible via the `.tables/` directory.
 
 ```
 Read "mount/.tables/notes/.info/schema"       # Table schema
@@ -100,7 +100,7 @@ See [data.md](data.md) for the full data-first reference.
 
 ## Versioned History
 
-Every update and delete is captured as a read-only timestamped snapshot in `.history/`. Requires the `history` feature (see [Creating Apps](#creating-apps)).
+Every update and delete is captured as a read-only timestamped snapshot in `.history/`. Requires the `history` feature (see [Creating Workspaces](#creating-workspaces)).
 
 Each directory has its own `.history/` scoped to files in that directory:
 
@@ -146,7 +146,7 @@ Set at mount time: `--user-id agent-7` or `TIGERFS_USER_ID=agent-7`. See [ops.md
 
 ## Operation Log
 
-Every create, edit, rename, and delete on a history-enabled app is recorded in `.log/`. Each entry has a stable log_id (UUIDv7), the operation type, affected file, and the user who performed it.
+Every create, edit, rename, and delete on a history-enabled workspace is recorded in `.log/`. Each entry has a stable log_id (UUIDv7), the operation type, affected file, and the user who performed it.
 
 ```
 Glob "mount/notes/.log/.last/10/*"                          # Recent entries
