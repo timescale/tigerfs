@@ -1,89 +1,71 @@
-# Markdown App
+# File-First Mode
 
-Store markdown files in PostgreSQL — edit them as plain files, share them across tools, and get transactional writes for free.
+File-first mode presents database tables as directories of files. Markdown files have YAML frontmatter mapped to columns. Plain text files are body-only. Multiple users and agents access the same files concurrently with transactional writes.
 
-## What It Does
+## Creating Workspaces
 
-Write and organize `.md` files the way you normally would — with any text editor, shell script, or AI agent. The Markdown App stores each file as a database row with YAML frontmatter mapped to columns, so your content is:
+Workspaces tell TigerFS how to present a table as files. Write a format to `.build/` to create a new workspace:
 
-- **Shareable** — multiple users, editors, and agents access the same files simultaneously
-- **Transactionally safe** — every write is an atomic database operation; no partial saves or corrupted files
-- **Searchable** — use `grep` across all files, or query metadata via SQL on the underlying table
-- **Metadata-rich** — frontmatter fields (author, tags, etc.) are real columns you can index and query
+```bash
+echo "markdown" > /mnt/db/.build/notes           # Markdown with YAML frontmatter
+echo "plaintext" > /mnt/db/.build/snippets        # Plain text, no frontmatter
+echo "markdown,history" > /mnt/db/.build/blog     # With versioned history
+echo "history" > /mnt/db/.build/notes             # Add history to existing workspace
+```
 
-Under the hood, each markdown file is stored as a database row — frontmatter fields map to columns and the body maps to a text column:
+Each workspace creates a directory (`/mnt/db/notes/`) backed by a table in the `tigerfs` schema. Access the backing table via `/mnt/db/.tables/notes/`.
 
-**`hello-world.md`:**
+To add file-first access to an existing data-first table:
+
+```bash
+echo "markdown" > /mnt/db/posts/.format/markdown
+# Creates posts_md/ view (appends _md to avoid collision)
+```
+
+## File Formats
+
+### Markdown
+
+Each `.md` file has YAML frontmatter (from columns) and a body (from the body column):
+
 ```markdown
 ---
-title: Hello
+title: Getting Started
 author: alice
+tags:
+  - tutorial
+  - intro
 draft: false
 ---
 
-# Hello
+# Getting Started
 
-Welcome...
+This is the body content stored in the text column...
 ```
 
-**Stored as:**
+### Plain Text
+
+Plain text files have body content only, no frontmatter:
+
 ```
-id: 1, filename: "hello-world.md", title: "Hello", author: "alice", headers: {"draft": false}, body: "# Hello\n\nWelcome..."
-```
-
-## Quick Start
-
-### Option 1: Create New App
-
-Start fresh with a pre-configured table:
-
-```bash
-# Create a new markdown app called "notes"
-echo "markdown" > /mnt/db/.build/notes
-
-# Start writing
-echo "---
-title: Shopping List
----
-
-- Milk
-- Eggs
-- Bread" > /mnt/db/notes/shopping.md
+This is the entire file content.
+No YAML frontmatter is parsed or generated.
 ```
 
-### Option 2: Add to Existing Table
+### How Frontmatter Works
 
-If you already have a table with content:
+Frontmatter fields map to database columns. The write behavior depends on the column type:
 
-```bash
-# Create a markdown view on your posts table
-echo "markdown" > /mnt/db/posts/.format/markdown
+- **Known columns** (e.g., `title`, `author`): Omitting a key from frontmatter **keeps the old value**. To clear a field, set it explicitly: `title: ""`
+- **Headers JSONB** (e.g., `tags`, `draft` -- keys with no dedicated column): **Full-replace on each write**. Omitting a key removes it from the database.
+- **Body**: Always replaced with what you write.
+- **Timestamps** (`created_at`, `modified_at`): File times only -- they don't appear in frontmatter and can't be set via writes.
 
-# Your posts are now available as .md files
-ls /mnt/db/posts_md/
-# hello-world.md  my-first-post.md  announcement.md
+To see which columns a table has: `cat /mnt/db/.tables/notes/.info/columns`
 
-cat /mnt/db/posts_md/hello-world.md
-```
+## Reading and Writing
 
-## Naming Conventions
-
-The two creation methods use different naming conventions:
-
-| Method | Synthesized View | Native Table | Example |
-|--------|------------------|--------------|---------|
-| `.build/notes` | `notes/` | `tigerfs.notes` | `/notes/hello.md` and `/.tables/notes/1/body` |
-| `posts/.format/markdown` | `posts_md/` | `posts/` | `/posts_md/hello.md` and `/posts/1/body` |
-
-**`.build/` (new app):** View gets the clean name in the user's schema, backing table lives in the `tigerfs` schema. This is the primary method.
-
-**`.format/` (existing table):** View gets `_md` suffix to avoid collision with the existing table name.
-
-## Usage
-
-These examples use a `.build/` app called `notes`. The same operations work with `.format/` views (just use `posts_md/` instead of `notes/`).
-
-### Reading Files
+Standard file operations work as expected:
 
 ```bash
 # List all files
@@ -94,82 +76,56 @@ cat /mnt/db/notes/hello-world.md
 
 # Search across all files
 grep -r "TODO" /mnt/db/notes/
-```
 
-### Creating Files
-
-```bash
 # Create with frontmatter
 cat > /mnt/db/notes/new-post.md << 'EOF'
 ---
+title: New Post
 author: bob
-tags: [tutorial, getting-started]
+tags: [update]
 ---
 
-# Getting Started
-
-This is my new post...
+Content goes here...
 EOF
-```
 
-### Editing Files
-
-```bash
 # Edit with any editor
 vim /mnt/db/notes/hello-world.md
 
-# Or append content
-echo "\n## Update\n\nMore content here." >> /mnt/db/notes/hello-world.md
-```
-
-### Renaming Files
-
-```bash
-# Rename updates the filename column in the database
+# Rename (updates the filename column)
 mv /mnt/db/notes/old-name.md /mnt/db/notes/new-name.md
+
+# Delete
+rm /mnt/db/notes/unwanted.md
 ```
 
-### Deleting Files
+## Directories
+
+Workspaces support subdirectories. Create directories with `mkdir` and organize files into them:
 
 ```bash
-rm /mnt/db/notes/unwanted-post.md
-```
-
-### Organizing with Directories
-
-Synthesized apps support subdirectories. Create directories with `mkdir` and organize files into them:
-
-```bash
-# Create a directory
 mkdir /mnt/db/notes/tutorials
 
-# Create a file in the directory
 cat > /mnt/db/notes/tutorials/getting-started.md << 'EOF'
 ---
 title: Getting Started
 author: alice
 ---
 
-# Getting Started
-
 Follow these steps...
 EOF
 
-# List files in the directory
 ls /mnt/db/notes/tutorials/
 # getting-started.md
 ```
 
-**Auto-creation:** Writing a file with a path automatically creates parent directories. Writing to `notes/a/b/c.md` auto-creates the `a/` and `a/b/` directories.
+**Auto-creation:** Writing a file with a path automatically creates parent directories. Writing to `notes/a/b/c.md` auto-creates `a/` and `a/b/`.
 
-**Directory rename:** Renaming a directory atomically renames all files within it:
+**Atomic rename:** Renaming a directory atomically renames all files within it:
 
 ```bash
 mv /mnt/db/notes/tutorials /mnt/db/notes/guides
 # All files under tutorials/ are now under guides/
 ```
-
-**`.format/` views:** Directory support also works with `.format/` views, as long as the underlying table has a `filetype` column.
 
 ## Column Mapping
 
@@ -183,209 +139,42 @@ TigerFS automatically detects column roles by naming convention (first match win
 | Body | `body`, `content`, `description`, `text` | Yes |
 | Timestamps | `modified_at`, `updated_at` (modification time); `created_at` (creation time) | No |
 | Extra Headers | `headers` (JSONB, merged into frontmatter) | No |
-| Frontmatter | All remaining columns (excluding primary key) | — |
+| Frontmatter | All remaining columns (excluding primary key) | -- |
 
-Timestamp columns are used for file modification/creation times (visible in `ls -l`), but are **not** rendered as frontmatter fields.
+Timestamp columns set file modification/creation times (visible in `ls -l`) but are **not** rendered as frontmatter.
 
 ### Explicit Mapping (Planned)
 
-Currently, column roles are always auto-detected by naming convention. A future release will allow explicit mapping for tables whose column names don't match the conventions:
+Currently, column roles are always auto-detected by naming convention. A future release will allow explicit mapping for tables whose column names don't match the conventions.
 
-```bash
-# Planned — not yet implemented
-echo '{filename:post_slug,body:post_content}' > /mnt/db/posts/.format/markdown
-```
-
-### Checking Configuration (Planned)
-
-A future release will allow reading the current column mapping by reading the `.format/markdown` control file:
-
-```bash
-# Planned — not yet implemented
-cat /mnt/db/posts/.format/markdown
-```
-
-## Custom Frontmatter (Extra Headers)
+### Custom Frontmatter (Extra Headers)
 
 Tables created with `.build/` include a `headers JSONB` column for storing arbitrary frontmatter keys beyond the fixed schema columns.
 
-**How it works:**
+- On **read**, entries from `headers` are merged into YAML frontmatter after known columns, sorted alphabetically.
+- On **write**, frontmatter keys that don't match a known column are collected into `headers`.
+- **Overwrite semantics** -- the entire `headers` value is replaced on each write. Omitting a key removes it.
 
-- On **read**, entries from the `headers` column are merged into YAML frontmatter after the known columns, sorted alphabetically by key.
-- On **write**, any frontmatter keys that don't match a known column are collected into the `headers` JSONB value.
-- **Overwrite semantics** — the entire `headers` value is replaced on each write. If you remove a key from the frontmatter, it's removed from the database.
+Example: `title` and `author` are stored in their own columns. `tags` and `draft` (no dedicated columns) are stored together in `headers` JSONB.
 
-**Example:**
+## Backing Table Access
 
-```bash
-cat > /mnt/db/blog/welcome.md << 'EOF'
----
-title: Welcome to My Blog
-author: alice
-tags: [intro, welcome]
-draft: false
----
-
-# Welcome
-
-Thanks for visiting...
-EOF
-```
-
-Here `title` and `author` are stored in their own columns. `tags` and `draft` — which don't have dedicated columns — are stored together in the `headers` JSONB column.
-
-Reading the file back:
-
-```markdown
----
-title: Welcome to My Blog
-author: alice
-draft: false
-tags:
-  - intro
-  - welcome
----
-
-# Welcome
-
-Thanks for visiting...
-```
-
-Known columns (`title`, `author`) appear first in schema order, then extra headers (`draft`, `tags`) appear alphabetically.
-
-## Use Cases
-
-### Blog or Documentation
+The underlying table is accessible for data-first operations:
 
 ```bash
-# Set up blog
-echo "markdown" > /mnt/db/.build/blog
+# .build/ workspaces
+ls /mnt/db/.tables/notes/      # Data-first access to backing table
+ls /mnt/db/notes/              # File-first access
 
-# Write posts
-cat > /mnt/db/blog/welcome.md << 'EOF'
----
-title: Welcome to My Blog
-author: alice
-date: 2024-01-15
-tags: [intro, welcome]
-draft: false
----
-
-# Welcome
-
-Thanks for visiting...
-EOF
-
-# Find all drafts (draft and tags are stored in the headers JSONB column)
-grep -l "draft: true" /mnt/db/blog/*.md
+# .format/ views
+ls /mnt/db/posts/              # Data-first (original table)
+ls /mnt/db/posts_md/           # File-first (synthesized view)
 ```
 
-### Knowledge Base
+See [data-first.md](data-first.md) for the full data-first reference.
 
-```bash
-# Create knowledge base
-echo "markdown" > /mnt/db/.build/kb
+## Further Reading
 
-# Organize into directories
-mkdir /mnt/db/kb/getting-started
-mkdir /mnt/db/kb/reference
-
-cat > /mnt/db/kb/getting-started/setup-guide.md << 'EOF'
----
-title: Setup Guide
-last_updated: 2024-01-20
----
-
-# Setup Guide
-
-Follow these steps...
-EOF
-
-cat > /mnt/db/kb/reference/api.md << 'EOF'
----
-title: API Reference
----
-
-# API Reference
-
-Endpoints and usage...
-EOF
-
-# List a section
-ls /mnt/db/kb/getting-started/
-# setup-guide.md
-
-# Search across all sections
-grep -r "TODO" /mnt/db/kb/
-```
-
-### Meeting Notes
-
-```bash
-# Create meeting notes app
-echo "markdown" > /mnt/db/.build/meetings
-
-# Record a meeting
-cat > /mnt/db/meetings/2024-01-15-standup.md << 'EOF'
----
-date: 2024-01-15
-attendees: [alice, bob, charlie]
-type: standup
----
-
-# Daily Standup - Jan 15
-
-## Updates
-- Alice: Finished API work
-- Bob: Working on frontend
-- Charlie: Reviewing PRs
-
-## Action Items
-- [ ] Alice to deploy API
-- [ ] Bob to demo on Friday
-EOF
-```
-
-### Agent Workflows
-
-AI agents can read and write content naturally:
-
-```bash
-# Agent reads all posts
-for f in /mnt/db/blog/*.md; do
-  echo "=== $f ==="
-  cat "$f"
-done
-
-# Agent creates content
-cat > /mnt/db/blog/ai-generated.md << 'EOF'
----
-title: AI-Generated Summary
-author: assistant
-generated: true
----
-
-Based on my analysis...
-EOF
-```
-
-## Native Table Access
-
-The underlying table is still accessible for SQL operations:
-
-```bash
-# For .format/ (existing table)
-ls /mnt/db/posts/          # Native row-as-directory
-ls /mnt/db/posts_md/       # Synthesized markdown
-
-# For .build/ (new app)
-ls /mnt/db/.tables/notes/  # Native backing table
-ls /mnt/db/notes/          # Synthesized markdown
-```
-
-## Tips
-
-1. **Frontmatter is automatic** — All columns except filename, body, timestamps, and primary key become frontmatter
-2. **Extra headers** — Add a `headers JSONB` column to store arbitrary frontmatter keys beyond the fixed schema
-3. **Timestamps are file times** — `modified_at` and `created_at` set file mtime/ctime (visible in `ls -l`), not rendered as frontmatter
-4. **Arrays supported** — `tags: [a, b, c]` works with PostgreSQL array columns
+- [Recipes](../skills/tigerfs/recipes.md) -- Blog, knowledge base, meeting notes, and other patterns built on file-first mode
+- [History](history.md) -- Versioned history for file-first workspaces
+- [Data-First](data-first.md) -- Direct table access via row-as-file and row-as-directory

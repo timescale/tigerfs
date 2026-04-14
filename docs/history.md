@@ -1,25 +1,25 @@
 # History
 
-Automatic versioning for synthesized apps — every edit and delete is captured as a timestamped snapshot you can browse and recover.
+Automatic versioning for file-first workspaces — every edit and delete is captured as a timestamped snapshot you can browse and recover.
 
 ## What It Does
 
-When history is enabled on a synthesized app, a PostgreSQL BEFORE trigger automatically copies the old row into a companion history table on every UPDATE and DELETE. Past versions appear as read-only files under a `.history/` directory alongside your current files.
+When history is enabled on a workspace, a PostgreSQL BEFORE trigger automatically copies the old row into a companion history table on every UPDATE and DELETE. Past versions appear as read-only files under a `.history/` directory alongside your current files.
 
 - **Automatic** — no manual save or commit; every change is captured
 - **Read-only** — `.history/` cannot be written to (returns EACCES)
 - **Composable** — works with any synth format (markdown, text, future formats)
-- **Add anytime** — enable at creation or add to an existing app later
+- **Add anytime** — enable at creation or add to an existing workspace later
 
 ## Quick Start
 
-Enable history when creating a new app:
+Enable history when creating a new workspace:
 
 ```bash
 echo "markdown,history" > /mnt/db/.build/notes
 ```
 
-Or add history to an existing app:
+Or add history to an existing workspace:
 
 ```bash
 echo "history" > /mnt/db/.build/notes
@@ -144,7 +144,7 @@ Maintain a living knowledge base where articles are frequently updated. History 
 
 ## How It Works
 
-- **Companion table** -- Each history-enabled app gets a `tigerfs.<name>_history` table (e.g., `tigerfs.notes_history`) that mirrors the source table's columns plus history metadata (`version_id`, `operation`)
+- **Companion table** -- Each history-enabled workspace gets a `tigerfs.<name>_history` table (e.g., `tigerfs.notes_history`) that mirrors the source table's columns plus history metadata (`version_id`, `operation`)
 - **Trigger** -- A PostgreSQL BEFORE UPDATE/DELETE trigger copies the OLD row into the history table on every change, with a CASE expression detecting operation type (edit, rename, delete) from OLD vs NEW comparison
 - **TimescaleDB hypertable** -- The history table is partitioned by `version_id` (UUIDv7) with 7-day chunks, using `segment_by='file_id'` and `order_by='version_id DESC'`
 - **Detection** -- TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion `tigerfs.<name>_history` table
@@ -157,12 +157,12 @@ History requires **TimescaleDB** — it will not work on vanilla PostgreSQL. The
 
 | Goal | Path |
 |------|------|
-| List files with history | `ls mount/app/.history/` |
-| List versions of a file | `ls mount/app/.history/file.md/` |
-| Read a past version | `cat mount/app/.history/file.md/<timestamp>` |
-| Get row UUID | `cat mount/app/.history/file.md/.id` |
-| List all row UUIDs | `ls mount/app/.history/.by/` |
-| Versions by UUID | `ls mount/app/.history/.by/<uuid>/` |
-| Read version by UUID | `cat mount/app/.history/.by/<uuid>/<timestamp>` |
-| Subdirectory history | `ls mount/app/subdir/.history/` |
+| List files with history | `ls mount/workspace/.history/` |
+| List versions of a file | `ls mount/workspace/.history/file.md/` |
+| Read a past version | `cat mount/workspace/.history/file.md/<timestamp>` |
+| Get row UUID | `cat mount/workspace/.history/file.md/.id` |
+| List all row UUIDs | `ls mount/workspace/.history/.by/` |
+| Versions by UUID | `ls mount/workspace/.history/.by/<uuid>/` |
+| Read version by UUID | `cat mount/workspace/.history/.by/<uuid>/<timestamp>` |
+| Subdirectory history | `ls mount/workspace/subdir/.history/` |
 | Restore old version | Read from `.history/`, write to current path |

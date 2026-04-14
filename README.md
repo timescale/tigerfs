@@ -6,7 +6,7 @@ Every file is a real PostgreSQL row. Directories are tables. File contents are c
 
 You can use TigerFS in two ways:
 
-* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, and everything is auto-versioned.  Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight apps via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
+* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, and everything is auto-versioned.  Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight workspaces via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
 
 * **Data-first**: Mount any Postgres database and explore it with `ls`, `cat`, `grep`, and other unix tools. For
 large databases, chain filters into paths that push down to SQL:
@@ -25,13 +25,13 @@ curl -fsSL https://install.tigerfs.io | sh
 
 | Mode | You have... | You want to... |
 |------|------------|----------------|
-| File-first | A new project or workflow | Store markdown or other files, and build simple apps via the file system (e.g., task queues, agent workspaces, collaborative docs). |
+| File-first | A new project or workflow | Store markdown or other files, and build simple workspaces via the file system (e.g., task queues, agent workspaces, collaborative docs). |
 | Data-first | An existing Postgres database | Explore and operate on it with `ls`, `cat`, `grep` instead of SQL. |
 
 ### File-first
 
 ```bash
-# Mount a database and create a markdown app
+# Mount a database and create a workspace
 tigerfs mount postgres://localhost/mydb /mnt/db
 echo "markdown,history" > /mnt/db/.build/notes
 
@@ -67,12 +67,12 @@ cat /mnt/db/orders/.by/customer_id/1/.order/created_at/.last/5/.export/json
 
 ## File-First: Transactional Workspace
 
-### Apps
+### Workspaces
 
-Apps tell TigerFS how to present a table as a native file format. Write "markdown" to `.build/` and the table becomes a directory of .md files with YAML frontmatter:
+Workspaces tell TigerFS how to present a table as a native file format. Write "markdown" to `.build/` and the table becomes a directory of .md files with YAML frontmatter:
 
 ```bash
-# Create a markdown app
+# Create a workspace
 echo "markdown" > /mnt/db/.build/blog
 
 # Write a post. Frontmatter becomes columns, body becomes text
@@ -103,12 +103,12 @@ See [docs/file-first.md](docs/file-first.md) for column mapping, frontmatter han
 
 ### Version History
 
-Any app can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
+Any workspace can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
 
-To enable automatic versioning, write "history" to `.build/` when creating the app:
+To enable automatic versioning, write "history" to `.build/` when creating the workspace:
 
 ```bash
-# Create an app with history enabled
+# Create a workspace with history enabled
 echo "markdown,history" > /mnt/db/.build/notes
 
 # Browse past versions of a file
@@ -359,7 +359,7 @@ Config file: `~/.config/tigerfs/config.yaml`. Run `tigerfs config show` to see a
 
 | Guide | Description |
 |-------|-------------|
-| [docs/file-first.md](docs/file-first.md) | File-first mode: markdown/plaintext apps, column mapping, frontmatter, directories |
+| [docs/file-first.md](docs/file-first.md) | File-first mode: workspaces, column mapping, frontmatter, directories |
 | [docs/history.md](docs/history.md) | Version history: snapshots, cross-rename tracking, recovery |
 | [docs/data-first.md](docs/data-first.md) | Data-first mode: row formats, indexes, pipeline queries, schema management |
 | [docs/quickstart.md](docs/quickstart.md) | Guided scenarios with sample data |
@@ -382,7 +382,7 @@ TigerFS is early, but the core idea is stable: transactional, concurrent files a
 **v0.5.0.** Performance and observability — dramatically fewer SQL queries, flexible logging, and column projection.
 
 **Highlights:**
-- Markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
+- Markdown workspaces with YAML frontmatter, directory hierarchies, and automatic version history
 - Cloud backends: mount, create, and fork Tiger Cloud and Ghost databases by service ID
 - Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, `.columns/`, chained pagination, `.export/`)
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
