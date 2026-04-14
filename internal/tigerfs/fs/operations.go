@@ -69,6 +69,11 @@ type Operations struct {
 
 	// nowFunc returns the current time. Overridable in tests for deterministic timing.
 	nowFunc func() time.Time
+
+	// undoCache provides short-lived caching for undo preview queries.
+	// Reduces redundant DB queries when multiple NFS/FUSE RPCs access
+	// the same undo target within a 2-second window.
+	undoCache undoCache
 }
 
 // NewOperations creates a new Operations instance.

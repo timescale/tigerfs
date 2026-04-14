@@ -149,6 +149,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 
 	// Invalidate caches
 	o.statCache.invalidate(synth.TigerFSSchema, tableName)
+	o.undoCache.invalidate()
 
 	result := &UndoResult{
 		FilesDeleted:  len(deleteFileIDs),
@@ -429,6 +430,7 @@ func (o *Operations) queryUndoAffected(ctx context.Context, parsed *ParsedPath) 
 	// Build filters from pipeline context
 	var filters []db.UndoFilter
 	var userID string
+	var filterKey string
 	if parsed.Context != nil {
 		for _, f := range parsed.Context.Filters {
 			if f.Column == "user_id" {
@@ -436,44 +438,51 @@ func (o *Operations) queryUndoAffected(ctx context.Context, parsed *ParsedPath) 
 			} else {
 				filters = append(filters, db.UndoFilter{Column: f.Column, Value: f.Value})
 			}
+			filterKey += f.Column + "=" + f.Value + ","
 		}
 	}
+
+	// Check affected files cache
+	if cached, ok := o.undoCache.lookupAffected(parsed.UndoMode, parsed.UndoTarget, filterKey); ok {
+		return cached, nil
+	}
+
+	var result []db.UndoAffectedFile
+	var err error
 
 	switch parsed.UndoMode {
 	case "id":
-		// Single operation: return one entry
+		// Single operation: return one entry (uses log entry cache)
 		logID := resolveLogID(parsed.UndoTarget)
-		entry, err := o.db.QueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
-		if err != nil {
-			return nil, err
+		entry, qErr := o.cachedQueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
+		if qErr != nil {
+			return nil, qErr
 		}
-		return []db.UndoAffectedFile{*entry}, nil
+		result = []db.UndoAffectedFile{*entry}
 
 	case "to-id":
 		afterID := resolveLogID(parsed.UndoTarget)
-		return o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, afterID, userID, filters)
+		result, err = o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, afterID, userID, filters)
 
 	case "to-savepoint":
-		// Look up savepoint_id by name
-		savepointTable := tableName + "_savepoint"
-		row, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
-		if err != nil {
-			return nil, fmt.Errorf("savepoint not found: %s", parsed.UndoTarget)
+		// Look up savepoint_id by name (uses savepoint cache)
+		savepointID, spErr := o.cachedSavepointID(ctx, tableName, parsed.UndoTarget)
+		if spErr != nil {
+			return nil, spErr
 		}
-		var savepointID string
-		for i, col := range row.Columns {
-			if col == "savepoint_id" {
-				savepointID, _ = format.ConvertValueToText(row.Values[i])
-				break
-			}
-		}
-		if savepointID == "" {
-			return nil, fmt.Errorf("savepoint %s has no savepoint_id", parsed.UndoTarget)
-		}
-		return o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, savepointID, userID, filters)
+		result, err = o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, savepointID, userID, filters)
+
+	default:
+		return nil, fmt.Errorf("unknown undo mode: %s", parsed.UndoMode)
 	}
 
-	return nil, fmt.Errorf("unknown undo mode: %s", parsed.UndoMode)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the result
+	o.undoCache.storeAffected(parsed.UndoMode, parsed.UndoTarget, filterKey, result)
+	return result, nil
 }
 
 // statUndo handles Stat for .undo/ paths beyond the basic directory entry.
@@ -658,8 +667,15 @@ func (o *Operations) undoSummaryMetadata(ctx context.Context, parsed *ParsedPath
 
 	if parsed.UndoMode == "to-savepoint" {
 		savepointTable := parsed.OrigTableName + "_savepoint"
-		row, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
-		if err == nil {
+		row, ok := o.undoCache.lookupSavepoint(synth.TigerFSSchema, savepointTable, parsed.UndoTarget)
+		if !ok {
+			var err error
+			row, err = o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
+			if err == nil {
+				o.undoCache.storeSavepoint(synth.TigerFSSchema, savepointTable, parsed.UndoTarget, row)
+			}
+		}
+		if row != nil {
 			for i, col := range row.Columns {
 				switch col {
 				case "savepoint_id":
@@ -682,6 +698,58 @@ func (o *Operations) undoSummaryMetadata(ctx context.Context, parsed *ParsedPath
 	}
 
 	return meta
+}
+
+// cachedSavepointID looks up a savepoint's savepoint_id by name, using the cache.
+func (o *Operations) cachedSavepointID(ctx context.Context, tableName, savepointName string) (string, error) {
+	savepointTable := tableName + "_savepoint"
+
+	// Check cache
+	if row, ok := o.undoCache.lookupSavepoint(synth.TigerFSSchema, savepointTable, savepointName); ok {
+		return extractSavepointID(row)
+	}
+
+	// Query DB
+	row, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", savepointName))
+	if err != nil {
+		return "", fmt.Errorf("savepoint not found: %s", savepointName)
+	}
+
+	// Cache the row
+	o.undoCache.storeSavepoint(synth.TigerFSSchema, savepointTable, savepointName, row)
+
+	return extractSavepointID(row)
+}
+
+// extractSavepointID extracts the savepoint_id string from a savepoint row.
+func extractSavepointID(row *db.Row) (string, error) {
+	for i, col := range row.Columns {
+		if col == "savepoint_id" {
+			id, _ := format.ConvertValueToText(row.Values[i])
+			if id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("savepoint row has no savepoint_id")
+}
+
+// cachedQueryLogEntry fetches a log entry by ID, using the cache.
+func (o *Operations) cachedQueryLogEntry(ctx context.Context, schema, logTable, logID string) (*db.UndoAffectedFile, error) {
+	// Check cache
+	if entry, ok := o.undoCache.lookupLogEntry(schema, logTable, logID); ok {
+		return entry, nil
+	}
+
+	// Query DB
+	entry, err := o.db.QueryLogEntry(ctx, schema, logTable, logID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache
+	o.undoCache.storeLogEntry(schema, logTable, logID, entry)
+	return entry, nil
 }
 
 // uuidTimestamp extracts a UTC timestamp string from a UUID string.
@@ -871,9 +939,15 @@ func (o *Operations) readSynthFileByID(ctx context.Context, schema, tableName, f
 
 // readHistoryByVersionID reads a history entry and renders it as synth content.
 func (o *Operations) readHistoryByVersionID(ctx context.Context, schema, historyTable, sourceTable, versionID string) (*FileContent, *FSError) {
-	row, err := o.db.GetRow(ctx, schema, historyTable, db.SinglePKMatch("version_id", versionID))
-	if err != nil {
-		return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("history entry not found: %s", versionID)}
+	// Check history row cache (immutable data, safe to cache)
+	row, ok := o.undoCache.lookupHistoryRow(schema, historyTable, versionID)
+	if !ok {
+		var err error
+		row, err = o.db.GetRow(ctx, schema, historyTable, db.SinglePKMatch("version_id", versionID))
+		if err != nil {
+			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("history entry not found: %s", versionID)}
+		}
+		o.undoCache.storeHistoryRow(schema, historyTable, versionID, row)
 	}
 
 	// Map history columns to source columns (file_id -> id, skip version_id/operation)
@@ -983,6 +1057,7 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 	// Invalidate caches after undo
 	o.statCache.invalidate(synth.TigerFSSchema, tableName)
 	o.pathCache.invalidate(synth.TigerFSSchema, tableName)
+	o.undoCache.invalidate()
 
 	return nil
 }
@@ -993,15 +1068,16 @@ func (o *Operations) validateUndoTarget(ctx context.Context, parsed *ParsedPath)
 
 	switch parsed.UndoMode {
 	case "to-savepoint":
-		savepointTable := tableName + "_savepoint"
-		_, err := o.db.GetRow(ctx, synth.TigerFSSchema, savepointTable, db.SinglePKMatch("name", parsed.UndoTarget))
+		// Uses savepoint cache -- populates cache for subsequent queryUndoAffected calls
+		_, err := o.cachedSavepointID(ctx, tableName, parsed.UndoTarget)
 		if err != nil {
 			return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("savepoint not found: %s", parsed.UndoTarget)}
 		}
 	case "id", "to-id":
+		// Uses log entry cache
 		logTable := tableName + "_log"
 		logID := resolveLogID(parsed.UndoTarget)
-		_, err := o.db.QueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
+		_, err := o.cachedQueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)
 		if err != nil {
 			return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("log entry not found: %s", parsed.UndoTarget)}
 		}
