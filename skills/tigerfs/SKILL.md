@@ -22,7 +22,10 @@ mount/
 ├── notes/                  # File-first (markdown app)
 │   ├── hello.md
 │   ├── tutorials/
-│   └── .history/           # Versioned history (if enabled)
+│   ├── .history/           # Versioned history (if enabled)
+│   ├── .log/               # Operation log (create, edit, rename, delete)
+│   ├── .savepoint/         # Named bookmarks for undo
+│   └── .undo/              # Preview and apply undo operations
 ├── snippets/               # File-first (plain text app)
 │   └── bash-loop.txt
 ├── .tables/                # Backing tables in tigerfs schema
@@ -31,6 +34,7 @@ mount/
 │   ├── .info/
 │   ├── .by/
 │   └── 1/  2/  3/ ...
+├── .info/                  # Mount-level metadata (user identity)
 └── .build/                 # Create new apps
 ```
 
@@ -78,25 +82,45 @@ Bash "echo '{\"description\":\"Before investigating bug #42\"}' > mount/app/.sav
 
 **When to undo:** user asks to revert, agent realizes the approach isn't working, or changes were made to wrong files.
 
-**Before undoing:** always preview first. Show the user what will change (`/changes <savepoint>` or read `.info/summary`), get explicit confirmation. Undo is destructive -- treat like `git reset`, not `git diff`.
+**Before undoing:** always preview first and get user confirmation. Undo is destructive.
 
 **Undo is undoable:** undo operations are logged (type='undo'), so you can undo an undo. Create a savepoint before a major undo for extra safety -- if the result isn't what was expected, undo back to that savepoint.
 
-### Slash Commands
+### Common Workflows
 
-| Command | Description |
-|---------|-------------|
-| `/savepoint <name> "<description>"` | Create a savepoint before risky edits |
-| `/changes <arg> [N]` | Show recent changes to a file (with English summaries) or savepoint undo preview |
-| `/diff <arg>` | Diff changes since a savepoint (all files) or last change to a file |
-| `/undo <savepoint>` | Interactive undo -- previews changes, asks for confirmation, then applies |
-| `/log [N]` | View last N log entries |
+**"Create a savepoint"**
+```
+Bash "echo '{\"description\":\"<why>\"}' > mount/app/.savepoint/<name>.json"
+```
 
-`/changes` and `/diff` are overloaded: if the argument has an extension or slash, it's treated as a filename; otherwise as a savepoint name. If no matching file is found, falls back to savepoint lookup.
+**"What changed since the savepoint?"**
+1. Read the summary: `Read "mount/app/.undo/to-savepoint/<name>/.info/summary"`
+2. If <= 5 files affected: for each file, read its before and current state, summarize cumulative changes in English
+3. If > 5 files: present the summary table (type, filename, user, timestamp)
+4. If user wants raw diffs: `Bash "cd mount/app && diff -ru .undo/to-savepoint/<name> . -x '.*'"`
 
-`/undo` is interactive: it reads the summary, presents what will change, and asks for user confirmation before executing.
+**"What changed in this file?"**
+1. Find recent edits: `Read "mount/app/.log/.by/filename/<file>/.last/5/.export/json"`
+2. For each edit, read before and after, compare them, summarize in English (e.g., "Added 'Recent Updates' section with 3 new bullet points")
+3. Present with log_ids so the user can pick one to undo
 
-See [files.md](files.md) for the underlying `.log/`, `.savepoint/`, and `.undo/` paths. See [recipes.md](recipes.md) Recipes 1-3 for workflow patterns.
+**"Show me the diff"**
+- Savepoint: `Bash "cd mount/app && diff -ru .undo/to-savepoint/<name> . -x '.*'"`
+- Single file: `Bash "diff -u --color mount/app/.log/<id>/before mount/app/.log/<id>/after"`
+
+**"Undo to the savepoint"**
+1. Read the summary: `Read "mount/app/.undo/to-savepoint/<name>/.info/summary"`
+2. If <= 5 files: summarize cumulative changes per file in English
+3. Present to user: "This will undo N changes: [summary]. Go ahead?"
+4. Only if confirmed: `Bash "touch mount/app/.undo/to-savepoint/<name>/.apply"`
+
+**"Undo this one change"**
+1. Read the log entry summary: `Read "mount/app/.undo/id/<log_id>/.info/summary"`
+2. Show the diff: `Bash "diff -u --color mount/app/.log/<id>/before mount/app/.log/<id>/after"`
+3. Present to user: "This will revert [description]. Go ahead?"
+4. Only if confirmed: `Bash "touch mount/app/.undo/id/<log_id>/.apply"`
+
+For advanced cases (filtered undo, per-user undo, pipeline queries), construct paths directly from [files.md](files.md). See [recipes.md](recipes.md) Recipes 1-3 for complete workflow patterns.
 
 ## Data-First
 
@@ -136,10 +160,9 @@ See [data.md](data.md) for the full reference.
 | Read old version | `Read "mount/app/.history/file.md/<timestamp>"` |
 | **Savepoints & Undo** | |
 | Create savepoint | `Bash "echo '{\"description\":\"Before refactoring\"}' > mount/app/.savepoint/name.json"` |
-| What changed since savepoint? | `Read "mount/app/.undo/to-savepoint/name/.info/summary"` |
 | Diff all changes since savepoint | `Bash "cd mount/app && diff -ru .undo/to-savepoint/name . -x '.*'"` |
-| Undo to savepoint | `Bash "touch mount/app/.undo/to-savepoint/name/.apply"` |
-| Undo one change | `Bash "touch mount/app/.undo/id/<log_id>/.apply"` |
+| Undo to savepoint | Preview first -- see "Undo to the savepoint" in Common Workflows above |
+| Undo one change | Preview first -- see "Undo this one change" in Common Workflows above |
 | File drift since a change | `Bash "diff -u --color mount/app/.log/<id>/before mount/app/.log/<id>/current"` |
 | View recent log | `Read "mount/app/.log/.last/10/.export/json"` |
 | **Data-First** | |
@@ -162,7 +185,7 @@ See [data.md](data.md) for the full reference.
 | **File-First** | |
 | Put `status:` in frontmatter to track state | Use directories as states (`todo/`, `doing/`, `done/`), `mv` to transition |
 | Manually reverse edits across files to "undo" | Create savepoints, use `.undo/` to revert atomically |
-| Undo without previewing first | Always read `.info/summary` or use `/changes` before applying |
+| Undo without previewing first | Always read `.info/summary` and get user confirmation before applying |
 | **Data-First** | |
 | Read individual rows in a loop for large tables | Use `.export/json` or `.export/csv` for bulk access |
 | Write full row JSON expecting replace semantics | JSON/CSV/TSV writes are **PATCH** -- only specified keys update |
