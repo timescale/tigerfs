@@ -131,7 +131,7 @@ UUID browsing (`.by/`) is available at the root `.history/` level only, not in s
 3. Read the current file: `Read "mount/notes/hello.md"`
 4. Compare and report differences.
 
-For single-file recovery, use `/changes hello.md` to list recent edits with summaries, then `/undo <log_id>` to revert a specific one. For multi-file rollback to a known state, use `/undo <savepoint>` which handles all affected files atomically. `.history/` is best for reading and comparing old versions; use `.undo/` for restoring.
+For single-file recovery, find recent edits via `.log/.by/filename/hello.md/.last/5/.export/json`, then undo a specific one with `touch .undo/id/<log_id>/.apply`. For multi-file rollback to a known state, use `touch .undo/to-savepoint/<name>/.apply` which handles all affected files atomically. `.history/` is best for reading and comparing old versions; use `.undo/` for restoring. See SKILL.md "Common Workflows" for the full multi-step agent behavior.
 
 ## User Identity
 
