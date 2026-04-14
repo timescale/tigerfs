@@ -42,7 +42,7 @@ Each entry is a directory containing past versions of that file.
 
 ```bash
 ls /mnt/db/notes/.history/hello.md/
-# .id  2026-02-24T150000Z  2026-02-12T021500Z  2026-02-12T013000Z
+# .id  2026-02-24T150000.123Z-abc123def  2026-02-12T021500.456Z-xyz789ghi  2026-02-12T013000.789Z-jkl012mno
 ```
 
 Returns `.id` (the row UUID) followed by version timestamps, newest first.
@@ -50,16 +50,14 @@ Returns `.id` (the row UUID) followed by version timestamps, newest first.
 ### Read a past version
 
 ```bash
-cat /mnt/db/notes/.history/hello.md/2026-02-12T013000Z
+cat /mnt/db/notes/.history/hello.md/2026-02-12T013000.789Z-jkl012mno
 ```
 
 Returns the full file content (frontmatter + body) as it existed at that point.
 
 ## Version IDs
 
-Version timestamps are extracted from the history row's UUIDv7, formatted as `2006-01-02T150405Z` — filesystem-safe with no colons. Versions are listed newest-first.
-
-Since UUIDv7 encodes millisecond-precision timestamps but the filesystem path uses second precision, sub-second edits may share the same version ID.
+Version IDs use the UUIDv7 display format: `2026-02-24T150000.123Z-abc123def` (UTC timestamp with millisecond precision + base36 entropy suffix). This format is filesystem-safe, case-insensitive, lossless, and sorts chronologically. Versions are listed newest-first.
 
 ## Cross-Rename Tracking
 
@@ -84,7 +82,7 @@ ls /mnt/db/notes/.history/.by/
 ls /mnt/db/notes/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890/
 
 # Read a past version by UUID
-cat /mnt/db/notes/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890/2026-02-12T013000Z
+cat /mnt/db/notes/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890/2026-02-12T013000.789Z-jkl012mno
 ```
 
 `.by/` is only available at the root `.history/` level, not in subdirectory `.history/` directories.
@@ -103,19 +101,32 @@ ls /mnt/db/notes/tutorials/.history/intro.md/
 
 Subdirectory `.history/` does not include `.by/` (UUID browsing is root-level only).
 
-## Recovering a Past Version
+## Recovering Past Versions
 
-Read the old version from `.history/`, then write it back to the current path:
+**Single file via undo (preferred):** Find the change in the log, then undo it:
 
 ```bash
-# Read the version you want to restore
-cat /mnt/db/notes/.history/hello.md/2026-02-12T013000Z > /tmp/restore.md
+# Find recent edits to the file
+cat /mnt/db/notes/.log/.by/filename/hello.md/.last/5/.export/json
 
-# Write it back to the current file
+# Undo a specific change
+touch /mnt/db/notes/.undo/id/<log_id>/.apply
+```
+
+**Multi-file rollback:** Undo all changes since a savepoint:
+
+```bash
+touch /mnt/db/notes/.undo/to-savepoint/before-investigation/.apply
+```
+
+**Manual restore from history:** Read the old version and write it back:
+
+```bash
+cat /mnt/db/notes/.history/hello.md/2026-02-12T013000.789Z-jkl012mno > /tmp/restore.md
 cp /tmp/restore.md /mnt/db/notes/hello.md
 ```
 
-The restored content becomes the current version, and the overwritten content is captured as a new history entry.
+See [spec.md](spec.md) for the full undo interface documentation.
 
 ## Use Cases
 
@@ -133,9 +144,9 @@ Maintain a living knowledge base where articles are frequently updated. History 
 
 ## How It Works
 
-- **Companion table** -- Each history-enabled app gets a `tigerfs.<name>_history` table (e.g., `tigerfs.notes_history`) that mirrors the source table's columns plus history metadata (`_history_id`, `_operation`)
-- **Trigger** — A PostgreSQL BEFORE UPDATE/DELETE trigger copies the OLD row into the history table on every change
-- **TimescaleDB hypertable** — The history table is partitioned by `_history_id` (UUIDv7) with 1-month chunks, compressed after 1 day, using `segment_by='filename'` and `order_by='_history_id DESC'`
+- **Companion table** -- Each history-enabled app gets a `tigerfs.<name>_history` table (e.g., `tigerfs.notes_history`) that mirrors the source table's columns plus history metadata (`version_id`, `operation`)
+- **Trigger** -- A PostgreSQL BEFORE UPDATE/DELETE trigger copies the OLD row into the history table on every change, with a CASE expression detecting operation type (edit, rename, delete) from OLD vs NEW comparison
+- **TimescaleDB hypertable** -- The history table is partitioned by `version_id` (UUIDv7) with 7-day chunks, using `segment_by='file_id'` and `order_by='version_id DESC'`
 - **Detection** -- TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion `tigerfs.<name>_history` table
 
 ## Requirements

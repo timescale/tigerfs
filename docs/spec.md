@@ -1431,6 +1431,180 @@ TigerFS detects history support via:
 
 ---
 
+## Operation Log, Savepoints, and Undo
+
+History-enabled synth apps (those created with `markdown,history` or `plaintext,history`) automatically gain three additional capabilities: an operation log, savepoints, and undo. These are described in detail in [ADR-016](adr/016-undo-and-recovery.md).
+
+### User Identity
+
+Each mount has an optional user identity for tracking who made changes:
+
+```bash
+tigerfs mount --user-id agent-7 postgres://... /mnt/db       # Set at mount time
+export TIGERFS_USER_ID=agent-7                                # Or via environment
+echo "agent-7" > /mnt/db/.info/user                          # Or change at runtime
+cat /mnt/db/.info/user                                        # Read current identity
+```
+
+Precedence: flag > environment > empty (anonymous). The identity is stored in-memory per-mount and used for log entries, savepoint auto-injection, and per-user undo filtering.
+
+### Operation Log (.log/)
+
+Every create, edit, rename, and delete is recorded in the `.log/` directory:
+
+| Path | Description |
+|------|-------------|
+| `app/.log/` | List log entries (default: last 100) |
+| `app/.log/.last/N/` | Last N entries |
+| `app/.log/.by/user_id/agent-7/` | Filter by user |
+| `app/.log/.by/type/edit/` | Filter by operation type |
+| `app/.log/<log_id>/` | Single entry as directory (column files + diff symlinks) |
+| `app/.log/.export/json` | Export entries as JSON |
+
+The log table schema:
+
+```sql
+CREATE TABLE tigerfs.<app>_log (
+    log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    file_id UUID NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo')),
+    user_id TEXT,
+    filename TEXT NOT NULL,
+    version_id UUID,
+    description TEXT
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'log_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'log_id ASC'
+);
+```
+
+Indexed on `(file_id, log_id ASC)` for efficient per-file lookups and SkipScan-optimized DISTINCT ON queries.
+
+#### Diff Symlinks
+
+Each log entry directory contains three symlinks for diffing:
+
+| Symlink | Target |
+|---------|--------|
+| `before` | History version before this operation (or `/dev/null` for creates) |
+| `after` | History version after this operation (or current file, or `/dev/null`) |
+| `current` | Live file path (or `/dev/null` if deleted) |
+
+History symlink paths are per-directory: a file at `tutorials/getting-started.md` links to `tutorials/.history/getting-started.md/<version>`, not `.history/tutorials/getting-started.md/<version>`.
+
+```bash
+diff -u --color app/.log/<id>/before app/.log/<id>/after      # What this edit changed
+diff -u --color app/.log/<id>/before app/.log/<id>/current     # Drift since this edit
+```
+
+Log entry IDs use UUIDv7 display format (e.g., `2026-04-07T143000.123Z-abc123`).
+
+### Savepoints (.savepoint/)
+
+Named bookmarks for undo-to-savepoint operations:
+
+| Path | Description |
+|------|-------------|
+| `app/.savepoint/` | List savepoints |
+| `app/.savepoint/name.json` | Create savepoint (write JSON with description) |
+| `app/.savepoint/name/description` | Read savepoint description |
+| `app/.savepoint/name/savepoint_id` | Read auto-generated UUIDv7 |
+
+Schema:
+
+```sql
+CREATE TABLE tigerfs.<app>_savepoint (
+    name TEXT NOT NULL PRIMARY KEY,
+    savepoint_id UUID NOT NULL DEFAULT uuidv7() UNIQUE,
+    user_id TEXT,
+    description TEXT
+);
+```
+
+Creation requires a format suffix (`.json`, `.tsv`, `.csv`, `.yaml`). This avoids a macOS NFS client inode cache conflict where bare-path writes create FILE handles that conflict with DIRECTORY handles in READDIRPLUS. If `--user-id` is set, `user_id` is auto-injected into the savepoint.
+
+#### Auto-Savepoints
+
+TigerFS creates savepoints automatically when the gap since the last write exceeds a configurable threshold:
+
+- **Config:** `auto_savepoint_interval` (default: 30 minutes)
+- **Flag:** `--auto-savepoint-interval` (e.g., `30m`, `1h`, `0` to disable)
+- **Env:** `TIGERFS_AUTO_SAVEPOINT_INTERVAL`
+- **Naming:** `auto-<user>-<timestamp>` or `auto-<timestamp>` (anonymous)
+- **Detection:** In-memory per-table timestamp, no DB query
+
+### Undo (.undo/)
+
+The `.undo/` directory provides a preview-then-apply interface for reversing operations:
+
+| Path | Description |
+|------|-------------|
+| `app/.undo/` | List modes: `id/`, `to-id/`, `to-savepoint/` |
+| `app/.undo/id/<log_id>/` | Single operation undo (summary + apply only) |
+| `app/.undo/to-id/<log_id>/` | Multi-file undo to a log entry (preview tree) |
+| `app/.undo/to-savepoint/<name>/` | Multi-file undo to a savepoint (preview tree) |
+
+#### Preview
+
+For `to-id/` and `to-savepoint/` modes, the target directory contains:
+- `.info/summary` -- TSV with metadata headers and affected files (also `.json`, `.csv`, `.yaml`)
+- `.apply` -- touch or write to execute the undo
+- Affected files rendered from history (restore) or as `/dev/null` symlinks (delete)
+
+The `.info/summary` TSV format includes comment headers with metadata:
+
+```
+# savepoint: before-edits
+# created: 2026-04-13T14:28:15Z
+# user: agent-7
+# description: All posts created, before any edits
+# affected: 2 files
+# type	filename	user	timestamp
+edit	hello-world.md	agent-7	2026-04-13T14:28:17Z
+edit	tutorials/getting-started-with-sql.md	agent-7	2026-04-13T14:28:17Z
+```
+
+For `id/` mode (single operation), only `.info/summary` and `.apply` are present -- no preview tree. Use `.log/<id>/before` and `.log/<id>/after` for diffs.
+
+#### Applying Undo
+
+```bash
+touch app/.undo/to-savepoint/before-edits/.apply          # Undo to savepoint
+touch app/.undo/id/<log_id>/.apply                        # Undo single operation
+touch app/.undo/to-savepoint/X/.by/user_id/agent-7/.apply # Per-user undo
+```
+
+The `.apply` trigger works via both `touch` (SETATTR/Chtimes) and `echo` (Write/Close) on NFS and FUSE.
+
+Pipeline capabilities filter which operations are undone: `.by/user_id/`, `.filter/type/delete/`, `.last/N/`. `.sample/` is rejected on `.apply`.
+
+#### Execution
+
+Undo executes in a single PostgreSQL transaction:
+1. Query affected files using DISTINCT ON with SkipScan on the `(file_id, log_id ASC)` index
+2. DELETE rows created after the target point
+3. UPSERT rows from history for edits, renames, and deletes (restores before-state including `parent_id`)
+4. INSERT `type='undo'` log entries for each affected file
+
+Undo is idempotent: undoing to the same savepoint twice produces the same data state (with additional log/history entries). Undo operations are themselves logged, so you can undo an undo.
+
+#### DDL Limitations
+
+Undo operates on data (DML) only. If a column was added or removed after the savepoint, the UPSERT may fail. TigerFS detects PostgreSQL error codes 42703 (undefined column) and 42P01 (undefined table) and returns a descriptive error instead of a raw SQL message.
+
+#### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `undo_list_limit` | 100 | Default listing limit for `.undo/` sub-directories |
+| Flag: `--undo-list-limit` | | Override at mount time |
+| Env: `TIGERFS_UNDO_LIST_LIMIT` | | Override via environment |
+
+---
+
 ## Configuration System
 
 ### Configuration Hierarchy (Precedence: Low to High)
@@ -1594,6 +1768,13 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 --attr-timeout SECS       FUSE attribute cache timeout (FUSE backend only, default: 1)
 --entry-timeout SECS      FUSE entry cache timeout (FUSE backend only, default: 1)
 --metadata-refresh SECS   Table metadata refresh interval (default: 30)
+```
+
+**Identity & Undo:**
+```bash
+--user-id ID              User identity for undo log entries (also: TIGERFS_USER_ID env)
+--auto-savepoint-interval DUR  Inactivity gap before auto-savepoint (default: 30m, 0 disables)
+--undo-list-limit N       Default listing limit for .undo/ sub-directories (default: 100)
 ```
 
 **Logging/Debug:**
