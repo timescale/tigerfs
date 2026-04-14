@@ -51,17 +51,52 @@ See [files.md](files.md) for full details on schemas, column roles, directories,
 Because the filesystem is transactional and shared, it can implement collaborative workflows:
 
 When asked to create a **task list, kanban board, todo, or project tracker**:
-> Read [recipes.md](recipes.md) Recipe 1 and follow it exactly.
+> Read [recipes.md](recipes.md) Recipe 4 and follow it exactly.
   Core principle: **directories = states** (`todo/`, `doing/`, `done/`), **`mv` = transitions**. Do NOT use `status` frontmatter fields.
 
 When asked to create a **knowledge base, wiki, or documentation store**:
-> Read [recipes.md](recipes.md) Recipe 2 and follow it exactly.
+> Read [recipes.md](recipes.md) Recipe 5 and follow it exactly.
 
 When asked to **save or resume session context**:
-> Read [recipes.md](recipes.md) Recipe 3 and follow it exactly.
+> Read [recipes.md](recipes.md) Recipe 6 and follow it exactly.
 
 When asked to **keep a log of what you do**:
-> Read [recipes.md](recipes.md) Recipe 4 and follow it exactly.
+> Read [recipes.md](recipes.md) Recipe 7 and follow it exactly.
+
+When asked to **revert, roll back, or undo changes**:
+> Use savepoints and `.undo/`. See the Safe Editing section below and [files.md](files.md) for full details.
+
+## Safe Editing with Savepoints
+
+Before making multiple or risky edits, always create a savepoint:
+
+```bash
+Bash "echo '{\"description\":\"Before investigating bug #42\"}' > mount/app/.savepoint/before-investigation.json"
+```
+
+**When to create a savepoint:** investigating a bug, debugging, refactoring, multi-file edits, or any uncertain operation.
+
+**When to undo:** user asks to revert, agent realizes the approach isn't working, or changes were made to wrong files.
+
+**Before undoing:** always preview first. Show the user what will change (`/changes <savepoint>` or read `.info/summary`), get explicit confirmation. Undo is destructive -- treat like `git reset`, not `git diff`.
+
+**Undo is undoable:** undo operations are logged (type='undo'), so you can undo an undo. Create a savepoint before a major undo for extra safety -- if the result isn't what was expected, undo back to that savepoint.
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/savepoint <name> "<description>"` | Create a savepoint before risky edits |
+| `/changes <arg> [N]` | Show recent changes to a file (with English summaries) or savepoint undo preview |
+| `/diff <arg>` | Diff changes since a savepoint (all files) or last change to a file |
+| `/undo <savepoint>` | Interactive undo -- previews changes, asks for confirmation, then applies |
+| `/log [N]` | View last N log entries |
+
+`/changes` and `/diff` are overloaded: if the argument has an extension or slash, it's treated as a filename; otherwise as a savepoint name. If no matching file is found, falls back to savepoint lookup.
+
+`/undo` is interactive: it reads the summary, presents what will change, and asks for user confirmation before executing.
+
+See [files.md](files.md) for the underlying `.log/`, `.savepoint/`, and `.undo/` paths. See [recipes.md](recipes.md) Recipes 1-3 for workflow patterns.
 
 ## Data-First
 
@@ -99,6 +134,14 @@ See [data.md](data.md) for the full reference.
 | Search | `Grep pattern="term" path="mount/app/"` |
 | History versions | `Glob "mount/app/.history/file.md/*"` |
 | Read old version | `Read "mount/app/.history/file.md/<timestamp>"` |
+| **Savepoints & Undo** | |
+| Create savepoint | `Bash "echo '{\"description\":\"Before refactoring\"}' > mount/app/.savepoint/name.json"` |
+| What changed since savepoint? | `Read "mount/app/.undo/to-savepoint/name/.info/summary"` |
+| Diff all changes since savepoint | `Bash "cd mount/app && diff -ru .undo/to-savepoint/name . -x '.*'"` |
+| Undo to savepoint | `Bash "touch mount/app/.undo/to-savepoint/name/.apply"` |
+| Undo one change | `Bash "touch mount/app/.undo/id/<log_id>/.apply"` |
+| File drift since a change | `Bash "diff -u --color mount/app/.log/<id>/before mount/app/.log/<id>/current"` |
+| View recent log | `Read "mount/app/.log/.last/10/.export/json"` |
 | **Data-First** | |
 | Row count | `Read "mount/t/.info/count"` |
 | Schema / columns | `Read "mount/t/.info/schema"` or `.info/columns` |
@@ -118,6 +161,8 @@ See [data.md](data.md) for the full reference.
 |-------|------------|
 | **File-First** | |
 | Put `status:` in frontmatter to track state | Use directories as states (`todo/`, `doing/`, `done/`), `mv` to transition |
+| Manually reverse edits across files to "undo" | Create savepoints, use `.undo/` to revert atomically |
+| Undo without previewing first | Always read `.info/summary` or use `/changes` before applying |
 | **Data-First** | |
 | Read individual rows in a loop for large tables | Use `.export/json` or `.export/csv` for bulk access |
 | Write full row JSON expecting replace semantics | JSON/CSV/TSV writes are **PATCH** -- only specified keys update |
@@ -132,5 +177,5 @@ When asked to **create, mount, fork, or manage a database or filesystem**, see [
 
 - [files.md](files.md) -- File-first: markdown apps, plain text apps, directories, and history
 - [data.md](data.md) -- Data-first: row-as-file, row-as-directory, metadata, indexes, pipeline queries
-- [recipes.md](recipes.md) -- Recipes: kanban boards, knowledge bases, session context, snippets
+- [recipes.md](recipes.md) -- Recipes: kanban boards, knowledge bases, session context, snippets, safe exploration, compare approaches, multi-agent undo
 - [ops.md](ops.md) -- Operations: mount, create, fork, status, unmount

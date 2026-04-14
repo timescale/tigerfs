@@ -1,8 +1,115 @@
 # Recipes
 
-Practical patterns for file-first workflows.
+Practical patterns for file-first workflows. Workflow patterns come first (how to work safely), then application patterns (what to build).
 
-## Recipe 1: Task Board
+---
+
+# Workflow Patterns
+
+## Recipe 1: Safe Agent Exploration
+
+Create a savepoint before investigating, exploring, or making uncertain changes. Auto-savepoints detect session boundaries automatically.
+
+### Pattern: Savepoint, Explore, Review, Keep or Revert
+
+```bash
+# 1. Create savepoint before starting
+Bash "echo '{\"description\":\"Before investigating bug #42\"}' > mount/notes/.savepoint/before-investigation.json"
+
+# 2. Explore and make changes (edits, creates, deletes)
+# ... agent works ...
+
+# 3. Review what changed
+Read "mount/notes/.undo/to-savepoint/before-investigation/.info/summary"
+Bash "cd mount/notes && diff -ru .undo/to-savepoint/before-investigation . -x '.*'"
+
+# 4a. Keep changes (do nothing -- changes are already saved)
+
+# 4b. Revert all changes (after user confirmation)
+Bash "touch mount/notes/.undo/to-savepoint/before-investigation/.apply"
+```
+
+### Auto-Savepoints
+
+TigerFS creates savepoints automatically after 30 minutes of inactivity. If an agent starts working after a gap, an auto-savepoint captures the state before the new session. Named `auto-<user>-<timestamp>`.
+
+```
+Glob "mount/notes/.savepoint/auto-*"    # List auto-savepoints
+```
+
+## Recipe 2: Compare Approaches with Savepoints
+
+Try two implementations and keep the better one.
+
+```bash
+# 1. Savepoint the baseline
+Bash "echo '{\"description\":\"Clean baseline\"}' > mount/app/.savepoint/baseline.json"
+
+# 2. Implement approach A
+# ... agent implements DFS approach ...
+
+# 3. Savepoint after A
+Bash "echo '{\"description\":\"DFS implementation complete\"}' > mount/app/.savepoint/after-dfs.json"
+
+# 4. Undo to baseline (clean slate for approach B)
+Bash "touch mount/app/.undo/to-savepoint/baseline/.apply"
+
+# 5. Implement approach B
+# ... agent implements BFS approach ...
+
+# 6. Compare: B is current, preview A via undo
+Read "mount/app/.undo/to-savepoint/after-dfs/.info/summary"
+
+# 7a. Keep B (already current -- do nothing)
+
+# 7b. Keep A instead
+Bash "touch mount/app/.undo/to-savepoint/after-dfs/.apply"
+# This works because undo-to-savepoint restores the state at that savepoint,
+# regardless of what happened after (including B's implementation).
+```
+
+## Recipe 3: Multi-Agent Selective Undo
+
+Multiple agents work on the same data with separate identities. An orchestrator can selectively undo one agent's changes while preserving another's.
+
+### Setup: Separate User IDs
+
+Each agent mounts with its own identity:
+
+```bash
+# Agent 1: research
+tigerfs mount --user-id agent-research postgres://... /mnt/research
+
+# Agent 2: implementation
+tigerfs mount --user-id agent-implement postgres://... /mnt/implement
+```
+
+Both see the same data. Operations are tagged with the agent's user_id in the log.
+
+### Selective Undo
+
+```bash
+# Create a shared savepoint
+Bash "echo '{\"description\":\"Sprint start\"}' > mount/notes/.savepoint/sprint-start.json"
+
+# Both agents work...
+# agent-research explores and edits files
+# agent-implement makes changes too
+
+# View changes by user
+Read "mount/notes/.log/.by/user_id/agent-research/.last/10/.export/json"
+
+# Undo only agent-research's changes (preserves agent-implement's work)
+Bash "touch mount/notes/.undo/to-savepoint/sprint-start/.by/user_id/agent-research/.apply"
+```
+
+**Caveat:** If two agents edit the same file, per-user undo reverts the file to its state before the specified agent's first edit -- which also reverts the other agent's interleaved edits on that same file.
+
+---
+
+# Application Patterns
+
+## Recipe 4: Task Board
 
 Works as: todo list, kanban board, project tracker, shared queue, work coordination. The core pattern: directories = states, files = items, `mv` = transitions, `author` = ownership.
 
@@ -74,7 +181,7 @@ Shows when the task was moved, who edited it, previous content.
 
 Use any directory names: `backlog/`, `sprint/`, `review/`, `shipped/`. The directory IS the state. `mv` IS the transition. No status columns needed.
 
-## Recipe 2: Knowledge Base with History
+## Recipe 5: Knowledge Base with History
 
 ### Setup
 
@@ -132,7 +239,7 @@ Read old version vs current to see what evolved.
 | `source` | free text | Where you learned this |
 | `supersedes` | filename | If this replaces an older fact |
 
-## Recipe 3: Session Context (Resuming Work)
+## Recipe 6: Session Context (Resuming Work)
 
 ### Setup
 
@@ -169,7 +276,7 @@ Read "mount/sessions/2026-02-24-auth-refactor.md"
 
 Date + topic: `2026-02-24-auth-refactor.md`. Use `status` frontmatter for filtering.
 
-## Recipe 4: Activity Log
+## Recipe 7: Activity Log
 
 Append-only log of what agents and users have done. One file per activity, immutable once written. Multiple agents can write simultaneously without conflicts.
 
@@ -201,3 +308,4 @@ Glob "mount/activity/2026-03-21*"                              # Today's activit
 Grep pattern="author: agent-a" path="mount/activity/" glob="*.md"  # By agent
 Grep pattern="type: fix" path="mount/activity/" glob="*.md"        # By type
 ```
+
