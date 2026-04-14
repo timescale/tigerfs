@@ -99,7 +99,7 @@ mkdir /mnt/db/blog/tutorials
 mv /mnt/db/blog/hello-world.md /mnt/db/blog/tutorials/
 ```
 
-See [docs/markdown-app.md](docs/markdown-app.md) for column mapping, frontmatter handling, and use cases.
+See [docs/file-first.md](docs/file-first.md) for column mapping, frontmatter handling, and use cases.
 
 ### Version History
 
@@ -248,7 +248,7 @@ mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (...)" > /mnt/db/.crea
 touch /mnt/db/.create/orders/.commit
 ```
 
-See [docs/native-tables.md](docs/native-tables.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
+See [docs/data-first.md](docs/data-first.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
 
 ## Why TigerFS
 
@@ -359,9 +359,9 @@ Config file: `~/.config/tigerfs/config.yaml`. Run `tigerfs config show` to see a
 
 | Guide | Description |
 |-------|-------------|
-| [docs/markdown-app.md](docs/markdown-app.md) | Markdown app: column mapping, frontmatter, directories |
+| [docs/file-first.md](docs/file-first.md) | File-first mode: markdown/plaintext apps, column mapping, frontmatter, directories |
 | [docs/history.md](docs/history.md) | Version history: snapshots, cross-rename tracking, recovery |
-| [docs/native-tables.md](docs/native-tables.md) | Native table access: row formats, indexes, pipeline queries, schema management |
+| [docs/data-first.md](docs/data-first.md) | Data-first mode: row formats, indexes, pipeline queries, schema management |
 | [docs/quickstart.md](docs/quickstart.md) | Guided scenarios with sample data |
 
 ## Development

@@ -63,7 +63,7 @@ Capability directories (`.filter`, `.order`, `.first`, `.last`, `.export`, `.col
 
 ### Synth Apps
 
-Tables whose names start with `_` (e.g., `_blog`, `_docs`) can be exposed as synthesized views -- markdown files, task lists, or plain text snippets. The synth layer (`fs/synth/`) maps filesystem operations to table rows using format-specific conventions. See `docs/markdown-app.md` and `docs/tasks-app.md`.
+Tables whose names start with `_` (e.g., `_blog`, `_docs`) can be exposed as synthesized views -- markdown files, task lists, or plain text snippets. The synth layer (`fs/synth/`) maps filesystem operations to table rows using format-specific conventions. See `docs/file-first.md`.
 
 ### SQL Identifier Quoting
 
