@@ -1,6 +1,6 @@
 # File-First Mode
 
-File-first mode presents database tables as directories of files. Markdown files have YAML frontmatter mapped to columns. Plain text files are body-only. Multiple users and agents access the same files concurrently with transactional writes.
+File-first mode presents database tables as directories of files. Markdown files have YAML frontmatter mapped to columns. Plain text files are body-only. Multiple users and agents access the same files concurrently with transactional writes. With history enabled, every change is versioned and reversible -- create savepoints, preview changes, and undo when needed.
 
 ## Creating Workspaces
 
@@ -9,7 +9,7 @@ Workspaces tell TigerFS how to present a table as files. Write a format to `.bui
 ```bash
 echo "markdown" > /mnt/db/.build/notes           # Markdown with YAML frontmatter
 echo "plaintext" > /mnt/db/.build/snippets        # Plain text, no frontmatter
-echo "markdown,history" > /mnt/db/.build/blog     # With versioned history
+echo "markdown,history" > /mnt/db/.build/blog     # With versioned history (enables .history/, .log/, .savepoint/, .undo/)
 echo "history" > /mnt/db/.build/notes             # Add history to existing workspace
 ```
 
@@ -172,6 +172,27 @@ ls /mnt/db/posts_md/           # File-first (synthesized view)
 ```
 
 See [data-first.md](data-first.md) for the full data-first reference.
+
+## History and Undo
+
+Workspaces created with the `history` feature get automatic versioning, an operation log, savepoints, and undo:
+
+| Directory | Purpose |
+|-----------|---------|
+| `.history/` | Browse past versions of any file |
+| `.log/` | Operation log with diff symlinks (before/after/current) |
+| `.savepoint/` | Named bookmarks for undo-to-savepoint |
+| `.undo/` | Preview and apply undo operations |
+
+```bash
+# Create savepoint, work, review, undo if needed
+echo '{"description":"Before refactoring"}' > /mnt/db/notes/.savepoint/checkpoint.json
+# ... make changes ...
+diff -ru /mnt/db/notes/.undo/to-savepoint/checkpoint /mnt/db/notes/ -x '.*'
+touch /mnt/db/notes/.undo/to-savepoint/checkpoint/.apply
+```
+
+See [History](history.md) for version browsing, savepoints, undo, and recovery. See the [File-First Skills Reference](../skills/tigerfs/files.md) for agent workflows.
 
 ## Further Reading
 
