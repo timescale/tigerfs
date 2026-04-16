@@ -7,13 +7,27 @@ File-first mode presents database tables as directories of files. Markdown files
 Workspaces tell TigerFS how to present a table as files. Write a format to `.build/` to create a new workspace:
 
 ```bash
-echo "markdown" > /mnt/db/.build/notes           # Markdown with YAML frontmatter
+echo "markdown,history" > /mnt/db/.build/notes    # Markdown with history (recommended)
+echo "markdown" > /mnt/db/.build/notes            # Markdown without history
 echo "plaintext" > /mnt/db/.build/snippets        # Plain text, no frontmatter
-echo "markdown,history" > /mnt/db/.build/blog     # With versioned history (enables .history/, .log/, .savepoint/, .undo/)
 echo "history" > /mnt/db/.build/notes             # Add history to existing workspace
 ```
 
-Each workspace creates a directory (`/mnt/db/notes/`) backed by a table in the `tigerfs` schema. Access the backing table via `/mnt/db/.tables/notes/`.
+Each workspace creates a directory backed by a table in the `tigerfs` schema:
+
+```
+/mnt/db/notes/
+├── hello.md                     # Your files
+├── tutorials/
+│   └── getting-started.md
+├── .history/                    # Past versions (with history)
+├── .log/                        # Operation log (with history)
+├── .savepoint/                  # Bookmarks for undo (with history)
+├── .undo/                       # Preview and apply undo (with history)
+└── .info/                       # Workspace metadata
+```
+
+Access the backing table via `/mnt/db/.tables/notes/`.
 
 To add file-first access to an existing data-first table:
 
@@ -175,14 +189,7 @@ See [data-first.md](data-first.md) for the full data-first reference.
 
 ## History and Undo
 
-Workspaces created with the `history` feature get automatic versioning, an operation log, savepoints, and undo:
-
-| Directory | Purpose |
-|-----------|---------|
-| `.history/` | Browse past versions of any file |
-| `.log/` | Operation log with diff symlinks (before/after/current) |
-| `.savepoint/` | Named bookmarks for undo-to-savepoint |
-| `.undo/` | Preview and apply undo operations |
+Workspaces created with `history` get automatic versioning, an operation log, savepoints, and undo. The dot-directories (`.history/`, `.log/`, `.savepoint/`, `.undo/`) are shown in the directory structure above.
 
 ```bash
 # Create savepoint, work, review, undo if needed
@@ -192,10 +199,10 @@ diff -ru /mnt/db/notes/.undo/to-savepoint/checkpoint /mnt/db/notes/ -x '.*'
 touch /mnt/db/notes/.undo/to-savepoint/checkpoint/.apply
 ```
 
-See [History](history.md) for version browsing, savepoints, undo, and recovery. See the [File-First Skills Reference](../skills/tigerfs/files.md) for agent workflows.
+See [History](history.md) for the full guide on version browsing, savepoints, undo, and recovery.
 
 ## Further Reading
 
-- [Recipes](../skills/tigerfs/recipes.md) -- Blog, knowledge base, meeting notes, and other patterns built on file-first mode
-- [History](history.md) -- Versioned history for file-first workspaces
+- [History](history.md) -- Version browsing, savepoints, undo, and recovery
 - [Data-First](data-first.md) -- Direct table access via row-as-file and row-as-directory
+- [Recipes](../skills/tigerfs/recipes.md) -- Blog, knowledge base, task boards, and other patterns
