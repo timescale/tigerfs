@@ -178,6 +178,24 @@ See [data.md](data.md) for the full reference.
 | Insert row | `Write "mount/t/new.json"` with JSON |
 | Delete row | `Bash "rm mount/t/pk"` |
 
+## Directory Scanning Safety
+
+TigerFS virtual directories can trigger expensive or unbounded queries when recursively scanned. **Never use recursive Glob, `find`, or `ls -R` on these directories.** Always use targeted access patterns from the Quick Reference above.
+
+**Never recursively scan:**
+- `.history/` -- one entry per file version; grows with every edit
+- `.log/` -- data-first pipeline with unbounded depth via chaining
+- `.savepoint/` -- data-first pipeline (same structure as `.log/`)
+- `.undo/` -- preview trees that mirror the affected file hierarchy
+- `.by/<column>/` -- lists every distinct value; each expands to filtered rows
+- `.filter/<column>/` -- same as `.by/` with higher limit
+- `.export/` -- reading files triggers full table/query dumps
+- `.import/` -- write interface; scanning could trigger unintended operations
+
+**Safe to scan:**
+- Regular files and subdirectories in a workspace (e.g., `Glob "mount/workspace/**/*.md"`)
+- `.info/` -- small, fixed set of metadata files
+
 ## Anti-Patterns
 
 | Don't | Do Instead |
