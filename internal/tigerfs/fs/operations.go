@@ -615,7 +615,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
-		limit = 10000
+		limit = 1000
 	}
 
 	var rows []string
@@ -665,9 +665,11 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		// Always include .info for metadata access
 		entries = append(entries, Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	} else {
-		// Show all capabilities for raw table access
+		// Show all capabilities for raw table access.
+		// Note: DirAll is omitted because it's a no-op (same as the table listing)
+		// and creates infinite recursion for recursive scanners (rm -rf, find, agents).
 		capabilities := []string{
-			DirAll, DirBy, DirColumns, DirDelete, DirExport, DirFilter, DirFirst,
+			DirBy, DirColumns, DirDelete, DirExport, DirFilter, DirFirst,
 			DirFormat, DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
 		}
 		for _, cap := range capabilities {
@@ -1101,7 +1103,7 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 	// List distinct values for the column (use DirListingLimit for .by/)
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
-		limit = 10000
+		limit = 1000
 	}
 	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
 }
@@ -1166,7 +1168,7 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 	// List distinct values for the column (use DirFilterLimit for .filter/)
 	limit := o.config.DirFilterLimit
 	if limit <= 0 {
-		limit = 100000
+		limit = 10000
 	}
 	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
 }
@@ -1239,15 +1241,11 @@ func (o *Operations) readDirOrderCapability(ctx context.Context, parsed *ParsedP
 }
 
 // readDirPaginationCapability lists options for .first/, .last/, .sample/.
+// Returns an empty listing to prevent recursive scanners (rm -rf, find, agents)
+// from descending into multiple limit values and triggering parallel queries.
+// Users navigate directly via .first/50, .last/100, etc.
 func (o *Operations) readDirPaginationCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
-	now := time.Now()
-	// Show common limit values
-	limits := []string{"10", "25", "50", "100", "500", "1000"}
-	entries := make([]Entry, len(limits))
-	for i, l := range limits {
-		entries[i] = Entry{Name: l, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
-	}
-	return entries, nil
+	return []Entry{}, nil
 }
 
 // readDirIndexesCapability lists indexes for /{table}/.indexes/.
@@ -2529,7 +2527,7 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
-		limit = 10000
+		limit = 1000
 	}
 
 	// Validate column names if column projection is specified

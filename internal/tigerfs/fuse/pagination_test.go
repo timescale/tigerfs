@@ -13,7 +13,7 @@ import (
 func TestNewPaginationNode(t *testing.T) {
 	cfg := &config.Config{
 		DefaultSchema:   "public",
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	partialRows := NewPartialRowTracker(nil)

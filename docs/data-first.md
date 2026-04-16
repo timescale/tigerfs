@@ -463,7 +463,7 @@ touch /mnt/db/.views/.create/active_users/.commit
 ```yaml
 # ~/.config/tigerfs/config.yaml
 filesystem:
-  dir_listing_limit: 10000   # Max rows in directory listing
+  dir_listing_limit: 1000    # Max rows in directory listing
   dir_filter_limit: 100000   # Skip value listing for tables larger than this
   query_timeout: 30s         # Maximum query execution time
   no_filename_extensions: false  # Set true to disable .txt/.json/.bin extensions

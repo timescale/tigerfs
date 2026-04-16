@@ -89,7 +89,7 @@ func Init() error {
 	viper.SetDefault("default_schema", "") // Empty = inherit from PostgreSQL's current_schema()
 	viper.SetDefault("pool_size", 10)
 	viper.SetDefault("pool_max_idle", 5)
-	viper.SetDefault("dir_listing_limit", 10000)
+	viper.SetDefault("dir_listing_limit", 1000)
 	viper.SetDefault("dir_writing_limit", 100000)
 	viper.SetDefault("trailing_newlines", true)
 	viper.SetDefault("no_filename_extensions", false)

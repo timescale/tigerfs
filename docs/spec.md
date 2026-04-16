@@ -207,18 +207,9 @@
 │   │           ├── test.log              # Validation result (read-only)
 │   │           ├── .commit               # Touch to execute
 │   │           └── .abort                # Touch to cancel
-│   ├── .sample/                          # Random samples
-│   │   └── 100/                          # 100 random rows
-│   │       ├── 47392/                    # Row directory
-│   │       └── 103847/                   # Row directory
-│   ├── .first/                           # First N rows (ascending)
-│   │   └── 50/                           # First 50 rows by PK
-│   │       ├── 1/                        # Row directory
-│   │       └── 2/                        # Row directory
-│   ├── .last/                            # Last N rows (descending)
-│   │   └── 50/                           # Last 50 rows by PK
-│   │       ├── 99999/                    # Row directory
-│   │       └── 99998/                    # Row directory
+│   ├── .sample/N/                        # Random N rows (navigate directly, e.g. .sample/100/)
+│   ├── .first/N/                         # First N rows by PK (navigate directly, e.g. .first/50/)
+│   ├── .last/N/                          # Last N rows by PK (navigate directly, e.g. .last/50/)
 │   └── 123/                              # Row directory - shown in ls
 │       ├── email.txt                     # Individual column file
 │       ├── name.txt                      # Individual column file
@@ -341,7 +332,7 @@ Every row accessible in **two ways**:
 **Directory Listing Behavior:**
 ```bash
 $ ls /mount/users/
-.all/  .by/  .columns/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
+.by/  .columns/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
 1/  2/  3/  ...
 
 $ cd /mount/users/1        # Enter row directory
@@ -577,12 +568,12 @@ SELECT id FROM users ORDER BY id;
 ```
 
 **Output:**
-- Capability directories: `.all/`, `.by/`, `.columns/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
+- Capability directories: `.by/`, `.columns/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
 - Row directories: `1/`, `2/`, `3/`, ... (primary key values)
 
-**Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings.
+**Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings. Similarly, `.all/` is accessible but not listed (it is equivalent to the table listing itself). Pagination directories (`.first/`, `.last/`, `.sample/`) appear in listings but show empty contents -- navigate directly with a number, e.g., `.first/50/`. These are hidden from `ls` to prevent recursive scanners (`rm -rf`, `find`, AI agents) from triggering expensive or infinite directory traversals.
 
-**Constraint:** Tables > `dir_listing_limit` (default: 10,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
+**Constraint:** Tables > `dir_listing_limit` (default: 1,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
 
 #### Indexed Lookups
 
@@ -921,7 +912,7 @@ Tables with millions of rows make `ls /mount/users/` unusable:
 **Configuration:**
 ```yaml
 filesystem:
-  dir_listing_limit: 10000  # Default threshold
+  dir_listing_limit: 1000   # Default threshold
 ```
 
 **Behavior:**
@@ -1646,7 +1637,7 @@ connection:
 
 # Filesystem behavior
 filesystem:
-  dir_listing_limit: 10000           # Max rows returned by ls (prevents huge listings)
+  dir_listing_limit: 1000            # Max rows returned by ls (prevents huge listings)
   trailing_newlines: true            # Add \n to column and .count file reads
   no_filename_extensions: false      # Disable type-based extensions (.txt, .json, etc.)
   attr_timeout: 1                    # FUSE attribute cache (seconds, FUSE backend only)
@@ -1756,7 +1747,7 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 
 **Filesystem Behavior:**
 ```bash
---max-ls-rows N           Large table threshold (default: 10000)
+--max-ls-rows N           Large table threshold (default: 1000)
 --unlimited-ls            Disable row limit for ls operations
 --read-only               Mount as read-only
 --allow-other             Allow other users to access mount (FUSE)
