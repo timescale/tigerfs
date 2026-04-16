@@ -564,7 +564,9 @@ func TestReadDir_OrderCapability(t *testing.T) {
 	assert.Contains(t, names, "name.desc")
 }
 
-// TestReadDir_PaginationCapability tests listing options in .first/.
+// TestReadDir_PaginationCapability tests that .first/ returns empty listing.
+// Pagination directories don't list numeric subdirs to prevent recursive scanners
+// (rm -rf, find, agents) from descending into multiple limit values.
 func TestReadDir_PaginationCapability(t *testing.T) {
 	cfg := &config.Config{}
 	mockDB := &mockDBClient{
@@ -580,14 +582,7 @@ func TestReadDir_PaginationCapability(t *testing.T) {
 	entries, err := ops.ReadDir(context.Background(), "/users/.first")
 
 	require.Nil(t, err)
-	require.NotNil(t, entries)
-
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name
-	}
-	assert.Contains(t, names, "10")
-	assert.Contains(t, names, "100")
+	assert.Empty(t, entries, ".first/ should return empty listing")
 }
 
 // TestReadDir_ExportDirectory tests listing the .export directory.

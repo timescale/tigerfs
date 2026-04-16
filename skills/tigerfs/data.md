@@ -23,7 +23,7 @@ mount/
 │   ├── .columns/col1,col2/     # Column projection
 │   ├── .export/json|csv|tsv    # Bulk export
 │   ├── .import/json|csv|tsv    # Bulk import
-│   ├── .all/                   # Access all rows (bypasses 10,000 row default limit)
+│   ├── .all/                   # Access all rows (hidden from ls; bypasses 1,000 row limit)
 │   ├── .indexes/               # Index management (DDL)
 │   ├── .modify/                # Table modification (DDL)
 │   ├── .delete/                # Table deletion (DDL)
@@ -89,14 +89,14 @@ Read "mount/users/1/email"       # Single column value (raw text)
 
 ### Navigating Tables
 
-Directory listings are limited to 10,000 rows by default. Use `.all/` to bypass this limit.
+Directory listings are limited to 1,000 rows by default. Use `.all/` to bypass this limit. Note: `.all/` does not appear in `ls` output (to prevent infinite recursion for recursive scanners), but works when accessed directly. Pagination directories (`.first/`, `.last/`, `.sample/`) appear in `ls` but show empty contents -- navigate directly with a number (e.g., `.first/50/`).
 
 ```
 Glob "mount/users/*.json"             # List rows (small tables only)
 Glob "mount/orders/.first/20/*"       # First 20 PKs (ascending)
 Glob "mount/orders/.last/10/*"        # Last 10 PKs (descending, most recent)
 Glob "mount/orders/.sample/50/*"      # 50 random PKs
-Glob "mount/big_table/.all/*"         # All PKs (bypasses 10,000 row limit)
+Glob "mount/big_table/.all/*"         # All PKs (bypasses 1,000 row limit)
 ```
 
 After getting PKs, read individual rows: `Read "mount/orders/1.json"`

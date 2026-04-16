@@ -12,7 +12,7 @@ import (
 
 // TestPipelineNode_Readdir tests that PipelineNode lists capabilities based on context.
 func TestPipelineNode_Readdir(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 
 	mockDB := db.NewMockDBClient()
 	mockDB.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
@@ -61,7 +61,7 @@ func TestPipelineNode_Readdir(t *testing.T) {
 
 // TestPipelineNode_Readdir_AfterOrder tests capabilities after .order/ is applied.
 func TestPipelineNode_Readdir_AfterOrder(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 
 	mockDB := db.NewMockDBClient()
 	mockDB.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
@@ -104,7 +104,7 @@ func TestPipelineNode_Readdir_AfterOrder(t *testing.T) {
 
 // TestPipelineNode_Readdir_AfterLimit tests capabilities after .first/N is applied.
 func TestPipelineNode_Readdir_AfterLimit(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 
 	mockDB := db.NewMockDBClient()
 	mockDB.MockSchemaReader.GetPrimaryKeyFunc = func(ctx context.Context, schema, table string) (*db.PrimaryKey, error) {
@@ -155,7 +155,7 @@ func TestPipelineNode_Readdir_AfterLimit(t *testing.T) {
 
 // TestPipelineLimitNode_Lookup tests that limit node parses N correctly.
 func TestPipelineLimitNode_Lookup(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 	mockDB := db.NewMockDBClient()
 
 	pipeline := NewPipelineContext("public", "users", "id")
@@ -179,7 +179,7 @@ func TestPipelineLimitNode_Lookup(t *testing.T) {
 
 // TestPipelineByDirNode_Readdir tests that .by/ shows indexed columns.
 func TestPipelineByDirNode_Readdir(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 
 	mockDB := db.NewMockDBClient()
 	mockDB.MockIndexReader.GetSingleColumnIndexesFunc = func(ctx context.Context, schema, table string) ([]db.Index, error) {
@@ -224,7 +224,7 @@ func TestPipelineByDirNode_Readdir(t *testing.T) {
 
 // TestPipelineOrderDirNode_Readdir tests that .order/ shows all columns.
 func TestPipelineOrderDirNode_Readdir(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 
 	mockDB := db.NewMockDBClient()
 	mockDB.MockSchemaReader.GetColumnsFunc = func(ctx context.Context, schema, table string) ([]db.Column, error) {
@@ -259,7 +259,7 @@ func TestPipelineOrderDirNode_Readdir(t *testing.T) {
 
 // TestPipelineOrderColumnNode_Readdir tests that .order/<column>/ shows directions.
 func TestPipelineOrderColumnNode_Readdir(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 	mockDB := db.NewMockDBClient()
 
 	pipeline := NewPipelineContext("public", "users", "id")
@@ -291,7 +291,7 @@ func TestPipelineOrderColumnNode_Readdir(t *testing.T) {
 
 // TestPipelineExportDirNode_Readdir tests that .export/ shows formats.
 func TestPipelineExportDirNode_Readdir(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 	mockDB := db.NewMockDBClient()
 
 	pipeline := NewPipelineContext("public", "users", "id")
@@ -330,7 +330,7 @@ func TestPipelineExportDirNode_Readdir(t *testing.T) {
 
 // TestPipelineByColumnNode_Pipeline tests that filter is added with indexed=true.
 func TestPipelineByColumnNode_Pipeline(t *testing.T) {
-	cfg := &config.Config{DirListingLimit: 10000}
+	cfg := &config.Config{DirListingLimit: 1000}
 	mockDB := db.NewMockDBClient()
 
 	// Create base pipeline

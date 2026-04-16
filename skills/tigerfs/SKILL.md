@@ -139,8 +139,8 @@ Read "mount/users/.by/status/active/.export/json"       # Filtered export
 | Size | Strategy |
 |------|----------|
 | **~100 rows or less** | Glob patterns and row-as-directory access are fine |
-| **100 - 10,000 rows** | Prefer `.export/` over reading individual rows to avoid 1 query per row. Use `.by/`, `.filter/`, `.first/`, `.last/`, `.sample/` for selective access when possible |
-| **10,000+ rows** | Large tables are limited to 10,000 rows by default; use `.all/` if you actually need all rows. Strongly prefer `.export/` over reading individual rows. Use `.by/`, `.filter/`, `.first/`, `.last/`, `.sample/` for selective access whenever possible |
+| **100 - 1,000 rows** | Prefer `.export/` over reading individual rows to avoid 1 query per row. Use `.by/`, `.filter/`, `.first/`, `.last/`, `.sample/` for selective access when possible |
+| **1,000+ rows** | Large tables are limited to 1,000 rows by default; use `.all/` if you actually need all rows. Strongly prefer `.export/` over reading individual rows. Use `.by/`, `.filter/`, `.first/`, `.last/`, `.sample/` for selective access whenever possible |
 
 Always check `.info/count` first to choose the right strategy.
 

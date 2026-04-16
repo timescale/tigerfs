@@ -170,12 +170,9 @@ Considered alternatives:
 ├── .columns/         # capability: column projection (pipeline query)
 │   └── id,name,price/
 │       └── .export/
-├── .first/           # capability: first N rows
-│   └── 100/
-├── .last/            # capability: last N rows
-│   └── 100/
-├── .sample/          # capability: random sample
-│   └── 100/
+├── .first/N/         # capability: first N rows (navigate directly, e.g. .first/100/)
+├── .last/N/          # capability: last N rows (navigate directly, e.g. .last/100/)
+├── .sample/N/        # capability: random sample (navigate directly, e.g. .sample/100/)
 ├── .order/           # capability: specify row ordering (see ADR-006)
 │   └── price/        # (dynamic: any column name)
 ├── .export/          # capability: bulk read (see ADR-006)
@@ -190,7 +187,7 @@ Considered alternatives:
 │   │   └── csv, tsv, json, yaml
 │   └── .append/
 │       └── csv, tsv, json, yaml
-├── .all/             # capability: all rows iterator
+├── .all/             # capability: all rows (hidden from ls to prevent infinite recursion)
 ├── .indexes/         # capability: index DDL management
 │   └── .create/
 ├── .delete/          # capability: table delete staging
