@@ -385,3 +385,215 @@ func TestSynth_ParentPointer_RenameSameDir(t *testing.T) {
 	assert.Equal(t, "rename", mockDB.logEntries[0].opType)
 	assert.Equal(t, "uuid-file", mockDB.logEntries[0].fileID)
 }
+
+// --- Reserved dotfile name tests ---
+
+// TestSynth_WriteReservedName verifies that creating a file with a reserved name fails.
+// Known capabilities are intercepted by the path parser (routed to their handlers, not synth).
+// The checkReservedFilename helper provides defense-in-depth for direct API calls.
+func TestSynth_WriteReservedName(t *testing.T) {
+	reserved := []string{".history", ".log", ".savepoint", ".undo", ".info", ".by", ".filter", ".export"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			mockDB := newParentPointerMockDB()
+			mockDB.resolvePathResults = nil
+
+			cfg := &config.Config{DirListingLimit: 1000}
+			ops := NewOperations(cfg, mockDB)
+			ctx := context.Background()
+
+			fsErr := ops.WriteFile(ctx, fmt.Sprintf("/notes/%s", name), []byte("test"))
+			require.NotNil(t, fsErr, "WriteFile(%q) should fail for reserved name", name)
+		})
+	}
+
+	// Non-reserved dotfiles should not fail with ErrPermission
+	allowed := []string{".gitignore", ".env", ".vscode", ".git"}
+	for _, name := range allowed {
+		t.Run(name, func(t *testing.T) {
+			mockDB := newParentPointerMockDB()
+			mockDB.resolvePathResults = nil
+
+			cfg := &config.Config{DirListingLimit: 1000}
+			ops := NewOperations(cfg, mockDB)
+			ctx := context.Background()
+
+			fsErr := ops.WriteFile(ctx, fmt.Sprintf("/notes/%s", name), []byte("test"))
+			if fsErr != nil {
+				assert.NotEqual(t, ErrPermission, fsErr.Code,
+					"WriteFile(%q) should not fail with ErrPermission", name)
+			}
+		})
+	}
+}
+
+// TestSynth_MkdirReservedName verifies that mkdir with a reserved name fails.
+func TestSynth_MkdirReservedName(t *testing.T) {
+	reserved := []string{".history", ".log", ".undo"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			mockDB := newParentPointerMockDB()
+			mockDB.resolvePathResults = nil
+
+			cfg := &config.Config{DirListingLimit: 1000}
+			ops := NewOperations(cfg, mockDB)
+			ctx := context.Background()
+
+			fsErr := ops.Mkdir(ctx, fmt.Sprintf("/notes/%s", name))
+			require.NotNil(t, fsErr, "Mkdir(%q) should fail for reserved name", name)
+		})
+	}
+
+	allowed := []string{".vscode", ".git"}
+	for _, name := range allowed {
+		t.Run(name, func(t *testing.T) {
+			mockDB := newParentPointerMockDB()
+			mockDB.resolvePathResults = nil
+
+			cfg := &config.Config{DirListingLimit: 1000}
+			ops := NewOperations(cfg, mockDB)
+			ctx := context.Background()
+
+			fsErr := ops.Mkdir(ctx, fmt.Sprintf("/notes/%s", name))
+			if fsErr != nil {
+				assert.NotEqual(t, ErrPermission, fsErr.Code,
+					"Mkdir(%q) should not fail with ErrPermission", name)
+			}
+		})
+	}
+}
+
+// TestSynth_RenameToReservedName verifies that renaming to a reserved name fails.
+// Rename targets go through the path parser, so known capabilities are intercepted.
+func TestSynth_RenameToReservedName(t *testing.T) {
+	reserved := []string{".history", ".log", ".undo"}
+	for _, name := range reserved {
+		t.Run(name, func(t *testing.T) {
+			mockDB := newParentPointerMockDB()
+			mockDB.resolvePathResults = []db.PathSegment{
+				{Depth: 1, ID: "uuid-file", Name: "old.md"},
+			}
+			mockDB.rowData = map[string]*mockRow{
+				"public.notes.uuid-file": {
+					columns: []string{"id", "parent_id", "filename", "filetype", "body"},
+					values:  []interface{}{"uuid-file", nil, "old.md", "file", "content"},
+				},
+			}
+			mockDB.latestVersionIDs = map[string]string{
+				"uuid-file": "version-xyz",
+			}
+
+			cfg := &config.Config{DirListingLimit: 1000}
+			ops := NewOperations(cfg, mockDB)
+			ctx := context.Background()
+
+			fsErr := ops.Rename(ctx, "/notes/old.md", fmt.Sprintf("/notes/%s", name))
+			require.NotNil(t, fsErr, "Rename to %q should fail for reserved name", name)
+		})
+	}
+
+	// Rename to non-reserved dotfile should not fail with ErrPermission
+	t.Run(".gitignore", func(t *testing.T) {
+		mockDB := newParentPointerMockDB()
+		mockDB.resolvePathResults = []db.PathSegment{
+			{Depth: 1, ID: "uuid-file", Name: "old.md"},
+		}
+		mockDB.rowData = map[string]*mockRow{
+			"public.notes.uuid-file": {
+				columns: []string{"id", "parent_id", "filename", "filetype", "body"},
+				values:  []interface{}{"uuid-file", nil, "old.md", "file", "content"},
+			},
+		}
+		mockDB.latestVersionIDs = map[string]string{
+			"uuid-file": "version-xyz",
+		}
+
+		cfg := &config.Config{DirListingLimit: 1000}
+		ops := NewOperations(cfg, mockDB)
+		ctx := context.Background()
+
+		fsErr := ops.Rename(ctx, "/notes/old.md", "/notes/.gitignore")
+		if fsErr != nil {
+			assert.NotEqual(t, ErrPermission, fsErr.Code,
+				"Rename to .gitignore should not fail with ErrPermission")
+		}
+	})
+}
+
+// TestSynth_RenameFromDotfile verifies that renaming FROM a dotfile works fine.
+func TestSynth_RenameFromDotfile(t *testing.T) {
+	mockDB := newParentPointerMockDB()
+	mockDB.resolvePathResults = []db.PathSegment{
+		{Depth: 1, ID: "uuid-file", Name: ".gitignore"},
+	}
+	mockDB.rowData = map[string]*mockRow{
+		"public.notes.uuid-file": {
+			columns: []string{"id", "parent_id", "filename", "filetype", "body"},
+			values:  []interface{}{"uuid-file", nil, ".gitignore", "file", "content"},
+		},
+	}
+	mockDB.latestVersionIDs = map[string]string{
+		"uuid-file": "version-xyz",
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	fsErr := ops.Rename(ctx, "/notes/.gitignore", "/notes/ignored.txt")
+	require.Nil(t, fsErr, "Rename from dotfile should succeed")
+}
+
+// TestSynth_FilterReservedNames verifies that reserved names are filtered from ReadDir.
+func TestSynth_FilterReservedNames(t *testing.T) {
+	entries := []Entry{
+		{Name: "hello.md"},
+		{Name: ".gitignore"},
+		{Name: ".history"}, // reserved -- should be filtered
+		{Name: ".log"},     // reserved -- should be filtered
+		{Name: ".env"},
+		{Name: ".undo"}, // reserved -- should be filtered
+	}
+
+	filtered := filterReservedNames(entries)
+	names := make([]string, len(filtered))
+	for i, e := range filtered {
+		names[i] = e.Name
+	}
+
+	assert.Contains(t, names, "hello.md")
+	assert.Contains(t, names, ".gitignore")
+	assert.Contains(t, names, ".env")
+	assert.NotContains(t, names, ".history")
+	assert.NotContains(t, names, ".log")
+	assert.NotContains(t, names, ".undo")
+}
+
+// TestSynth_CheckReservedFilename verifies the reserved filename check helper.
+func TestSynth_CheckReservedFilename(t *testing.T) {
+	tests := []struct {
+		filename string
+		wantErr  bool
+	}{
+		{".history", true},
+		{".log", true},
+		{".info", true},
+		{".gitignore", false},
+		{".env", false},
+		{"subdir/.history", true},    // leaf is reserved
+		{"subdir/.gitignore", false}, // leaf is not reserved
+		{"hello.md", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			err := checkReservedFilename(tt.filename)
+			if tt.wantErr {
+				require.NotNil(t, err)
+				assert.Equal(t, ErrPermission, err.Code)
+			} else {
+				assert.Nil(t, err)
+			}
+		})
+	}
+}

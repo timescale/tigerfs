@@ -226,6 +226,36 @@ func synthUndoDirs(info *synth.ViewInfo) []Entry {
 	}
 }
 
+// filterReservedNames removes entries whose names conflict with TigerFS virtual
+// control directories (e.g., .history, .log, .savepoint, .undo). Virtual directories
+// always take precedence over user-created files with the same name.
+func filterReservedNames(entries []Entry) []Entry {
+	filtered := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if !isKnownCapability(e.Name) {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
+// checkReservedFilename returns an error if the leaf filename matches a TigerFS
+// reserved name (virtual control directory). Used by write, mkdir, and rename.
+func checkReservedFilename(filename string) *FSError {
+	leaf := filename
+	if i := strings.LastIndex(filename, "/"); i >= 0 {
+		leaf = filename[i+1:]
+	}
+	if isKnownCapability(leaf) {
+		return &FSError{
+			Code:    ErrPermission,
+			Message: fmt.Sprintf("filename %q is reserved for TigerFS virtual directory", leaf),
+			Hint:    "choose a different filename to avoid collision with TigerFS control directories",
+		}
+	}
+	return nil
+}
+
 // primeSynthStatCache populates the stat cache from row data.
 // pathPrefix is prepended to leaf filenames for the cache key (e.g., "projects/web"
 // for subdirectory entries). Empty for root-level entries.
@@ -324,7 +354,7 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 			return nil, &FSError{Code: ErrIO, Message: "failed to list root entries", Cause: err}
 		}
 		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, "", columns, rows, info)
-		children := o.buildEntriesFromRows(columns, rows, info)
+		children := filterReservedNames(o.buildEntriesFromRows(columns, rows, info))
 		children = append(synthUndoDirs(info), children...)
 		return children, nil
 	}
@@ -343,7 +373,7 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 
 	// Old hierarchy model (path-encoded filenames, pre-ADR-017): filter to root-level
 	if info.SupportsHierarchy {
-		children := o.filterHierarchicalChildren(columns, rows, "", info)
+		children := filterReservedNames(o.filterHierarchicalChildren(columns, rows, "", info))
 		children = append(synthUndoDirs(info), children...)
 		return children, nil
 	}
@@ -361,6 +391,11 @@ func (o *Operations) readDirSynthView(ctx context.Context, parsed *ParsedPath, i
 		case synth.FormatPlainText:
 			filename = synth.GetPlainTextFilename(columns, row, info.Roles)
 		default:
+			continue
+		}
+
+		// Skip entries whose names collide with virtual control directories
+		if isKnownCapability(filename) {
 			continue
 		}
 
@@ -729,6 +764,11 @@ func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string,
 func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo, data []byte) *FSError {
 	fsCtx := parsed.Context
 	filename := parsed.PrimaryKey
+
+	// Reject filenames that collide with TigerFS virtual directories
+	if fsErr := checkReservedFilename(filename); fsErr != nil {
+		return fsErr
+	}
 
 	var colValues map[string]interface{}
 
@@ -1163,6 +1203,11 @@ func (o *Operations) synthesizeContent(columns []string, row []interface{}, info
 // For directories in hierarchical views, performs an atomic prefix rename
 // that updates the directory row and all its descendants.
 func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, info *synth.ViewInfo, oldFilename, newFilename string) *FSError {
+	// Reject renames to reserved TigerFS virtual directory names
+	if fsErr := checkReservedFilename(newFilename); fsErr != nil {
+		return fsErr
+	}
+
 	// Parent-pointer model (ADR-017): rename is a single-row UPDATE
 	if info.Roles.ParentID != "" {
 		_, _, fileID, fsErr := o.resolveSynthRow(ctx, schema, table, info, oldFilename)
@@ -1291,7 +1336,7 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 		}
 
 		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
-		children := o.buildEntriesFromRows(columns, rows, info)
+		children := filterReservedNames(o.buildEntriesFromRows(columns, rows, info))
 		children = append(synthUndoDirs(info), children...)
 		return children, nil
 	}
@@ -1307,7 +1352,7 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 	}
 
 	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
-	children := o.filterHierarchicalChildren(columns, rows, prefix, info)
+	children := filterReservedNames(o.filterHierarchicalChildren(columns, rows, prefix, info))
 	if info.HasHistory {
 		children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
 	}
@@ -1451,6 +1496,11 @@ func (o *Operations) filterHierarchicalChildren(columns []string, rows [][]inter
 func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) *FSError {
 	fsCtx := parsed.Context
 	dirPath := parsed.PrimaryKey
+
+	// Reject directory names that collide with TigerFS virtual directories
+	if fsErr := checkReservedFilename(dirPath); fsErr != nil {
+		return fsErr
+	}
 
 	// Parent-pointer model (ADR-017): use leaf name + parent_id
 	if info.Roles.ParentID != "" {
