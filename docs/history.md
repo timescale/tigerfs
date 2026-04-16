@@ -242,13 +242,6 @@ touch /mnt/db/notes/.undo/id/<log_id>/.apply
 touch /mnt/db/notes/.undo/to-savepoint/before-investigation/.apply
 ```
 
-**Manual restore from history:** Read the old version and write it back:
-
-```bash
-cat /mnt/db/notes/.history/hello.md/2026-02-12T013000.789Z-jkl012mno > /tmp/restore.md
-cp /tmp/restore.md /mnt/db/notes/hello.md
-```
-
 ## Limitations
 
 - **Requires TimescaleDB:** history, log, and savepoint tables use TimescaleDB hypertables for compressed storage. Will not work on vanilla PostgreSQL.

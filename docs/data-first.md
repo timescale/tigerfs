@@ -1,4 +1,4 @@
-# Native Table Access
+# Data-First Mode
 
 Access PostgreSQL tables as directories of files — read rows, write columns, navigate indexes, chain pipeline queries, and manage schema, all from the command line.
 
@@ -7,7 +7,7 @@ Access PostgreSQL tables as directories of files — read rows, write columns, n
 TigerFS maps every table to a directory. Each row appears as a file (in your choice of format) or as a subdirectory of column files. Primary keys become filenames, columns become file contents, and standard Unix tools replace SQL.
 
 ```
-/mnt/db/public/users/
+/mnt/db/users/
 ├── 1.json                  # Row as JSON file
 ├── 1.tsv                   # Row as TSV file
 ├── 1/                      # Row as directory
