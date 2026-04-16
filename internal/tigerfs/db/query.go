@@ -470,6 +470,47 @@ func (c *Client) DeleteRow(ctx context.Context, schema, table string, pk *PKMatc
 	return DeleteRow(ctx, c.pool, schema, table, pk)
 }
 
+// DeleteAndUpdate atomically deletes one row and updates another in a single
+// PostgreSQL transaction. Used for POSIX rename-as-replace semantics where
+// the target file must be removed before the source file can be renamed to it.
+// Both BEFORE triggers (history capture) fire within the transaction.
+func (c *Client) DeleteAndUpdate(ctx context.Context, schema, table string,
+	deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error {
+
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Step 1: Delete the target row
+	deleteSQL := fmt.Sprintf(`DELETE FROM %s WHERE %s`, qt(schema, table), deletePK.WhereClause(1))
+	_, err = tx.Exec(ctx, deleteSQL, deletePK.WhereArgs()...)
+	if err != nil {
+		return fmt.Errorf("failed to delete target row: %w", err)
+	}
+
+	// Step 2: Update the source row (rename)
+	setClauses := make([]string, len(updateCols))
+	for i, col := range updateCols {
+		setClauses[i] = fmt.Sprintf(`%s = $%d`, qi(col), i+1)
+	}
+	whereStart := len(updateVals) + 1
+	updateSQL := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`,
+		qt(schema, table), strings.Join(setClauses, ", "), updatePK.WhereClause(whereStart))
+	allValues := append(updateVals, updatePK.WhereArgs()...)
+	_, err = tx.Exec(ctx, updateSQL, allValues...)
+	if err != nil {
+		return fmt.Errorf("failed to update source row: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 // GetFirstNRows returns the first N primary key values ordered by PK ascending.
 // Returns encoded PK strings (comma-delimited for composite PKs).
 func GetFirstNRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, error) {
@@ -1059,6 +1100,12 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 
 		_, err = tx.Exec(ctx, upsertSQL, sourceVals...)
 		if err != nil {
+			// Detect unique constraint violation: happens when undoing a delete
+			// after a rename-as-replace -- the renamed file now occupies the filename.
+			if isUniqueViolation(err) {
+				return fmt.Errorf("cannot restore file %s: filename already occupied "+
+					"(possibly by a rename-as-replace; undo the rename first)", fileID)
+			}
 			// Detect DDL schema mismatch: column removed/renamed after the savepoint.
 			// PostgreSQL returns SQLSTATE 42703 (undefined_column) or 42P01 (undefined_table).
 			if pgErr := asPgError(err); pgErr != nil && (pgErr.Code == "42703" || pgErr.Code == "42P01") {

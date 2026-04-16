@@ -171,6 +171,7 @@ type MockRowWriter struct {
 	UpdateColumnFunc    func(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error
 	UpdateColumnCASFunc func(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error
 	DeleteRowFunc       func(ctx context.Context, schema, table string, pk *PKMatch) error
+	DeleteAndUpdateFunc func(ctx context.Context, schema, table string, deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error
 }
 
 var _ RowWriter = (*MockRowWriter)(nil)
@@ -206,6 +207,13 @@ func (m *MockRowWriter) UpdateColumnCAS(ctx context.Context, schema, table strin
 func (m *MockRowWriter) DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error {
 	if m.DeleteRowFunc != nil {
 		return m.DeleteRowFunc(ctx, schema, table, pk)
+	}
+	return nil
+}
+
+func (m *MockRowWriter) DeleteAndUpdate(ctx context.Context, schema, table string, deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error {
+	if m.DeleteAndUpdateFunc != nil {
+		return m.DeleteAndUpdateFunc(ctx, schema, table, deletePK, updatePK, updateCols, updateVals)
 	}
 	return nil
 }

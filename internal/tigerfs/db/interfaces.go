@@ -95,6 +95,10 @@ type RowWriter interface {
 
 	// DeleteRow deletes a row by primary key.
 	DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error
+
+	// DeleteAndUpdate atomically deletes one row and updates another in a single
+	// transaction. Used for POSIX rename-as-replace (mv over existing file).
+	DeleteAndUpdate(ctx context.Context, schema, table string, deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error
 }
 
 // IndexReader provides index metadata and lookup operations.
