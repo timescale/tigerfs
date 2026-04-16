@@ -4,21 +4,38 @@ Automatic versioning for file-first workspaces -- every edit and delete is captu
 
 ## What It Does
 
-When history is enabled on a workspace, TigerFS creates three companion tables alongside the backing table:
+When history is enabled on a workspace, every change is automatically tracked. The filesystem exposes four directories for browsing and managing your workspace's history:
 
-| Table | Directory | Purpose |
-|-------|-----------|---------|
-| `<name>_history` | `.history/` | Timestamped snapshots of every file version |
-| `<name>_log` | `.log/` | Operation log recording what changed, when, and by whom |
-| `<name>_savepoint` | `.savepoint/` | Named bookmarks for undo-to-savepoint |
-| -- | `.undo/` | Virtual directory for previewing and applying undo |
+```
+notes/
+├── hello.md                     # Your current files
+├── tutorials/
+│   └── getting-started.md
+├── .history/                    # Browse past versions of any file
+│   ├── hello.md/
+│   │   ├── .id
+│   │   └── 2026-02-24T150000.123Z-abc123def
+│   └── .by/                    # Look up history by row UUID
+├── .log/                        # Operation log: what changed, when, by whom
+│   └── <log_id>/
+│       ├── before → .history/...   # Diff symlinks
+│       ├── after → .history/...
+│       └── current → hello.md
+├── .savepoint/                  # Named bookmarks for undo
+│   ├── before-refactor/
+│   └── auto-agent-7-20260408T143000Z/
+└── .undo/                       # Preview and apply undo
+    ├── id/                      # Undo a single operation
+    ├── to-id/                   # Undo to a log entry
+    └── to-savepoint/            # Undo to a savepoint
+```
 
 Key properties:
 - **Automatic** -- no manual save or commit; every change is captured
 - **Reversible** -- undo any change or roll back to any savepoint
 - **Attributable** -- each operation records who made it (via `--user-id`)
-- **Composable** -- works with any workspace format (markdown, text, future formats)
-- **Add anytime** -- enable at creation or add to an existing workspace later
+- **Composable** -- works with any workspace format (markdown, text)
+- **Add anytime** -- enable at creation or add to an existing workspace
 
 ## Quick Start
 
@@ -234,19 +251,24 @@ cp /tmp/restore.md /mnt/db/notes/hello.md
 
 ## Limitations
 
-- **Requires TimescaleDB** -- history, log, and savepoint tables use TimescaleDB hypertables for compressed storage. Will not work on vanilla PostgreSQL.
-- **File-first only** -- data-first tables don't get history. Writing directly to the backing table via `.tables/` bypasses the history trigger (no log entry, no history snapshot).
-- **Undo doesn't cross schema changes** -- if a column was added or removed after the savepoint, undo returns a descriptive error rather than corrupting data.
-- **Per-user undo caveat** -- if two users interleave edits on the same file, undoing one user's changes also reverts the other user's interleaved edits on that file (inherent in rollback semantics).
-- **Storage cost** -- every edit creates a history row. For large files with frequent edits, this can grow. TimescaleDB compression mitigates this (7-day chunks, automatic compression).
+- **Requires TimescaleDB:** history, log, and savepoint tables use TimescaleDB hypertables for compressed storage. Will not work on vanilla PostgreSQL.
+- **File-first only:** data-first tables don't get history. Writing directly to the backing table via `.tables/` bypasses the history trigger.
+- **Per-user undo caveat:** if two users interleave edits on the same file, undoing one user's changes also reverts the other user's interleaved edits on that file.
+- **Storage cost:** every edit creates a history row. TimescaleDB compression mitigates this (7-day chunks, automatic compression).
 
 ## How It Works
 
-- **History table** (`tigerfs.<name>_history`) -- mirrors source columns plus `version_id` (UUIDv7 PK) and `operation` (edit/rename/delete). TimescaleDB hypertable with 7-day chunks, `segment_by='file_id'`, `order_by='version_id DESC'`.
-- **Log table** (`tigerfs.<name>_log`) -- records `log_id`, `file_id`, `type`, `user_id`, `filename`, `version_id`, `description`. TimescaleDB hypertable with `segment_by='file_id'`, `order_by='log_id ASC'`. Indexed on `(file_id, log_id ASC)` for SkipScan-optimized undo queries.
-- **Savepoint table** (`tigerfs.<name>_savepoint`) -- `name` (PK), `savepoint_id` (UUIDv7, UNIQUE), `user_id`, `description`. Regular PostgreSQL table (not a hypertable).
-- **Trigger** -- a BEFORE UPDATE/DELETE trigger on the source table copies the OLD row into history with a UUIDv7 version_id. A CASE expression detects operation type from OLD vs NEW comparison (filename/parent_id change = rename, DELETE = delete, otherwise = edit).
-- **Detection** -- TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion `tigerfs.<name>_history` table.
+Each history-enabled workspace is backed by three companion tables in the `tigerfs` schema, alongside the main backing table.
+
+The **history table** stores a snapshot of every file version. A PostgreSQL BEFORE trigger fires on every update and delete, copying the old row into history with a UUIDv7 version_id. The trigger detects whether the operation was an edit, rename, or delete by comparing the old and new rows.
+
+The **log table** records each operation (create, edit, rename, delete, undo) with who did it and when. Log entries reference history entries via version_id, connecting "what happened" to "what it looked like."
+
+The **savepoint table** stores named bookmarks. Each savepoint's UUIDv7 timestamp enables efficient "find all operations after this point" queries.
+
+All three tables use TimescaleDB hypertables for time-partitioned storage and automatic compression. The log table is indexed on (file_id, log_id) for SkipScan-optimized undo queries.
+
+TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion history table.
 
 ## Quick Reference
 
