@@ -313,6 +313,14 @@ Synthesized apps, DDL operations, and pipeline queries add additional dotfile di
 - `.stats` - Performance monitoring
 - `.views/` - Database views and view creation
 
+**User Dotfiles:**
+
+Files and directories starting with `.` that are not in the reserved list above are treated as regular files/directories. For example, `.gitignore`, `.env`, `.git/`, `.vscode/` can be created and used normally in file-first workspaces. They are stored in the database like any other filename.
+
+**Reserved Name Enforcement:**
+
+The dotfile names listed above are reserved for TigerFS virtual directories. Attempts to create files, create directories, or rename to these names return `EACCES` (permission denied). If hard links, symlinks, or mknod are added in the future, they must also enforce this restriction.
+
 **Rationale:**
 - Standard Unix convention (dotfiles hidden from `ls`)
 - `ls -a` reveals metadata and special paths

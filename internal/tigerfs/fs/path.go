@@ -504,8 +504,10 @@ func processSegments(result *ParsedPath, segments []string) (*ParsedPath, *FSErr
 	for i < len(segments) {
 		seg := segments[i]
 
-		// Check for capability directories
-		if strings.HasPrefix(seg, ".") {
+		// Check for known capability directories (e.g., .info, .by, .filter, .history).
+		// Unknown dot-prefixed segments (e.g., .git, .gitignore, .env) fall through
+		// to the scan-ahead logic and are treated as regular filenames/directories.
+		if strings.HasPrefix(seg, ".") && isKnownCapability(seg) {
 			consumed, err := processCapability(result, seg, segments[i:])
 			if err != nil {
 				return nil, err
@@ -600,9 +602,10 @@ func processCapability(result *ParsedPath, cap string, remaining []string) (int,
 	case DirUndo:
 		return processUndo(result, remaining)
 	default:
+		// Should not reach here -- callers check isKnownCapability() first.
 		return 0, &FSError{
 			Code:    ErrInvalidPath,
-			Message: fmt.Sprintf("unknown capability: %s", cap),
+			Message: fmt.Sprintf("internal error: processCapability called with unknown capability: %s", cap),
 		}
 	}
 }
