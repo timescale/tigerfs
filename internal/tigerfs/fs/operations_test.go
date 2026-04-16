@@ -1112,8 +1112,13 @@ type mockDBClient struct {
 	resolvePathResults     []db.PathSegment
 	resolvePathErr         error
 	resolvePathCalls       int
+	resolvePathCallCount   int // separate counter for test-specific resolve functions
+	resolvePathFn          func(ctx context.Context, schema, table string, segments []string) ([]db.PathSegment, error)
 	lastResolveStartParent string
 	lastResolveSegments    []string
+
+	// Rename-as-replace tracking
+	deleteAndUpdateFunc func(ctx context.Context, schema, table string, deletePK *db.PKMatch, updatePK *db.PKMatch, updateCols []string, updateVals []interface{}) error
 
 	// PK match tracking for composite PK tests
 	lastPKMatch *db.PKMatch
@@ -1623,6 +1628,16 @@ func (m *mockDBClient) DeleteRow(ctx context.Context, schema, table string, pk *
 	return nil
 }
 
+func (m *mockDBClient) DeleteAndUpdate(ctx context.Context, schema, table string, deletePK *db.PKMatch, updatePK *db.PKMatch, updateCols []string, updateVals []interface{}) error {
+	if m.deleteAndUpdateFunc != nil {
+		return m.deleteAndUpdateFunc(ctx, schema, table, deletePK, updatePK, updateCols, updateVals)
+	}
+	m.deleteCalled = true
+	m.lastDeletePK = deletePK.Values[0]
+	m.updateCalled = true
+	return nil
+}
+
 // Implement db.DDLExecutor
 
 func (m *mockDBClient) Exec(ctx context.Context, sql string, args ...interface{}) error {
@@ -1785,6 +1800,9 @@ func (m *mockDBClient) ResolvePath(ctx context.Context, schema, table, startPare
 	m.resolvePathCalls++
 	m.lastResolveStartParent = startParentID
 	m.lastResolveSegments = segments
+	if m.resolvePathFn != nil {
+		return m.resolvePathFn(ctx, schema, table, segments)
+	}
 	return m.resolvePathResults, m.resolvePathErr
 }
 

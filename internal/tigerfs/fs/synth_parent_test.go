@@ -386,6 +386,120 @@ func TestSynth_ParentPointer_RenameSameDir(t *testing.T) {
 	assert.Equal(t, "uuid-file", mockDB.logEntries[0].fileID)
 }
 
+// --- Rename-as-replace tests ---
+
+// TestSynth_ParentPointer_RenameReplace verifies that renaming to an existing
+// file atomically deletes the target and renames the source (POSIX semantics).
+func TestSynth_ParentPointer_RenameReplace(t *testing.T) {
+	mockDB := newParentPointerMockDB()
+	// Source file exists
+	mockDB.resolvePathResults = []db.PathSegment{
+		{Depth: 1, ID: "uuid-lock", Name: "config.lock"},
+	}
+	mockDB.rowData = map[string]*mockRow{
+		"public.notes.uuid-lock": {
+			columns: []string{"id", "parent_id", "filename", "filetype", "body"},
+			values:  []interface{}{"uuid-lock", nil, "config.lock", "file", "new content"},
+		},
+	}
+	mockDB.latestVersionIDs = map[string]string{
+		"uuid-lock":   "version-lock",
+		"uuid-config": "version-config",
+	}
+
+	// Target "config" already exists -- resolveSynthPath for ["config"] returns uuid-config
+	mockDB.resolvePathCallCount = 0
+	originalResolveFn := mockDB.resolvePathFn
+	mockDB.resolvePathFn = func(ctx context.Context, schema, table string, segments []string) ([]db.PathSegment, error) {
+		// First call: resolve source ("config.lock")
+		if mockDB.resolvePathCallCount == 0 {
+			mockDB.resolvePathCallCount++
+			return []db.PathSegment{{Depth: 1, ID: "uuid-lock", Name: "config.lock"}}, nil
+		}
+		// Second call: resolve target ("config") -- exists
+		if mockDB.resolvePathCallCount == 1 {
+			mockDB.resolvePathCallCount++
+			return []db.PathSegment{{Depth: 1, ID: "uuid-config", Name: "config"}}, nil
+		}
+		if originalResolveFn != nil {
+			return originalResolveFn(ctx, schema, table, segments)
+		}
+		return nil, nil
+	}
+
+	// Track DeleteAndUpdate calls
+	deleteAndUpdateCalled := false
+	mockDB.deleteAndUpdateFunc = func(ctx context.Context, schema, table string, deletePK *db.PKMatch, updatePK *db.PKMatch, updateCols []string, updateVals []interface{}) error {
+		deleteAndUpdateCalled = true
+		assert.Equal(t, "uuid-config", deletePK.Values[0], "should delete the target file")
+		assert.Equal(t, "uuid-lock", updatePK.Values[0], "should update the source file")
+		return nil
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	fsErr := ops.Rename(ctx, "/notes/config.lock", "/notes/config")
+	require.Nil(t, fsErr, "Rename-as-replace should succeed")
+
+	assert.True(t, deleteAndUpdateCalled, "should call DeleteAndUpdate for replace")
+
+	// Should have two log entries: delete + rename
+	require.Len(t, mockDB.logEntries, 2)
+	assert.Equal(t, "delete", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-config", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "rename", mockDB.logEntries[1].opType)
+	assert.Equal(t, "uuid-lock", mockDB.logEntries[1].fileID)
+}
+
+// TestSynth_ParentPointer_RenameNoReplace verifies that simple rename (no target)
+// uses the existing UpdateRow path, not DeleteAndUpdate.
+func TestSynth_ParentPointer_RenameNoReplace(t *testing.T) {
+	mockDB := newParentPointerMockDB()
+	mockDB.resolvePathResults = []db.PathSegment{
+		{Depth: 1, ID: "uuid-file", Name: "old.md"},
+	}
+	mockDB.rowData = map[string]*mockRow{
+		"public.notes.uuid-file": {
+			columns: []string{"id", "parent_id", "filename", "filetype", "body"},
+			values:  []interface{}{"uuid-file", nil, "old.md", "file", "content"},
+		},
+	}
+	mockDB.latestVersionIDs = map[string]string{
+		"uuid-file": "version-abc",
+	}
+
+	// Target doesn't exist -- resolveSynthPath for ["new.md"] returns empty
+	mockDB.resolvePathCallCount = 0
+	mockDB.resolvePathFn = func(ctx context.Context, schema, table string, segments []string) ([]db.PathSegment, error) {
+		if mockDB.resolvePathCallCount == 0 {
+			mockDB.resolvePathCallCount++
+			return []db.PathSegment{{Depth: 1, ID: "uuid-file", Name: "old.md"}}, nil
+		}
+		// Second call: target doesn't exist
+		mockDB.resolvePathCallCount++
+		return nil, nil
+	}
+
+	deleteAndUpdateCalled := false
+	mockDB.deleteAndUpdateFunc = func(ctx context.Context, schema, table string, deletePK *db.PKMatch, updatePK *db.PKMatch, updateCols []string, updateVals []interface{}) error {
+		deleteAndUpdateCalled = true
+		return nil
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	fsErr := ops.Rename(ctx, "/notes/old.md", "/notes/new.md")
+	require.Nil(t, fsErr, "Simple rename should succeed")
+
+	assert.False(t, deleteAndUpdateCalled, "should NOT call DeleteAndUpdate for simple rename")
+	require.Len(t, mockDB.logEntries, 1)
+	assert.Equal(t, "rename", mockDB.logEntries[0].opType)
+}
+
 // --- Reserved dotfile name tests ---
 
 // TestSynth_WriteReservedName verifies that creating a file with a reserved name fails.

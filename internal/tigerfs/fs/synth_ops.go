@@ -1246,12 +1246,30 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 			}
 		}
 
-		err := o.db.UpdateRow(ctx, schema, table, db.SinglePKMatch(info.Roles.PrimaryKey, fileID), updateCols, updateVals)
-		if err != nil {
-			return &FSError{Code: ErrIO, Message: "failed to rename synth file", Cause: err}
+		// Check if target file already exists (POSIX rename-as-replace).
+		// If it does, atomically delete the target and rename the source.
+		targetFileID, targetExists := o.resolveSynthPath(ctx, schema, table, newParts)
+		if targetExists && targetFileID != fileID {
+			err := o.db.DeleteAndUpdate(ctx, schema, table,
+				db.SinglePKMatch(info.Roles.PrimaryKey, targetFileID),
+				db.SinglePKMatch(info.Roles.PrimaryKey, fileID),
+				updateCols, updateVals)
+			if err != nil {
+				return &FSError{Code: ErrIO, Message: "failed to rename synth file", Cause: err}
+			}
+
+			// Log both operations: delete of target, then rename of source
+			o.logSynthOp(ctx, schema, table, info, "delete", targetFileID, newFilename)
+			o.logSynthOp(ctx, schema, table, info, "rename", fileID, newFilename)
+		} else {
+			err := o.db.UpdateRow(ctx, schema, table, db.SinglePKMatch(info.Roles.PrimaryKey, fileID), updateCols, updateVals)
+			if err != nil {
+				return &FSError{Code: ErrIO, Message: "failed to rename synth file", Cause: err}
+			}
+
+			o.logSynthOp(ctx, schema, table, info, "rename", fileID, newFilename)
 		}
 
-		o.logSynthOp(ctx, schema, table, info, "rename", fileID, newFilename)
 		o.statCache.invalidate(schema, table)
 		o.pathCache.invalidate(schema, table)
 		return nil
