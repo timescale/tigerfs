@@ -12,9 +12,41 @@ You can use TigerFS in two ways:
 large databases, chain filters into paths that push down to SQL:
 `.by/customer_id/123/.order/created_at/.last/10/.export/json`. No database client or SQL needed, and ships with agent skills.
 
-Both modes are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. 
+Both modes are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
 
-TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
+### Agent Skills
+
+TigerFS ships with agent skills for Claude Code, Gemini CLI, and Codex -- automatically installed at mount time. You don't need to learn the filesystem interface. Just ask:
+
+- "Create a workspace for my notes"
+- "What changed since the savepoint?"
+- "Undo agent-7's changes"
+- "Show me the last 10 orders by customer 123"
+
+The skills teach your agent the filesystem paths, diff commands, and undo workflows. For details on what's underneath, read on.
+
+### The Filesystem is the API
+
+Your data lives in regular files and directories. Metadata, queries, and operations live in dot-directories -- invisible by default, always available:
+
+```bash
+$ ls /mnt/db/notes/
+hello.md  tutorials/
+
+$ ls -a /mnt/db/notes/
+.  ..  .history/  .log/  .savepoint/  .undo/  hello.md  tutorials/
+```
+
+Dot-directories are the control surface. Navigate them to browse history, filter data, undo changes, and manage schemas -- all through the same filesystem interface.
+
+| File-first | Data-first |
+|------------|------------|
+| `.history/` -- past versions | `.info/` -- table metadata |
+| `.log/` -- operation log with diffs | `.by/` -- index lookups |
+| `.savepoint/` -- bookmarks for undo | `.filter/` -- column filtering |
+| `.undo/` -- preview and apply undo | `.order/`, `.first/`, `.last/` -- sort and paginate |
+| `.build/` -- create workspaces | `.export/`, `.import/` -- bulk I/O |
+| | `.create/`, `.modify/`, `.delete/` -- schema management |
 
 ## Quick Start
 
@@ -61,7 +93,7 @@ ls /mnt/db/users/                              # list rows
 cat /mnt/db/users/1.json                       # read a row
 cat /mnt/db/users/.by/email/alice@co.com.json  # index lookup
 
-# Chain filters, ordering, pagination — pushed down as one SQL query
+# Chain filters, ordering, pagination — pushed down as one SQL query and bulk export
 cat /mnt/db/orders/.by/customer_id/1/.order/created_at/.last/5/.export/json
 ```
 
@@ -404,21 +436,28 @@ For development guidelines, architecture details, and the full specification, se
 
 TigerFS is early, but the core idea is stable: transactional, concurrent files as the foundation for human-agent collaboration.
 
-**v0.5.0.** Performance and observability — dramatically fewer SQL queries, flexible logging, and column projection.
+**v0.7.0.** Undo and recovery -- savepoints, operation log, and atomic undo for safe exploration.
+
+**v0.6.0.** Dedicated tigerfs schema, security hardening, and unified demo.
 
 **Highlights:**
-- Markdown workspaces with YAML frontmatter, directory hierarchies, and automatic version history
-- Savepoints, undo, and operation log for safe exploration and atomic rollback
+- Markdown and plaintext workspaces with YAML frontmatter, directory hierarchies, and version history
+- Savepoints, undo, and operation log -- create checkpoints, preview changes, roll back atomically
+- Per-user undo -- multiple agents with separate identities, selectively undo one agent's work
+- Auto-savepoints -- detect session boundaries on inactivity gaps
+- Relational directory model with parent-pointer hierarchy and UUIDv7 identifiers
+- Dedicated tigerfs schema with migration framework (`tigerfs migrate`)
+- TLS enforcement, SQL injection hardening, and credential sanitization
+- Agent skill auto-install for Claude Code, Gemini CLI, and Codex
 - Cloud backends: mount, create, and fork Tiger Cloud and Ghost databases by service ID
 - Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, `.columns/`, chained pagination, `.export/`)
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
 - Full CRUD with multiple formats (TSV, CSV, JSON, YAML), index navigation, and PATCH semantics
-- Binary distribution via GoReleaser with install script (`curl -fsSL https://install.tigerfs.io | sh`)
+- Binary distribution via GoReleaser with install script
 - Multi-tier stat caching and query reduction for fast operations over remote databases
 
 **Planned:**
 - Tables without primary keys (read-only via ctid)
-- TimescaleDB hypertables (time-based navigation)
 - Windows support
 
 ## Contributing
