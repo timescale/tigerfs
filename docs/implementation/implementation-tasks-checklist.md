@@ -308,7 +308,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | ✅ | 14.1 | Scaffolding + Infrastructure (CLI, Docker, mount, teardown) | ~9470 |
 | ✅ | 14.2 | State Tracking + Validation (WorkspaceState, stack, ValidateWorkspace) | ~9500 |
 | ✅ | 14.3 | Operations + Content Generation (all FS ops, size distribution, pools) | ~9530 |
-| ⬜ | 14.4 | Runner + Undo + End-to-End (test loop, undo ops, wiring) | ~9560 |
+| ✅ | 14.4 | Runner + Undo + End-to-End (test loop, undo ops, wiring) | ~9560 |
 | ⬜ | 14.5 | README Finalization (architecture docs, usage guide) | ~9590 |
 
 ---
@@ -334,5 +334,5 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 11: Skills | 1 | 1 | 100% |
 | Phase 12: Undo and Recovery | 14 | 14 | 100% |
 | Phase 13: Relational Directory Structure | 12 | 12 | 100% |
-| Phase 14: Stress Test | 3 | 5 | 60% |
-| **Total** | **131** | **154** | **85%** |
+| Phase 14: Stress Test | 4 | 5 | 80% |
+| **Total** | **132** | **154** | **86%** |
