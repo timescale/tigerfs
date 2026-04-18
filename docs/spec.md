@@ -581,6 +581,8 @@ SELECT id FROM users ORDER BY id;
 
 **Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings. Similarly, `.all/` is accessible but not listed (it is equivalent to the table listing itself). Pagination directories (`.first/`, `.last/`, `.sample/`) appear in listings but show empty contents -- navigate directly with a number, e.g., `.first/50/`. These are hidden from `ls` to prevent recursive scanners (`rm -rf`, `find`, AI agents) from triggering expensive or infinite directory traversals.
 
+**Virtual directories in file-first workspaces:** `.history/`, `.log/`, `.savepoint/`, `.undo/` only appear at the workspace root level, not inside subdirectories. Pipeline capabilities (`.by/`, `.filter/`, `.order/`, `.export/`) inside `.log/` and `.savepoint/` are accessible by explicit path but hidden from `ls` listings. A configurable `max_pipeline_depth` (default: 10) provides defense-in-depth by suppressing capability listings after N chained pipeline operations.
+
 **Constraint:** Tables > `dir_listing_limit` (default: 1,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
 
 #### Indexed Lookups
@@ -1646,6 +1648,7 @@ connection:
 # Filesystem behavior
 filesystem:
   dir_listing_limit: 1000            # Max rows returned by ls (prevents huge listings)
+  max_pipeline_depth: 10            # Max chained pipeline ops before capabilities hidden (0=unlimited)
   trailing_newlines: true            # Add \n to column and .count file reads
   no_filename_extensions: false      # Disable type-based extensions (.txt, .json, etc.)
   attr_timeout: 1                    # FUSE attribute cache (seconds, FUSE backend only)
@@ -1756,6 +1759,7 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 **Filesystem Behavior:**
 ```bash
 --max-ls-rows N           Large table threshold (default: 1000)
+--max-pipeline-depth N    Max chained pipeline ops in ReadDir (default: 10; 0=unlimited)
 --unlimited-ls            Disable row limit for ls operations
 --read-only               Mount as read-only
 --allow-other             Allow other users to access mount (FUSE)

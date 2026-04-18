@@ -1090,6 +1090,7 @@ func processLog(result *ParsedPath, remaining []string) (int, *FSError) {
 	result.OrigTableName = result.Context.TableName
 	result.Context.TableName = result.Context.TableName + "_log"
 	result.Context.Schema = "tigerfs"
+	result.Context.HideCapabilities = true // suppress pipeline dirs in listing
 	result.Type = PathLog
 
 	if len(remaining) == 1 {
@@ -1114,6 +1115,7 @@ func processSavepoint(result *ParsedPath, remaining []string) (int, *FSError) {
 	result.OrigTableName = result.Context.TableName
 	result.Context.TableName = result.Context.TableName + "_savepoint"
 	result.Context.Schema = "tigerfs"
+	result.Context.HideCapabilities = true // suppress pipeline dirs in listing
 	result.Type = PathSavepoint
 
 	if len(remaining) == 1 {

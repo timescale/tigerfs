@@ -656,8 +656,17 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	// Build entries: capability directories first, then rows
 	entries := make([]Entry, 0, len(rows)+15)
 
+	// Check if pipeline depth exceeds the configured maximum.
+	// When exceeded, hide capability directories to prevent infinite recursion
+	// from recursive scanners (rm -rf, find, agents). Rows are still listed.
+	maxDepth := o.config.MaxPipelineDepth
+	depthExceeded := maxDepth > 0 && fsCtx.PipelineDepth >= maxDepth
+
 	// Add capability directories based on what's available in current context
-	if fsCtx.HasPipelineOperations() {
+	if fsCtx.HideCapabilities || depthExceeded {
+		// Depth exceeded: only show .info for metadata, no further pipeline capabilities
+		entries = append(entries, Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	} else if fsCtx.HasPipelineOperations() {
 		// Use available capabilities based on pipeline state
 		for _, cap := range fsCtx.AvailableCapabilities() {
 			entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})

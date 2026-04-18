@@ -211,8 +211,9 @@ func extractModTime(columns []string, values []interface{}, info *synth.ViewInfo
 	return info.CachedMountTime
 }
 
-// synthUndoDirs returns the undo-related directory entries (.history/, .log/, .savepoint/, .undo/)
-// for a history-enabled synth app. Returns nil if history is not enabled.
+// synthUndoDirs returns the undo-related directory entries for a history-enabled
+// synth app at the workspace ROOT level. Returns nil if history is not enabled.
+// Includes .history/, .log/, .savepoint/, .undo/.
 func synthUndoDirs(info *synth.ViewInfo) []Entry {
 	if !info.HasHistory {
 		return nil
@@ -224,6 +225,13 @@ func synthUndoDirs(info *synth.ViewInfo) []Entry {
 		{Name: DirSavepoint, IsDir: true, Mode: os.ModeDir | 0755, ModTime: t},
 		{Name: DirUndo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: t},
 	}
+}
+
+// synthSubdirDirs returns virtual directory entries for subdirectories.
+// Subdirectories do NOT get .log, .savepoint, .undo (those are workspace-level).
+// Returns nil -- subdirectories only contain real files and directories.
+func synthSubdirDirs(_ *synth.ViewInfo) []Entry {
+	return nil
 }
 
 // filterReservedNames removes entries whose names conflict with TigerFS virtual
@@ -1355,7 +1363,8 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 
 		o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
 		children := filterReservedNames(o.buildEntriesFromRows(columns, rows, info))
-		children = append(synthUndoDirs(info), children...)
+		// Subdirectories: no virtual dirs (.log, .savepoint, .undo are workspace-level only)
+		children = append(synthSubdirDirs(info), children...)
 		return children, nil
 	}
 
@@ -1371,9 +1380,7 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 
 	o.primeSynthStatCache(fsCtx.Schema, fsCtx.TableName, prefix, columns, rows, info)
 	children := filterReservedNames(o.filterHierarchicalChildren(columns, rows, prefix, info))
-	if info.HasHistory {
-		children = append([]Entry{{Name: DirHistory, IsDir: true, Mode: os.ModeDir | 0555, ModTime: info.CachedMountTime}}, children...)
-	}
+	// Old model subdirectories: no virtual dirs
 	return children, nil
 }
 

@@ -163,7 +163,8 @@ func TestWriteFile_InsertRow_BareFormat_Rejected(t *testing.T) {
 
 	require.NotNil(t, err, "bare-path INSERT should be rejected")
 	assert.Equal(t, ErrInvalidArgument, err.Code)
-	assert.Contains(t, err.Message, "format suffix required")
+	assert.Contains(t, err.Message, "without a format suffix")
+	assert.Contains(t, err.Hint, "test-cat.json", "hint should suggest suffixed alternatives")
 	assert.False(t, mockDB.insertCalled, "should not have attempted INSERT")
 }
 

@@ -43,6 +43,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var noFilenameExtensions bool
 	var queryTimeout time.Duration
 	var dirFilterLimit int
+	var maxPipelineDepth int
 	var legacyFuse bool
 	var insecureNoSSL bool
 	var userID string
@@ -155,6 +156,9 @@ Examples:
 			if dirFilterLimit > 0 {
 				cfg.DirFilterLimit = dirFilterLimit
 			}
+			if cmd.Flags().Changed("max-pipeline-depth") {
+				cfg.MaxPipelineDepth = maxPipelineDepth
+			}
 			if legacyFuse {
 				cfg.LegacyFuse = true
 			}
@@ -236,6 +240,7 @@ Examples:
 	cmd.Flags().BoolVar(&noFilenameExtensions, "no-filename-extensions", false, "disable automatic file extensions based on column type")
 	cmd.Flags().DurationVar(&queryTimeout, "query-timeout", 0, "global query timeout (e.g., 30s, 1m); 0 uses config default")
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
+	cmd.Flags().IntVar(&maxPipelineDepth, "max-pipeline-depth", 0, "max chained pipeline ops before capabilities are hidden; 0 uses config default")
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
 	cmd.Flags().StringVar(&userID, "user-id", "", "user identity for undo log entries (also: TIGERFS_USER_ID env)")
