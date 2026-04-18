@@ -40,6 +40,66 @@ func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *F
 	return o.writeFileWithParsed(ctx, parsed, data)
 }
 
+// ValidateCreate reports an FSError if creating a regular file at this path
+// would conflict with a future directory inode on NFS.
+//
+// The only case we reject: a bare-path write (no format suffix) that would
+// create a new row in a non-synth-view table. The server later exposes that
+// row as a directory in READDIRPLUS, but if the kernel already cached a
+// file-typed positive dentry from Create, the entry gets suppressed from
+// `ls` because the inode types disagree. Failing at Create time prevents
+// the file-typed dentry from ever forming.
+//
+// Returns nil for every other path: synth views (bare filename is user
+// content), format-suffix writes (distinct file inode from the row
+// directory), non-row paths (columns, DDL, undo, etc.), existing rows, and
+// any path the parser cannot fully resolve. Adapters should call this
+// before issuing a file handle.
+func (o *Operations) ValidateCreate(ctx context.Context, filePath string) *FSError {
+	parsed, err := o.parsePath(ctx, filePath)
+	if err != nil {
+		return nil
+	}
+	o.resolveSynthHierarchy(ctx, parsed)
+	if parsed.Type != PathRow || parsed.Format != "" {
+		return nil
+	}
+	fsCtx := parsed.Context
+	if fsCtx == nil {
+		return nil
+	}
+	// Synth views route bare-path writes through writeSynthFile; the
+	// filename is user content, not a PK. Mirrors writeRowFile's dispatch.
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return nil
+	}
+	pk, mErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	if mErr != nil {
+		return nil
+	}
+	match, dErr := pk.Decode(parsed.PrimaryKey)
+	if dErr != nil {
+		return nil
+	}
+	if _, gErr := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match); gErr == nil {
+		return nil // row exists; writeRowFile will UPDATE
+	}
+	return newBarePathRejection(parsed.PrimaryKey)
+}
+
+// newBarePathRejection builds the FSError returned for bare-path new-row
+// writes. Shared by ValidateCreate (adapter-level pre-check) and writeRowFile
+// (defense-in-depth guard) so the user-visible message, hint, and cause
+// stay in lockstep.
+func newBarePathRejection(pk string) *FSError {
+	return &FSError{
+		Code:    ErrInvalidArgument,
+		Message: fmt.Sprintf("cannot create %q without a format suffix", pk),
+		Hint:    fmt.Sprintf("retry as %q, %q, or %q (bare-path writes conflict with the row directory inode on NFS)", pk+".json", pk+".tsv", pk+".csv"),
+		Cause:   errors.New("format suffix required for new rows"),
+	}
+}
+
 // writeFileWithParsed implements write logic for a parsed path.
 func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	switch parsed.Type {
@@ -164,13 +224,13 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 		// with the DIRECTORY inode returned by READDIRPLUS, causing the entry to silently
 		// disappear from ls. Format suffixes avoid this because the write path (e.g.,
 		// "test-cat.tsv") differs from the listing name ("test-cat").
+		//
+		// Adapters call ValidateCreate before issuing a file handle; this guard
+		// stays as defense-in-depth for callers that bypass the adapter (tests,
+		// direct WriteFile). Both paths share newBarePathRejection so the
+		// user-visible error stays identical.
 		if parsed.Format == "" {
-			return &FSError{
-				Code:    ErrInvalidArgument,
-				Message: fmt.Sprintf("cannot create %q without a format suffix", parsed.PrimaryKey),
-				Hint:    fmt.Sprintf("retry as %q, %q, or %q (bare-path writes conflict with the row directory inode on NFS)", parsed.PrimaryKey+".json", parsed.PrimaryKey+".tsv", parsed.PrimaryKey+".csv"),
-				Cause:   errors.New("format suffix required for new rows"),
-			}
+			return newBarePathRejection(parsed.PrimaryKey)
 		}
 
 		// Merge PK columns from the path if not already in the data.
