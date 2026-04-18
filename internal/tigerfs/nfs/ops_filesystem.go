@@ -499,6 +499,25 @@ func (f *OpsFilesystem) Create(filename string) (billy.File, error) {
 	filename = normalizePath(filename)
 	logging.Info("OpsFilesystem.Create", zap.String("filename", filename))
 
+	// Reject bare-path new-row writes here, before we return a file handle.
+	// If we let Create succeed and fail at Close, the macOS NFS client has
+	// already cached a positive file-typed dentry for a name the server will
+	// later expose as a directory, and `ls` suppresses the mismatched entry.
+	// f.ops is nil in cache-only unit tests; skip validation in that case.
+	if f.ops != nil {
+		vctx, vcancel := ctx()
+		if fsErr := f.ops.ValidateCreate(vctx, filename); fsErr != nil {
+			vcancel()
+			logging.Error("OpsFilesystem.Create rejected",
+				zap.String("filename", filename),
+				zap.String("message", fsErr.Message),
+				zap.String("hint", fsErr.Hint),
+				zap.Error(fsErr.Cause))
+			return nil, os.ErrInvalid
+		}
+		vcancel()
+	}
+
 	// Get or create cached file entry with O_CREATE|O_TRUNC semantics
 	cached := f.getOrCreateCachedFile(filename, os.O_CREATE|os.O_TRUNC)
 
@@ -549,6 +568,25 @@ func (f *OpsFilesystem) Open(filename string) (billy.File, error) {
 func (f *OpsFilesystem) OpenFile(filename string, flag int, perm os.FileMode) (billy.File, error) {
 	filename = normalizePath(filename)
 	logging.Info("OpsFilesystem.OpenFile", zap.String("filename", filename), zap.Int("flag", flag))
+
+	// When the client opens with O_CREATE, we may be about to materialize a
+	// new file handle. Apply the same bare-path rejection as Create so the
+	// kernel never caches a file-typed dentry for a name the server will
+	// later expose as a directory. f.ops is nil in cache-only unit tests.
+	if flag&os.O_CREATE != 0 && f.ops != nil {
+		vctx, vcancel := ctx()
+		if fsErr := f.ops.ValidateCreate(vctx, filename); fsErr != nil {
+			vcancel()
+			logging.Error("OpsFilesystem.OpenFile rejected",
+				zap.String("filename", filename),
+				zap.Int("flag", flag),
+				zap.String("message", fsErr.Message),
+				zap.String("hint", fsErr.Hint),
+				zap.Error(fsErr.Cause))
+			return nil, os.ErrInvalid
+		}
+		vcancel()
+	}
 
 	isWrite := flag&(os.O_WRONLY|os.O_RDWR|os.O_CREATE|os.O_TRUNC) != 0
 
