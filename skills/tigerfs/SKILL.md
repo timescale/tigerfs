@@ -21,11 +21,11 @@ Each directory in a TigerFS mount is either file-first or data-first:
 mount/
 ├── notes/                  # File-first (markdown workspace)
 │   ├── hello.md
-│   ├── tutorials/
-│   ├── .history/           # Versioned history (if enabled)
-│   ├── .log/               # Operation log (create, edit, rename, delete)
-│   ├── .savepoint/         # Named bookmarks for undo
-│   └── .undo/              # Preview and apply undo operations
+│   ├── tutorials/          # Subdirectories: only real files, no virtual dirs
+│   ├── .history/           # Versioned history (root level only)
+│   ├── .log/               # Operation log (root level only; pipeline hidden from ls)
+│   ├── .savepoint/         # Named bookmarks for undo (root level only)
+│   └── .undo/              # Preview and apply undo operations (root level only)
 ├── snippets/               # File-first (plain text workspace)
 │   └── bash-loop.txt
 ├── .tables/                # Backing tables in tigerfs schema
@@ -180,12 +180,12 @@ See [data.md](data.md) for the full reference.
 
 ## Directory Scanning Safety
 
-TigerFS virtual directories can trigger expensive or unbounded queries when recursively scanned. **Never use recursive Glob, `find`, or `ls -R` on these directories.** Always use targeted access patterns from the Quick Reference above.
+**Virtual directory layout:** `.history/`, `.log/`, `.savepoint/`, `.undo/` only appear at the **workspace root** level, not inside subdirectories. Subdirectories contain only real files and folders. Pipeline capabilities (`.by/`, `.filter/`, `.order/`, `.export/`) inside `.log/` and `.savepoint/` are accessible by explicit path but hidden from `ls` to prevent recursive scanner blowup.
 
-**Never recursively scan:**
+**Never recursively scan these directories** -- always use targeted access patterns from the Quick Reference above:
+- `.log/` -- pipeline capabilities hidden from listing, use `.log/.last/10/.export/json`
+- `.savepoint/` -- same as `.log/`, use explicit paths
 - `.history/` -- one entry per file version; grows with every edit
-- `.log/` -- data-first pipeline with unbounded depth via chaining
-- `.savepoint/` -- data-first pipeline (same structure as `.log/`)
 - `.undo/` -- preview trees that mirror the affected file hierarchy
 - `.by/<column>/` -- lists every distinct value; each expands to filtered rows
 - `.filter/<column>/` -- same as `.by/` with higher limit

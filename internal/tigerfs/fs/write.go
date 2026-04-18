@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -166,7 +167,9 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 		if parsed.Format == "" {
 			return &FSError{
 				Code:    ErrInvalidArgument,
-				Message: "format suffix required to create new rows (use .tsv, .json, or .csv)",
+				Message: fmt.Sprintf("cannot create %q without a format suffix", parsed.PrimaryKey),
+				Hint:    fmt.Sprintf("retry as %q, %q, or %q (bare-path writes conflict with the row directory inode on NFS)", parsed.PrimaryKey+".json", parsed.PrimaryKey+".tsv", parsed.PrimaryKey+".csv"),
+				Cause:   errors.New("format suffix required for new rows"),
 			}
 		}
 

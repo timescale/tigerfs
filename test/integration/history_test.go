@@ -493,13 +493,18 @@ func TestSynth_HistoryPerDirectory(t *testing.T) {
 		[]byte("---\ntitle: README\n---\n\nReadme v2.\n"))
 	require.Nil(t, fsErr, "WriteFile readme v2 should succeed")
 
-	// 1. Subdirectory listing should include .history/
+	// 1. Subdirectory listing should NOT include virtual dirs
+	// (.log, .savepoint, .undo, .history are workspace-level only)
 	entries, fsErr := ops.ReadDir(ctx, "/hist_pdir/getting-started")
 	require.Nil(t, fsErr, "ReadDir getting-started should succeed")
 	names := fsEntryNames(entries)
-	assert.Contains(t, names, ".history", "subdirectory should contain .history")
+	assert.NotContains(t, names, ".history", "subdirectory should NOT contain .history (workspace-level only)")
+	assert.NotContains(t, names, ".log", "subdirectory should NOT contain .log")
+	assert.NotContains(t, names, ".savepoint", "subdirectory should NOT contain .savepoint")
+	assert.NotContains(t, names, ".undo", "subdirectory should NOT contain .undo")
 
-	// 2. Subdirectory .history/ should show only local files (not root files)
+	// 2. Subdirectory .history/ should still be accessible by explicit path
+	// and show only local files (not root files)
 	entries, fsErr = ops.ReadDir(ctx, "/hist_pdir/getting-started/.history")
 	require.Nil(t, fsErr, "ReadDir getting-started/.history should succeed")
 	names = fsEntryNames(entries)

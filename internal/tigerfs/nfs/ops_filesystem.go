@@ -2,6 +2,7 @@ package nfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -1539,9 +1540,13 @@ func (f *memFile) Close() error {
 			logging.Error("memFile.Close WriteFile failed",
 				zap.String("path", filePath),
 				zap.String("message", fsErr.Message),
+				zap.String("hint", fsErr.Hint),
 				zap.Error(fsErr.Cause))
 			f.fs.removeFromCache(filePath)
-			return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+			if fsErr.Cause != nil {
+				return fmt.Errorf("%s: %w", fsErr.Message, fsErr.Cause)
+			}
+			return errors.New(fsErr.Message)
 		}
 
 		// For virtual directory entries (savepoints, .info/), remove the file

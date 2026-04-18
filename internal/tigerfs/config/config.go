@@ -41,8 +41,9 @@ type Config struct {
 	EntryTimeout         time.Duration `mapstructure:"entry_timeout"`
 
 	// Query Safety
-	QueryTimeout   time.Duration `mapstructure:"query_timeout"`    // Global statement timeout for all queries (default: 30s)
-	DirFilterLimit int           `mapstructure:"dir_filter_limit"` // Row count threshold for .filter/ value listing (default: 100000)
+	QueryTimeout     time.Duration `mapstructure:"query_timeout"`      // Global statement timeout for all queries (default: 30s)
+	DirFilterLimit   int           `mapstructure:"dir_filter_limit"`   // Row count threshold for .filter/ value listing (default: 100000)
+	MaxPipelineDepth int           `mapstructure:"max_pipeline_depth"` // Max chained pipeline ops before capabilities are hidden (default: 10; 0=unlimited)
 
 	// Metadata
 	MetadataRefreshInterval           time.Duration `mapstructure:"metadata_refresh_interval"`            // Catalog TTL: schemas/tables/views (default: 10s)
@@ -97,6 +98,7 @@ func Init() error {
 	viper.SetDefault("entry_timeout", 1*time.Second)
 	viper.SetDefault("query_timeout", 30*time.Second)
 	viper.SetDefault("dir_filter_limit", 100000)
+	viper.SetDefault("max_pipeline_depth", 10)
 	viper.SetDefault("metadata_refresh_interval", 10*time.Second)
 	viper.SetDefault("structural_metadata_refresh_interval", 5*time.Minute)
 	viper.SetDefault("nfs_streaming_threshold", int64(10*1024*1024))

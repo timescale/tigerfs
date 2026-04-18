@@ -365,5 +365,6 @@ func TestSynth_Savepoint_BarePathRejected(t *testing.T) {
 	fsErr := ops.WriteFile(context.Background(), "/notes/.savepoint/my-checkpoint", data)
 	require.NotNil(t, fsErr)
 	assert.Equal(t, ErrInvalidArgument, fsErr.Code)
-	assert.Contains(t, fsErr.Message, "format suffix required")
+	assert.Contains(t, fsErr.Message, "without a format suffix")
+	assert.Contains(t, fsErr.Hint, "my-checkpoint.json", "hint should suggest suffixed alternatives")
 }
