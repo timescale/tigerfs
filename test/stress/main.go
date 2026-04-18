@@ -101,14 +101,8 @@ func runStart(cfg *Config) int {
 	fmt.Printf("Workspace path: %s/%s\n", infra.Mountpoint, cfg.Workspace)
 	fmt.Println()
 
-	// TODO: Run test iterations (commit 4)
-	fmt.Println("Test iterations not yet implemented.")
-	fmt.Println("Infrastructure is up. Press Ctrl-C to tear down.")
-
-	// Wait for signal (will be replaced by test loop in commit 4)
-	infra.WaitForSignal()
-
-	return 0
+	// Run test iterations
+	return RunAndExit(cfg, infra)
 }
 
 func runStop() int {
