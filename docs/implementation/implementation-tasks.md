@@ -9185,3 +9185,100 @@ Replaces path-encoded filenames with a parent-pointer model. Must be completed b
 2. All 45 verification scenarios from ADR-017 covered by tests
 3. Demo: directory rename produces one log entry, undo restores correctly
 4. `tigerfs migrate` relational-directories migration tested with integration test
+
+---
+
+## Phase 14: Stress Test (`tigerfs-stress`)
+
+A comprehensive, repeatable stress test for file-first workspaces. Exercises all filesystem operations (create, edit, rename, move, delete files and directories) and all undo operations (single undo by log_id, multi-op undo to log_id, undo to savepoint). Deterministic via PRNG seeding, self-verifying via content hashing, self-contained (spins up own Docker PostgreSQL + TigerFS). All operations go through the real mounted filesystem -- the stress tester is a pure filesystem client with no tigerfs internal imports.
+
+**Location:** `test/stress/`
+**Binary:** `go build -o bin/tigerfs-stress ./test/stress` (not packaged with releases)
+
+### Task 14.1: Scaffolding + Infrastructure
+
+**Objective:** Standalone binary that spins up Docker PostgreSQL, builds and mounts TigerFS, creates a workspace, and tears down cleanly on exit or via `stop` command.
+
+**Files:** `test/stress/main.go`, `test/stress/infra.go`, `test/stress/docker-compose.yml`, `test/stress/README.md`
+**Tasks:**
+1. CLI parsing with `flag` package: `start` and `stop` subcommands, all flags (--seed, --iterations, --debug, --keep, --workspace, --large-files, --many-files, --validate-every)
+2. Infrastructure lifecycle: Docker compose up (timescale/timescaledb-ha:pg18, port 5433), pg_isready wait loop, tigerfs build, mount to `/tmp/tigerfs-stress-<timestamp>`, workspace creation via `.build/`
+3. Teardown: kill tigerfs (SIGTERM then SIGKILL), unmount (diskutil/umount), remove mountpoint, docker compose down -v, remove PID/info files
+4. Signal handling: trap SIGINT/SIGTERM for clean teardown when Ctrl-C'd
+5. `stop` command: read `/tmp/tigerfs-stress.info`, execute teardown from another terminal
+6. Initial README with build instructions and flag reference
+
+### Task 14.2: State Tracking + Validation
+
+**Objective:** In-memory expected state tracking with push/pop stack for undo rollback, and a standalone validation function that compares expected state against the actual mounted filesystem.
+
+**Depends on:** 14.1
+**Files:** `test/stress/state.go`, `test/stress/state_test.go`, `test/stress/validate_test.go`
+**Tasks:**
+1. `WorkspaceState` struct: `Files map[string]string` (path to md5 hash), `Dirs map[string]bool`
+2. Deep copy function for WorkspaceState
+3. `StateStack`: push before every operation, pop on undo_single, restore to savepoint index on undo_to_savepoint, restore to iteration on undo_to_id. `savepoints map[string]int` for savepoint-to-stack-index mapping
+4. `ValidateWorkspace(wsPath, expected)`: walk filesystem skipping dotfiles/virtual dirs, compute md5 per file, compare to expected, detect missing/unexpected/mismatched files
+5. `SnapshotHash(wsPath)`: deterministic hash of sorted "relpath:filehash" lines
+6. Unit tests: deep copy correctness, push/pop, savepoint restore, stack trim, ValidateWorkspace against real temp dirs (passing, unexpected file, missing file, hash mismatch, dotfile skipping)
+
+### Task 14.3: Operations + Content Generation
+
+**Objective:** All filesystem operations with deterministic PRNG-driven content generation, log-normal file size distribution, and directory density control.
+
+**Depends on:** 14.2
+**Files:** `test/stress/operations.go`, `test/stress/operations_test.go`
+**Tasks:**
+1. `SizeConfig` struct with default (max 100KB, typical ~5KB) and large (max 10MB, typical ~22KB) presets
+2. `generateFileSize(rng, cfg)`: log-normal distribution clamped to [64, MaxBytes]
+3. `generateContent(rng, title, targetSize)`: deterministic markdown filling target size
+4. `randomName(rng)`, `randomWords(rng, n)`: deterministic name/content generation
+5. File/dir pool management: `[]string` slices, capacity tracking per directory
+6. All filesystem operations: create_file, edit_file, rename_file, move_file, delete_file, create_dir, rename_dir, create_savepoint -- each takes `rng`, pools, state, wsPath; performs the real filesystem operation; updates expected state
+7. Directory density: default max 10 files/3 subdirs per dir, --many-files max 1000/20
+8. Unit tests: size bounds, content determinism with fixed seed, valid filenames
+
+### Task 14.4: Runner + Undo + End-to-End
+
+**Objective:** Main test loop with weighted operation selection, undo operations through the real filesystem, and full end-to-end wiring.
+
+**Depends on:** 14.3
+**Files:** `test/stress/runner.go`, `test/stress/undo.go`, `test/stress/runner_test.go`
+**Tasks:**
+1. Weighted operation selection: weighted random via `rng` with precondition checks. Re-roll on invalid preconditions, force create_file when nothing else possible
+2. Operation table with weights: create_file(25), edit_file(25), rename_file(10), move_file(10), delete_file(10), create_dir(5), rename_dir(5), create_savepoint(5), undo_single(3), undo_to_id(2), undo_to_savepoint(2)
+3. `undo_single`: read `.log/.last/1/.export/json`, parse LogEntry JSON, apply `.undo/id/<log_id>/.apply`, pop state stack
+4. `undo_to_id`: read `.log/.last/N/.export/json`, pick entry, apply `.undo/to-id/<log_id>/.apply`, restore state to stack index
+5. `undo_to_savepoint`: apply `.undo/to-savepoint/<name>/.apply`, restore state from savepoint snapshot
+6. `--validate-every N` logic: validate every N operations, always validate after undo
+7. Step logging to stdout, error reporting to stderr with seed for replay
+8. Wire runner into main.go start command: after infrastructure ready, run iterations, then teardown
+9. Unit tests: fixed seed produces identical operation sequence, empty pool re-roll, precondition checks
+
+### Task 14.5: README Finalization
+
+**Objective:** Complete documentation with architecture description and usage guide.
+
+**Depends on:** 14.4
+**Files:** `test/stress/README.md`
+**Tasks:**
+1. Expanded "What it is" section: stress test architecture, infrastructure lifecycle, PRNG-seeded operation loop, state tracking model (hash-based verification with push/pop stack), undo rollback testing approach
+2. Prerequisites (Docker, Go, macOS or Linux)
+3. Full flag reference table
+4. Examples: default, reproducible, large-scale, debug, keep-for-inspection
+5. What it tests: full operation list
+6. Stopping a run: `stop` command and Ctrl-C
+7. Interpreting output: stdout progress, stderr errors, tigerfs.log
+8. Replaying failures: copy seed, re-run with --seed
+9. Running unit tests: `go test ./test/stress/...`
+
+---
+
+## Verification (Phase 14)
+
+1. `go test ./test/stress/...` passes (unit tests for state, operations, validation, runner)
+2. `bin/tigerfs-stress start --seed 42 --iterations 20` completes with exit 0
+3. Same seed produces identical output across runs
+4. `bin/tigerfs-stress stop` cleanly tears down from another terminal
+5. Ctrl-C during a run triggers clean teardown
+6. `--large-files --many-files --iterations 50` completes without OOM or timeouts

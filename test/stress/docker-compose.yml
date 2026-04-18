@@ -1,0 +1,11 @@
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg18
+    environment:
+      POSTGRES_USER: testundo
+      POSTGRES_PASSWORD: testundo
+      POSTGRES_DB: testundo
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
