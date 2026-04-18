@@ -1,0 +1,510 @@
+package main
+
+import (
+	"fmt"
+	"math"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// SizeConfig controls the file size distribution.
+type SizeConfig struct {
+	MaxBytes  int
+	MeanLog   float64 // mu of underlying normal (log-space)
+	StdDevLog float64 // sigma of underlying normal (log-space)
+}
+
+// DensityConfig controls directory density limits.
+type DensityConfig struct {
+	MaxFilesPerDir   int
+	MaxSubdirsPerDir int
+}
+
+var (
+	defaultSizeConfig = SizeConfig{
+		MaxBytes:  100 * 1024, // 100KB
+		MeanLog:   8.5,        // ~5KB typical
+		StdDevLog: 1.5,        // spread: 500B - 50KB
+	}
+	largeSizeConfig = SizeConfig{
+		MaxBytes:  10 * 1024 * 1024, // 10MB
+		MeanLog:   10.0,              // ~22KB typical
+		StdDevLog: 2.5,               // spread: 1KB - 1MB common, occasional 10MB
+	}
+	defaultDensityConfig = DensityConfig{
+		MaxFilesPerDir:   10,
+		MaxSubdirsPerDir: 3,
+	}
+	manyFilesDensityConfig = DensityConfig{
+		MaxFilesPerDir:   1000,
+		MaxSubdirsPerDir: 20,
+	}
+)
+
+// OpConfig bundles all configuration for operations.
+type OpConfig struct {
+	Size    SizeConfig
+	Density DensityConfig
+}
+
+// NewOpConfig creates an OpConfig from CLI flags.
+func NewOpConfig(largeFiles, manyFiles bool) *OpConfig {
+	cfg := &OpConfig{
+		Size:    defaultSizeConfig,
+		Density: defaultDensityConfig,
+	}
+	if largeFiles {
+		cfg.Size = largeSizeConfig
+	}
+	if manyFiles {
+		cfg.Density = manyFilesDensityConfig
+	}
+	return cfg
+}
+
+// Pools tracks available files and directories for operation targeting.
+type Pools struct {
+	Files []string // relative paths of existing files
+	Dirs  []string // relative paths of existing directories (empty string = root)
+}
+
+// NewPools creates pools with just the root directory.
+func NewPools() *Pools {
+	return &Pools{
+		Files: nil,
+		Dirs:  []string{""}, // root
+	}
+}
+
+// AddFile adds a file to the pool.
+func (p *Pools) AddFile(relPath string) {
+	p.Files = append(p.Files, relPath)
+}
+
+// RemoveFile removes a file from the pool.
+func (p *Pools) RemoveFile(relPath string) {
+	for i, f := range p.Files {
+		if f == relPath {
+			p.Files = append(p.Files[:i], p.Files[i+1:]...)
+			return
+		}
+	}
+}
+
+// AddDir adds a directory to the pool.
+func (p *Pools) AddDir(relPath string) {
+	p.Dirs = append(p.Dirs, relPath)
+}
+
+// RemoveDir removes a directory and all files/subdirs under it from pools.
+func (p *Pools) RemoveDir(relPath string) {
+	prefix := relPath + "/"
+
+	// Remove the dir itself
+	for i, d := range p.Dirs {
+		if d == relPath {
+			p.Dirs = append(p.Dirs[:i], p.Dirs[i+1:]...)
+			break
+		}
+	}
+
+	// Remove subdirs
+	filtered := p.Dirs[:0]
+	for _, d := range p.Dirs {
+		if !strings.HasPrefix(d, prefix) {
+			filtered = append(filtered, d)
+		}
+	}
+	p.Dirs = filtered
+
+	// Remove files
+	filteredFiles := p.Files[:0]
+	for _, f := range p.Files {
+		if !strings.HasPrefix(f, prefix) && filepath.Dir(f) != relPath {
+			filteredFiles = append(filteredFiles, f)
+		}
+	}
+	// Also remove files directly in the dir
+	var finalFiles []string
+	for _, f := range filteredFiles {
+		dir := filepath.Dir(f)
+		if dir == "." {
+			dir = ""
+		}
+		if dir == relPath {
+			continue
+		}
+		finalFiles = append(finalFiles, f)
+	}
+	p.Files = finalFiles
+}
+
+// RenameFile renames a file in the pool.
+func (p *Pools) RenameFile(oldPath, newPath string) {
+	for i, f := range p.Files {
+		if f == oldPath {
+			p.Files[i] = newPath
+			return
+		}
+	}
+}
+
+// RenameDir renames a directory and updates all nested paths.
+func (p *Pools) RenameDir(oldPath, newPath string) {
+	oldPrefix := oldPath + "/"
+	newPrefix := newPath + "/"
+
+	for i, d := range p.Dirs {
+		if d == oldPath {
+			p.Dirs[i] = newPath
+		} else if strings.HasPrefix(d, oldPrefix) {
+			p.Dirs[i] = newPrefix + strings.TrimPrefix(d, oldPrefix)
+		}
+	}
+
+	for i, f := range p.Files {
+		if strings.HasPrefix(f, oldPrefix) {
+			p.Files[i] = newPrefix + strings.TrimPrefix(f, oldPrefix)
+		}
+	}
+}
+
+// NonRootDirs returns directories excluding the root.
+func (p *Pools) NonRootDirs() []string {
+	var result []string
+	for _, d := range p.Dirs {
+		if d != "" {
+			result = append(result, d)
+		}
+	}
+	return result
+}
+
+// generateFileSize returns a random file size using log-normal distribution.
+func generateFileSize(rng *rand.Rand, cfg SizeConfig) int {
+	logSize := cfg.MeanLog + cfg.StdDevLog*rng.NormFloat64()
+	size := int(math.Exp(logSize))
+	if size < 64 {
+		size = 64
+	}
+	if size > cfg.MaxBytes {
+		size = cfg.MaxBytes
+	}
+	return size
+}
+
+// generateContent creates deterministic markdown content of approximately targetSize bytes.
+func generateContent(rng *rand.Rand, title string, targetSize int) string {
+	var buf strings.Builder
+	buf.Grow(targetSize + 100)
+	fmt.Fprintf(&buf, "---\ntitle: %s\n---\n\n", title)
+	lineNum := 0
+	for buf.Len() < targetSize {
+		nWords := 5 + rng.Intn(15)
+		fmt.Fprintf(&buf, "Line %d: %s\n", lineNum, randomWords(rng, nWords))
+		lineNum++
+	}
+	s := buf.String()
+	if len(s) > targetSize {
+		s = s[:targetSize]
+	}
+	return s
+}
+
+// Word pool for content generation (deterministic, no external dependencies).
+var wordPool = []string{
+	"the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog",
+	"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
+	"lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing",
+	"data", "query", "index", "table", "schema", "column", "row", "view",
+	"create", "update", "delete", "insert", "select", "filter", "order",
+	"first", "last", "sample", "export", "import", "mount", "build",
+	"file", "directory", "path", "name", "hash", "content", "version",
+	"undo", "redo", "save", "restore", "checkpoint", "rollback", "commit",
+}
+
+// randomWords returns n random words from the word pool.
+func randomWords(rng *rand.Rand, n int) string {
+	words := make([]string, n)
+	for i := range words {
+		words[i] = wordPool[rng.Intn(len(wordPool))]
+	}
+	return strings.Join(words, " ")
+}
+
+// randomName generates a random filename-safe name.
+func randomName(rng *rand.Rand) string {
+	prefixes := []string{
+		"doc", "note", "memo", "report", "guide", "spec",
+		"draft", "plan", "log", "ref", "brief", "summary",
+	}
+	prefix := prefixes[rng.Intn(len(prefixes))]
+	suffix := rng.Intn(10000)
+	return fmt.Sprintf("%s-%04d", prefix, suffix)
+}
+
+// randomDirName generates a random directory name.
+func randomDirName(rng *rand.Rand) string {
+	names := []string{
+		"docs", "notes", "drafts", "specs", "guides", "refs",
+		"archive", "inbox", "review", "staging", "projects", "topics",
+	}
+	name := names[rng.Intn(len(names))]
+	suffix := rng.Intn(1000)
+	return fmt.Sprintf("%s-%03d", name, suffix)
+}
+
+// --- Filesystem Operations ---
+// Each operation takes the workspace path, rng, pools, state, and config.
+// It performs the real filesystem operation and updates the expected state.
+// Returns a description string for logging, or an error.
+
+// OpCreateFile creates a new markdown file in a random directory.
+func OpCreateFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, cfg *OpConfig) (string, error) {
+	// Pick a directory with capacity
+	dir := pickDirWithCapacity(rng, pools, state, cfg.Density.MaxFilesPerDir)
+	name := randomName(rng) + ".md"
+	relPath := name
+	if dir != "" {
+		relPath = dir + "/" + name
+	}
+
+	size := generateFileSize(rng, cfg.Size)
+	content := generateContent(rng, name, size)
+
+	fullPath := filepath.Join(wsPath, relPath)
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+		return "", fmt.Errorf("mkdir for %s: %w", relPath, err)
+	}
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("write %s: %w", relPath, err)
+	}
+
+	state.SetFile(relPath, HashContent([]byte(content)))
+	pools.AddFile(relPath)
+
+	return fmt.Sprintf("create_file %s (%s)", relPath, formatSize(size)), nil
+}
+
+// OpEditFile modifies an existing file.
+func OpEditFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, cfg *OpConfig) (string, error) {
+	if len(pools.Files) == 0 {
+		return "", fmt.Errorf("no files to edit")
+	}
+
+	idx := rng.Intn(len(pools.Files))
+	relPath := pools.Files[idx]
+	size := generateFileSize(rng, cfg.Size)
+	content := generateContent(rng, filepath.Base(relPath), size)
+
+	fullPath := filepath.Join(wsPath, relPath)
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("write %s: %w", relPath, err)
+	}
+
+	state.SetFile(relPath, HashContent([]byte(content)))
+
+	return fmt.Sprintf("edit_file %s (%s)", relPath, formatSize(size)), nil
+}
+
+// OpRenameFile renames a file within the same directory.
+func OpRenameFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+	if len(pools.Files) == 0 {
+		return "", fmt.Errorf("no files to rename")
+	}
+
+	idx := rng.Intn(len(pools.Files))
+	oldRelPath := pools.Files[idx]
+	dir := filepath.Dir(oldRelPath)
+	if dir == "." {
+		dir = ""
+	}
+
+	newName := randomName(rng) + ".md"
+	newRelPath := newName
+	if dir != "" {
+		newRelPath = dir + "/" + newName
+	}
+
+	oldFull := filepath.Join(wsPath, oldRelPath)
+	newFull := filepath.Join(wsPath, newRelPath)
+	if err := os.Rename(oldFull, newFull); err != nil {
+		return "", fmt.Errorf("rename %s -> %s: %w", oldRelPath, newRelPath, err)
+	}
+
+	state.RenameFile(oldRelPath, newRelPath)
+	pools.RenameFile(oldRelPath, newRelPath)
+
+	return fmt.Sprintf("rename_file %s -> %s", oldRelPath, newRelPath), nil
+}
+
+// OpMoveFile moves a file to a different directory.
+func OpMoveFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+	if len(pools.Files) == 0 || len(pools.Dirs) < 2 {
+		return "", fmt.Errorf("need files and multiple dirs to move")
+	}
+
+	fileIdx := rng.Intn(len(pools.Files))
+	oldRelPath := pools.Files[fileIdx]
+	oldDir := filepath.Dir(oldRelPath)
+	if oldDir == "." {
+		oldDir = ""
+	}
+
+	// Pick a different directory
+	var newDir string
+	for attempts := 0; attempts < 10; attempts++ {
+		candidate := pools.Dirs[rng.Intn(len(pools.Dirs))]
+		if candidate != oldDir {
+			newDir = candidate
+			break
+		}
+	}
+	if newDir == oldDir {
+		return "", fmt.Errorf("no different directory available")
+	}
+
+	baseName := filepath.Base(oldRelPath)
+	newRelPath := baseName
+	if newDir != "" {
+		newRelPath = newDir + "/" + baseName
+	}
+
+	oldFull := filepath.Join(wsPath, oldRelPath)
+	newFull := filepath.Join(wsPath, newRelPath)
+	if err := os.MkdirAll(filepath.Dir(newFull), 0755); err != nil {
+		return "", fmt.Errorf("mkdir for move: %w", err)
+	}
+	if err := os.Rename(oldFull, newFull); err != nil {
+		return "", fmt.Errorf("move %s -> %s: %w", oldRelPath, newRelPath, err)
+	}
+
+	state.RenameFile(oldRelPath, newRelPath)
+	pools.RenameFile(oldRelPath, newRelPath)
+
+	return fmt.Sprintf("move_file %s -> %s", oldRelPath, newRelPath), nil
+}
+
+// OpDeleteFile deletes an existing file.
+func OpDeleteFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+	if len(pools.Files) == 0 {
+		return "", fmt.Errorf("no files to delete")
+	}
+
+	idx := rng.Intn(len(pools.Files))
+	relPath := pools.Files[idx]
+
+	fullPath := filepath.Join(wsPath, relPath)
+	if err := os.Remove(fullPath); err != nil {
+		return "", fmt.Errorf("delete %s: %w", relPath, err)
+	}
+
+	state.RemoveFile(relPath)
+	pools.RemoveFile(relPath)
+
+	return fmt.Sprintf("delete_file %s", relPath), nil
+}
+
+// OpCreateDir creates a new subdirectory.
+func OpCreateDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, cfg *OpConfig) (string, error) {
+	// Pick a parent directory with subdir capacity
+	parent := pickDirWithSubdirCapacity(rng, pools, state, cfg.Density.MaxSubdirsPerDir)
+	name := randomDirName(rng)
+	relPath := name
+	if parent != "" {
+		relPath = parent + "/" + name
+	}
+
+	fullPath := filepath.Join(wsPath, relPath)
+	if err := os.MkdirAll(fullPath, 0755); err != nil {
+		return "", fmt.Errorf("mkdir %s: %w", relPath, err)
+	}
+
+	state.AddDir(relPath)
+	pools.AddDir(relPath)
+
+	return fmt.Sprintf("create_dir %s", relPath), nil
+}
+
+// OpRenameDir renames a non-root directory.
+func OpRenameDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+	nonRoot := pools.NonRootDirs()
+	if len(nonRoot) == 0 {
+		return "", fmt.Errorf("no non-root dirs to rename")
+	}
+
+	idx := rng.Intn(len(nonRoot))
+	oldRelPath := nonRoot[idx]
+	parent := filepath.Dir(oldRelPath)
+	if parent == "." {
+		parent = ""
+	}
+
+	newName := randomDirName(rng)
+	newRelPath := newName
+	if parent != "" {
+		newRelPath = parent + "/" + newName
+	}
+
+	oldFull := filepath.Join(wsPath, oldRelPath)
+	newFull := filepath.Join(wsPath, newRelPath)
+	if err := os.Rename(oldFull, newFull); err != nil {
+		return "", fmt.Errorf("rename dir %s -> %s: %w", oldRelPath, newRelPath, err)
+	}
+
+	state.RenameDir(oldRelPath, newRelPath)
+	pools.RenameDir(oldRelPath, newRelPath)
+
+	return fmt.Sprintf("rename_dir %s -> %s", oldRelPath, newRelPath), nil
+}
+
+// OpCreateSavepoint creates a named savepoint.
+func OpCreateSavepoint(wsPath string, rng *rand.Rand, _ *Pools, _ *WorkspaceState, _ *OpConfig, iteration int, stack *StateStack) (string, error) {
+	name := fmt.Sprintf("sp-%d-%04d", iteration, rng.Intn(10000))
+	spPath := filepath.Join(wsPath, ".savepoint", name+".json")
+	content := fmt.Sprintf(`{"description":"Savepoint at iteration %d"}`, iteration)
+
+	if err := os.WriteFile(spPath, []byte(content), 0644); err != nil {
+		return "", fmt.Errorf("create savepoint %s: %w", name, err)
+	}
+
+	stack.SaveSavepoint(name)
+
+	return fmt.Sprintf("create_savepoint %s", name), nil
+}
+
+// --- Helpers ---
+
+func pickDirWithCapacity(rng *rand.Rand, pools *Pools, state *WorkspaceState, maxFiles int) string {
+	// Try random directories, find one with capacity
+	for attempts := 0; attempts < 20; attempts++ {
+		dir := pools.Dirs[rng.Intn(len(pools.Dirs))]
+		if state.FileCount(dir) < maxFiles {
+			return dir
+		}
+	}
+	// Fallback: root always works (or first dir with space)
+	return pools.Dirs[0]
+}
+
+func pickDirWithSubdirCapacity(rng *rand.Rand, pools *Pools, state *WorkspaceState, maxSubdirs int) string {
+	for attempts := 0; attempts < 20; attempts++ {
+		dir := pools.Dirs[rng.Intn(len(pools.Dirs))]
+		if state.SubdirCount(dir) < maxSubdirs {
+			return dir
+		}
+	}
+	return pools.Dirs[0]
+}
+
+func formatSize(bytes int) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%dB", bytes)
+	}
+	if bytes < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%.1fMB", float64(bytes)/(1024*1024))
+}
