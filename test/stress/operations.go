@@ -30,8 +30,8 @@ var (
 	}
 	largeSizeConfig = SizeConfig{
 		MaxBytes:  10 * 1024 * 1024, // 10MB
-		MeanLog:   10.0,              // ~22KB typical
-		StdDevLog: 2.5,               // spread: 1KB - 1MB common, occasional 10MB
+		MeanLog:   10.0,             // ~22KB typical
+		StdDevLog: 2.5,              // spread: 1KB - 1MB common, occasional 10MB
 	}
 	defaultDensityConfig = DensityConfig{
 		MaxFilesPerDir:   10,
@@ -196,9 +196,11 @@ func generateFileSize(rng *rand.Rand, cfg SizeConfig) int {
 }
 
 // generateContent creates deterministic markdown content of approximately targetSize bytes.
+// Content always ends at a newline boundary to avoid truncation artifacts (null bytes
+// from mid-string slicing that PostgreSQL TEXT columns can't store).
 func generateContent(rng *rand.Rand, title string, targetSize int) string {
 	var buf strings.Builder
-	buf.Grow(targetSize + 100)
+	buf.Grow(targetSize + 200)
 	fmt.Fprintf(&buf, "---\ntitle: %s\n---\n\n", title)
 	lineNum := 0
 	for buf.Len() < targetSize {
@@ -206,11 +208,9 @@ func generateContent(rng *rand.Rand, title string, targetSize int) string {
 		fmt.Fprintf(&buf, "Line %d: %s\n", lineNum, randomWords(rng, nWords))
 		lineNum++
 	}
-	s := buf.String()
-	if len(s) > targetSize {
-		s = s[:targetSize]
-	}
-	return s
+	// Don't truncate mid-line -- return at the last complete line.
+	// Content may slightly exceed targetSize (by up to one line ~200 chars).
+	return buf.String()
 }
 
 // Word pool for content generation (deterministic, no external dependencies).
@@ -256,6 +256,21 @@ func randomDirName(rng *rand.Rand) string {
 	return fmt.Sprintf("%s-%03d", name, suffix)
 }
 
+// readBackHash reads a file back from TigerFS and returns the hash of
+// what TigerFS returns. This is necessary because TigerFS synth views
+// re-synthesize content (parse frontmatter into columns, reconstruct
+// on read), so the returned content may differ from what was written.
+//
+// Uses explicit open/close to ensure the NFS client fetches fresh data
+// from the server rather than serving from the write cache.
+func readBackHash(fullPath string) (string, error) {
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("read back %s: %w", fullPath, err)
+	}
+	return HashContent(data), nil
+}
+
 // --- Filesystem Operations ---
 // Each operation takes the workspace path, rng, pools, state, and config.
 // It performs the real filesystem operation and updates the expected state.
@@ -282,7 +297,14 @@ func OpCreateFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceS
 		return "", fmt.Errorf("write %s: %w", relPath, err)
 	}
 
-	state.SetFile(relPath, HashContent([]byte(content)))
+	// Read back from TigerFS to get the synthesized content hash
+	// (TigerFS re-synthesizes markdown from structured columns)
+	hash, err := readBackHash(fullPath)
+	if err != nil {
+		return "", err
+	}
+
+	state.SetFile(relPath, hash)
 	pools.AddFile(relPath)
 
 	return fmt.Sprintf("create_file %s (%s)", relPath, formatSize(size)), nil
@@ -304,7 +326,13 @@ func OpEditFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSta
 		return "", fmt.Errorf("write %s: %w", relPath, err)
 	}
 
-	state.SetFile(relPath, HashContent([]byte(content)))
+	// Read back synthesized content
+	hash, err := readBackHash(fullPath)
+	if err != nil {
+		return "", err
+	}
+
+	state.SetFile(relPath, hash)
 
 	return fmt.Sprintf("edit_file %s (%s)", relPath, formatSize(size)), nil
 }
@@ -473,6 +501,21 @@ func OpCreateSavepoint(wsPath string, rng *rand.Rand, _ *Pools, _ *WorkspaceStat
 	stack.SaveSavepoint(name)
 
 	return fmt.Sprintf("create_savepoint %s", name), nil
+}
+
+// RebuildPools reconstructs pools from the workspace state.
+// Used after undo operations to sync pools with the restored state.
+func RebuildPools(state *WorkspaceState) *Pools {
+	pools := &Pools{
+		Dirs: []string{""}, // root always exists
+	}
+	for relPath := range state.Files {
+		pools.Files = append(pools.Files, relPath)
+	}
+	for relPath := range state.Dirs {
+		pools.Dirs = append(pools.Dirs, relPath)
+	}
+	return pools
 }
 
 // --- Helpers ---

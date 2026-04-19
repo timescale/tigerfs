@@ -92,9 +92,9 @@ func canExecute(op opType, pools *Pools, stack *StateStack) bool {
 	case opCreateSavepoint:
 		return true
 	case opUndoSingle:
-		return stack.Len() > 0
+		return stack.LoggedCount() > 0
 	case opUndoToID:
-		return stack.Len() >= 2
+		return stack.LoggedCount() >= 2
 	case opUndoToSavepoint:
 		return stack.HasSavepoints()
 	}
@@ -111,6 +111,8 @@ func RunIterations(cfg *Config, infra *Infra) error {
 	stack := NewStateStack()
 	pools := NewPools()
 
+	var lastLogID string
+
 	for i := 1; i <= cfg.Iterations; i++ {
 		// Select operation (with re-roll for unmet preconditions)
 		op := selectValidOperation(rng, pools, stack)
@@ -124,16 +126,29 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		}
 
 		// Execute operation
-		desc, err := executeOperation(op, wsPath, rng, pools, state, opCfg, stack, i)
+		desc, restoredState, err := executeOperation(op, wsPath, rng, pools, state, opCfg, stack, i)
 		if err != nil {
 			return fmt.Errorf("[STEP %d/%d] %s failed: %w", i, cfg.Iterations, opName(op), err)
 		}
 
 		fmt.Printf("[STEP %d/%d] %s\n", i, cfg.Iterations, desc)
 
-		// For undo operations, restore state from stack
-		if isUndo {
-			state = GetRestoredState(stack)
+		// Record log_id for non-undo operations
+		if !isUndo {
+			currentLogID := readLatestLogID(wsPath)
+			if currentLogID != "" && currentLogID != lastLogID {
+				stack.SetLastLogID(currentLogID)
+				lastLogID = currentLogID
+			}
+			// If currentLogID == lastLogID, this operation didn't create a log entry
+			// (e.g., create_dir, create_savepoint). LogID stays empty on the stack entry.
+		}
+
+		// For undo operations, restore state and rebuild pools
+		if isUndo && restoredState != nil {
+			state = restoredState
+			pools = RebuildPools(state)
+			lastLogID = readLatestLogID(wsPath)
 		}
 
 		// Validate
@@ -177,26 +192,36 @@ func selectValidOperation(rng *rand.Rand, pools *Pools, stack *StateStack) opTyp
 }
 
 // executeOperation dispatches to the appropriate operation function.
+// Returns (description, restoredState, error). restoredState is non-nil only
+// for undo operations -- the caller should use it to replace the current state.
 func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
-	state *WorkspaceState, cfg *OpConfig, stack *StateStack, iteration int) (string, error) {
+	state *WorkspaceState, cfg *OpConfig, stack *StateStack, iteration int) (string, *WorkspaceState, error) {
 
 	switch op {
 	case opCreateFile:
-		return OpCreateFile(wsPath, rng, pools, state, cfg)
+		desc, err := OpCreateFile(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opEditFile:
-		return OpEditFile(wsPath, rng, pools, state, cfg)
+		desc, err := OpEditFile(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opRenameFile:
-		return OpRenameFile(wsPath, rng, pools, state, cfg)
+		desc, err := OpRenameFile(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opMoveFile:
-		return OpMoveFile(wsPath, rng, pools, state, cfg)
+		desc, err := OpMoveFile(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opDeleteFile:
-		return OpDeleteFile(wsPath, rng, pools, state, cfg)
+		desc, err := OpDeleteFile(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opCreateDir:
-		return OpCreateDir(wsPath, rng, pools, state, cfg)
+		desc, err := OpCreateDir(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opRenameDir:
-		return OpRenameDir(wsPath, rng, pools, state, cfg)
+		desc, err := OpRenameDir(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
 	case opCreateSavepoint:
-		return OpCreateSavepoint(wsPath, rng, pools, state, cfg, iteration, stack)
+		desc, err := OpCreateSavepoint(wsPath, rng, pools, state, cfg, iteration, stack)
+		return desc, nil, err
 	case opUndoSingle:
 		return OpUndoSingle(wsPath, stack)
 	case opUndoToID:
@@ -204,7 +229,7 @@ func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
 	case opUndoToSavepoint:
 		return OpUndoToSavepoint(wsPath, stack)
 	default:
-		return "", fmt.Errorf("unknown operation: %d", op)
+		return "", nil, fmt.Errorf("unknown operation: %d", op)
 	}
 }
 

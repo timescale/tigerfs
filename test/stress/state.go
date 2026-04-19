@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"io/fs"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -161,6 +162,7 @@ func (ws *WorkspaceState) SubdirCount(dirPath string) int {
 type StackEntry struct {
 	State     *WorkspaceState
 	Iteration int
+	LogID     string // log_id of the operation (empty for non-logged ops like create_dir)
 }
 
 // StateStack tracks workspace state history for undo operations.
@@ -199,6 +201,97 @@ func (s *StateStack) Pop() *WorkspaceState {
 // Len returns the number of entries on the stack.
 func (s *StateStack) Len() int {
 	return len(s.entries)
+}
+
+// SetLastLogID sets the LogID on the most recent stack entry.
+func (s *StateStack) SetLastLogID(logID string) {
+	if len(s.entries) > 0 {
+		s.entries[len(s.entries)-1].LogID = logID
+	}
+}
+
+// LoggedCount returns the number of entries with non-empty LogIDs.
+func (s *StateStack) LoggedCount() int {
+	count := 0
+	for _, e := range s.entries {
+		if e.LogID != "" {
+			count++
+		}
+	}
+	return count
+}
+
+// PopToLogID finds the stack entry matching the given LogID (searching from top),
+// returns its State (the state before the operation was applied), and trims the
+// stack to exclude that entry and everything above it.
+func (s *StateStack) PopToLogID(logID string) *WorkspaceState {
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		if s.entries[i].LogID == logID {
+			state := s.entries[i].State
+			s.entries = s.entries[:i]
+			for name, spIdx := range s.savepoints {
+				if spIdx > i {
+					delete(s.savepoints, name)
+				}
+			}
+			return state.DeepCopy()
+		}
+	}
+	return nil
+}
+
+// RestoreAfterLogID finds the entry with the given LogID, then returns the state
+// AFTER that operation (entries[idx+1].State) and trims the stack to [0..idx].
+// This is used for undo_to_id where TigerFS keeps the target operation.
+func (s *StateStack) RestoreAfterLogID(logID string) *WorkspaceState {
+	targetIdx := -1
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		if s.entries[i].LogID == logID {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx < 0 || targetIdx+1 >= len(s.entries) {
+		return nil
+	}
+
+	afterState := s.entries[targetIdx+1].State.DeepCopy()
+	s.entries = s.entries[:targetIdx+1]
+	for name, spIdx := range s.savepoints {
+		if spIdx > targetIdx+1 {
+			delete(s.savepoints, name)
+		}
+	}
+	return afterState
+}
+
+// RandomLoggedTarget picks a random logged stack entry that isn't the most recent
+// logged entry (so there's at least one logged operation to undo after it).
+// Returns the LogID and true, or empty string and false if not enough logged entries.
+func (s *StateStack) RandomLoggedTarget(rng *rand.Rand) (string, bool) {
+	var logged []int
+	for i, e := range s.entries {
+		if e.LogID != "" {
+			logged = append(logged, i)
+		}
+	}
+	if len(logged) < 2 {
+		return "", false
+	}
+	// Pick any logged entry except the last one
+	idx := rng.Intn(len(logged) - 1)
+	return s.entries[logged[idx]].LogID, true
+}
+
+// MostRecentLogID returns the LogID of the most recent logged stack entry,
+// or empty string if none have LogIDs.
+func (s *StateStack) MostRecentLogID() string {
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		if s.entries[i].LogID != "" {
+			return s.entries[i].LogID
+		}
+	}
+	return ""
 }
 
 // SaveSavepoint records a savepoint at the current stack position.

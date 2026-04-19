@@ -88,7 +88,9 @@ func TestCanExecute_WithFiles(t *testing.T) {
 	pools.AddDir("docs")
 	stack := NewStateStack()
 	stack.Push(NewWorkspaceState(), 0)
+	stack.SetLastLogID("log-0")
 	stack.Push(NewWorkspaceState(), 1)
+	stack.SetLastLogID("log-1")
 	stack.SaveSavepoint("sp1")
 
 	if !canExecute(opEditFile, pools, stack) {

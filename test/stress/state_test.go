@@ -278,6 +278,162 @@ func TestStackRestoreToIndex(t *testing.T) {
 	}
 }
 
+func TestSetLastLogID(t *testing.T) {
+	stack := NewStateStack()
+	ws := NewWorkspaceState()
+	stack.Push(ws, 1)
+	stack.SetLastLogID("abc")
+
+	if stack.entries[0].LogID != "abc" {
+		t.Errorf("LogID = %q, want %q", stack.entries[0].LogID, "abc")
+	}
+
+	// SetLastLogID on empty stack should not panic
+	empty := NewStateStack()
+	empty.SetLastLogID("xyz")
+}
+
+func TestLoggedCount(t *testing.T) {
+	stack := NewStateStack()
+	ws := NewWorkspaceState()
+
+	stack.Push(ws, 1)
+	stack.SetLastLogID("a")
+	stack.Push(ws, 2)
+	// entry 2 has no LogID (non-logged operation)
+	stack.Push(ws, 3)
+	stack.SetLastLogID("b")
+
+	if got := stack.LoggedCount(); got != 2 {
+		t.Errorf("LoggedCount = %d, want 2", got)
+	}
+}
+
+func TestPopToLogID(t *testing.T) {
+	stack := NewStateStack()
+
+	ws1 := NewWorkspaceState()
+	ws1.SetFile("a.md", "h1")
+	stack.Push(ws1, 1)
+	stack.SetLastLogID("log-1")
+
+	ws2 := NewWorkspaceState()
+	ws2.SetFile("a.md", "h1")
+	ws2.SetFile("b.md", "h2")
+	stack.Push(ws2, 2)
+	// No LogID (create_dir)
+
+	ws3 := NewWorkspaceState()
+	ws3.SetFile("a.md", "h1")
+	ws3.SetFile("b.md", "h2")
+	ws3.SetFile("c.md", "h3")
+	stack.Push(ws3, 3)
+	stack.SetLastLogID("log-3")
+
+	// Pop to log-3: should return state before op 3 (ws3) and trim to 2 entries
+	restored := stack.PopToLogID("log-3")
+	if restored == nil {
+		t.Fatal("PopToLogID returned nil")
+	}
+	if len(restored.Files) != 3 {
+		t.Errorf("restored has %d files, want 3", len(restored.Files))
+	}
+	if stack.Len() != 2 {
+		t.Errorf("stack len = %d, want 2", stack.Len())
+	}
+}
+
+func TestPopToLogID_SkipsNonLogged(t *testing.T) {
+	stack := NewStateStack()
+	ws := NewWorkspaceState()
+
+	stack.Push(ws, 1)
+	stack.SetLastLogID("log-1")
+
+	ws2 := NewWorkspaceState()
+	ws2.SetFile("a.md", "h1")
+	stack.Push(ws2, 2)
+	stack.SetLastLogID("log-2")
+
+	ws3 := NewWorkspaceState()
+	ws3.SetFile("a.md", "h1")
+	ws3.AddDir("docs")
+	stack.Push(ws3, 3)
+	// No LogID (create_dir at step 3)
+
+	// Pop to log-2: should skip the non-logged entry at top, find log-2
+	restored := stack.PopToLogID("log-2")
+	if restored == nil {
+		t.Fatal("PopToLogID returned nil")
+	}
+	if len(restored.Files) != 1 {
+		t.Errorf("restored has %d files, want 1", len(restored.Files))
+	}
+	if stack.Len() != 1 {
+		t.Errorf("stack len = %d, want 1", stack.Len())
+	}
+}
+
+func TestRestoreAfterLogID(t *testing.T) {
+	stack := NewStateStack()
+
+	ws0 := NewWorkspaceState()
+	stack.Push(ws0, 1)
+	stack.SetLastLogID("log-1")
+
+	ws1 := NewWorkspaceState()
+	ws1.SetFile("a.md", "h1")
+	stack.Push(ws1, 2)
+	stack.SetLastLogID("log-2")
+
+	ws2 := NewWorkspaceState()
+	ws2.SetFile("a.md", "h1")
+	ws2.SetFile("b.md", "h2")
+	stack.Push(ws2, 3)
+	stack.SetLastLogID("log-3")
+
+	// Restore after log-1: should return ws1 (state after op 1 = state before op 2)
+	restored := stack.RestoreAfterLogID("log-1")
+	if restored == nil {
+		t.Fatal("RestoreAfterLogID returned nil")
+	}
+	if len(restored.Files) != 1 || restored.Files["a.md"] != "h1" {
+		t.Errorf("wrong restored state: %v", restored.Files)
+	}
+	if stack.Len() != 1 {
+		t.Errorf("stack len = %d, want 1", stack.Len())
+	}
+}
+
+func TestRebuildPools(t *testing.T) {
+	state := NewWorkspaceState()
+	state.SetFile("a.md", "h1")
+	state.SetFile("docs/b.md", "h2")
+	state.AddDir("docs")
+
+	pools := RebuildPools(state)
+
+	if len(pools.Files) != 2 {
+		t.Errorf("pools has %d files, want 2", len(pools.Files))
+	}
+	if len(pools.Dirs) != 2 { // root + docs
+		t.Errorf("pools has %d dirs, want 2", len(pools.Dirs))
+	}
+	hasRoot := false
+	hasDocs := false
+	for _, d := range pools.Dirs {
+		if d == "" {
+			hasRoot = true
+		}
+		if d == "docs" {
+			hasDocs = true
+		}
+	}
+	if !hasRoot || !hasDocs {
+		t.Error("pools missing root or docs dir")
+	}
+}
+
 func TestHashContent(t *testing.T) {
 	h1 := HashContent([]byte("hello"))
 	h2 := HashContent([]byte("hello"))
