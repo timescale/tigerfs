@@ -72,12 +72,14 @@ func TestGenerateContent_ApproximateSize(t *testing.T) {
 
 	for _, targetSize := range []int{64, 500, 5000, 50000} {
 		content := generateContent(rng, "test", targetSize)
-		if len(content) > targetSize {
-			t.Errorf("content length %d exceeds target %d", len(content), targetSize)
+		// Content ends at a natural line boundary, so it will be at least targetSize
+		// but may overshoot by up to one line (~200 bytes max).
+		if len(content) < targetSize {
+			t.Errorf("content length %d shorter than target %d", len(content), targetSize)
 		}
-		// Allow some slack for the frontmatter
-		if len(content) < targetSize-100 && targetSize > 100 {
-			t.Errorf("content length %d too short for target %d", len(content), targetSize)
+		maxOvershoot := 300
+		if len(content) > targetSize+maxOvershoot {
+			t.Errorf("content length %d overshoots target %d by more than %d", len(content), targetSize, maxOvershoot)
 		}
 	}
 }

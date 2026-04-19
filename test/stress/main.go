@@ -5,7 +5,8 @@
 //
 // Build: go build -o bin/tigerfs-stress ./test/stress
 // Usage: bin/tigerfs-stress start [--seed N] [--iterations N] [--debug]
-//        bin/tigerfs-stress stop
+//
+//	bin/tigerfs-stress stop
 package main
 
 import (

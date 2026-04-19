@@ -15,23 +15,23 @@ import (
 )
 
 const (
-	infoFilePath    = "/tmp/tigerfs-stress.info"
-	pgPort          = "5433"
-	pgUser          = "testundo"
-	pgPassword      = "testundo"
-	pgDatabase      = "testundo"
-	pgReadyTimeout  = 30 * time.Second
+	infoFilePath     = "/tmp/tigerfs-stress.info"
+	pgPort           = "5433"
+	pgUser           = "testundo"
+	pgPassword       = "testundo"
+	pgDatabase       = "testundo"
+	pgReadyTimeout   = 30 * time.Second
 	mountWaitTimeout = 15 * time.Second
 )
 
 // Infra holds the state of the running infrastructure.
 type Infra struct {
-	Mountpoint    string
-	TigerFSPid    int
-	ComposePath   string
-	RepoRoot      string
-	tigerfsCmd    *exec.Cmd
-	sigChan       chan os.Signal
+	Mountpoint  string
+	TigerFSPid  int
+	ComposePath string
+	RepoRoot    string
+	tigerfsCmd  *exec.Cmd
+	sigChan     chan os.Signal
 }
 
 // RunInfo is serialized to the info file for the stop command.
