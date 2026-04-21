@@ -88,7 +88,14 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	//   (go-nfs) runs in the same process as the client. 128KB is a safe
 	//   balance: 4x fewer RPCs than the default with no GC issues.
 	// - rsize=131072: 128KB read chunks (match wsize for consistency)
-	mountOpts := fmt.Sprintf("locallocks,vers=3,tcp,port=%d,mountport=%d,soft,timeo=300,retrans=2,noresvport,nolocks,wsize=131072,rsize=131072", port, port)
+	// - noac: Disable NFS client attribute caching. Without this, the client
+	//   caches file attributes (mtime, size) for up to 60 seconds (acregmax).
+	//   TigerFS content can change server-side at any time (undo operations,
+	//   concurrent mounts), and stale attributes cause the client to serve
+	//   stale file data. This does NOT increase SQL queries -- GETATTR requests
+	//   are served from TigerFS's in-memory stat cache (2s TTL). The cost is
+	//   only additional loopback NFS round-trips (~0.1ms each).
+	mountOpts := fmt.Sprintf("locallocks,vers=3,tcp,port=%d,mountport=%d,soft,timeo=300,retrans=2,noresvport,nolocks,wsize=131072,rsize=131072,noac", port, port)
 
 	cmd := exec.CommandContext(ctx, "/sbin/mount_nfs",
 		"-o", mountOpts,

@@ -517,7 +517,7 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 				Name:    filename,
 				IsDir:   true,
 				Mode:    0755,
-				ModTime: info.CachedMountTime,
+				ModTime: extractModTime(columns, row, info),
 			}
 			o.statCache.set(schema, table, filename, entry)
 			return &entry, nil
