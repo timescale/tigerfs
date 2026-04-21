@@ -110,6 +110,59 @@ func TestSynth_ExtractModTime(t *testing.T) {
 	}
 }
 
+func TestSynth_StatDirectory_UsesModifiedAt(t *testing.T) {
+	dirModifiedAt := time.Date(2025, 3, 15, 10, 30, 0, 0, time.UTC)
+
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "parent_id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "filetype", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		// resolveSynthPath returns the directory UUID
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-dir-1", Name: "docs"},
+		},
+		// GetRow returns the directory row with a known modified_at
+		rowData: map[string]*mockRow{
+			"public.notes.uuid-dir-1": {
+				columns: []string{"id", "parent_id", "filename", "filetype", "title", "body", "encoding", "created_at", "modified_at"},
+				values:  []interface{}{"uuid-dir-1", nil, "docs", "directory", nil, nil, "utf8", dirModifiedAt, dirModifiedAt},
+			},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	entry, fsErr := ops.Stat(ctx, "/notes/docs")
+	require.Nil(t, fsErr, "Stat should succeed for directory")
+	require.NotNil(t, entry)
+
+	assert.True(t, entry.IsDir, "should be a directory")
+	assert.Equal(t, "docs", entry.Name)
+	assert.True(t, entry.ModTime.Equal(dirModifiedAt),
+		"directory ModTime should come from database modified_at, got %v, want %v", entry.ModTime, dirModifiedAt)
+}
+
 // newSynthHierarchicalMockDB creates a mock DB configured with a hierarchical synth markdown view.
 // The "memory" view has columns [id, filename, filetype, title, author, body] with:
 //   - "projects" (directory)
