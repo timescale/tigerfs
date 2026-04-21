@@ -3,12 +3,15 @@ package integration
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/timescale/tigerfs/internal/tigerfs/config"
 )
 
 // getDirMtime reads a directory row's modified_at directly from PostgreSQL.
@@ -372,4 +375,132 @@ func TestDirMtime_UndoToSavepoint(t *testing.T) {
 	mtimeAfter := getDirMtime(t, pool, "dirmtime8", "docs")
 	assert.True(t, mtimeAfter.After(mtimeBefore),
 		"parent dir mtime should increase after undo to savepoint (before=%v, after=%v)", mtimeBefore, mtimeAfter)
+}
+
+// --- Mount-level tests: verify mtime propagates through NFS/FUSE stat ---
+
+func TestMount_DirMtime_ReflectsCreate(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDBEmpty(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         1000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		LogLevel:                "warn",
+		TrailingNewlines:        true,
+	}
+
+	mountpoint := t.TempDir()
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+	time.Sleep(500 * time.Millisecond)
+
+	// Create workspace with history
+	wsPath := filepath.Join(mountpoint, ".build", "mtimetest")
+	err := os.WriteFile(wsPath, []byte("markdown,history"), 0644)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	// Create directory
+	dirPath := filepath.Join(mountpoint, "mtimetest", "docs")
+	err = os.Mkdir(dirPath, 0755)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	// Record directory mtime before file creation
+	dirStat, err := os.Stat(dirPath)
+	require.NoError(t, err)
+	mtimeBefore := dirStat.ModTime()
+
+	// Create a file in the directory
+	time.Sleep(100 * time.Millisecond)
+	filePath := filepath.Join(dirPath, "hello.md")
+	err = os.WriteFile(filePath, []byte("---\ntitle: Hello\n---\nContent\n"), 0644)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	// Stat directory again -- mtime should have increased
+	dirStat, err = os.Stat(dirPath)
+	require.NoError(t, err)
+	mtimeAfter := dirStat.ModTime()
+
+	assert.True(t, mtimeAfter.After(mtimeBefore),
+		"dir mtime via os.Stat should increase after file creation (before=%v, after=%v)", mtimeBefore, mtimeAfter)
+}
+
+func TestMount_DirMtime_StableOnEdit(t *testing.T) {
+	checkFUSEMountCapability(t)
+
+	dbResult := GetTestDBEmpty(t)
+	if dbResult == nil {
+		return
+	}
+	defer dbResult.Cleanup()
+
+	cfg := &config.Config{
+		PoolSize:                5,
+		PoolMaxIdle:             2,
+		DefaultSchema:           "public",
+		DirListingLimit:         1000,
+		AttrTimeout:             1 * time.Second,
+		EntryTimeout:            1 * time.Second,
+		MetadataRefreshInterval: 30 * time.Second,
+		LogLevel:                "warn",
+		TrailingNewlines:        true,
+	}
+
+	mountpoint := t.TempDir()
+	filesystem := mountWithTimeout(t, cfg, dbResult.ConnStr, mountpoint, 10*time.Second)
+	if filesystem == nil {
+		return
+	}
+	defer func() { _ = filesystem.Close() }()
+	time.Sleep(500 * time.Millisecond)
+
+	// Create workspace
+	wsPath := filepath.Join(mountpoint, ".build", "mtimetest2")
+	err := os.WriteFile(wsPath, []byte("markdown,history"), 0644)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	// Create directory + file
+	dirPath := filepath.Join(mountpoint, "mtimetest2", "docs")
+	err = os.Mkdir(dirPath, 0755)
+	require.NoError(t, err)
+	filePath := filepath.Join(dirPath, "hello.md")
+	err = os.WriteFile(filePath, []byte("---\ntitle: Hello\n---\nOriginal\n"), 0644)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	// Record directory mtime
+	dirStat, err := os.Stat(dirPath)
+	require.NoError(t, err)
+	mtimeBefore := dirStat.ModTime()
+
+	// Edit file content (not filename or parent)
+	time.Sleep(100 * time.Millisecond)
+	err = os.WriteFile(filePath, []byte("---\ntitle: Hello\n---\nUpdated content\n"), 0644)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+
+	// Stat directory -- mtime should NOT have changed
+	dirStat, err = os.Stat(dirPath)
+	require.NoError(t, err)
+	mtimeAfter := dirStat.ModTime()
+
+	assert.Equal(t, mtimeBefore, mtimeAfter,
+		"dir mtime via os.Stat should NOT change on content edit (before=%v, after=%v)", mtimeBefore, mtimeAfter)
 }
