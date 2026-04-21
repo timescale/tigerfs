@@ -38,6 +38,7 @@ type migration struct {
 var migrations = []migration{
 	moveBackingTablesMigration(),
 	addParentPointerMigration(),
+	addParentDirMtimeTriggerMigration(),
 }
 
 // moveBackingTablesMigration returns the migration that moves synth backing tables
@@ -437,6 +438,82 @@ END $migrate$`, qt, qt, qt, qt))
 						`ALTER TABLE %s ADD CONSTRAINT %s CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo'))`,
 						logQt, db.QuoteIdent(appName+"_log_type_check")))
 				}
+			}
+			return stmts, nil
+		},
+	}
+}
+
+// addParentDirMtimeTriggerMigration returns the migration that adds a trigger to
+// update the parent directory's modified_at when children are added, removed, or
+// moved. This gives directories POSIX-correct mtime semantics and ensures the NFS
+// client re-fetches directory listings after changes.
+func addParentDirMtimeTriggerMigration() migration {
+	return migration{
+		Name:    "parent-dir-mtime-trigger",
+		Summary: "Add trigger to update parent directory mtime when children change",
+		Detect: func(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
+			// Find synth apps with parent_id (parent-pointer model) but missing
+			// the parent mtime trigger.
+			rows, err := pool.Query(ctx,
+				`SELECT c.relname
+				 FROM pg_class c
+				 JOIN pg_namespace n ON n.oid = c.relnamespace
+				 LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
+				 WHERE n.nspname = $1 AND c.relkind = 'v'
+				   AND d.description LIKE 'tigerfs:%'`, schema)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list synth views: %w", err)
+			}
+			defer rows.Close()
+
+			var items []string
+			for rows.Next() {
+				var viewName string
+				if err := rows.Scan(&viewName); err != nil {
+					return nil, fmt.Errorf("failed to scan view: %w", err)
+				}
+
+				// Check prerequisites: backing table exists in tigerfs schema with parent_id
+				var hasParentID bool
+				err := pool.QueryRow(ctx,
+					`SELECT EXISTS(
+						SELECT 1 FROM information_schema.columns
+						WHERE table_schema = 'tigerfs' AND table_name = $1
+						  AND column_name = 'parent_id'
+					)`, viewName).Scan(&hasParentID)
+				if err != nil {
+					return nil, fmt.Errorf("failed to check parent_id for %s: %w", viewName, err)
+				}
+				if !hasParentID {
+					continue
+				}
+
+				// Check if trigger already exists
+				triggerName := "trg_" + viewName + "_parent_mtime"
+				var hasTrigger bool
+				err = pool.QueryRow(ctx,
+					`SELECT EXISTS(
+						SELECT 1 FROM pg_trigger t
+						JOIN pg_class c ON c.oid = t.tgrelid
+						JOIN pg_namespace n ON n.oid = c.relnamespace
+						WHERE t.tgname = $1 AND c.relname = $2 AND n.nspname = 'tigerfs'
+					)`, triggerName, viewName).Scan(&hasTrigger)
+				if err != nil {
+					return nil, fmt.Errorf("failed to check trigger for %s: %w", viewName, err)
+				}
+
+				if !hasTrigger {
+					items = append(items, viewName)
+				}
+			}
+			return items, nil
+		},
+		Plan: func(ctx context.Context, pool *pgxpool.Pool, schema string, items []string) ([]string, error) {
+			var stmts []string
+			for _, appName := range items {
+				triggerStmts := synth.GenerateParentDirMtimeTriggerSQL(schema, appName)
+				stmts = append(stmts, triggerStmts...)
 			}
 			return stmts, nil
 		},

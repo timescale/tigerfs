@@ -125,6 +125,59 @@ $$ LANGUAGE plpgsql`, funcName)
 	return []string{createFunc, createTrigger}
 }
 
+// GenerateParentDirMtimeTriggerSQL returns two SQL statements to create a trigger
+// function and trigger that updates the parent directory's modified_at when
+// children are added, removed, or moved. This gives directories POSIX-correct
+// mtime semantics: mtime changes on child create/delete/rename, not on content edits.
+//
+// The trigger is AFTER (side-effect on a different row) and uses column-level
+// filtering (UPDATE OF parent_id, filename) so content-only edits never fire it.
+// No recursion risk: the UPDATE to the parent only changes modified_at, which is
+// not in the column filter list.
+func GenerateParentDirMtimeTriggerSQL(schema, tableName string) []string {
+	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent("bump_"+tableName+"_parent_mtime"))
+	triggerName := db.QuoteIdent("trg_" + tableName + "_parent_mtime")
+	qualifiedTable := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(tableName))
+
+	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.parent_id IS NOT NULL THEN
+            UPDATE %s SET modified_at = now()
+            WHERE id = NEW.parent_id AND filetype = 'directory';
+        END IF;
+    ELSIF TG_OP = 'DELETE' THEN
+        IF OLD.parent_id IS NOT NULL THEN
+            UPDATE %s SET modified_at = now()
+            WHERE id = OLD.parent_id AND filetype = 'directory';
+        END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF OLD.parent_id IS DISTINCT FROM NEW.parent_id
+           OR OLD.filename IS DISTINCT FROM NEW.filename THEN
+            IF OLD.parent_id IS NOT NULL
+               AND OLD.parent_id IS DISTINCT FROM NEW.parent_id THEN
+                UPDATE %s SET modified_at = now()
+                WHERE id = OLD.parent_id AND filetype = 'directory';
+            END IF;
+            IF NEW.parent_id IS NOT NULL THEN
+                UPDATE %s SET modified_at = now()
+                WHERE id = NEW.parent_id AND filetype = 'directory';
+            END IF;
+        END IF;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql`, funcName, qualifiedTable, qualifiedTable, qualifiedTable, qualifiedTable)
+
+	createTrigger := fmt.Sprintf(`CREATE TRIGGER %s
+    AFTER INSERT OR DELETE OR UPDATE OF parent_id, filename ON %s
+    FOR EACH ROW EXECUTE FUNCTION %s()`,
+		triggerName, qualifiedTable, funcName)
+
+	return []string{createFunc, createTrigger}
+}
+
 // GenerateBuildSQL returns the complete SQL statements to create a synthesized app.
 // This includes the backing table, view, view comment, and modified_at trigger.
 // Returns a slice of individual statements (not delimited) because the trigger
@@ -205,8 +258,11 @@ func GenerateBuildSQLWithFeatures(schema, appName string, features FeatureSet) (
 	commentSQL := GenerateViewCommentSQLWithFeatures(schema, appName, features)
 	triggerStmts := GenerateModifiedAtTriggerSQL(schema, appName)
 
+	parentMtimeStmts := GenerateParentDirMtimeTriggerSQL(schema, appName)
+
 	stmts := []string{createSchema, resolvePathFunc, tableSQL, parentIndex, viewSQL, commentSQL}
 	stmts = append(stmts, triggerStmts...)
+	stmts = append(stmts, parentMtimeStmts...)
 
 	if features.History {
 		historyStmts := GenerateHistorySQL(schema, appName, features.Format)
