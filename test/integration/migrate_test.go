@@ -582,3 +582,177 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 		cp.Exec(cleanupCtx, `DROP VIEW IF EXISTS "mig_pp" CASCADE`)
 	})
 }
+
+// TestSynth_MigrateAddParentDirMtimeTrigger tests migration for workspaces that have
+// parent_id but lack the parent directory mtime trigger.
+func TestSynth_MigrateAddParentDirMtimeTrigger(t *testing.T) {
+	require.NoError(t, config.Init(), "config.Init should succeed")
+
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+
+	ctx := context.Background()
+
+	pool, err := pgxpool.New(ctx, result.ConnStr)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	var schema string
+	err = pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema)
+	require.NoError(t, err)
+
+	// Setup: Create a workspace with parent_id but WITHOUT the parent mtime trigger.
+	// This simulates an existing workspace created before this feature.
+	setupSQL := []string{
+		`CREATE SCHEMA IF NOT EXISTS tigerfs`,
+		`CREATE TABLE tigerfs."mig_mtime" (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			parent_id UUID REFERENCES tigerfs."mig_mtime"(id),
+			filename TEXT NOT NULL,
+			filetype TEXT NOT NULL DEFAULT 'file',
+			title TEXT,
+			body TEXT,
+			encoding TEXT NOT NULL DEFAULT 'utf8',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype)
+		)`,
+		fmt.Sprintf(`CREATE VIEW %q."mig_mtime" AS SELECT * FROM tigerfs."mig_mtime"`, schema),
+		fmt.Sprintf(`COMMENT ON VIEW %q."mig_mtime" IS 'tigerfs:md'`, schema),
+		// Add the modified_at BEFORE trigger (existing workspaces have this)
+		`CREATE OR REPLACE FUNCTION tigerfs."set_mig_mtime_modified_at"()
+		RETURNS TRIGGER AS $$
+		BEGIN NEW.modified_at = now(); RETURN NEW; END;
+		$$ LANGUAGE plpgsql`,
+		`CREATE TRIGGER "trg_mig_mtime_modified_at"
+		BEFORE UPDATE ON tigerfs."mig_mtime"
+		FOR EACH ROW EXECUTE FUNCTION tigerfs."set_mig_mtime_modified_at"()`,
+	}
+	for _, sql := range setupSQL {
+		_, err := pool.Exec(ctx, sql)
+		require.NoError(t, err, "setup SQL failed: %s", sql)
+	}
+
+	// Step 1: Detect should find this workspace
+	descCmd := cmd.BuildMigrateCmd()
+	var descBuf bytes.Buffer
+	descCmd.SetOut(&descBuf)
+	descCmd.SetErr(&descBuf)
+	descCmd.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
+	err = descCmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, descBuf.String(), "parent-dir-mtime-trigger")
+	assert.Contains(t, descBuf.String(), "mig_mtime")
+
+	// Step 2: Dry-run should show trigger SQL
+	dryCmd := cmd.BuildMigrateCmd()
+	var dryBuf bytes.Buffer
+	dryCmd.SetOut(&dryBuf)
+	dryCmd.SetErr(&dryBuf)
+	dryCmd.SetArgs([]string{result.ConnStr, "--dry-run", "--insecure-no-ssl"})
+	err = dryCmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, dryBuf.String(), "bump_mig_mtime_parent_mtime")
+	assert.Contains(t, dryBuf.String(), "AFTER INSERT OR DELETE OR UPDATE")
+
+	// Step 3: Execute migration
+	execCmd := cmd.BuildMigrateCmd()
+	var execBuf bytes.Buffer
+	execCmd.SetOut(&execBuf)
+	execCmd.SetErr(&execBuf)
+	execCmd.SetArgs([]string{result.ConnStr, "--insecure-no-ssl"})
+	err = execCmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, execBuf.String(), "parent-dir-mtime-trigger")
+
+	// Step 4: Verify trigger exists
+	var hasTrigger bool
+	err = pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM pg_trigger t
+			JOIN pg_class c ON c.oid = t.tgrelid
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE t.tgname = 'trg_mig_mtime_parent_mtime'
+			  AND c.relname = 'mig_mtime' AND n.nspname = 'tigerfs'
+		)`).Scan(&hasTrigger)
+	require.NoError(t, err)
+	assert.True(t, hasTrigger, "trigger should exist after migration")
+
+	// Step 5: Verify trigger works -- create a dir, then insert a file, check parent mtime
+	_, err = pool.Exec(ctx, `INSERT INTO tigerfs."mig_mtime" (id, filename, filetype) VALUES (gen_random_uuid(), 'testdir', 'directory')`)
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+	var dirMtimeBefore time.Time
+	err = pool.QueryRow(ctx, `SELECT modified_at FROM tigerfs."mig_mtime" WHERE filename = 'testdir' AND filetype = 'directory'`).Scan(&dirMtimeBefore)
+	require.NoError(t, err)
+
+	var dirID string
+	err = pool.QueryRow(ctx, `SELECT id FROM tigerfs."mig_mtime" WHERE filename = 'testdir' AND filetype = 'directory'`).Scan(&dirID)
+	require.NoError(t, err)
+
+	time.Sleep(10 * time.Millisecond)
+	_, err = pool.Exec(ctx, `INSERT INTO tigerfs."mig_mtime" (id, parent_id, filename, filetype, body) VALUES (gen_random_uuid(), $1, 'test.md', 'file', 'hello')`, dirID)
+	require.NoError(t, err)
+
+	var dirMtimeAfter time.Time
+	err = pool.QueryRow(ctx, `SELECT modified_at FROM tigerfs."mig_mtime" WHERE filename = 'testdir' AND filetype = 'directory'`).Scan(&dirMtimeAfter)
+	require.NoError(t, err)
+	assert.True(t, dirMtimeAfter.After(dirMtimeBefore), "dir mtime should increase after child insert")
+
+	// Step 6: Idempotency -- second describe should find nothing
+	idemp := cmd.BuildMigrateCmd()
+	var idempBuf bytes.Buffer
+	idemp.SetOut(&idempBuf)
+	idemp.SetErr(&idempBuf)
+	idemp.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
+	err = idemp.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, idempBuf.String(), "No pending migrations")
+
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cp, err := pgxpool.New(cleanupCtx, result.ConnStr)
+		if err != nil {
+			return
+		}
+		defer cp.Close()
+		cp.Exec(cleanupCtx, `DROP TABLE IF EXISTS tigerfs."mig_mtime" CASCADE`)
+		cp.Exec(cleanupCtx, `DROP VIEW IF EXISTS "mig_mtime" CASCADE`)
+	})
+}
+
+// TestSynth_MigrateParentDirMtimeTrigger_NotNeeded tests that workspaces
+// created with the trigger already present don't show up in migration detect.
+func TestSynth_MigrateParentDirMtimeTrigger_NotNeeded(t *testing.T) {
+	require.NoError(t, config.Init(), "config.Init should succeed")
+
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mig_mtime_new")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Create a workspace with the full build path (includes trigger)
+	fsErr := ops.WriteFile(ctx, "/.build/mig_mtime_new", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Describe should find no pending migrations
+	descCmd := cmd.BuildMigrateCmd()
+	var descBuf bytes.Buffer
+	descCmd.SetOut(&descBuf)
+	descCmd.SetErr(&descBuf)
+	descCmd.SetArgs([]string{result.ConnStr, "--describe", "--insecure-no-ssl"})
+	err := descCmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, descBuf.String(), "No pending migrations")
+}
