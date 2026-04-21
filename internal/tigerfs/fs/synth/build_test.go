@@ -147,6 +147,71 @@ func TestGenerateModifiedAtTriggerSQL(t *testing.T) {
 	}
 }
 
+func TestGenerateParentDirMtimeTriggerSQL(t *testing.T) {
+	stmts := GenerateParentDirMtimeTriggerSQL("public", "posts")
+	if len(stmts) != 2 {
+		t.Fatalf("expected 2 statements, got %d", len(stmts))
+	}
+
+	funcSQL := stmts[0]
+	triggerSQL := stmts[1]
+
+	// Function
+	if !strings.Contains(funcSQL, "CREATE OR REPLACE FUNCTION") {
+		t.Errorf("should create function, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, `"tigerfs"."bump_posts_parent_mtime"`) {
+		t.Errorf("function should be in tigerfs schema with correct name, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, "RETURNS TRIGGER") {
+		t.Errorf("should return trigger, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, "RETURN NULL") {
+		t.Errorf("AFTER trigger must return NULL, got:\n%s", funcSQL)
+	}
+	// Should handle all three operations
+	if !strings.Contains(funcSQL, "TG_OP = 'INSERT'") {
+		t.Errorf("should handle INSERT, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, "TG_OP = 'DELETE'") {
+		t.Errorf("should handle DELETE, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, "TG_OP = 'UPDATE'") {
+		t.Errorf("should handle UPDATE, got:\n%s", funcSQL)
+	}
+	// Should reference parent_id and filetype
+	if !strings.Contains(funcSQL, "NEW.parent_id") {
+		t.Errorf("should reference NEW.parent_id, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, "OLD.parent_id") {
+		t.Errorf("should reference OLD.parent_id, got:\n%s", funcSQL)
+	}
+	if !strings.Contains(funcSQL, "filetype = 'directory'") {
+		t.Errorf("should guard against non-directory parents, got:\n%s", funcSQL)
+	}
+	// Should use IS DISTINCT FROM for NULL-safe comparison
+	if !strings.Contains(funcSQL, "IS DISTINCT FROM") {
+		t.Errorf("should use IS DISTINCT FROM for NULL-safe comparison, got:\n%s", funcSQL)
+	}
+
+	// Trigger
+	if !strings.Contains(triggerSQL, "CREATE TRIGGER") {
+		t.Errorf("should create trigger, got:\n%s", triggerSQL)
+	}
+	if !strings.Contains(triggerSQL, `"trg_posts_parent_mtime"`) {
+		t.Errorf("trigger name should use correct pattern, got:\n%s", triggerSQL)
+	}
+	if !strings.Contains(triggerSQL, "AFTER INSERT OR DELETE OR UPDATE OF parent_id, filename") {
+		t.Errorf("should be AFTER trigger with column filter, got:\n%s", triggerSQL)
+	}
+	if !strings.Contains(triggerSQL, "FOR EACH ROW") {
+		t.Errorf("should be row-level trigger, got:\n%s", triggerSQL)
+	}
+	if !strings.Contains(triggerSQL, `"tigerfs"."posts"`) {
+		t.Errorf("trigger should reference tigerfs.posts, got:\n%s", triggerSQL)
+	}
+}
+
 func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	stmts, err := GenerateBuildSQL("public", "posts", FormatMarkdown)
 	if err != nil {
@@ -186,9 +251,10 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, `"public"."posts" AS SELECT * FROM "tigerfs"."posts"`) {
 		t.Errorf("view should be in public schema referencing tigerfs, got:\n%s", allSQL)
 	}
-	// Should have 8 statements: schema, resolve_path, table, parent_index, view, comment, function, trigger
-	if len(stmts) != 8 {
-		t.Errorf("expected 8 statements, got %d", len(stmts))
+	// Should have 10 statements: schema, resolve_path, table, parent_index, view, comment,
+	// modified_at function + trigger, parent_mtime function + trigger
+	if len(stmts) != 10 {
+		t.Errorf("expected 10 statements, got %d", len(stmts))
 	}
 
 	// Parent index for ReadDir and path resolution
@@ -456,10 +522,10 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 
 	allSQL := strings.Join(stmts, "\n")
 
-	// Should have base (8: schema+resolve_path+table+parent_idx+view+comment+func+trigger)
-	// + history (8: table+2idx+func+trigger+log+logidx+savepoint) = 16 statements
-	if len(stmts) != 16 {
-		t.Errorf("expected 16 statements, got %d", len(stmts))
+	// Should have base (10: schema+resolve_path+table+parent_idx+view+comment+func+trigger+parent_mtime_func+parent_mtime_trigger)
+	// + history (8: table+2idx+func+trigger+log+logidx+savepoint) = 18 statements
+	if len(stmts) != 18 {
+		t.Errorf("expected 18 statements, got %d", len(stmts))
 	}
 
 	// First statement should create tigerfs schema
