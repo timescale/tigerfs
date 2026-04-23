@@ -1316,7 +1316,10 @@ CREATE TABLE tigerfs.notes (
 
 The `parent_id` column implements a parent-pointer directory model (ADR-017): `filename` stores only the leaf name (e.g., `todo.md`), and `parent_id` references the parent directory row. NULL for root-level entries. Directory renames and moves are single-row updates. The `DEFERRABLE` constraints support undo transactions.
 
-A `BEFORE UPDATE` trigger automatically sets `modified_at = now()` on every update.
+Two triggers maintain timestamps:
+
+1. **`BEFORE UPDATE` trigger** (`trg_<name>_modified_at`): Sets `modified_at = now()` on every row update.
+2. **`AFTER INSERT OR DELETE OR UPDATE OF parent_id, filename` trigger** (`trg_<name>_parent_mtime`): Bumps the parent directory's `modified_at` when children are added, removed, or moved. Uses column-level filtering so content-only edits (body, title, headers) never fire it. This gives directories POSIX-correct mtime semantics.
 
 ### View Architecture
 
@@ -2144,6 +2147,30 @@ tigerfs fork /mnt/db --no-mount
 - Unless `--no-mount`, spawns a background `tigerfs mount` process for the fork
 - `--json` outputs the fork result (source ID, fork ID, name, connection string, mountpoint)
 
+#### 12. migrate
+
+**Syntax:**
+```bash
+tigerfs migrate CONNECTION [--describe] [--dry-run] [--insecure-no-ssl] [--schema SCHEMA]
+```
+
+**Description:** Detect and run pending database migrations. Migrations are named actions that update database structures for compatibility with newer TigerFS versions.
+
+**Modes:**
+- `--describe`: List pending migrations without generating SQL
+- `--dry-run`: Show the SQL that would be executed without running it
+- (default): Execute all pending migrations
+
+**Current migrations (run in order):**
+
+| Migration | Description |
+|-----------|-------------|
+| `move-backing-tables` | Move backing tables from user schema to tigerfs schema |
+| `relational-directories` | Add parent-pointer directory model (parent_id column) |
+| `parent-dir-mtime-trigger` | Add trigger to update parent directory mtime when children change |
+
+Each migration has a Detect function that checks whether it's needed (queries system catalogs) and a Plan function that generates SQL. Migrations are idempotent -- running `migrate` when nothing is pending is a no-op.
+
 ---
 
 ## Connection and Authentication
@@ -2502,7 +2529,13 @@ tigerfs mount tiger:<service-id> /mnt/cloud
 **mtime (Modification Time):**
 - Check for `updated_at` or `modified_at` column (common convention)
 - Use column value if exists
-- Fallback to current time if column doesn't exist
+- Fallback to `created_at`, then to mount time if neither exists
+
+**Directory mtime (File-First Workspaces):**
+- Directory `modified_at` is updated by a database trigger when children are added, removed, renamed, or moved
+- Content-only edits to files do NOT change the parent directory's mtime (POSIX-correct behavior)
+- This ensures NFS/FUSE clients detect directory content changes and re-fetch listings
+- Cross-mount visibility: another mount sees directory changes within the stat cache TTL (2 seconds)
 
 **ctime (Change Time) and atime (Access Time):**
 - Use same as mtime or current time
@@ -2512,6 +2545,7 @@ tigerfs mount tiger:<service-id> /mnt/cloud
 - Meaningful timestamps when available
 - Graceful degradation for tables without timestamp columns
 - No extra queries just for timestamps
+- Directory mtime enables correct NFS/FUSE cache invalidation after undo and cross-mount operations
 
 ### Ownership
 
@@ -3188,9 +3222,10 @@ For multi-chunk writes, this produces **O(n²) total DB write volume**: the firs
 **Mitigations in place:**
 
 1. **wsize=128KB** (macOS mount option): 4x fewer RPCs than macOS default (32KB-64KB). Larger values (e.g., 1MB) can trigger GC deadlocks in test environments where the NFS server runs in the same process as the client. 128KB is a safe balance.
-2. **Schema caching**: Schema resolution is cached with `sync.Once`, eliminating ~4-6 DB queries per RPC.
-3. **Stat cache**: Dirty cached files return size from memory, avoiding a DB read after each write.
-4. **Per-RPC overhead**: Reduced from ~7-9 DB queries to ~1 DB write per WRITE RPC.
+2. **noac** (macOS mount option): Disables NFS client attribute caching. Without this, the client caches file attributes (mtime, size) for up to 60 seconds (`acregmax`), causing stale reads after undo operations or cross-mount changes. This does not increase SQL queries -- GETATTR requests are served from TigerFS's in-memory stat cache (2s TTL). The cost is only additional loopback NFS round-trips (~0.1ms each).
+3. **Schema caching**: Schema resolution is cached with `sync.Once`, eliminating ~4-6 DB queries per RPC.
+4. **Stat cache**: Dirty cached files return size from memory, avoiding a DB read after each write.
+5. **Per-RPC overhead**: Reduced from ~7-9 DB queries to ~1 DB write per WRITE RPC.
 
 **Behavior:**
 
