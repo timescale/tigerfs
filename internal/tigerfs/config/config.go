@@ -67,6 +67,9 @@ type Config struct {
 	DefaultFormat  string `mapstructure:"default_format"`
 	BinaryEncoding string `mapstructure:"binary_encoding"`
 
+	// Session Variables
+	SessionVariables map[string]string `mapstructure:"session_variables"` // Applied via SET LOCAL to every query (e.g. {"app.user_id": "42"})
+
 	// FUSE backend selection (Linux only)
 	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
 

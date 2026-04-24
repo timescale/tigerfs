@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -109,11 +108,11 @@ func (p *QueryParams) HasOrder() bool {
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection or transaction
 //   - params: Query parameters from pipeline context
 //
 // Returns primary key values as strings, or error on database failure.
-func QueryRowsPipeline(ctx context.Context, pool *pgxpool.Pool, params QueryParams) ([]string, error) {
+func QueryRowsPipeline(ctx context.Context, dbtx DBTX, params QueryParams) ([]string, error) {
 	logging.Debug("Executing pipeline query",
 		zap.String("schema", params.Schema),
 		zap.String("table", params.Table),
@@ -128,7 +127,7 @@ func QueryRowsPipeline(ctx context.Context, pool *pgxpool.Pool, params QueryPara
 		zap.String("sql", query),
 		zap.Int("param_count", len(queryParams)))
 
-	rows, err := pool.Query(ctx, query, queryParams...)
+	rows, err := dbtx.Query(ctx, query, queryParams...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute pipeline query: %w", err)
 	}
@@ -163,11 +162,13 @@ func QueryRowsPipeline(ctx context.Context, pool *pgxpool.Pool, params QueryPara
 }
 
 // QueryRowsPipeline is a convenience wrapper for Client.
-func (c *Client) QueryRowsPipeline(ctx context.Context, params QueryParams) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) QueryRowsPipeline(ctx context.Context, params QueryParams) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return QueryRowsPipeline(ctx, c.pool, params)
+	defer func() { done(retErr) }()
+	return QueryRowsPipeline(ctx, q, params)
 }
 
 // QueryRowsWithDataPipeline executes a pipeline query and returns full row data.
@@ -175,11 +176,11 @@ func (c *Client) QueryRowsPipeline(ctx context.Context, params QueryParams) ([]s
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection or transaction
 //   - params: Query parameters from pipeline context
 //
 // Returns column names and row data, or error on database failure.
-func QueryRowsWithDataPipeline(ctx context.Context, pool *pgxpool.Pool, params QueryParams) ([]string, [][]interface{}, error) {
+func QueryRowsWithDataPipeline(ctx context.Context, dbtx DBTX, params QueryParams) ([]string, [][]interface{}, error) {
 	logging.Debug("Executing pipeline query with full data",
 		zap.String("schema", params.Schema),
 		zap.String("table", params.Table),
@@ -194,7 +195,7 @@ func QueryRowsWithDataPipeline(ctx context.Context, pool *pgxpool.Pool, params Q
 		zap.String("sql", query),
 		zap.Int("param_count", len(queryParams)))
 
-	rows, err := pool.Query(ctx, query, queryParams...)
+	rows, err := dbtx.Query(ctx, query, queryParams...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to execute pipeline query: %w", err)
 	}
@@ -229,11 +230,13 @@ func QueryRowsWithDataPipeline(ctx context.Context, pool *pgxpool.Pool, params Q
 }
 
 // QueryRowsWithDataPipeline is a convenience wrapper for Client.
-func (c *Client) QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error) {
-	if c.pool == nil {
-		return nil, nil, fmt.Errorf("database connection not initialized")
+func (c *Client) QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) (columns []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-	return QueryRowsWithDataPipeline(ctx, c.pool, params)
+	defer func() { done(retErr) }()
+	return QueryRowsWithDataPipeline(ctx, q, params)
 }
 
 // buildPipelineSQL constructs the SQL query for a pipeline operation.

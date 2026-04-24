@@ -5,6 +5,17 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Per-query session variable scoping via `SET LOCAL` in transactions.
+  Enables multi-tenant RLS from a shared connection pool, compatible with
+  PgBouncer (session + transaction mode) and RDS Proxy. Configure via
+  `--session-var key=value` CLI flag, `session_variables` config, or
+  `db.WithSessionVars()` library API.
+- `DBTX` interface abstracting `*pgxpool.Pool` and `pgx.Tx`, enabling
+  transparent transaction wrapping for session variable injection.
+
 ## [0.6.0] - 2026-03-26
 
 **Dedicated tigerfs schema, security hardening, and unified demo.**
