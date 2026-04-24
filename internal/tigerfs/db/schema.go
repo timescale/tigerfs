@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -17,14 +16,14 @@ import (
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection (pool or transaction)
 //
 // Returns the current schema name, or error on database failure.
-func GetCurrentSchema(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+func GetCurrentSchema(ctx context.Context, dbtx DBTX) (string, error) {
 	logging.Debug("Querying current_schema from PostgreSQL")
 
 	var schema string
-	err := pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema)
+	err := dbtx.QueryRow(ctx, "SELECT current_schema()").Scan(&schema)
 	if err != nil {
 		return "", fmt.Errorf("failed to query current_schema: %w", err)
 	}
@@ -42,7 +41,7 @@ func (c *Client) GetCurrentSchema(ctx context.Context) (string, error) {
 }
 
 // GetSchemas returns all user-defined schemas (excluding system schemas)
-func GetSchemas(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+func GetSchemas(ctx context.Context, dbtx DBTX) ([]string, error) {
 	logging.Debug("Querying schemas from information_schema")
 
 	query := `
@@ -52,7 +51,7 @@ func GetSchemas(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 		ORDER BY schema_name
 	`
 
-	rows, err := pool.Query(ctx, query)
+	rows, err := dbtx.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query schemas: %w", err)
 	}
@@ -79,7 +78,7 @@ func GetSchemas(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 // Excludes tables owned by extensions (e.g., pg_buffercache internal tables)
 // via pg_depend deptype='e'. Hypertables are NOT excluded — TimescaleDB
 // tracks them in its own catalog, not pg_depend.
-func GetTables(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
+func GetTables(ctx context.Context, dbtx DBTX, schema string) ([]string, error) {
 	logging.Debug("Querying tables from information_schema", zap.String("schema", schema))
 
 	query := `
@@ -97,7 +96,7 @@ func GetTables(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string
 		ORDER BY t.table_name
 	`
 
-	rows, err := pool.Query(ctx, query, schema)
+	rows, err := dbtx.Query(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tables: %w", err)
 	}
@@ -143,7 +142,7 @@ func (c *Client) GetTables(ctx context.Context, schema string) ([]string, error)
 // GetViews returns all user views in a given schema.
 // Excludes views owned by extensions (e.g., pg_buffercache, pg_buffercache_numa)
 // via pg_depend deptype='e'.
-func GetViews(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string, error) {
+func GetViews(ctx context.Context, dbtx DBTX, schema string) ([]string, error) {
 	logging.Debug("Querying views from information_schema", zap.String("schema", schema))
 
 	query := `
@@ -161,7 +160,7 @@ func GetViews(ctx context.Context, pool *pgxpool.Pool, schema string) ([]string,
 		ORDER BY t.table_name
 	`
 
-	rows, err := pool.Query(ctx, query, schema)
+	rows, err := dbtx.Query(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query views: %w", err)
 	}
@@ -200,7 +199,7 @@ func (c *Client) GetViews(ctx context.Context, schema string) ([]string, error) 
 // PostgreSQL determines this based on the view definition - simple views on
 // single tables are typically updatable, while views with JOINs, aggregates,
 // DISTINCT, GROUP BY, etc. are not.
-func IsViewUpdatable(ctx context.Context, pool *pgxpool.Pool, schema, view string) (bool, error) {
+func IsViewUpdatable(ctx context.Context, dbtx DBTX, schema, view string) (bool, error) {
 	logging.Debug("Checking if view is updatable",
 		zap.String("schema", schema),
 		zap.String("view", view))
@@ -212,7 +211,7 @@ func IsViewUpdatable(ctx context.Context, pool *pgxpool.Pool, schema, view strin
 	`
 
 	var isUpdatable string
-	err := pool.QueryRow(ctx, query, schema, view).Scan(&isUpdatable)
+	err := dbtx.QueryRow(ctx, query, schema, view).Scan(&isUpdatable)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return false, fmt.Errorf("view %s.%s not found", schema, view)
@@ -250,7 +249,7 @@ type Column struct {
 // GetColumns returns all columns for a table in schema order.
 // Fetches column_default and character_maximum_length so callers
 // can generate DDL without a separate query.
-func GetColumns(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Column, error) {
+func GetColumns(ctx context.Context, dbtx DBTX, schema, table string) ([]Column, error) {
 	logging.Debug("Querying columns from information_schema",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -264,7 +263,7 @@ func GetColumns(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 		ORDER BY ordinal_position
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query columns: %w", err)
 	}
@@ -302,7 +301,7 @@ func (c *Client) GetColumns(ctx context.Context, schema, table string) ([]Column
 }
 
 // GetRowCount returns the number of rows in a table
-func GetRowCount(ctx context.Context, pool *pgxpool.Pool, schema, table string) (int64, error) {
+func GetRowCount(ctx context.Context, dbtx DBTX, schema, table string) (int64, error) {
 	logging.Debug("Getting row count",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -313,7 +312,7 @@ func GetRowCount(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 	)
 
 	var count int64
-	err := pool.QueryRow(ctx, query).Scan(&count)
+	err := dbtx.QueryRow(ctx, query).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get row count: %w", err)
 	}
@@ -348,12 +347,12 @@ const SmallTableThreshold = 100000
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: PostgreSQL schema name
 //   - table: Table name
 //
 // Returns the estimated row count, or -1 if the table is not found in pg_class.
-func GetTableRowCountEstimate(ctx context.Context, pool *pgxpool.Pool, schema, table string) (int64, error) {
+func GetTableRowCountEstimate(ctx context.Context, dbtx DBTX, schema, table string) (int64, error) {
 	logging.Debug("Getting table row count estimate",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -366,7 +365,7 @@ func GetTableRowCountEstimate(ctx context.Context, pool *pgxpool.Pool, schema, t
 	`
 
 	var estimate int64
-	err := pool.QueryRow(ctx, query, schema, table).Scan(&estimate)
+	err := dbtx.QueryRow(ctx, query, schema, table).Scan(&estimate)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			logging.Debug("Table not found in pg_class",
@@ -403,18 +402,18 @@ func (c *Client) GetTableRowCountEstimate(ctx context.Context, schema, table str
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: PostgreSQL schema name
 //   - table: Table name to count
 //
 // Returns the row count (exact or estimated), or error on database failure.
-func GetRowCountSmart(ctx context.Context, pool *pgxpool.Pool, schema, table string) (int64, error) {
+func GetRowCountSmart(ctx context.Context, dbtx DBTX, schema, table string) (int64, error) {
 	logging.Debug("Getting smart row count",
 		zap.String("schema", schema),
 		zap.String("table", table))
 
 	// Get the pg_class.reltuples estimate using shared helper
-	estimate, err := GetTableRowCountEstimate(ctx, pool, schema, table)
+	estimate, err := GetTableRowCountEstimate(ctx, dbtx, schema, table)
 	if err != nil {
 		return 0, err
 	}
@@ -424,7 +423,7 @@ func GetRowCountSmart(ctx context.Context, pool *pgxpool.Pool, schema, table str
 		logging.Debug("Table not found in pg_class, using exact count",
 			zap.String("schema", schema),
 			zap.String("table", table))
-		return GetRowCount(ctx, pool, schema, table)
+		return GetRowCount(ctx, dbtx, schema, table)
 	}
 
 	// For small tables, use exact count for accuracy
@@ -433,7 +432,7 @@ func GetRowCountSmart(ctx context.Context, pool *pgxpool.Pool, schema, table str
 			zap.String("table", table),
 			zap.Int64("estimate", estimate),
 			zap.Int64("threshold", SmallTableThreshold))
-		return GetRowCount(ctx, pool, schema, table)
+		return GetRowCount(ctx, dbtx, schema, table)
 	}
 
 	// For large tables, return the estimate to avoid expensive full scan
@@ -462,7 +461,7 @@ func (c *Client) GetRowCountSmart(ctx context.Context, schema, table string) (in
 // GetRowCountEstimates returns fast row count estimates for multiple tables using pg_class.
 // Uses reltuples from PostgreSQL statistics, avoiding full table scans.
 // Returns a map of table name to estimated row count.
-func GetRowCountEstimates(ctx context.Context, pool *pgxpool.Pool, schema string, tables []string) (map[string]int64, error) {
+func GetRowCountEstimates(ctx context.Context, dbtx DBTX, schema string, tables []string) (map[string]int64, error) {
 	if len(tables) == 0 {
 		return make(map[string]int64), nil
 	}
@@ -478,7 +477,7 @@ func GetRowCountEstimates(ctx context.Context, pool *pgxpool.Pool, schema string
 		WHERE n.nspname = $1 AND c.relname = ANY($2)
 	`
 
-	rows, err := pool.Query(ctx, query, schema, tables)
+	rows, err := dbtx.Query(ctx, query, schema, tables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get row count estimates: %w", err)
 	}
@@ -515,7 +514,7 @@ func (c *Client) GetRowCountEstimates(ctx context.Context, schema string, tables
 
 // GetTableDDL returns the CREATE TABLE statement for a table
 // Constructs DDL from information_schema
-func GetTableDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetTableDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting table DDL",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -533,7 +532,7 @@ func GetTableDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 		ORDER BY ordinal_position
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to query column definitions: %w", err)
 	}
@@ -592,7 +591,7 @@ func GetTableDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 	`
 
 	var pkColumns *string
-	if err := pool.QueryRow(ctx, pkQuery, schema, table).Scan(&pkColumns); err != nil && err != pgx.ErrNoRows {
+	if err := dbtx.QueryRow(ctx, pkQuery, schema, table).Scan(&pkColumns); err != nil && err != pgx.ErrNoRows {
 		return "", fmt.Errorf("failed to query primary key: %w", err)
 	}
 
@@ -668,7 +667,7 @@ func FormatTableDDL(schema, table string, columns []Column, pk *PrimaryKey) stri
 // GetIndexDDL returns CREATE INDEX statements for a table.
 // Includes both regular and unique indexes, excluding primary key constraints
 // (which are already shown in the CREATE TABLE statement).
-func GetIndexDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetIndexDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting index DDL",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -687,7 +686,7 @@ func GetIndexDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) 
 		ORDER BY indexname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to query indexes: %w", err)
 	}
@@ -719,7 +718,7 @@ func (c *Client) GetIndexDDL(ctx context.Context, schema, table string) (string,
 }
 
 // GetForeignKeyDDL returns ALTER TABLE statements for foreign key constraints.
-func GetForeignKeyDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetForeignKeyDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting foreign key DDL",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -737,7 +736,7 @@ func GetForeignKeyDDL(ctx context.Context, pool *pgxpool.Pool, schema, table str
 		ORDER BY con.conname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to query foreign keys: %w", err)
 	}
@@ -769,7 +768,7 @@ func (c *Client) GetForeignKeyDDL(ctx context.Context, schema, table string) (st
 }
 
 // GetCheckConstraintDDL returns ALTER TABLE statements for check constraints.
-func GetCheckConstraintDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetCheckConstraintDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting check constraint DDL",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -787,7 +786,7 @@ func GetCheckConstraintDDL(ctx context.Context, pool *pgxpool.Pool, schema, tabl
 		ORDER BY con.conname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to query check constraints: %w", err)
 	}
@@ -819,7 +818,7 @@ func (c *Client) GetCheckConstraintDDL(ctx context.Context, schema, table string
 }
 
 // GetTriggerDDL returns CREATE TRIGGER statements for a table.
-func GetTriggerDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetTriggerDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting trigger DDL",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -835,7 +834,7 @@ func GetTriggerDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string
 		ORDER BY t.tgname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to query triggers: %w", err)
 	}
@@ -867,7 +866,7 @@ func (c *Client) GetTriggerDDL(ctx context.Context, schema, table string) (strin
 }
 
 // GetTableComments returns COMMENT statements for table and columns.
-func GetTableComments(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetTableComments(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting table comments",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -879,7 +878,7 @@ func GetTableComments(ctx context.Context, pool *pgxpool.Pool, schema, table str
 		SELECT obj_description((quote_ident($1) || '.' || quote_ident($2))::regclass, 'pg_class')
 	`
 	var tableComment *string
-	err := pool.QueryRow(ctx, tableCommentQuery, schema, table).Scan(&tableComment)
+	err := dbtx.QueryRow(ctx, tableCommentQuery, schema, table).Scan(&tableComment)
 	if err != nil {
 		return "", fmt.Errorf("failed to query table comment: %w", err)
 	}
@@ -903,7 +902,7 @@ func GetTableComments(ctx context.Context, pool *pgxpool.Pool, schema, table str
 		ORDER BY a.attnum
 	`
 
-	rows, err := pool.Query(ctx, columnCommentQuery, schema, table)
+	rows, err := dbtx.Query(ctx, columnCommentQuery, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to query column comments: %w", err)
 	}
@@ -941,7 +940,7 @@ func (c *Client) GetTableComments(ctx context.Context, schema, table string) (st
 // - Triggers
 // - Comments
 // Sections are only included if they have content.
-func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (string, error) {
+func GetFullDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, error) {
 	logging.Debug("Getting full DDL",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -949,7 +948,7 @@ func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	var ddl strings.Builder
 
 	// Table definition
-	tableDDL, err := GetTableDDL(ctx, pool, schema, table)
+	tableDDL, err := GetTableDDL(ctx, dbtx, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to get table DDL: %w", err)
 	}
@@ -958,7 +957,7 @@ func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	ddl.WriteString("\n")
 
 	// Indexes
-	indexDDL, err := GetIndexDDL(ctx, pool, schema, table)
+	indexDDL, err := GetIndexDDL(ctx, dbtx, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to get index DDL: %w", err)
 	}
@@ -969,7 +968,7 @@ func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	}
 
 	// Foreign keys
-	fkDDL, err := GetForeignKeyDDL(ctx, pool, schema, table)
+	fkDDL, err := GetForeignKeyDDL(ctx, dbtx, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to get foreign key DDL: %w", err)
 	}
@@ -980,7 +979,7 @@ func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	}
 
 	// Check constraints
-	checkDDL, err := GetCheckConstraintDDL(ctx, pool, schema, table)
+	checkDDL, err := GetCheckConstraintDDL(ctx, dbtx, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to get check constraint DDL: %w", err)
 	}
@@ -991,7 +990,7 @@ func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	}
 
 	// Triggers
-	triggerDDL, err := GetTriggerDDL(ctx, pool, schema, table)
+	triggerDDL, err := GetTriggerDDL(ctx, dbtx, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to get trigger DDL: %w", err)
 	}
@@ -1002,7 +1001,7 @@ func GetFullDDL(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 	}
 
 	// Comments
-	commentsDDL, err := GetTableComments(ctx, pool, schema, table)
+	commentsDDL, err := GetTableComments(ctx, dbtx, schema, table)
 	if err != nil {
 		return "", fmt.Errorf("failed to get table comments: %w", err)
 	}
@@ -1041,7 +1040,7 @@ type ForeignKeyRef struct {
 
 // GetReferencingForeignKeys returns foreign keys that reference the specified table.
 // This is the reverse of GetForeignKeyDDL - it finds tables that depend on this table.
-func GetReferencingForeignKeys(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]ForeignKeyRef, error) {
+func GetReferencingForeignKeys(ctx context.Context, dbtx DBTX, schema, table string) ([]ForeignKeyRef, error) {
 	logging.Debug("Getting referencing foreign keys",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -1070,7 +1069,7 @@ func GetReferencingForeignKeys(ctx context.Context, pool *pgxpool.Pool, schema, 
 		ORDER BY src_nsp.nspname, src_cls.relname, con.conname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query referencing foreign keys: %w", err)
 	}
@@ -1114,7 +1113,7 @@ func (c *Client) GetReferencingForeignKeys(ctx context.Context, schema, table st
 
 // GetSchemaTableCount returns the number of tables in a schema.
 // Used to determine if a schema is empty when generating delete templates.
-func GetSchemaTableCount(ctx context.Context, pool *pgxpool.Pool, schema string) (int, error) {
+func GetSchemaTableCount(ctx context.Context, dbtx DBTX, schema string) (int, error) {
 	logging.Debug("Getting schema table count",
 		zap.String("schema", schema))
 
@@ -1127,7 +1126,7 @@ func GetSchemaTableCount(ctx context.Context, pool *pgxpool.Pool, schema string)
 	`
 
 	var count int
-	err := pool.QueryRow(ctx, query, schema).Scan(&count)
+	err := dbtx.QueryRow(ctx, query, schema).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get schema table count: %w", err)
 	}
@@ -1146,7 +1145,7 @@ func (c *Client) GetSchemaTableCount(ctx context.Context, schema string) (int, e
 // GetViewComment returns the raw comment string for a view.
 // Returns empty string if the view has no comment.
 // Used to detect synthesized format markers (e.g., "tigerfs:md").
-func GetViewComment(ctx context.Context, pool *pgxpool.Pool, schema, view string) (string, error) {
+func GetViewComment(ctx context.Context, dbtx DBTX, schema, view string) (string, error) {
 	logging.Debug("Getting view comment",
 		zap.String("schema", schema),
 		zap.String("view", view))
@@ -1161,7 +1160,7 @@ func GetViewComment(ctx context.Context, pool *pgxpool.Pool, schema, view string
 	`
 
 	var comment string
-	err := pool.QueryRow(ctx, query, schema, view).Scan(&comment)
+	err := dbtx.QueryRow(ctx, query, schema, view).Scan(&comment)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return "", nil
@@ -1182,7 +1181,7 @@ func (c *Client) GetViewComment(ctx context.Context, schema, view string) (strin
 
 // GetViewCommentsBatch returns comments for all views in a schema.
 // Returns a map of view name to comment string. Views without comments are omitted.
-func GetViewCommentsBatch(ctx context.Context, pool *pgxpool.Pool, schema string) (map[string]string, error) {
+func GetViewCommentsBatch(ctx context.Context, dbtx DBTX, schema string) (map[string]string, error) {
 	logging.Debug("Getting view comments batch",
 		zap.String("schema", schema))
 
@@ -1195,7 +1194,7 @@ func GetViewCommentsBatch(ctx context.Context, pool *pgxpool.Pool, schema string
 		AND obj_description(c.oid, 'pg_class') IS NOT NULL
 	`
 
-	rows, err := pool.Query(ctx, query, schema)
+	rows, err := dbtx.Query(ctx, query, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query view comments: %w", err)
 	}
@@ -1232,7 +1231,7 @@ func (c *Client) GetViewCommentsBatch(ctx context.Context, schema string) (map[s
 }
 
 // GetViewDefinition returns the SQL definition of a view.
-func GetViewDefinition(ctx context.Context, pool *pgxpool.Pool, schema, view string) (string, error) {
+func GetViewDefinition(ctx context.Context, dbtx DBTX, schema, view string) (string, error) {
 	logging.Debug("Getting view definition",
 		zap.String("schema", schema),
 		zap.String("view", view))
@@ -1247,7 +1246,7 @@ func GetViewDefinition(ctx context.Context, pool *pgxpool.Pool, schema, view str
 	`
 
 	var definition string
-	err := pool.QueryRow(ctx, query, schema, view).Scan(&definition)
+	err := dbtx.QueryRow(ctx, query, schema, view).Scan(&definition)
 	if err != nil {
 		return "", fmt.Errorf("failed to get view definition: %w", err)
 	}
@@ -1264,7 +1263,7 @@ func (c *Client) GetViewDefinition(ctx context.Context, schema, view string) (st
 }
 
 // GetDependentViews returns views that depend on the specified view or table.
-func GetDependentViews(ctx context.Context, pool *pgxpool.Pool, schema, name string) ([]string, error) {
+func GetDependentViews(ctx context.Context, dbtx DBTX, schema, name string) ([]string, error) {
 	logging.Debug("Getting dependent views",
 		zap.String("schema", schema),
 		zap.String("name", name))
@@ -1282,7 +1281,7 @@ func GetDependentViews(ctx context.Context, pool *pgxpool.Pool, schema, name str
 		ORDER BY dep_cls.relname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, name)
+	rows, err := dbtx.Query(ctx, query, schema, name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query dependent views: %w", err)
 	}
