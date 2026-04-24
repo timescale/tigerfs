@@ -27,29 +27,22 @@ type doneFunc func(err error)
 
 // effectiveSessionVars merges baseline (mount-level) vars with per-request
 // context vars. Context vars override baseline vars for the same key.
+// Returns a zero-value SessionVars if no vars are active.
 func (c *Client) effectiveSessionVars(ctx context.Context) SessionVars {
 	ctxVars := SessionVarsFromContext(ctx)
-	if len(c.baselineVars) == 0 && len(ctxVars) == 0 {
-		return nil
+	if c.baselineVars.Empty() && ctxVars.Empty() {
+		return SessionVars{}
 	}
-	// Fast path: baseline only (no context vars) — return directly without copy.
-	// baselineVars is immutable after construction, so sharing is safe.
-	if len(ctxVars) == 0 {
+	// Fast path: baseline only — return directly (immutable, pre-sorted).
+	if ctxVars.Empty() {
 		return c.baselineVars
 	}
-	// Context only — return directly.
-	if len(c.baselineVars) == 0 {
+	// Context only — return directly (pre-sorted at construction).
+	if c.baselineVars.Empty() {
 		return ctxVars
 	}
-	// Merge: baseline first, context overrides.
-	merged := make(SessionVars, len(c.baselineVars)+len(ctxVars))
-	for k, v := range c.baselineVars {
-		merged[k] = v
-	}
-	for k, v := range ctxVars {
-		merged[k] = v
-	}
-	return merged
+	// Merge: baseline first, context overrides. Re-sorts once.
+	return c.baselineVars.Merge(ctxVars)
 }
 
 // acquireDBTX returns a DBTX with session variables applied.
@@ -74,7 +67,7 @@ func (c *Client) acquireDBTX(ctx context.Context) (DBTX, doneFunc, error) {
 	}
 
 	vars := c.effectiveSessionVars(ctx)
-	if len(vars) == 0 {
+	if vars.Empty() {
 		return c.pool, func(error) {}, nil
 	}
 
@@ -236,9 +229,10 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 		cfg:  cfg,
 	}
 
-	// Set baseline session variables from config (applied to every query)
+	// Set baseline session variables from config (applied to every query).
+	// Keys are sorted once here; no per-query sorting needed.
 	if len(cfg.SessionVariables) > 0 {
-		client.baselineVars = SessionVars(cfg.SessionVariables)
+		client.baselineVars = NewSessionVars(cfg.SessionVariables)
 		logging.Debug("Session variables configured",
 			zap.Int("count", len(cfg.SessionVariables)))
 	}
@@ -322,7 +316,7 @@ func (c *Client) ExecInTransaction(ctx context.Context, sql string, args ...inte
 	}()
 
 	// Apply session variables (SET LOCAL) if configured
-	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+	if vars := c.effectiveSessionVars(ctx); !vars.Empty() {
 		if err := applySessionVars(ctx, tx, vars); err != nil {
 			return fmt.Errorf("failed to apply session variables: %w", err)
 		}

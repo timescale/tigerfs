@@ -32,7 +32,7 @@ func (c *Client) ImportOverwrite(ctx context.Context, schema, table string, colu
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Apply session variables (SET LOCAL) if configured
-	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+	if vars := c.effectiveSessionVars(ctx); !vars.Empty() {
 		if err := applySessionVars(ctx, tx, vars); err != nil {
 			return fmt.Errorf("failed to apply session variables: %w", err)
 		}
@@ -89,7 +89,7 @@ func (c *Client) ImportSync(ctx context.Context, schema, table string, columns [
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Apply session variables (SET LOCAL) if configured
-	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+	if vars := c.effectiveSessionVars(ctx); !vars.Empty() {
 		if err := applySessionVars(ctx, tx, vars); err != nil {
 			return fmt.Errorf("failed to apply session variables: %w", err)
 		}
@@ -134,7 +134,7 @@ func (c *Client) ImportAppend(ctx context.Context, schema, table string, columns
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// Apply session variables (SET LOCAL) if configured
-	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+	if vars := c.effectiveSessionVars(ctx); !vars.Empty() {
 		if err := applySessionVars(ctx, tx, vars); err != nil {
 			return fmt.Errorf("failed to apply session variables: %w", err)
 		}

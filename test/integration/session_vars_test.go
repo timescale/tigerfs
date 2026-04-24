@@ -86,9 +86,9 @@ func TestSessionVars_SetLocalDoesNotLeak(t *testing.T) {
 	defer client.Close()
 
 	// First query: with session vars via context
-	ctx := db.WithSessionVars(context.Background(), db.SessionVars{
+	ctx := db.WithSessionVars(context.Background(), db.NewSessionVars(map[string]string{
 		"app.user_id": "99",
-	})
+	}))
 
 	if err := client.Exec(ctx, `CREATE TEMPORARY TABLE _sv_leak (val text)`); err != nil {
 		t.Fatalf("create temp table: %v", err)
@@ -166,7 +166,7 @@ func TestSessionVars_ContextOverridesBaseline(t *testing.T) {
 	}
 
 	// Insert with context override
-	ctxOverride := db.WithSessionVars(ctx, db.SessionVars{"app.user_id": "context_user"})
+	ctxOverride := db.WithSessionVars(ctx, db.NewSessionVars(map[string]string{"app.user_id": "context_user"}))
 	if err := client.Exec(ctxOverride, `INSERT INTO _sv_override (val) VALUES (current_setting('app.user_id', true))`); err != nil {
 		t.Fatalf("insert override: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestSessionVars_RLSIsolation(t *testing.T) {
 	}
 	defer clientShared.Close()
 
-	ctxAlice := db.WithSessionVars(ctx, db.SessionVars{"app.user_id": "alice"})
+	ctxAlice := db.WithSessionVars(ctx, db.NewSessionVars(map[string]string{"app.user_id": "alice"}))
 	aliceCount2, err := clientShared.GetRowCount(ctxAlice, schema, "rls_docs")
 	if err != nil {
 		t.Fatalf("shared as alice: %v", err)
@@ -361,7 +361,7 @@ func TestSessionVars_RLSIsolation(t *testing.T) {
 		t.Errorf("shared pool as alice sees %d rows, want 2", aliceCount2)
 	}
 
-	ctxBob := db.WithSessionVars(ctx, db.SessionVars{"app.user_id": "bob"})
+	ctxBob := db.WithSessionVars(ctx, db.NewSessionVars(map[string]string{"app.user_id": "bob"}))
 	bobCount2, err := clientShared.GetRowCount(ctxBob, schema, "rls_docs")
 	if err != nil {
 		t.Fatalf("shared as bob: %v", err)
@@ -538,9 +538,9 @@ func TestSessionVars_ConcurrentIsolation(t *testing.T) {
 		wg.Add(1)
 		go func(userIdx int) {
 			defer wg.Done()
-			userCtx := db.WithSessionVars(ctx, db.SessionVars{
+			userCtx := db.WithSessionVars(ctx, db.NewSessionVars(map[string]string{
 				"app.user_id": fmt.Sprintf("user_%d", userIdx),
-			})
+			}))
 			count, err := client.GetRowCount(userCtx, schema, "conc_docs")
 			errors[userIdx] = err
 			counts[userIdx] = count

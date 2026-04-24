@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -35,19 +34,17 @@ var (
 // equivalent of SET LOCAL — safe against injection, transaction-scoped,
 // and compatible with PgBouncer transaction mode and RDS Proxy.
 //
-// Keys are sorted for deterministic ordering, which aids debugging and
-// log analysis.
+// Keys are iterated in sorted order (pre-sorted at SessionVars construction)
+// for deterministic execution with zero per-query allocation.
 func applySessionVars(ctx context.Context, tx pgx.Tx, vars SessionVars) error {
-	keys := make([]string, 0, len(vars))
-	for k := range vars {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, k := range keys {
-		if _, err := tx.Exec(ctx, "SELECT set_config($1, $2, true)", k, vars[k]); err != nil {
-			return fmt.Errorf("set session var %q: %w", k, err)
+	var applyErr error
+	vars.Range(func(key, value string) {
+		if applyErr != nil {
+			return
 		}
-	}
-	return nil
+		if _, err := tx.Exec(ctx, "SELECT set_config($1, $2, true)", key, value); err != nil {
+			applyErr = fmt.Errorf("set session var %q: %w", key, err)
+		}
+	})
+	return applyErr
 }
