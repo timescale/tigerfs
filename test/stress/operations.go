@@ -277,7 +277,8 @@ func readBackHash(fullPath string) (string, error) {
 // Returns a description string for logging, or an error.
 
 // OpCreateFile creates a new markdown file in a random directory.
-func OpCreateFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, cfg *OpConfig) (string, error) {
+// Returns the description, the number of bytes written, and any error.
+func OpCreateFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, cfg *OpConfig) (string, int, error) {
 	// Pick a directory with capacity
 	dir := pickDirWithCapacity(rng, pools, state, cfg.Density.MaxFilesPerDir)
 	name := randomName(rng) + ".md"
@@ -288,26 +289,27 @@ func OpCreateFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceS
 
 	size := generateFileSize(rng, cfg.Size)
 	content := generateContent(rng, name, size)
+	written := len(content)
 
 	fullPath := filepath.Join(wsPath, relPath)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return "", fmt.Errorf("mkdir for %s: %w", relPath, err)
+		return "", 0, fmt.Errorf("mkdir for %s: %w", relPath, err)
 	}
 	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
-		return "", fmt.Errorf("write %s: %w", relPath, err)
+		return "", 0, fmt.Errorf("write %s: %w", relPath, err)
 	}
 
 	// Read back from TigerFS to get the synthesized content hash
 	// (TigerFS re-synthesizes markdown from structured columns)
 	hash, err := readBackHash(fullPath)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	state.SetFile(relPath, hash)
 	pools.AddFile(relPath)
 
-	return fmt.Sprintf("create_file %s (%s)", relPath, formatSize(size)), nil
+	return fmt.Sprintf("create_file %s (%s)", relPath, formatSize(size)), written, nil
 }
 
 // OpEditFile modifies an existing file.
