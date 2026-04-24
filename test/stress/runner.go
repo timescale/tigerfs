@@ -110,6 +110,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 	state := NewWorkspaceState()
 	stack := NewStateStack()
 	pools := NewPools()
+	stats := NewStats()
 
 	var lastLogID string
 
@@ -126,10 +127,11 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		}
 
 		// Execute operation
-		desc, restoredState, err := executeOperation(op, wsPath, rng, pools, state, opCfg, stack, i)
+		desc, restoredState, err := executeOperation(op, wsPath, rng, pools, state, opCfg, stack, i, stats)
 		if err != nil {
 			return fmt.Errorf("[STEP %d/%d] %s failed: %w", i, cfg.Iterations, opName(op), err)
 		}
+		stats.RecordOp(opName(op))
 
 		fmt.Printf("[STEP %d/%d] %s\n", i, cfg.Iterations, desc)
 
@@ -170,6 +172,8 @@ func RunIterations(cfg *Config, infra *Infra) error {
 	fmt.Println("PASSED")
 
 	fmt.Printf("\nCompleted %d iterations with seed %d. All validations passed.\n", cfg.Iterations, cfg.Seed)
+
+	stats.Print()
 	return nil
 }
 
@@ -194,12 +198,16 @@ func selectValidOperation(rng *rand.Rand, pools *Pools, stack *StateStack) opTyp
 // executeOperation dispatches to the appropriate operation function.
 // Returns (description, restoredState, error). restoredState is non-nil only
 // for undo operations -- the caller should use it to replace the current state.
+// stats is updated with per-op metadata (currently just created-file sizes).
 func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
-	state *WorkspaceState, cfg *OpConfig, stack *StateStack, iteration int) (string, *WorkspaceState, error) {
+	state *WorkspaceState, cfg *OpConfig, stack *StateStack, iteration int, stats *Stats) (string, *WorkspaceState, error) {
 
 	switch op {
 	case opCreateFile:
-		desc, err := OpCreateFile(wsPath, rng, pools, state, cfg)
+		desc, size, err := OpCreateFile(wsPath, rng, pools, state, cfg)
+		if err == nil {
+			stats.RecordCreatedFileSize(size)
+		}
 		return desc, nil, err
 	case opEditFile:
 		desc, err := OpEditFile(wsPath, rng, pools, state, cfg)
