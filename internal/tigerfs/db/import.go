@@ -31,6 +31,13 @@ func (c *Client) ImportOverwrite(ctx context.Context, schema, table string, colu
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Apply session variables (SET LOCAL) if configured
+	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+		if err := applySessionVars(ctx, tx, vars); err != nil {
+			return fmt.Errorf("failed to apply session variables: %w", err)
+		}
+	}
+
 	// Truncate table
 	truncateSQL := fmt.Sprintf("TRUNCATE %s",
 		qt(schema, table))
@@ -81,6 +88,13 @@ func (c *Client) ImportSync(ctx context.Context, schema, table string, columns [
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Apply session variables (SET LOCAL) if configured
+	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+		if err := applySessionVars(ctx, tx, vars); err != nil {
+			return fmt.Errorf("failed to apply session variables: %w", err)
+		}
+	}
+
 	// Build upsert statement
 	// INSERT INTO table (col1, col2) VALUES ($1, $2)
 	// ON CONFLICT (pk_col) DO UPDATE SET col1 = EXCLUDED.col1, col2 = EXCLUDED.col2
@@ -119,6 +133,13 @@ func (c *Client) ImportAppend(ctx context.Context, schema, table string, columns
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Apply session variables (SET LOCAL) if configured
+	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+		if err := applySessionVars(ctx, tx, vars); err != nil {
+			return fmt.Errorf("failed to apply session variables: %w", err)
+		}
+	}
+
 	// Bulk insert (will fail on conflicts)
 	if err := c.bulkInsert(ctx, tx, schema, table, columns, rows); err != nil {
 		return err
@@ -136,10 +157,16 @@ func (c *Client) ImportAppend(ctx context.Context, schema, table string, columns
 }
 
 // truncateTable truncates a table in its own transaction.
-func (c *Client) truncateTable(ctx context.Context, schema, table string) error {
+func (c *Client) truncateTable(ctx context.Context, schema, table string) (retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { done(retErr) }()
+
 	truncateSQL := fmt.Sprintf("TRUNCATE %s",
 		qt(schema, table))
-	_, err := c.pool.Exec(ctx, truncateSQL)
+	_, err = q.Exec(ctx, truncateSQL)
 	if err != nil {
 		return fmt.Errorf("failed to truncate table: %w", err)
 	}
@@ -149,6 +176,10 @@ func (c *Client) truncateTable(ctx context.Context, schema, table string) error 
 // bulkInsert performs a bulk INSERT using COPY with text format for efficiency.
 // Text format allows PostgreSQL to handle type conversions server-side,
 // avoiding issues with binary encoding of complex types like timestamps.
+//
+// This requires pgx.Tx (not DBTX) because it uses tx.Conn().PgConn().CopyFrom()
+// which is not part of the DBTX interface. Session vars are applied by the
+// caller (ImportOverwrite/Sync/Append) at the start of the transaction.
 func (c *Client) bulkInsert(ctx context.Context, tx pgx.Tx, schema, table string, columns []string, rows [][]interface{}) error {
 	// Build COPY command with text format
 	quotedColumns := make([]string, len(columns))

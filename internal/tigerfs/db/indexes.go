@@ -44,7 +44,7 @@ func (i *Index) IsComposite() bool {
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name (e.g., "public")
 //   - table: Table name
 //
@@ -113,11 +113,13 @@ func GetIndexes(ctx context.Context, dbtx DBTX, schema, table string) ([]Index, 
 }
 
 // GetIndexes is a convenience wrapper for Client.
-func (c *Client) GetIndexes(ctx context.Context, schema, table string) ([]Index, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetIndexes(ctx context.Context, schema, table string) (result []Index, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetIndexes(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetIndexes(ctx, q, schema, table)
 }
 
 // GetIndexByColumn finds the first index whose leading column matches.
@@ -125,7 +127,7 @@ func (c *Client) GetIndexes(ctx context.Context, schema, table string) ([]Index,
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //   - column: Column name to match against first index column
@@ -148,11 +150,13 @@ func GetIndexByColumn(ctx context.Context, dbtx DBTX, schema, table, column stri
 }
 
 // GetIndexByColumn is a convenience wrapper for Client.
-func (c *Client) GetIndexByColumn(ctx context.Context, schema, table, column string) (*Index, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetIndexByColumn(ctx context.Context, schema, table, column string) (result *Index, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetIndexByColumn(ctx, c.pool, schema, table, column)
+	defer func() { done(retErr) }()
+	return GetIndexByColumn(ctx, q, schema, table, column)
 }
 
 // GetSingleColumnIndexes returns indexes with exactly one column.
@@ -160,7 +164,7 @@ func (c *Client) GetIndexByColumn(ctx context.Context, schema, table, column str
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //
@@ -182,11 +186,13 @@ func GetSingleColumnIndexes(ctx context.Context, dbtx DBTX, schema, table string
 }
 
 // GetSingleColumnIndexes is a convenience wrapper for Client.
-func (c *Client) GetSingleColumnIndexes(ctx context.Context, schema, table string) ([]Index, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetSingleColumnIndexes(ctx context.Context, schema, table string) (result []Index, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetSingleColumnIndexes(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetSingleColumnIndexes(ctx, q, schema, table)
 }
 
 // GetCompositeIndexes returns indexes with multiple columns.
@@ -194,7 +200,7 @@ func (c *Client) GetSingleColumnIndexes(ctx context.Context, schema, table strin
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //
@@ -216,11 +222,13 @@ func GetCompositeIndexes(ctx context.Context, dbtx DBTX, schema, table string) (
 }
 
 // GetCompositeIndexes is a convenience wrapper for Client.
-func (c *Client) GetCompositeIndexes(ctx context.Context, schema, table string) ([]Index, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetCompositeIndexes(ctx context.Context, schema, table string) (result []Index, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetCompositeIndexes(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetCompositeIndexes(ctx, q, schema, table)
 }
 
 // GetDistinctValues retrieves distinct values for an indexed column.
@@ -228,7 +236,7 @@ func (c *Client) GetCompositeIndexes(ctx context.Context, schema, table string) 
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //   - column: Column name to get distinct values for
@@ -285,11 +293,13 @@ func GetDistinctValues(ctx context.Context, dbtx DBTX, schema, table, column str
 }
 
 // GetDistinctValues is a convenience wrapper for Client.
-func (c *Client) GetDistinctValues(ctx context.Context, schema, table, column string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetDistinctValues(ctx context.Context, schema, table, column string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetDistinctValues(ctx, c.pool, schema, table, column, limit)
+	defer func() { done(retErr) }()
+	return GetDistinctValues(ctx, q, schema, table, column, limit)
 }
 
 // GetDistinctValuesOrdered retrieves distinct values with explicit ordering.
@@ -342,11 +352,13 @@ func GetDistinctValuesOrdered(ctx context.Context, dbtx DBTX, schema, table, col
 }
 
 // GetDistinctValuesOrdered is a convenience wrapper for Client.
-func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, column string, limit int, ascending bool) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, column string, limit int, ascending bool) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetDistinctValuesOrdered(ctx, c.pool, schema, table, column, limit, ascending)
+	defer func() { done(retErr) }()
+	return GetDistinctValuesOrdered(ctx, q, schema, table, column, limit, ascending)
 }
 
 // GetRowsByIndexValue retrieves primary keys of rows matching an indexed column value.
@@ -354,7 +366,7 @@ func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, co
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //   - column: Indexed column to query
@@ -381,11 +393,13 @@ func GetRowsByIndexValue(ctx context.Context, dbtx DBTX, schema, table, column, 
 }
 
 // GetRowsByIndexValue is a convenience wrapper for Client.
-func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetRowsByIndexValue(ctx, c.pool, schema, table, column, value, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return GetRowsByIndexValue(ctx, q, schema, table, column, value, pkColumns, limit)
 }
 
 // GetRowsByIndexValueOrdered retrieves primary keys with explicit ordering.
@@ -413,11 +427,13 @@ func GetRowsByIndexValueOrdered(ctx context.Context, dbtx DBTX, schema, table, c
 }
 
 // GetRowsByIndexValueOrdered is a convenience wrapper for Client.
-func (c *Client) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, column, value string, pkColumns []string, limit int, ascending bool) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetRowsByIndexValueOrdered(ctx, c.pool, schema, table, column, value, pkColumns, limit, ascending)
+	defer func() { done(retErr) }()
+	return GetRowsByIndexValueOrdered(ctx, q, schema, table, column, value, pkColumns, limit, ascending)
 }
 
 // scanPKRowsWithArgs executes a query with value and limit args, scans PK columns, and
@@ -464,7 +480,7 @@ func scanPKRowsWithArgs(ctx context.Context, dbtx DBTX, query string, pkColumns 
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //   - targetColumn: Column to get distinct values for (the "next" column in navigation)
@@ -538,11 +554,13 @@ func GetDistinctValuesFiltered(ctx context.Context, dbtx DBTX, schema, table, ta
 }
 
 // GetDistinctValuesFiltered is a convenience wrapper for Client.
-func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetDistinctValuesFiltered(ctx, c.pool, schema, table, targetColumn, filterColumns, filterValues, limit)
+	defer func() { done(retErr) }()
+	return GetDistinctValuesFiltered(ctx, q, schema, table, targetColumn, filterColumns, filterValues, limit)
 }
 
 // GetRowsByCompositeIndex retrieves primary keys of rows matching multiple column conditions.
@@ -557,7 +575,7 @@ func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, t
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: Schema name
 //   - table: Table name
 //   - columns: Indexed columns to query (in index order)
@@ -599,11 +617,13 @@ func GetRowsByCompositeIndex(ctx context.Context, dbtx DBTX, schema, table strin
 }
 
 // GetRowsByCompositeIndex is a convenience wrapper for Client.
-func (c *Client) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowsByCompositeIndex(ctx context.Context, schema, table string, columns, values []string, pkColumns []string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetRowsByCompositeIndex(ctx, c.pool, schema, table, columns, values, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return GetRowsByCompositeIndex(ctx, q, schema, table, columns, values, pkColumns, limit)
 }
 
 // joinStrings joins strings with a separator (helper to avoid importing strings package).

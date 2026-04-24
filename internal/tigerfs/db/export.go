@@ -69,11 +69,13 @@ func GetAllRows(ctx context.Context, dbtx DBTX, schema, table string, limit int)
 }
 
 // GetAllRows is a convenience wrapper for Client
-func (c *Client) GetAllRows(ctx context.Context, schema, table string, limit int) ([]string, [][]interface{}, error) {
-	if c.pool == nil {
-		return nil, nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetAllRows(ctx context.Context, schema, table string, limit int) (columns []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-	return GetAllRows(ctx, c.pool, schema, table, limit)
+	defer func() { done(retErr) }()
+	return GetAllRows(ctx, q, schema, table, limit)
 }
 
 // GetFirstNRowsWithData returns the first N rows ordered by primary key ascending.
@@ -127,11 +129,13 @@ func GetFirstNRowsWithData(ctx context.Context, dbtx DBTX, schema, table string,
 }
 
 // GetFirstNRowsWithData is a convenience wrapper for Client
-func (c *Client) GetFirstNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
-	if c.pool == nil {
-		return nil, nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetFirstNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) (columns []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-	return GetFirstNRowsWithData(ctx, c.pool, schema, table, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return GetFirstNRowsWithData(ctx, q, schema, table, pkColumns, limit)
 }
 
 // GetLastNRowsWithData returns the last N rows ordered by primary key descending.
@@ -185,19 +189,23 @@ func GetLastNRowsWithData(ctx context.Context, dbtx DBTX, schema, table string, 
 }
 
 // GetLastNRowsWithData is a convenience wrapper for Client
-func (c *Client) GetLastNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
-	if c.pool == nil {
-		return nil, nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetLastNRowsWithData(ctx context.Context, schema, table string, pkColumns []string, limit int) (columns []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-	return GetLastNRowsWithData(ctx, c.pool, schema, table, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return GetLastNRowsWithData(ctx, q, schema, table, pkColumns, limit)
 }
 
 // RowExistsByColumns checks if any row matches the given column=value conditions.
 // Generates: SELECT 1 FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1
-func (c *Client) RowExistsByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (bool, error) {
-	if c.pool == nil {
-		return false, fmt.Errorf("database connection not initialized")
+func (c *Client) RowExistsByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (result bool, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return false, err
 	}
+	defer func() { done(retErr) }()
 
 	// Build WHERE clause
 	var whereParts []string
@@ -216,7 +224,7 @@ func (c *Client) RowExistsByColumns(ctx context.Context, schema, table string, c
 		zap.Strings("columns", columns))
 
 	var dummy int
-	err := c.pool.QueryRow(ctx, query, values...).Scan(&dummy)
+	err = q.QueryRow(ctx, query, values...).Scan(&dummy)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
 			return false, nil
@@ -230,10 +238,12 @@ func (c *Client) RowExistsByColumns(ctx context.Context, schema, table string, c
 // GetRowByColumns returns a single row matching column=value conditions.
 // Returns all columns. Returns (nil, nil, nil) if no match.
 // Generates: SELECT * FROM "schema"."table" WHERE "col1" = $1 AND "col2" = $2 LIMIT 1
-func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error) {
-	if c.pool == nil {
-		return nil, nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) (colNames []string, rowValues []interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
+	defer func() { done(retErr) }()
 
 	// Build WHERE clause
 	var whereParts []string
@@ -251,7 +261,7 @@ func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, colu
 		zap.String("table", table),
 		zap.Strings("columns", columns))
 
-	rows, err := c.pool.Query(ctx, query, values...)
+	rows, err := q.Query(ctx, query, values...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query row by columns: %w", err)
 	}
@@ -259,9 +269,9 @@ func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, colu
 
 	// Get column names from field descriptions
 	fieldDescriptions := rows.FieldDescriptions()
-	colNames := make([]string, len(fieldDescriptions))
+	resultColNames := make([]string, len(fieldDescriptions))
 	for i, fd := range fieldDescriptions {
-		colNames[i] = string(fd.Name)
+		resultColNames[i] = string(fd.Name)
 	}
 
 	if !rows.Next() {
@@ -271,10 +281,10 @@ func (c *Client) GetRowByColumns(ctx context.Context, schema, table string, colu
 		return nil, nil, nil // No match
 	}
 
-	rowValues, err := rows.Values()
+	resultRowValues, err := rows.Values()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to scan row values: %w", err)
 	}
 
-	return colNames, rowValues, nil
+	return resultColNames, resultRowValues, nil
 }

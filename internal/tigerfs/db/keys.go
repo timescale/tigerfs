@@ -84,19 +84,23 @@ func ListRows(ctx context.Context, dbtx DBTX, schema, table string, pkColumns []
 }
 
 // GetPrimaryKey is a convenience wrapper for Client
-func (c *Client) GetPrimaryKey(ctx context.Context, schema, table string) (*PrimaryKey, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetPrimaryKey(ctx context.Context, schema, table string) (result *PrimaryKey, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetPrimaryKey(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetPrimaryKey(ctx, q, schema, table)
 }
 
 // ListRows is a convenience wrapper for Client
-func (c *Client) ListRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) ListRows(ctx context.Context, schema, table string, pkColumns []string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return ListRows(ctx, c.pool, schema, table, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return ListRows(ctx, q, schema, table, pkColumns, limit)
 }
 
 // ListAllRows returns all primary key values from a table without any limit.
@@ -149,9 +153,11 @@ func ListAllRows(ctx context.Context, dbtx DBTX, schema, table string, pkColumns
 }
 
 // ListAllRows is a convenience wrapper for Client
-func (c *Client) ListAllRows(ctx context.Context, schema, table string, pkColumns []string) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) ListAllRows(ctx context.Context, schema, table string, pkColumns []string) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return ListAllRows(ctx, c.pool, schema, table, pkColumns)
+	defer func() { done(retErr) }()
+	return ListAllRows(ctx, q, schema, table, pkColumns)
 }

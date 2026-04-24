@@ -108,7 +108,7 @@ func (p *QueryParams) HasOrder() bool {
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - params: Query parameters from pipeline context
 //
 // Returns primary key values as strings, or error on database failure.
@@ -162,11 +162,13 @@ func QueryRowsPipeline(ctx context.Context, dbtx DBTX, params QueryParams) ([]st
 }
 
 // QueryRowsPipeline is a convenience wrapper for Client.
-func (c *Client) QueryRowsPipeline(ctx context.Context, params QueryParams) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) QueryRowsPipeline(ctx context.Context, params QueryParams) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return QueryRowsPipeline(ctx, c.pool, params)
+	defer func() { done(retErr) }()
+	return QueryRowsPipeline(ctx, q, params)
 }
 
 // QueryRowsWithDataPipeline executes a pipeline query and returns full row data.
@@ -174,7 +176,7 @@ func (c *Client) QueryRowsPipeline(ctx context.Context, params QueryParams) ([]s
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - params: Query parameters from pipeline context
 //
 // Returns column names and row data, or error on database failure.
@@ -228,11 +230,13 @@ func QueryRowsWithDataPipeline(ctx context.Context, dbtx DBTX, params QueryParam
 }
 
 // QueryRowsWithDataPipeline is a convenience wrapper for Client.
-func (c *Client) QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) ([]string, [][]interface{}, error) {
-	if c.pool == nil {
-		return nil, nil, fmt.Errorf("database connection not initialized")
+func (c *Client) QueryRowsWithDataPipeline(ctx context.Context, params QueryParams) (columns []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
-	return QueryRowsWithDataPipeline(ctx, c.pool, params)
+	defer func() { done(retErr) }()
+	return QueryRowsWithDataPipeline(ctx, q, params)
 }
 
 // buildPipelineSQL constructs the SQL query for a pipeline operation.

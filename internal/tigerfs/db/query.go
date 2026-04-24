@@ -120,11 +120,13 @@ func GetRow(ctx context.Context, dbtx DBTX, schema, table string, pk *PKMatch) (
 }
 
 // GetRow is a convenience wrapper for Client
-func (c *Client) GetRow(ctx context.Context, schema, table string, pk *PKMatch) (*Row, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRow(ctx context.Context, schema, table string, pk *PKMatch) (result *Row, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetRow(ctx, c.pool, schema, table, pk)
+	defer func() { done(retErr) }()
+	return GetRow(ctx, q, schema, table, pk)
 }
 
 // GetColumn fetches a single column value from a row by primary key (single or composite).
@@ -157,11 +159,13 @@ func GetColumn(ctx context.Context, dbtx DBTX, schema, table string, pk *PKMatch
 }
 
 // GetColumn is a convenience wrapper for Client
-func (c *Client) GetColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName string) (interface{}, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName string) (result interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetColumn(ctx, c.pool, schema, table, pk, columnName)
+	defer func() { done(retErr) }()
+	return GetColumn(ctx, q, schema, table, pk, columnName)
 }
 
 // UpdateColumn updates a single column value for a row by primary key (single or composite).
@@ -212,20 +216,24 @@ func UpdateColumn(ctx context.Context, dbtx DBTX, schema, table string, pk *PKMa
 }
 
 // UpdateColumn is a convenience wrapper for Client
-func (c *Client) UpdateColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error {
-	if c.pool == nil {
-		return fmt.Errorf("database connection not initialized")
+func (c *Client) UpdateColumn(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) (retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
 	}
-	return UpdateColumn(ctx, c.pool, schema, table, pk, columnName, newValue)
+	defer func() { done(retErr) }()
+	return UpdateColumn(ctx, q, schema, table, pk, columnName, newValue)
 }
 
 // UpdateColumnCAS performs a compare-and-swap update on a column.
 // Only updates the row if whereColumn still has whereValue (atomic check).
 // Returns "row not found" if no row matches, enabling safe concurrent renames.
-func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error {
-	if c.pool == nil {
-		return fmt.Errorf("database connection not initialized")
+func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) (retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
 	}
+	defer func() { done(retErr) }()
 
 	logging.Debug("CAS updating column",
 		zap.String("schema", schema),
@@ -247,7 +255,7 @@ func (c *Client) UpdateColumnCAS(ctx context.Context, schema, table string, pk *
 	args := append([]interface{}{newValue}, pk.WhereArgs()...)
 	args = append(args, whereValue)
 
-	cmdTag, err := c.pool.Exec(ctx, query, args...)
+	cmdTag, err := q.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update column: %w", err)
 	}
@@ -336,11 +344,13 @@ func InsertRow(ctx context.Context, dbtx DBTX, schema, table string, columns []s
 }
 
 // InsertRow is a convenience wrapper for Client
-func (c *Client) InsertRow(ctx context.Context, schema, table string, columns []string, values []interface{}) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) InsertRow(ctx context.Context, schema, table string, columns []string, values []interface{}) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return InsertRow(ctx, c.pool, schema, table, columns, values)
+	defer func() { done(retErr) }()
+	return InsertRow(ctx, q, schema, table, columns, values)
 }
 
 // UpdateRow updates an existing row with the given column values.
@@ -397,11 +407,13 @@ func UpdateRow(ctx context.Context, dbtx DBTX, schema, table string, pk *PKMatch
 }
 
 // UpdateRow is a convenience wrapper for Client
-func (c *Client) UpdateRow(ctx context.Context, schema, table string, pk *PKMatch, columns []string, values []interface{}) error {
-	if c.pool == nil {
-		return fmt.Errorf("database connection not initialized")
+func (c *Client) UpdateRow(ctx context.Context, schema, table string, pk *PKMatch, columns []string, values []interface{}) (retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
 	}
-	return UpdateRow(ctx, c.pool, schema, table, pk, columns, values)
+	defer func() { done(retErr) }()
+	return UpdateRow(ctx, q, schema, table, pk, columns, values)
 }
 
 // DeleteRow deletes a row by primary key (single or composite).
@@ -438,11 +450,13 @@ func DeleteRow(ctx context.Context, dbtx DBTX, schema, table string, pk *PKMatch
 }
 
 // DeleteRow is a convenience wrapper for Client
-func (c *Client) DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error {
-	if c.pool == nil {
-		return fmt.Errorf("database connection not initialized")
+func (c *Client) DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) (retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
 	}
-	return DeleteRow(ctx, c.pool, schema, table, pk)
+	defer func() { done(retErr) }()
+	return DeleteRow(ctx, q, schema, table, pk)
 }
 
 // GetFirstNRows returns the first N primary key values ordered by PK ascending.
@@ -463,11 +477,13 @@ func GetFirstNRows(ctx context.Context, dbtx DBTX, schema, table string, pkColum
 }
 
 // GetFirstNRows is a convenience wrapper for Client
-func (c *Client) GetFirstNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetFirstNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetFirstNRows(ctx, c.pool, schema, table, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return GetFirstNRows(ctx, q, schema, table, pkColumns, limit)
 }
 
 // GetLastNRows returns the last N primary key values ordered by PK descending.
@@ -488,11 +504,13 @@ func GetLastNRows(ctx context.Context, dbtx DBTX, schema, table string, pkColumn
 }
 
 // GetLastNRows is a convenience wrapper for Client
-func (c *Client) GetLastNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetLastNRows(ctx context.Context, schema, table string, pkColumns []string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetLastNRows(ctx, c.pool, schema, table, pkColumns, limit)
+	defer func() { done(retErr) }()
+	return GetLastNRows(ctx, q, schema, table, pkColumns, limit)
 }
 
 // GetRandomSampleRows returns approximately N random primary key values.
@@ -547,11 +565,13 @@ func GetRandomSampleRows(ctx context.Context, dbtx DBTX, schema, table string, p
 }
 
 // GetRandomSampleRows is a convenience wrapper for Client
-func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRandomSampleRows(ctx context.Context, schema, table string, pkColumns []string, limit int, estimatedRows int64) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetRandomSampleRows(ctx, c.pool, schema, table, pkColumns, limit, estimatedRows)
+	defer func() { done(retErr) }()
+	return GetRandomSampleRows(ctx, q, schema, table, pkColumns, limit, estimatedRows)
 }
 
 // GetFirstNRowsOrdered returns the first N primary key values ordered by a specified column ascending.
@@ -582,11 +602,13 @@ func GetFirstNRowsOrdered(ctx context.Context, dbtx DBTX, schema, table string, 
 }
 
 // GetFirstNRowsOrdered is a convenience wrapper for Client
-func (c *Client) GetFirstNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetFirstNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetFirstNRowsOrdered(ctx, c.pool, schema, table, pkColumns, orderColumn, limit)
+	defer func() { done(retErr) }()
+	return GetFirstNRowsOrdered(ctx, q, schema, table, pkColumns, orderColumn, limit)
 }
 
 // GetLastNRowsOrdered returns the last N primary key values ordered by a specified column descending.
@@ -617,11 +639,13 @@ func GetLastNRowsOrdered(ctx context.Context, dbtx DBTX, schema, table string, p
 }
 
 // GetLastNRowsOrdered is a convenience wrapper for Client
-func (c *Client) GetLastNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetLastNRowsOrdered(ctx context.Context, schema, table string, pkColumns []string, orderColumn string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetLastNRowsOrdered(ctx, c.pool, schema, table, pkColumns, orderColumn, limit)
+	defer func() { done(retErr) }()
+	return GetLastNRowsOrdered(ctx, q, schema, table, pkColumns, orderColumn, limit)
 }
 
 // scanPKRows executes a query with a LIMIT $1 parameter, scans PK columns, and
@@ -661,10 +685,12 @@ func scanPKRows(ctx context.Context, dbtx DBTX, query string, pkColumns []string
 // RenameByPrefix atomically renames all rows where the given column value starts
 // with oldPrefix to use newPrefix instead. Used for directory renames in synth views.
 // Returns the number of rows affected.
-func (c *Client) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
-	if c.pool == nil {
-		return 0, fmt.Errorf("database connection not initialized")
+func (c *Client) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (result int64, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return 0, err
 	}
+	defer func() { done(retErr) }()
 
 	// UPDATE "schema"."table" SET "column" = $1 || substr("column", length($2) + 1)
 	// WHERE "column" = $2 OR "column" LIKE $2 || '/%'
@@ -673,7 +699,7 @@ func (c *Client) RenameByPrefix(ctx context.Context, schema, table, column, oldP
 		qt(schema, table), qi(column), qi(column), qi(column), qi(column),
 	)
 
-	cmdTag, err := c.pool.Exec(ctx, query, newPrefix, oldPrefix)
+	cmdTag, err := q.Exec(ctx, query, newPrefix, oldPrefix)
 	if err != nil {
 		return 0, fmt.Errorf("failed to rename by prefix: %w", err)
 	}
@@ -683,10 +709,12 @@ func (c *Client) RenameByPrefix(ctx context.Context, schema, table, column, oldP
 
 // HasChildrenWithPrefix checks if any rows exist where the given column value
 // starts with prefix + "/". Used to check if a directory has children before rmdir.
-func (c *Client) HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error) {
-	if c.pool == nil {
-		return false, fmt.Errorf("database connection not initialized")
+func (c *Client) HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (result bool, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return false, err
 	}
+	defer func() { done(retErr) }()
 
 	query := fmt.Sprintf(
 		`SELECT EXISTS(SELECT 1 FROM %s WHERE %s LIKE $1 || '/%%')`,
@@ -694,7 +722,7 @@ func (c *Client) HasChildrenWithPrefix(ctx context.Context, schema, table, colum
 	)
 
 	var exists bool
-	err := c.pool.QueryRow(ctx, query, prefix).Scan(&exists)
+	err = q.QueryRow(ctx, query, prefix).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("failed to check children: %w", err)
 	}
@@ -704,10 +732,12 @@ func (c *Client) HasChildrenWithPrefix(ctx context.Context, schema, table, colum
 
 // InsertIfNotExists inserts a row only if it doesn't already exist (ON CONFLICT DO NOTHING).
 // Used for auto-creating parent directory rows in synth views.
-func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error {
-	if c.pool == nil {
-		return fmt.Errorf("database connection not initialized")
+func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) (retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
 	}
+	defer func() { done(retErr) }()
 
 	if len(columns) == 0 || len(columns) != len(values) {
 		return fmt.Errorf("column/value count mismatch: %d columns, %d values", len(columns), len(values))
@@ -726,7 +756,7 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 		qt(schema, table), strings.Join(quotedCols, ", "), strings.Join(placeholders, ", "),
 	)
 
-	_, err := c.pool.Exec(ctx, query, values...)
+	_, err = q.Exec(ctx, query, values...)
 	if err != nil {
 		return fmt.Errorf("failed to insert if not exists: %w", err)
 	}
@@ -735,9 +765,15 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 }
 
 // HasExtension checks if a PostgreSQL extension is installed in the database.
-func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error) {
+func (c *Client) HasExtension(ctx context.Context, extName string) (result bool, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { done(retErr) }()
+
 	var exists bool
-	err := c.pool.QueryRow(ctx,
+	err = q.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = $1)`,
 		extName,
 	).Scan(&exists)
@@ -748,9 +784,15 @@ func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error)
 }
 
 // TableExists checks if a table exists in the given schema.
-func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, error) {
+func (c *Client) TableExists(ctx context.Context, schema, table string) (result bool, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { done(retErr) }()
+
 	var exists bool
-	err := c.pool.QueryRow(ctx,
+	err = q.QueryRow(ctx,
 		`SELECT EXISTS(
 			SELECT 1 FROM information_schema.tables
 			WHERE table_schema = $1 AND table_name = $2
@@ -765,31 +807,49 @@ func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, e
 
 // QueryHistoryByFilename queries the history table for versions of a file by filename.
 // Returns columns and rows ordered by _history_id DESC (most recent first).
-func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
+func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) (cols []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { done(retErr) }()
+
 	query := fmt.Sprintf(
 		`SELECT * FROM %s WHERE "filename" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
-	return c.queryRows(ctx, query, filename)
+	return c.queryRows(ctx, q, query, filename)
 }
 
 // QueryHistoryByID queries the history table for versions of a row by its UUID.
 // Returns columns and rows ordered by _history_id DESC (most recent first).
-func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
+func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) (cols []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { done(retErr) }()
+
 	query := fmt.Sprintf(
 		`SELECT * FROM %s WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
-	return c.queryRows(ctx, query, rowID)
+	return c.queryRows(ctx, q, query, rowID)
 }
 
 // QueryHistoryDistinctFilenames returns distinct filenames from the history table.
-func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { done(retErr) }()
+
 	query := fmt.Sprintf(
 		`SELECT DISTINCT "filename" FROM %s ORDER BY "filename" LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
-	rows, err := c.pool.Query(ctx, query)
+	rows, err := q.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query distinct filenames: %w", err)
 	}
@@ -807,12 +867,18 @@ func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, hist
 }
 
 // QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
-func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
+func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { done(retErr) }()
+
 	query := fmt.Sprintf(
 		`SELECT DISTINCT "id"::text FROM %s ORDER BY "id" LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
-	rows, err := c.pool.Query(ctx, query)
+	rows, err := q.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query distinct IDs: %w", err)
 	}
@@ -832,17 +898,23 @@ func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTab
 // QueryHistoryVersionByTime finds a history row matching a version ID timestamp.
 // Version IDs have second precision; UUIDv7 has millisecond precision. This queries
 // with a 1-second window around the target timestamp plus filename or id filter.
-func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
+func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) (cols []string, rows [][]interface{}, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { done(retErr) }()
+
 	query := fmt.Sprintf(
 		`SELECT * FROM %s WHERE %s = $1 ORDER BY "_history_id" DESC LIMIT %d`,
 		qt(schema, historyTable), qi(filterColumn), limit,
 	)
-	return c.queryRows(ctx, query, filterValue)
+	return c.queryRows(ctx, q, query, filterValue)
 }
 
 // queryRows executes a query and returns columns and row data.
-func (c *Client) queryRows(ctx context.Context, query string, args ...interface{}) ([]string, [][]interface{}, error) {
-	rows, err := c.pool.Query(ctx, query, args...)
+func (c *Client) queryRows(ctx context.Context, dbtx DBTX, query string, args ...interface{}) ([]string, [][]interface{}, error) {
+	rows, err := dbtx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("query failed: %w", err)
 	}

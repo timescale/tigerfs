@@ -45,6 +45,7 @@ func buildMountCmd(ctx context.Context) *cobra.Command {
 	var dirFilterLimit int
 	var legacyFuse bool
 	var insecureNoSSL bool
+	var sessionVars map[string]string
 
 	cmd := &cobra.Command{
 		Use:   "mount [CONNECTION] [MOUNTPOINT]",
@@ -158,6 +159,14 @@ Examples:
 			if insecureNoSSL {
 				cfg.InsecureNoSSL = true
 			}
+			if len(sessionVars) > 0 {
+				if cfg.SessionVariables == nil {
+					cfg.SessionVariables = make(map[string]string)
+				}
+				for k, v := range sessionVars {
+					cfg.SessionVariables[k] = v
+				}
+			}
 
 			// Mount the filesystem using platform-specific method
 			// (NFS on macOS, FUSE on Linux).
@@ -215,6 +224,7 @@ Examples:
 	cmd.Flags().IntVar(&dirFilterLimit, "dir-filter-limit", 0, "row count threshold for .filter/ value listing; 0 uses config default")
 	cmd.Flags().BoolVar(&legacyFuse, "legacy-fuse", false, "use legacy FUSE node tree (Linux only)")
 	cmd.Flags().BoolVar(&insecureNoSSL, "insecure-no-ssl", false, "allow non-TLS connections to remote databases (insecure)")
+	cmd.Flags().StringToStringVar(&sessionVars, "session-var", nil, "set a PostgreSQL session variable via SET LOCAL (key=value, repeatable)")
 
 	return cmd
 }

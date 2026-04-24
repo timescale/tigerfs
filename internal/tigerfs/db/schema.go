@@ -16,7 +16,7 @@ import (
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: DBTX (pool or transaction)
 //
 // Returns the current schema name, or error on database failure.
 func GetCurrentSchema(ctx context.Context, dbtx DBTX) (string, error) {
@@ -33,11 +33,13 @@ func GetCurrentSchema(ctx context.Context, dbtx DBTX) (string, error) {
 }
 
 // GetCurrentSchema is a convenience wrapper around GetCurrentSchema for Client.
-func (c *Client) GetCurrentSchema(ctx context.Context) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetCurrentSchema(ctx context.Context) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetCurrentSchema(ctx, c.pool)
+	defer func() { done(retErr) }()
+	return GetCurrentSchema(ctx, q)
 }
 
 // GetSchemas returns all user-defined schemas (excluding system schemas)
@@ -124,19 +126,23 @@ func GetTables(ctx context.Context, dbtx DBTX, schema string) ([]string, error) 
 }
 
 // GetSchemasWithClient is a convenience wrapper around GetSchemas for Client
-func (c *Client) GetSchemas(ctx context.Context) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetSchemas(ctx context.Context) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetSchemas(ctx, c.pool)
+	defer func() { done(retErr) }()
+	return GetSchemas(ctx, q)
 }
 
 // GetTables is a convenience wrapper around GetTables for Client
-func (c *Client) GetTables(ctx context.Context, schema string) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetTables(ctx context.Context, schema string) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetTables(ctx, c.pool, schema)
+	defer func() { done(retErr) }()
+	return GetTables(ctx, q, schema)
 }
 
 // GetViews returns all user views in a given schema.
@@ -188,11 +194,13 @@ func GetViews(ctx context.Context, dbtx DBTX, schema string) ([]string, error) {
 }
 
 // GetViews is a convenience wrapper around GetViews for Client
-func (c *Client) GetViews(ctx context.Context, schema string) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetViews(ctx context.Context, schema string) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetViews(ctx, c.pool, schema)
+	defer func() { done(retErr) }()
+	return GetViews(ctx, q, schema)
 }
 
 // IsViewUpdatable checks if a view supports INSERT/UPDATE/DELETE operations.
@@ -230,11 +238,13 @@ func IsViewUpdatable(ctx context.Context, dbtx DBTX, schema, view string) (bool,
 }
 
 // IsViewUpdatable is a convenience wrapper around IsViewUpdatable for Client
-func (c *Client) IsViewUpdatable(ctx context.Context, schema, view string) (bool, error) {
-	if c.pool == nil {
-		return false, fmt.Errorf("database connection not initialized")
+func (c *Client) IsViewUpdatable(ctx context.Context, schema, view string) (result bool, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return false, err
 	}
-	return IsViewUpdatable(ctx, c.pool, schema, view)
+	defer func() { done(retErr) }()
+	return IsViewUpdatable(ctx, q, schema, view)
 }
 
 // Column represents metadata about a table column
@@ -293,11 +303,13 @@ func GetColumns(ctx context.Context, dbtx DBTX, schema, table string) ([]Column,
 }
 
 // GetColumns is a convenience wrapper around GetColumns for Client
-func (c *Client) GetColumns(ctx context.Context, schema, table string) ([]Column, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetColumns(ctx context.Context, schema, table string) (result []Column, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetColumns(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetColumns(ctx, q, schema, table)
 }
 
 // GetRowCount returns the number of rows in a table
@@ -326,11 +338,13 @@ func GetRowCount(ctx context.Context, dbtx DBTX, schema, table string) (int64, e
 }
 
 // GetRowCount is a convenience wrapper around GetRowCount for Client
-func (c *Client) GetRowCount(ctx context.Context, schema, table string) (int64, error) {
-	if c.pool == nil {
-		return 0, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowCount(ctx context.Context, schema, table string) (result int64, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return 0, err
 	}
-	return GetRowCount(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetRowCount(ctx, q, schema, table)
 }
 
 // SmallTableThreshold is the row count below which exact COUNT(*) is used.
@@ -347,7 +361,7 @@ const SmallTableThreshold = 100000
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: DBTX (pool or transaction)
 //   - schema: PostgreSQL schema name
 //   - table: Table name
 //
@@ -385,11 +399,13 @@ func GetTableRowCountEstimate(ctx context.Context, dbtx DBTX, schema, table stri
 }
 
 // GetTableRowCountEstimate is a convenience wrapper for Client.
-func (c *Client) GetTableRowCountEstimate(ctx context.Context, schema, table string) (int64, error) {
-	if c.pool == nil {
-		return 0, fmt.Errorf("database connection not initialized")
+func (c *Client) GetTableRowCountEstimate(ctx context.Context, schema, table string) (result int64, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return 0, err
 	}
-	return GetTableRowCountEstimate(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetTableRowCountEstimate(ctx, q, schema, table)
 }
 
 // GetRowCountSmart returns the row count using an adaptive strategy.
@@ -402,7 +418,7 @@ func (c *Client) GetTableRowCountEstimate(ctx context.Context, schema, table str
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: DBTX (pool or transaction)
 //   - schema: PostgreSQL schema name
 //   - table: Table name to count
 //
@@ -451,11 +467,13 @@ func GetRowCountSmart(ctx context.Context, dbtx DBTX, schema, table string) (int
 //   - table: Table name to count
 //
 // Returns the row count (exact or estimated), or error on database failure.
-func (c *Client) GetRowCountSmart(ctx context.Context, schema, table string) (int64, error) {
-	if c.pool == nil {
-		return 0, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowCountSmart(ctx context.Context, schema, table string) (result int64, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return 0, err
 	}
-	return GetRowCountSmart(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetRowCountSmart(ctx, q, schema, table)
 }
 
 // GetRowCountEstimates returns fast row count estimates for multiple tables using pg_class.
@@ -505,11 +523,13 @@ func GetRowCountEstimates(ctx context.Context, dbtx DBTX, schema string, tables 
 }
 
 // GetRowCountEstimates is a convenience wrapper for Client.
-func (c *Client) GetRowCountEstimates(ctx context.Context, schema string, tables []string) (map[string]int64, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetRowCountEstimates(ctx context.Context, schema string, tables []string) (result map[string]int64, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetRowCountEstimates(ctx, c.pool, schema, tables)
+	defer func() { done(retErr) }()
+	return GetRowCountEstimates(ctx, q, schema, tables)
 }
 
 // GetTableDDL returns the CREATE TABLE statement for a table
@@ -609,11 +629,13 @@ func GetTableDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, 
 }
 
 // GetTableDDL is a convenience wrapper around GetTableDDL for Client
-func (c *Client) GetTableDDL(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetTableDDL(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetTableDDL(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetTableDDL(ctx, q, schema, table)
 }
 
 // FormatTableDDL generates a CREATE TABLE DDL statement from pre-fetched metadata.
@@ -710,11 +732,13 @@ func GetIndexDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, 
 }
 
 // GetIndexDDL is a convenience wrapper for Client
-func (c *Client) GetIndexDDL(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetIndexDDL(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetIndexDDL(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetIndexDDL(ctx, q, schema, table)
 }
 
 // GetForeignKeyDDL returns ALTER TABLE statements for foreign key constraints.
@@ -760,11 +784,13 @@ func GetForeignKeyDDL(ctx context.Context, dbtx DBTX, schema, table string) (str
 }
 
 // GetForeignKeyDDL is a convenience wrapper for Client
-func (c *Client) GetForeignKeyDDL(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetForeignKeyDDL(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetForeignKeyDDL(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetForeignKeyDDL(ctx, q, schema, table)
 }
 
 // GetCheckConstraintDDL returns ALTER TABLE statements for check constraints.
@@ -810,11 +836,13 @@ func GetCheckConstraintDDL(ctx context.Context, dbtx DBTX, schema, table string)
 }
 
 // GetCheckConstraintDDL is a convenience wrapper for Client
-func (c *Client) GetCheckConstraintDDL(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetCheckConstraintDDL(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetCheckConstraintDDL(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetCheckConstraintDDL(ctx, q, schema, table)
 }
 
 // GetTriggerDDL returns CREATE TRIGGER statements for a table.
@@ -858,11 +886,13 @@ func GetTriggerDDL(ctx context.Context, dbtx DBTX, schema, table string) (string
 }
 
 // GetTriggerDDL is a convenience wrapper for Client
-func (c *Client) GetTriggerDDL(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetTriggerDDL(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetTriggerDDL(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetTriggerDDL(ctx, q, schema, table)
 }
 
 // GetTableComments returns COMMENT statements for table and columns.
@@ -925,11 +955,13 @@ func GetTableComments(ctx context.Context, dbtx DBTX, schema, table string) (str
 }
 
 // GetTableComments is a convenience wrapper for Client
-func (c *Client) GetTableComments(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetTableComments(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetTableComments(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetTableComments(ctx, q, schema, table)
 }
 
 // GetFullDDL returns complete DDL for a table including:
@@ -1014,11 +1046,13 @@ func GetFullDDL(ctx context.Context, dbtx DBTX, schema, table string) (string, e
 }
 
 // GetFullDDL is a convenience wrapper for Client
-func (c *Client) GetFullDDL(ctx context.Context, schema, table string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetFullDDL(ctx context.Context, schema, table string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetFullDDL(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetFullDDL(ctx, q, schema, table)
 }
 
 // ForeignKeyRef represents a foreign key that references a table.
@@ -1104,11 +1138,13 @@ func GetReferencingForeignKeys(ctx context.Context, dbtx DBTX, schema, table str
 }
 
 // GetReferencingForeignKeys is a convenience wrapper for Client
-func (c *Client) GetReferencingForeignKeys(ctx context.Context, schema, table string) ([]ForeignKeyRef, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetReferencingForeignKeys(ctx context.Context, schema, table string) (result []ForeignKeyRef, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetReferencingForeignKeys(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetReferencingForeignKeys(ctx, q, schema, table)
 }
 
 // GetSchemaTableCount returns the number of tables in a schema.
@@ -1135,11 +1171,13 @@ func GetSchemaTableCount(ctx context.Context, dbtx DBTX, schema string) (int, er
 }
 
 // GetSchemaTableCount is a convenience wrapper for Client
-func (c *Client) GetSchemaTableCount(ctx context.Context, schema string) (int, error) {
-	if c.pool == nil {
-		return 0, fmt.Errorf("database connection not initialized")
+func (c *Client) GetSchemaTableCount(ctx context.Context, schema string) (result int, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return 0, err
 	}
-	return GetSchemaTableCount(ctx, c.pool, schema)
+	defer func() { done(retErr) }()
+	return GetSchemaTableCount(ctx, q, schema)
 }
 
 // GetViewComment returns the raw comment string for a view.
@@ -1172,11 +1210,13 @@ func GetViewComment(ctx context.Context, dbtx DBTX, schema, view string) (string
 }
 
 // GetViewComment is a convenience wrapper for Client.
-func (c *Client) GetViewComment(ctx context.Context, schema, view string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetViewComment(ctx context.Context, schema, view string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetViewComment(ctx, c.pool, schema, view)
+	defer func() { done(retErr) }()
+	return GetViewComment(ctx, q, schema, view)
 }
 
 // GetViewCommentsBatch returns comments for all views in a schema.
@@ -1223,11 +1263,13 @@ func GetViewCommentsBatch(ctx context.Context, dbtx DBTX, schema string) (map[st
 }
 
 // GetViewCommentsBatch is a convenience wrapper for Client.
-func (c *Client) GetViewCommentsBatch(ctx context.Context, schema string) (map[string]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetViewCommentsBatch(ctx context.Context, schema string) (result map[string]string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetViewCommentsBatch(ctx, c.pool, schema)
+	defer func() { done(retErr) }()
+	return GetViewCommentsBatch(ctx, q, schema)
 }
 
 // GetViewDefinition returns the SQL definition of a view.
@@ -1255,11 +1297,13 @@ func GetViewDefinition(ctx context.Context, dbtx DBTX, schema, view string) (str
 }
 
 // GetViewDefinition is a convenience wrapper for Client
-func (c *Client) GetViewDefinition(ctx context.Context, schema, view string) (string, error) {
-	if c.pool == nil {
-		return "", fmt.Errorf("database connection not initialized")
+func (c *Client) GetViewDefinition(ctx context.Context, schema, view string) (result string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return "", err
 	}
-	return GetViewDefinition(ctx, c.pool, schema, view)
+	defer func() { done(retErr) }()
+	return GetViewDefinition(ctx, q, schema, view)
 }
 
 // GetDependentViews returns views that depend on the specified view or table.
@@ -1304,9 +1348,11 @@ func GetDependentViews(ctx context.Context, dbtx DBTX, schema, name string) ([]s
 }
 
 // GetDependentViews is a convenience wrapper for Client
-func (c *Client) GetDependentViews(ctx context.Context, schema, name string) ([]string, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetDependentViews(ctx context.Context, schema, name string) (result []string, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetDependentViews(ctx, c.pool, schema, name)
+	defer func() { done(retErr) }()
+	return GetDependentViews(ctx, q, schema, name)
 }

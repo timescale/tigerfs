@@ -52,7 +52,7 @@ func (p *TablePermissions) HasAnyPermission() bool {
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: PostgreSQL schema name
 //   - table: Table name to check permissions for
 //
@@ -106,11 +106,13 @@ func GetTablePermissions(ctx context.Context, dbtx DBTX, schema, table string) (
 //
 // Returns the permissions struct, or error if the database connection
 // is not initialized or the query fails.
-func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) (*TablePermissions, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) (result *TablePermissions, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetTablePermissions(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetTablePermissions(ctx, q, schema, table)
 }
 
 // GetTablePermissionsBatch queries PostgreSQL to determine privileges
@@ -119,7 +121,7 @@ func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) 
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - dbtx: Database connection (pool or transaction)
+//   - dbtx: Database connection or transaction
 //   - schema: PostgreSQL schema name
 //   - tables: Table names to check permissions for
 //
@@ -170,9 +172,11 @@ func GetTablePermissionsBatch(ctx context.Context, dbtx DBTX, schema string, tab
 }
 
 // GetTablePermissionsBatch is a convenience wrapper for Client.
-func (c *Client) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (map[string]*TablePermissions, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (result map[string]*TablePermissions, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetTablePermissionsBatch(ctx, c.pool, schema, tables)
+	defer func() { done(retErr) }()
+	return GetTablePermissionsBatch(ctx, q, schema, tables)
 }

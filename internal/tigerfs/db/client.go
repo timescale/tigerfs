@@ -16,8 +16,91 @@ import (
 
 // Client represents a PostgreSQL database client with connection pooling
 type Client struct {
-	pool *pgxpool.Pool
-	cfg  *config.Config
+	pool         *pgxpool.Pool
+	cfg          *config.Config
+	baselineVars SessionVars // mount-level session variables from config/CLI
+}
+
+// doneFunc is called after a query completes to commit or rollback the
+// session variable transaction. When no session vars are active, this is a no-op.
+type doneFunc func(err error)
+
+// effectiveSessionVars merges baseline (mount-level) vars with per-request
+// context vars. Context vars override baseline vars for the same key.
+func (c *Client) effectiveSessionVars(ctx context.Context) SessionVars {
+	ctxVars := SessionVarsFromContext(ctx)
+	if len(c.baselineVars) == 0 && len(ctxVars) == 0 {
+		return nil
+	}
+	// Fast path: baseline only (no context vars) — return directly without copy.
+	// baselineVars is immutable after construction, so sharing is safe.
+	if len(ctxVars) == 0 {
+		return c.baselineVars
+	}
+	// Context only — return directly.
+	if len(c.baselineVars) == 0 {
+		return ctxVars
+	}
+	// Merge: baseline first, context overrides.
+	merged := make(SessionVars, len(c.baselineVars)+len(ctxVars))
+	for k, v := range c.baselineVars {
+		merged[k] = v
+	}
+	for k, v := range ctxVars {
+		merged[k] = v
+	}
+	return merged
+}
+
+// acquireDBTX returns a DBTX with session variables applied.
+// When no session vars are needed, returns the pool directly with a no-op
+// done func — zero overhead. When session vars exist, begins a transaction,
+// applies SET LOCAL via set_config, and returns the transaction as a DBTX.
+//
+// The returned doneFunc must be called with the operation's error to commit
+// (on success) or rollback (on failure) the transaction.
+//
+// Usage pattern with named returns:
+//
+//	func (c *Client) SomeMethod(ctx context.Context) (result T, retErr error) {
+//	    q, done, err := c.acquireDBTX(ctx)
+//	    if err != nil { return zero, err }
+//	    defer func() { done(retErr) }()
+//	    return SomeFunction(ctx, q, ...)
+//	}
+func (c *Client) acquireDBTX(ctx context.Context) (DBTX, doneFunc, error) {
+	if c.pool == nil {
+		return nil, nil, fmt.Errorf("database connection not initialized")
+	}
+
+	vars := c.effectiveSessionVars(ctx)
+	if len(vars) == 0 {
+		return c.pool, func(error) {}, nil
+	}
+
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to begin session var transaction: %w", err)
+	}
+
+	if err := applySessionVars(ctx, tx, vars); err != nil {
+		tx.Rollback(ctx) //nolint:errcheck
+		return nil, nil, err
+	}
+
+	// Use context.Background() for commit/rollback: the request context may
+	// be cancelled after the query succeeds (e.g., FUSE interrupt, NFS timeout),
+	// and we must not silently discard a successful write because of it.
+	done := func(retErr error) {
+		if retErr != nil {
+			tx.Rollback(context.Background()) //nolint:errcheck
+		} else {
+			if cErr := tx.Commit(context.Background()); cErr != nil {
+				logging.Warn("session var tx commit failed", zap.Error(cErr))
+			}
+		}
+	}
+	return tx, done, nil
 }
 
 // WithQueryTimeout returns a context with the configured query timeout applied.
@@ -148,10 +231,19 @@ func NewClient(ctx context.Context, cfg *config.Config, connStr string) (*Client
 		zap.String("user", poolConfig.ConnConfig.User),
 	)
 
-	return &Client{
+	client := &Client{
 		pool: pool,
 		cfg:  cfg,
-	}, nil
+	}
+
+	// Set baseline session variables from config (applied to every query)
+	if len(cfg.SessionVariables) > 0 {
+		client.baselineVars = SessionVars(cfg.SessionVariables)
+		logging.Debug("Session variables configured",
+			zap.Int("count", len(cfg.SessionVariables)))
+	}
+
+	return client, nil
 }
 
 // Close closes the database connection pool
@@ -183,10 +275,16 @@ func (c *Client) Query(ctx context.Context, sql string, args ...interface{}) (in
 }
 
 // Exec executes a SQL statement (INSERT, UPDATE, DELETE, DDL)
-func (c *Client) Exec(ctx context.Context, sql string, args ...interface{}) error {
+func (c *Client) Exec(ctx context.Context, sql string, args ...interface{}) (retErr error) {
 	logging.Debug("Executing statement", zap.String("sql", sql))
 
-	_, err := c.pool.Exec(ctx, sql, args...)
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { done(retErr) }()
+
+	_, err = q.Exec(ctx, sql, args...)
 	if err != nil {
 		logging.Error("Statement execution failed",
 			zap.String("sql", sql),
@@ -200,6 +298,10 @@ func (c *Client) Exec(ctx context.Context, sql string, args ...interface{}) erro
 
 // ExecInTransaction executes a SQL statement within a transaction that is
 // always rolled back. Used to validate DDL without persisting changes.
+//
+// This method manages its own transaction and must NOT use acquireDBTX,
+// because acquireDBTX commits on success while this method must always rollback.
+// Session vars are injected directly via applySessionVars after Begin.
 //
 // Returns nil if the statement would succeed, or an error describing the failure.
 func (c *Client) ExecInTransaction(ctx context.Context, sql string, args ...interface{}) error {
@@ -218,6 +320,13 @@ func (c *Client) ExecInTransaction(ctx context.Context, sql string, args ...inte
 			logging.Debug("Rollback after test", zap.Error(rbErr))
 		}
 	}()
+
+	// Apply session variables (SET LOCAL) if configured
+	if vars := c.effectiveSessionVars(ctx); len(vars) > 0 {
+		if err := applySessionVars(ctx, tx, vars); err != nil {
+			return fmt.Errorf("failed to apply session variables: %w", err)
+		}
+	}
 
 	// Execute the statement
 	_, err = tx.Exec(ctx, sql, args...)
