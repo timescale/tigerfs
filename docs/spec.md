@@ -1452,6 +1452,16 @@ connection:
   default_mount_dir: /tmp      # Base directory for auto-generated mountpoints
   insecure_no_ssl: false       # Skip TLS enforcement for remote connections
 
+  # Session variables — applied via SET LOCAL to every query in a transaction.
+  # Enables multi-tenant RLS from a shared connection pool. Compatible with
+  # PgBouncer (session + transaction mode) and RDS Proxy (no pinning).
+  # Variables are set per-query and automatically cleared when the transaction
+  # ends. Library consumers can additionally set per-request variables via
+  # db.WithSessionVars().
+  session_variables:
+    # app.user_id: "42"
+    # app.tenant_id: "acme"
+
 # Security note: TigerFS enforces sslmode=require for all non-localhost
 # database connections. This ensures connections to remote databases are
 # always encrypted. To disable this enforcement (not recommended), use
@@ -1575,6 +1585,11 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 --read-only               Mount as read-only
 --allow-other             Allow other users to access mount (FUSE)
 --allow-root              Allow root + mounting user to access (FUSE)
+```
+
+**Session Variables:**
+```bash
+--session-var KEY=VALUE   Set a PostgreSQL session variable via SET LOCAL (repeatable)
 ```
 
 **Caching/Performance:**
