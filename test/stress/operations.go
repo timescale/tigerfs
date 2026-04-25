@@ -490,6 +490,74 @@ func OpRenameDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSt
 	return fmt.Sprintf("rename_dir %s -> %s", oldRelPath, newRelPath), nil
 }
 
+// OpMoveDir moves a non-root directory (which may contain files/subdirs)
+// into a different parent directory. Sources are biased toward dirs with
+// contents so the recursive case is regularly exercised. The destination
+// must not be the source's current parent, the source itself, or a
+// descendant of the source. If the biased source has no valid destination,
+// other non-root sources are tried in random order before giving up.
+func OpMoveDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+	srcs := orderedMoveDirSources(rng, pools, state)
+	if len(srcs) == 0 {
+		return "", fmt.Errorf("no non-root dirs to move")
+	}
+
+	var src, newRelPath string
+	for _, candidate := range srcs {
+		dests := validMoveDirDests(candidate, pools, state)
+		if len(dests) == 0 {
+			continue
+		}
+		src = candidate
+		dest := dests[rng.Intn(len(dests))]
+		baseName := filepath.Base(src)
+		newRelPath = baseName
+		if dest != "" {
+			newRelPath = dest + "/" + baseName
+		}
+		break
+	}
+	if newRelPath == "" {
+		return "", fmt.Errorf("no valid (src, dest) pair for move_dir")
+	}
+
+	fileCount, subdirCount := countDirContents(src, state)
+
+	oldFull := filepath.Join(wsPath, src)
+	newFull := filepath.Join(wsPath, newRelPath)
+	if err := os.MkdirAll(filepath.Dir(newFull), 0755); err != nil {
+		return "", fmt.Errorf("mkdir for move_dir: %w", err)
+	}
+	if err := os.Rename(oldFull, newFull); err != nil {
+		return "", fmt.Errorf("move_dir %s -> %s: %w", src, newRelPath, err)
+	}
+
+	state.RenameDir(src, newRelPath)
+	pools.RenameDir(src, newRelPath)
+
+	return fmt.Sprintf("move_dir %s -> %s (%d files, %d subdirs)", src, newRelPath, fileCount, subdirCount), nil
+}
+
+// OpDeleteDir recursively deletes a non-root directory and everything inside.
+func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+	src := pickNonRootDirBiased(rng, pools, state)
+	if src == "" {
+		return "", fmt.Errorf("no non-root dirs to delete")
+	}
+
+	fileCount, subdirCount := countDirContents(src, state)
+
+	fullPath := filepath.Join(wsPath, src)
+	if err := os.RemoveAll(fullPath); err != nil {
+		return "", fmt.Errorf("delete_dir %s: %w", src, err)
+	}
+
+	state.RemoveDir(src)
+	pools.RemoveDir(src)
+
+	return fmt.Sprintf("delete_dir %s (%d files, %d subdirs)", src, fileCount, subdirCount), nil
+}
+
 // OpCreateSavepoint creates a named savepoint.
 func OpCreateSavepoint(wsPath string, rng *rand.Rand, _ *Pools, _ *WorkspaceState, _ *OpConfig, iteration int, stack *StateStack) (string, error) {
 	name := fmt.Sprintf("sp-%d-%04d", iteration, rng.Intn(10000))
@@ -542,6 +610,135 @@ func pickDirWithSubdirCapacity(rng *rand.Rand, pools *Pools, state *WorkspaceSta
 		}
 	}
 	return pools.Dirs[0]
+}
+
+// orderedMoveDirSources returns non-root dirs in the order the picker should
+// try them for move_dir: the biased preferred candidate first (prefers dirs
+// with nested contents), then the remaining non-root dirs in random order.
+// This lets OpMoveDir keep the non-empty bias while still finding a valid
+// (src, dest) pair whenever one exists.
+func orderedMoveDirSources(rng *rand.Rand, pools *Pools, state *WorkspaceState) []string {
+	first := pickNonRootDirBiased(rng, pools, state)
+	if first == "" {
+		return nil
+	}
+	ordered := []string{first}
+	rest := make([]string, 0, len(pools.NonRootDirs())-1)
+	for _, d := range pools.NonRootDirs() {
+		if d != first {
+			rest = append(rest, d)
+		}
+	}
+	rng.Shuffle(len(rest), func(i, j int) { rest[i], rest[j] = rest[j], rest[i] })
+	return append(ordered, rest...)
+}
+
+// validMoveDirDests returns all pool directories that are legal destinations
+// for moving src: not src's current parent, not src itself, not a descendant
+// of src, and not already occupied by a dir of the same basename.
+func validMoveDirDests(src string, pools *Pools, state *WorkspaceState) []string {
+	oldParent := filepath.Dir(src)
+	if oldParent == "." {
+		oldParent = ""
+	}
+	baseName := filepath.Base(src)
+	descendantPrefix := src + "/"
+
+	var out []string
+	for _, dest := range pools.Dirs {
+		if dest == oldParent || dest == src {
+			continue
+		}
+		if strings.HasPrefix(dest, descendantPrefix) {
+			continue
+		}
+		proposed := baseName
+		if dest != "" {
+			proposed = dest + "/" + baseName
+		}
+		if _, exists := state.Dirs[proposed]; exists {
+			continue
+		}
+		out = append(out, dest)
+	}
+	return out
+}
+
+// canMoveDir reports whether at least one valid (src, dest) pair exists.
+// Used by canExecute so opMoveDir is only selected when feasible.
+func canMoveDir(pools *Pools, state *WorkspaceState) bool {
+	for _, src := range pools.NonRootDirs() {
+		if len(validMoveDirDests(src, pools, state)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// pickNonRootDirBiased chooses a non-root directory, preferring ones that
+// contain files or subdirectories so move_dir / delete_dir exercise recursive
+// behavior. Empty dirs are still reachable as a secondary bucket. Returns ""
+// if no non-root dirs exist.
+func pickNonRootDirBiased(rng *rand.Rand, pools *Pools, state *WorkspaceState) string {
+	nonRoot := pools.NonRootDirs()
+	if len(nonRoot) == 0 {
+		return ""
+	}
+
+	var withContent, empty []string
+	for _, d := range nonRoot {
+		if dirHasContents(d, state) {
+			withContent = append(withContent, d)
+		} else {
+			empty = append(empty, d)
+		}
+	}
+
+	// When both groups exist, prefer non-empty dirs 70% of the time.
+	if len(withContent) > 0 && len(empty) > 0 {
+		if rng.Intn(10) < 7 {
+			return withContent[rng.Intn(len(withContent))]
+		}
+		return empty[rng.Intn(len(empty))]
+	}
+	if len(withContent) > 0 {
+		return withContent[rng.Intn(len(withContent))]
+	}
+	return empty[rng.Intn(len(empty))]
+}
+
+// dirHasContents reports whether the given directory has any nested files
+// or subdirectories in the expected state.
+func dirHasContents(dir string, state *WorkspaceState) bool {
+	prefix := dir + "/"
+	for f := range state.Files {
+		if strings.HasPrefix(f, prefix) {
+			return true
+		}
+	}
+	for d := range state.Dirs {
+		if strings.HasPrefix(d, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// countDirContents returns the number of files and subdirectories nested
+// anywhere beneath dir (recursive).
+func countDirContents(dir string, state *WorkspaceState) (files, subdirs int) {
+	prefix := dir + "/"
+	for f := range state.Files {
+		if strings.HasPrefix(f, prefix) {
+			files++
+		}
+	}
+	for d := range state.Dirs {
+		if strings.HasPrefix(d, prefix) {
+			subdirs++
+		}
+	}
+	return
 }
 
 func formatSize(bytes int) string {

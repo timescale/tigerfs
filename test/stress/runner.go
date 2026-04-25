@@ -18,6 +18,8 @@ const (
 	opDeleteFile
 	opCreateDir
 	opRenameDir
+	opMoveDir
+	opDeleteDir
 	opCreateSavepoint
 	opUndoSingle
 	opUndoToID
@@ -38,6 +40,8 @@ var operationTable = []weightedOp{
 	{opDeleteFile, 10, "delete_file"},
 	{opCreateDir, 5, "create_dir"},
 	{opRenameDir, 5, "rename_dir"},
+	{opMoveDir, 5, "move_dir"},
+	{opDeleteDir, 3, "delete_dir"},
 	{opCreateSavepoint, 5, "create_savepoint"},
 	{opUndoSingle, 3, "undo_single"},
 	{opUndoToID, 2, "undo_to_id"},
@@ -77,7 +81,7 @@ func opName(op opType) string {
 }
 
 // canExecute checks if an operation's preconditions are met.
-func canExecute(op opType, pools *Pools, stack *StateStack) bool {
+func canExecute(op opType, pools *Pools, state *WorkspaceState, stack *StateStack) bool {
 	switch op {
 	case opCreateFile:
 		return len(pools.Dirs) > 0
@@ -88,6 +92,13 @@ func canExecute(op opType, pools *Pools, stack *StateStack) bool {
 	case opCreateDir:
 		return len(pools.Dirs) > 0
 	case opRenameDir:
+		return len(pools.NonRootDirs()) > 0
+	case opMoveDir:
+		// Need at least one feasible (src, dest) pair. Checking pool counts
+		// alone is insufficient -- e.g., a single root-child dir has no valid
+		// destination because root is its current parent.
+		return canMoveDir(pools, state)
+	case opDeleteDir:
 		return len(pools.NonRootDirs()) > 0
 	case opCreateSavepoint:
 		return true
@@ -116,7 +127,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 
 	for i := 1; i <= cfg.Iterations; i++ {
 		// Select operation (with re-roll for unmet preconditions)
-		op := selectValidOperation(rng, pools, stack)
+		op := selectValidOperation(rng, pools, state, stack)
 
 		// Determine if this is an undo operation
 		isUndo := op == opUndoSingle || op == opUndoToID || op == opUndoToSavepoint
@@ -179,16 +190,16 @@ func RunIterations(cfg *Config, infra *Infra) error {
 
 // selectValidOperation picks an operation that can be executed.
 // Falls back to create_file if nothing else works.
-func selectValidOperation(rng *rand.Rand, pools *Pools, stack *StateStack) opType {
+func selectValidOperation(rng *rand.Rand, pools *Pools, state *WorkspaceState, stack *StateStack) opType {
 	// Try up to 50 times to find a valid operation
 	for attempt := 0; attempt < 50; attempt++ {
 		op := selectOperation(rng)
-		if canExecute(op, pools, stack) {
+		if canExecute(op, pools, state, stack) {
 			return op
 		}
 	}
 	// Fallback: create_file is almost always valid (dirs always exist)
-	if canExecute(opCreateFile, pools, stack) {
+	if canExecute(opCreateFile, pools, state, stack) {
 		return opCreateFile
 	}
 	// Ultimate fallback: create_dir
@@ -226,6 +237,12 @@ func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
 		return desc, nil, err
 	case opRenameDir:
 		desc, err := OpRenameDir(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
+	case opMoveDir:
+		desc, err := OpMoveDir(wsPath, rng, pools, state, cfg)
+		return desc, nil, err
+	case opDeleteDir:
+		desc, err := OpDeleteDir(wsPath, rng, pools, state, cfg)
 		return desc, nil, err
 	case opCreateSavepoint:
 		desc, err := OpCreateSavepoint(wsPath, rng, pools, state, cfg, iteration, stack)
