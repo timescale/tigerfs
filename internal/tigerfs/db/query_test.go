@@ -1931,6 +1931,7 @@ func TestExecuteUndoTransaction_DefersFKConstraint(t *testing.T) {
 			filename TEXT NOT NULL,
 			filetype TEXT NOT NULL DEFAULT 'file',
 			body TEXT,
+			modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
 		)`, srcQT, srcQT),
 		fmt.Sprintf(`CREATE TABLE %s (
@@ -1939,6 +1940,7 @@ func TestExecuteUndoTransaction_DefersFKConstraint(t *testing.T) {
 			filename TEXT NOT NULL,
 			filetype TEXT,
 			body TEXT,
+			modified_at TIMESTAMPTZ,
 			version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
 			operation TEXT NOT NULL
 		)`, histQT),
@@ -1984,8 +1986,8 @@ func TestExecuteUndoTransaction_DefersFKConstraint(t *testing.T) {
 			parentArg = parentVal
 		}
 		_, err := client.pool.Exec(ctx, fmt.Sprintf(
-			`INSERT INTO %s (version_id, file_id, parent_id, filename, filetype, body, operation)
-			 VALUES ($1, $2, $3, $4, $5, $6, 'delete')`, histQT),
+			`INSERT INTO %s (version_id, file_id, parent_id, filename, filetype, body, modified_at, operation)
+			 VALUES ($1, $2, $3, $4, $5, $6, now() - interval '1 hour', 'delete')`, histQT),
 			versionID, fileID, parentArg, filename, filetype, body)
 		if err != nil {
 			t.Fatalf("seed history (%s): %v", filename, err)
@@ -2048,5 +2050,22 @@ func TestExecuteUndoTransaction_DefersFKConstraint(t *testing.T) {
 	}
 	if logCount != 2 {
 		t.Errorf("expected 2 undo log entries, got %d", logCount)
+	}
+
+	// Verify modified_at was bumped to roughly now() on both restored rows.
+	// History rows have modified_at = now() - 1h; the bump-after-undo step
+	// should override that. Without the bump, NFS clients with `noac` keep
+	// serving cached readdir entries from before the undo (the file appears
+	// in `ls`, but stat/open returns ENOENT).
+	var ageSec float64
+	err = client.pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT EXTRACT(EPOCH FROM (now() - MIN(%s))) FROM %s WHERE %s IN ($1, $2)`,
+			qi("modified_at"), srcQT, qi("id")),
+		parentID, childID).Scan(&ageSec)
+	if err != nil {
+		t.Fatalf("query mtime: %v", err)
+	}
+	if ageSec > 60 {
+		t.Errorf("modified_at not bumped: oldest restored row is %.0fs old (expected <60s)", ageSec)
 	}
 }
