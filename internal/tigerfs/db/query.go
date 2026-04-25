@@ -1180,6 +1180,43 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 		}
 	}
 
+	// Step 4: Bump modified_at on restored rows and their parent dirs.
+	//
+	// The bump_parent_mtime AFTER trigger normally keeps directory mtimes
+	// fresh on child changes, but it can miss bumps during undo:
+	//   * Restored rows inserted via UPSERT's INSERT branch carry their
+	//     historical modified_at (pre-delete value), not now().
+	//   * With deferred FK ordering, a child can be inserted before its
+	//     parent dir row exists. The trigger's UPDATE on the (missing)
+	//     parent matches 0 rows, and the parent restored later doesn't
+	//     re-trigger the bump on its already-inserted children.
+	//
+	// Without an updated mtime, NFS clients with `noac` won't invalidate
+	// their readdir cache and will serve ghost entries from before the
+	// undo (file appears in `ls`, but stat/open returns ENOENT).
+	//
+	// We force the bump explicitly: each restored row's own mtime, plus
+	// the mtime of any parent dir that contains a restored row.
+	if len(params.RestoreFileIDs) > 0 {
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET %s = now() WHERE %s = ANY($1::uuid[])
+				   OR %s IN (
+				       SELECT DISTINCT %s FROM %s
+				       WHERE %s = ANY($1::uuid[]) AND %s IS NOT NULL
+				   )`,
+				sourceTable, qi("modified_at"), qi("id"),
+				qi("id"),
+				qi("parent_id"), sourceTable,
+				qi("id"), qi("parent_id"),
+			),
+			params.RestoreFileIDs,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to bump modified_at after undo: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit undo transaction: %w", err)
 	}
