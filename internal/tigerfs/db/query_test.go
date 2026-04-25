@@ -1883,3 +1883,170 @@ func TestClient_DeleteRow_NilPool(t *testing.T) {
 		t.Errorf("Expected 'database connection not initialized', got: %v", err)
 	}
 }
+
+// TestExecuteUndoTransaction_DefersFKConstraint verifies the deferral path
+// documented in ADR-017: ExecuteUndoTransaction must call SET CONSTRAINTS ALL
+// DEFERRED so rows can be UPSERTed in any order within the transaction. Without
+// this, restoring a child row before its parent dir row fires parent_id_fkey
+// (SQLSTATE 23503) immediately and aborts the undo.
+//
+// The test deliberately passes RestoreFileIDs in CHILD-FIRST order so the FK
+// would violate without deferral. With the fix in place, the FK is checked at
+// COMMIT and both rows survive.
+func TestExecuteUndoTransaction_DefersFKConstraint(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfg := &config.Config{PoolSize: 5, PoolMaxIdle: 2}
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Use unique table names so parallel runs / leftover state don't collide.
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	sourceTable := "tundo_src_" + suffix
+	historyTable := "tundo_hist_" + suffix
+	logTable := "tundo_log_" + suffix
+	schema := "public"
+
+	srcQT := QuoteTable(schema, sourceTable)
+	histQT := QuoteTable(schema, historyTable)
+	logQT := QuoteTable(schema, logTable)
+
+	// Schema mirrors the relevant pieces of the synth-app shape from ADR-017:
+	// parent_id FK and (parent_id, filename, filetype) UNIQUE both
+	// DEFERRABLE INITIALLY IMMEDIATE. No archive trigger -- we'll seed history
+	// directly so the test stays focused on ExecuteUndoTransaction's behavior.
+	setupSQL := []string{
+		fmt.Sprintf(`CREATE TABLE %s (
+			id UUID PRIMARY KEY,
+			parent_id UUID REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE,
+			filename TEXT NOT NULL,
+			filetype TEXT NOT NULL DEFAULT 'file',
+			body TEXT,
+			UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
+		)`, srcQT, srcQT),
+		fmt.Sprintf(`CREATE TABLE %s (
+			file_id UUID,
+			parent_id UUID,
+			filename TEXT NOT NULL,
+			filetype TEXT,
+			body TEXT,
+			version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+			operation TEXT NOT NULL
+		)`, histQT),
+		fmt.Sprintf(`CREATE TABLE %s (
+			log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+			file_id UUID NOT NULL,
+			type TEXT NOT NULL,
+			user_id TEXT,
+			filename TEXT NOT NULL,
+			version_id UUID,
+			description TEXT
+		)`, logQT),
+	}
+	for _, sql := range setupSQL {
+		if _, err := client.pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("setup failed (%s): %v", sql, err)
+		}
+	}
+	defer func() {
+		// Drop in reverse-dependency order; FK is on the source table itself
+		// (self-reference), so a single DROP suffices, but we list all three.
+		_, _ = client.pool.Exec(context.Background(),
+			fmt.Sprintf(`DROP TABLE IF EXISTS %s, %s, %s`, srcQT, histQT, logQT))
+	}()
+
+	// Pre-generate UUIDs so we can refer to them by name and assert.
+	var parentID, childID, parentVersion, childVersion string
+	err = client.pool.QueryRow(ctx,
+		`SELECT uuidv7()::text, uuidv7()::text, uuidv7()::text, uuidv7()::text`,
+	).Scan(&parentID, &childID, &parentVersion, &childVersion)
+	if err != nil {
+		t.Fatalf("uuid generation failed: %v", err)
+	}
+
+	// Seed history with delete entries for both rows. The undo will UPSERT
+	// from these history rows back into the source table.
+	insertHistory := func(versionID, fileID, parentVal, filename, filetype, body string) {
+		t.Helper()
+		var parentArg interface{}
+		if parentVal == "" {
+			parentArg = nil
+		} else {
+			parentArg = parentVal
+		}
+		_, err := client.pool.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO %s (version_id, file_id, parent_id, filename, filetype, body, operation)
+			 VALUES ($1, $2, $3, $4, $5, $6, 'delete')`, histQT),
+			versionID, fileID, parentArg, filename, filetype, body)
+		if err != nil {
+			t.Fatalf("seed history (%s): %v", filename, err)
+		}
+	}
+	insertHistory(parentVersion, parentID, "", "parent", "directory", "")
+	insertHistory(childVersion, childID, parentID, "child.md", "file", "child body")
+
+	// Source table is empty -- both rows were "deleted" (we just simulated it
+	// by populating history).
+
+	// Call ExecuteUndoTransaction with CHILD-FIRST restore order. Without
+	// SET CONSTRAINTS ALL DEFERRED this aborts with parent_id_fkey on the
+	// first UPSERT.
+	err = client.ExecuteUndoTransaction(ctx, &UndoTransactionParams{
+		Schema:            schema,
+		SourceTable:       sourceTable,
+		HistoryTable:      historyTable,
+		LogTable:          logTable,
+		Description:       "test undo deferred FK",
+		RestoreVersionIDs: []string{childVersion, parentVersion},
+		RestoreFileIDs:    []string{childID, parentID},
+		RestoreFilenames:  []string{"child.md", "parent"},
+		UserID:            "test-user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteUndoTransaction must succeed with deferred constraints (child-first restore): %v", err)
+	}
+
+	// Verify both rows are restored and the FK relationship is intact.
+	var parentExists bool
+	err = client.pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE id = $1 AND filetype = 'directory')`, srcQT),
+		parentID).Scan(&parentExists)
+	if err != nil {
+		t.Fatalf("query parent: %v", err)
+	}
+	if !parentExists {
+		t.Fatal("parent row should be restored")
+	}
+
+	var childParent string
+	err = client.pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT parent_id::text FROM %s WHERE id = $1`, srcQT),
+		childID).Scan(&childParent)
+	if err != nil {
+		t.Fatalf("query child: %v", err)
+	}
+	if childParent != parentID {
+		t.Errorf("child.parent_id = %q, want %q", childParent, parentID)
+	}
+
+	// Verify undo log entries were written for both restored rows.
+	var logCount int
+	err = client.pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE type = 'undo' AND file_id IN ($1, $2)`, logQT),
+		parentID, childID).Scan(&logCount)
+	if err != nil {
+		t.Fatalf("query log: %v", err)
+	}
+	if logCount != 2 {
+		t.Errorf("expected 2 undo log entries, got %d", logCount)
+	}
+}

@@ -1016,6 +1016,17 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 	}
 	defer tx.Rollback(ctx)
 
+	// Defer FK and UNIQUE checks to COMMIT so we can DELETE/INSERT/UPSERT
+	// rows in any order within the undo. This is the deferral path documented
+	// in ADR-017: parent_id_fkey and the (parent_id, filename, filetype)
+	// uniqueness constraint are DEFERRABLE INITIALLY IMMEDIATE specifically
+	// to support this. Without deferral, restoring a child file before its
+	// parent directory row fails with a parent_id_fkey violation
+	// (e.g., undoing a delete_dir that contained logged children).
+	if _, err := tx.Exec(ctx, `SET CONSTRAINTS ALL DEFERRED`); err != nil {
+		return fmt.Errorf("failed to defer constraints in undo transaction: %w", err)
+	}
+
 	sourceTable := qt(params.Schema, params.SourceTable)
 	historyTable := qt(params.Schema, params.HistoryTable)
 	logTable := qt(params.Schema, params.LogTable)
