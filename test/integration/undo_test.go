@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -969,4 +970,99 @@ func TestUndo_Interface_StatValidSavepoint(t *testing.T) {
 	require.Nil(t, fsErr, "Stat on existing savepoint should succeed")
 	assert.True(t, entry.IsDir)
 	assert.Equal(t, "valid-sp", entry.Name)
+}
+
+// TestUndo_ToID_RestoresDeletedDirWithFile exercises the deferred-constraint
+// path documented in ADR-017. Without SET CONSTRAINTS ALL DEFERRED in
+// ExecuteUndoTransaction, restoring a child file row whose parent_id points
+// to a directory row that hasn't been UPSERTed yet trips parent_id_fkey
+// (SQLSTATE 23503) and aborts the undo with EIO. This was the failure
+// reported by the stress test seed 1777065886566418000.
+//
+// To force the FK-ordering case, we create the file at root *before* the
+// directory. Restore order in ExecuteUndoTransaction is by file_id ASC, so
+// the older file_id (the file) is upserted first, with parent_id pointing to
+// the not-yet-restored dir row. We use the production .apply path so cache
+// invalidation matches the FUSE/NFS layer behavior. The undo target is read
+// from .log/.last/.../.export/json so it's a raw UUID -- the format
+// ExecuteUndo expects when called from writeUndoApply.
+func TestUndo_ToID_RestoresDeletedDirWithFile(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undofk")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undofk", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// 1. Create x.md at root -- its file_id (UUIDv7) is the oldest.
+	fsErr = ops.WriteFile(ctx, "/undofk/x.md", []byte("---\ntitle: X\n---\nbody x\n"))
+	require.Nil(t, fsErr)
+
+	// 2. Create dir A -- newer file_id.
+	fsErr = ops.Mkdir(ctx, "/undofk/A")
+	require.Nil(t, fsErr)
+
+	// 3. Move x.md into A. After this, x.md.parent_id = A.id but its
+	//    file_id stays unchanged (older than A's). When the undo restores
+	//    rows in file_id ASC order, x.md is upserted before A -- forcing
+	//    the FK to violate immediately without deferral.
+	fsErr = ops.Rename(ctx, "/undofk/x.md", "/undofk/A/x.md")
+	require.Nil(t, fsErr)
+
+	// Target: the most recent log entry, which is the rename. After undoing
+	// back to this point, both x.md (under A) and A should be restored.
+	targetLogID := mostRecentLogIDRaw(t, ops, ctx, "/undofk")
+
+	// 4. Delete file then dir (rmdir requires empty). We deliberately avoid
+	//    calling Stat between delete and undo: writeUndoApply invalidates
+	//    the stat cache under synth.TigerFSSchema while statSynthFile caches
+	//    under the user's schema, so a sanity Stat here would leave a stale
+	//    negative entry that survives the undo. (Unrelated to the FK fix.)
+	require.Nil(t, ops.Delete(ctx, "/undofk/A/x.md"))
+	require.Nil(t, ops.Delete(ctx, "/undofk/A"))
+
+	// 5. Apply undo via the production .apply path. The path segment is
+	//    the raw UUID (matches what writeUndoApply passes to ExecuteUndo).
+	applyPath := "/undofk/.undo/to-id/" + targetLogID + "/.apply"
+	fsErr = ops.WriteFile(ctx, applyPath, []byte(""))
+	require.Nil(t, fsErr, "undo .apply must succeed with deferred constraints")
+
+	// 6. Both the dir and the file inside should be back.
+	fc, fsErr := ops.ReadFile(ctx, "/undofk/A/x.md")
+	require.Nil(t, fsErr, "file x.md should be restored under A")
+	assert.Contains(t, string(fc.Data), "body x")
+
+	entries, fsErr := ops.ReadDir(ctx, "/undofk/A")
+	require.Nil(t, fsErr, "directory A should be readable after undo")
+	var names []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			names = append(names, e.Name)
+		}
+	}
+	assert.Contains(t, names, "x.md", "A should contain x.md after undo")
+}
+
+// mostRecentLogIDRaw returns the raw UUID of the most recent log entry for
+// the given app, read via .log/.last/1/.export/json. ReadDir on .log/ returns
+// display names (timestamp-encoded), but the undo apply path expects a raw
+// UUID, so we go through the JSON export to get the underlying value.
+func mostRecentLogIDRaw(t *testing.T, ops *fs.Operations, ctx context.Context, appPath string) string {
+	t.Helper()
+	fc, fsErr := ops.ReadFile(ctx, appPath+"/.log/.last/1/.export/json")
+	require.Nil(t, fsErr, "read latest log JSON")
+	var entries []struct {
+		LogID string `json:"log_id"`
+	}
+	require.NoError(t, json.Unmarshal(fc.Data, &entries))
+	require.NotEmpty(t, entries, "log should have at least one entry")
+	require.NotEmpty(t, entries[0].LogID, "log_id must not be empty")
+	return entries[0].LogID
 }
