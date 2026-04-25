@@ -41,18 +41,13 @@ func (s *Stats) Print() {
 	fmt.Println("=== Operation Statistics ===")
 	fmt.Println()
 
-	notImpl := map[string]string{
-		"move_dir":   "(not implemented in test)",
-		"delete_dir": "(not implemented in test)",
-	}
-
 	s.printGroup("File Operations:", []string{
 		"create_file", "edit_file", "rename_file", "move_file", "delete_file",
 	}, nil, total)
 	fmt.Println()
 	s.printGroup("Directory Operations:", []string{
 		"create_dir", "rename_dir", "move_dir", "delete_dir",
-	}, notImpl, total)
+	}, nil, total)
 	fmt.Println()
 	s.printGroup("Other Operations:", []string{
 		"create_savepoint", "undo_single", "undo_to_id", "undo_to_savepoint",

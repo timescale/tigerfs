@@ -42,42 +42,43 @@ func TestSelectOperation_AllTypesAppear(t *testing.T) {
 
 func TestCanExecute_EmptyState(t *testing.T) {
 	pools := NewPools() // only root dir
+	state := NewWorkspaceState()
 	stack := NewStateStack()
 
 	// Should be executable with empty state
-	if !canExecute(opCreateFile, pools, stack) {
+	if !canExecute(opCreateFile, pools, state, stack) {
 		t.Error("create_file should be valid with root dir")
 	}
-	if !canExecute(opCreateDir, pools, stack) {
+	if !canExecute(opCreateDir, pools, state, stack) {
 		t.Error("create_dir should be valid with root dir")
 	}
-	if !canExecute(opCreateSavepoint, pools, stack) {
+	if !canExecute(opCreateSavepoint, pools, state, stack) {
 		t.Error("create_savepoint should always be valid")
 	}
 
 	// Should NOT be executable
-	if canExecute(opEditFile, pools, stack) {
+	if canExecute(opEditFile, pools, state, stack) {
 		t.Error("edit_file should be invalid with no files")
 	}
-	if canExecute(opDeleteFile, pools, stack) {
+	if canExecute(opDeleteFile, pools, state, stack) {
 		t.Error("delete_file should be invalid with no files")
 	}
-	if canExecute(opRenameFile, pools, stack) {
+	if canExecute(opRenameFile, pools, state, stack) {
 		t.Error("rename_file should be invalid with no files")
 	}
-	if canExecute(opMoveFile, pools, stack) {
+	if canExecute(opMoveFile, pools, state, stack) {
 		t.Error("move_file should be invalid with no files")
 	}
-	if canExecute(opRenameDir, pools, stack) {
+	if canExecute(opRenameDir, pools, state, stack) {
 		t.Error("rename_dir should be invalid with no non-root dirs")
 	}
-	if canExecute(opUndoSingle, pools, stack) {
+	if canExecute(opUndoSingle, pools, state, stack) {
 		t.Error("undo_single should be invalid with empty stack")
 	}
-	if canExecute(opUndoToID, pools, stack) {
+	if canExecute(opUndoToID, pools, state, stack) {
 		t.Error("undo_to_id should be invalid with empty stack")
 	}
-	if canExecute(opUndoToSavepoint, pools, stack) {
+	if canExecute(opUndoToSavepoint, pools, state, stack) {
 		t.Error("undo_to_savepoint should be invalid with no savepoints")
 	}
 }
@@ -86,6 +87,8 @@ func TestCanExecute_WithFiles(t *testing.T) {
 	pools := NewPools()
 	pools.AddFile("test.md")
 	pools.AddDir("docs")
+	state := NewWorkspaceState()
+	state.AddDir("docs")
 	stack := NewStateStack()
 	stack.Push(NewWorkspaceState(), 0)
 	stack.SetLastLogID("log-0")
@@ -93,22 +96,22 @@ func TestCanExecute_WithFiles(t *testing.T) {
 	stack.SetLastLogID("log-1")
 	stack.SaveSavepoint("sp1")
 
-	if !canExecute(opEditFile, pools, stack) {
+	if !canExecute(opEditFile, pools, state, stack) {
 		t.Error("edit_file should be valid with files")
 	}
-	if !canExecute(opMoveFile, pools, stack) {
+	if !canExecute(opMoveFile, pools, state, stack) {
 		t.Error("move_file should be valid with files + 2 dirs")
 	}
-	if !canExecute(opRenameDir, pools, stack) {
+	if !canExecute(opRenameDir, pools, state, stack) {
 		t.Error("rename_dir should be valid with non-root dirs")
 	}
-	if !canExecute(opUndoSingle, pools, stack) {
+	if !canExecute(opUndoSingle, pools, state, stack) {
 		t.Error("undo_single should be valid with stack entries")
 	}
-	if !canExecute(opUndoToID, pools, stack) {
+	if !canExecute(opUndoToID, pools, state, stack) {
 		t.Error("undo_to_id should be valid with 2+ stack entries")
 	}
-	if !canExecute(opUndoToSavepoint, pools, stack) {
+	if !canExecute(opUndoToSavepoint, pools, state, stack) {
 		t.Error("undo_to_savepoint should be valid with savepoints")
 	}
 }
@@ -116,12 +119,13 @@ func TestCanExecute_WithFiles(t *testing.T) {
 func TestSelectValidOperation_FallsBack(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	pools := NewPools() // only root dir, no files
+	state := NewWorkspaceState()
 	stack := NewStateStack()
 
 	// Should always return something valid (create_file or create_dir)
 	for i := 0; i < 100; i++ {
-		op := selectValidOperation(rng, pools, stack)
-		if !canExecute(op, pools, stack) {
+		op := selectValidOperation(rng, pools, state, stack)
+		if !canExecute(op, pools, state, stack) {
 			t.Errorf("iteration %d: selectValidOperation returned %s which can't execute", i, opName(op))
 		}
 	}
