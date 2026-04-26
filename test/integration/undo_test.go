@@ -1028,6 +1028,15 @@ func TestUndo_ToID_RestoresDeletedDirWithFile(t *testing.T) {
 	require.Nil(t, ops.Delete(ctx, "/undofk/A/x.md"))
 	require.Nil(t, ops.Delete(ctx, "/undofk/A"))
 
+	// Pause so the dir's archived (pre-delete) modified_at is measurably
+	// older than the imminent undo. This makes the post-undo ModTime check
+	// below robust to wall-clock skew between the PG container and host:
+	// without the bump, ModTime ~= pre-delete time = sleepFloor; with the
+	// bump, ModTime is at least sleep duration newer.
+	const undoBumpSleep = 500 * time.Millisecond
+	sleepFloor := time.Now()
+	time.Sleep(undoBumpSleep)
+
 	// 5. Apply undo via the production .apply path. The path segment is
 	//    the raw UUID (matches what writeUndoApply passes to ExecuteUndo).
 	applyPath := "/undofk/.undo/to-id/" + targetLogID + "/.apply"
@@ -1048,6 +1057,87 @@ func TestUndo_ToID_RestoresDeletedDirWithFile(t *testing.T) {
 		}
 	}
 	assert.Contains(t, names, "x.md", "A should contain x.md after undo")
+
+	// 7. Directory A's ModTime must reflect the undo. In this scenario the
+	//    only restored child (x.md) has an older file_id than A, so x.md
+	//    is UPSERTed before A and the bump_parent_mtime AFTER trigger
+	//    fires against a not-yet-existing A (0 rows updated). Without
+	//    the explicit post-undo modified_at bump, A's mtime stays at the
+	//    historical (pre-delete) value -- and NFS clients with `noac`
+	//    won't invalidate their readdir cache.
+	//
+	// The pre-delete mtime was captured before sleepFloor; the bumped
+	// mtime should be at least undoBumpSleep newer. Use half the sleep
+	// as the tolerance to absorb container/host clock skew.
+	dirEntry, fsErr := ops.Stat(ctx, "/undofk/A")
+	require.Nil(t, fsErr, "stat A after undo")
+	tolerance := undoBumpSleep / 2
+	if dirEntry.ModTime.Before(sleepFloor.Add(tolerance)) {
+		t.Errorf("dir A ModTime not bumped by undo: ModTime=%v, expected after sleepFloor+tolerance=%v",
+			dirEntry.ModTime, sleepFloor.Add(tolerance))
+	}
+}
+
+// TestUndo_ToID_RestoresMultipleFilesInDeletedDir verifies multi-file
+// restoration end-to-end: delete one of several siblings, undo, and ensure
+// the directory listing surfaces every file (with content intact). Catches
+// regressions in row restoration or path resolution that wouldn't show up
+// in single-file tests.
+func TestUndo_ToID_RestoresMultipleFilesInDeletedDir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undomulti")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undomulti", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Build state: dir A with three sibling files.
+	require.Nil(t, ops.Mkdir(ctx, "/undomulti/A"))
+	require.Nil(t, ops.WriteFile(ctx, "/undomulti/A/one.md",
+		[]byte("---\ntitle: One\n---\nbody one\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/undomulti/A/two.md",
+		[]byte("---\ntitle: Two\n---\nbody two\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/undomulti/A/three.md",
+		[]byte("---\ntitle: Three\n---\nbody three\n")))
+
+	// Target: the most recent log entry (create of three.md). We undo back
+	// to this point, so the upcoming delete of two.md gets rolled back.
+	targetLogID := mostRecentLogIDRaw(t, ops, ctx, "/undomulti")
+
+	// Delete two.md.
+	require.Nil(t, ops.Delete(ctx, "/undomulti/A/two.md"))
+
+	// Apply undo via the production .apply path.
+	applyPath := "/undomulti/.undo/to-id/" + targetLogID + "/.apply"
+	fsErr = ops.WriteFile(ctx, applyPath, []byte(""))
+	require.Nil(t, fsErr, "undo .apply must succeed")
+
+	// All three siblings should be present.
+	entries, fsErr := ops.ReadDir(ctx, "/undomulti/A")
+	require.Nil(t, fsErr, "read A after undo")
+	names := map[string]bool{}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			names[e.Name] = true
+		}
+	}
+	for _, want := range []string{"one.md", "two.md", "three.md"} {
+		if !names[want] {
+			t.Errorf("missing %s after undo (got %v)", want, names)
+		}
+	}
+
+	// two.md's content is restored.
+	fc, fsErr := ops.ReadFile(ctx, "/undomulti/A/two.md")
+	require.Nil(t, fsErr, "read restored two.md")
+	assert.Contains(t, string(fc.Data), "body two")
 }
 
 // mostRecentLogIDRaw returns the raw UUID of the most recent log entry for
