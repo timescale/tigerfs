@@ -1035,10 +1035,12 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 	// in synth.TigerFSSchema but stat/path lookups happen against the user's
 	// view. Use the user's schema for invalidation so cached entries
 	// (including negatives) actually clear after undo.
-	cacheSchema := synth.TigerFSSchema
-	if parsed.Context != nil && parsed.Context.Schema != "" {
-		cacheSchema = parsed.Context.Schema
-	}
+	//
+	// parsed.Context and parsed.Context.Schema are invariants here:
+	// processUndo (path.go) errors out on nil Context, and resolveSchema
+	// (operations.go) errors out when current_schema() can't be resolved.
+	// Either failure aborts WriteFile before this function is called.
+	cacheSchema := parsed.Context.Schema
 
 	// Build filters from pipeline context
 	var filters []db.UndoFilter
