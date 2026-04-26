@@ -2,6 +2,8 @@ package main
 
 import (
 	"math/rand"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -342,6 +344,133 @@ func TestValidMoveDirDests_ExcludesSelfParentAndDescendants(t *testing.T) {
 	}
 	if !got[""] || !got["other"] || len(got) != 2 {
 		t.Errorf("validMoveDirDests(a/b): got %v, want [\"\" other]", dests)
+	}
+}
+
+func TestCollectDeletionOrder(t *testing.T) {
+	// Real filesystem layout:
+	//   <tmp>/A/
+	//     leaf.md
+	//     sub/
+	//       deep.md
+	//   <tmp>/other.md  (must NOT appear in order; outside src)
+	//   <tmp>/A/.hidden  (must NOT appear; hidden entries are skipped)
+	tmp := t.TempDir()
+	mustMkdir := func(p string) {
+		if err := os.MkdirAll(filepath.Join(tmp, p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite := func(p string) {
+		if err := os.WriteFile(filepath.Join(tmp, p), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustMkdir("A/sub")
+	mustWrite("A/leaf.md")
+	mustWrite("A/sub/deep.md")
+	mustWrite("A/.hidden")
+	mustWrite("other.md")
+
+	order, err := collectDeletionOrder(tmp, "A")
+	if err != nil {
+		t.Fatalf("collectDeletionOrder: %v", err)
+	}
+
+	// src must always be last.
+	if order[len(order)-1].path != "A" || !order[len(order)-1].isDir {
+		t.Fatalf("last item must be src dir 'A', got %+v", order[len(order)-1])
+	}
+
+	// Nothing outside A's subtree, and no hidden entries.
+	for _, it := range order {
+		if it.path != "A" && !strings.HasPrefix(it.path, "A/") {
+			t.Errorf("unexpected path outside subtree: %s", it.path)
+		}
+		if strings.Contains(it.path, "/.") || strings.HasPrefix(filepath.Base(it.path), ".") {
+			t.Errorf("hidden entry should be skipped: %s", it.path)
+		}
+	}
+
+	// Children-before-parent invariant: every directory entry must appear
+	// after every entry whose path begins with that dir + "/".
+	indexOf := map[string]int{}
+	for i, it := range order {
+		indexOf[it.path] = i
+	}
+	for _, it := range order {
+		if !it.isDir {
+			continue
+		}
+		dirIdx := indexOf[it.path]
+		prefix := it.path + "/"
+		for _, child := range order {
+			if strings.HasPrefix(child.path, prefix) && indexOf[child.path] > dirIdx {
+				t.Errorf("child %s (idx %d) appears AFTER its parent %s (idx %d)",
+					child.path, indexOf[child.path], it.path, dirIdx)
+			}
+		}
+	}
+
+	// Spot-check exact contents.
+	want := map[string]bool{
+		"A/sub/deep.md": false,
+		"A/sub":         true,
+		"A/leaf.md":     false,
+		"A":             true,
+	}
+	if len(order) != len(want) {
+		t.Errorf("len(order) = %d, want %d (got %v)", len(order), len(want), order)
+	}
+	for _, it := range order {
+		expectedDir, ok := want[it.path]
+		if !ok {
+			t.Errorf("unexpected entry %s", it.path)
+			continue
+		}
+		if it.isDir != expectedDir {
+			t.Errorf("entry %s isDir=%v, want %v", it.path, it.isDir, expectedDir)
+		}
+	}
+}
+
+func TestCollectDeletionOrder_EmptyDir(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	order, err := collectDeletionOrder(tmp, "empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 1 || order[0].path != "empty" || !order[0].isDir {
+		t.Errorf("empty dir should yield only [{empty,true}], got %v", order)
+	}
+}
+
+// TestCollectDeletionOrder_PhantomDir simulates the case where TigerFS has
+// a directory the stress test's WorkspaceState doesn't track (mkdirSynth
+// doesn't log, so undo doesn't roll Mkdir-created dirs back). The walker
+// must find such phantom dirs via os.ReadDir so they get deleted along
+// with the rest, otherwise os.Remove on the parent fails with ENOTEMPTY
+// (surfaced as EIO through the NFS adapter).
+func TestCollectDeletionOrder_PhantomDir(t *testing.T) {
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "A/phantom"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	order, err := collectDeletionOrder(tmp, "A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawPhantom bool
+	for _, it := range order {
+		if it.path == "A/phantom" && it.isDir {
+			sawPhantom = true
+		}
+	}
+	if !sawPhantom {
+		t.Errorf("phantom dir A/phantom not in deletion order: %v", order)
 	}
 }
 

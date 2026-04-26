@@ -242,7 +242,7 @@ func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
 		desc, err := OpMoveDir(wsPath, rng, pools, state, cfg)
 		return desc, nil, err
 	case opDeleteDir:
-		desc, err := OpDeleteDir(wsPath, rng, pools, state, cfg)
+		desc, err := OpDeleteDir(wsPath, rng, pools, state, cfg, stack, iteration)
 		return desc, nil, err
 	case opCreateSavepoint:
 		desc, err := OpCreateSavepoint(wsPath, rng, pools, state, cfg, iteration, stack)
