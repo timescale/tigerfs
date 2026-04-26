@@ -3456,6 +3456,48 @@ echo 1 > /mnt/db/.refresh
 - Manual refresh available for immediate consistency
 - Most use cases tolerate eventual consistency
 
+### Undo Preview Cache
+
+Undo preview surfaces (`.undo/<mode>/<target>/.info/summary`,
+`.undo/<mode>/<target>/<preview-file>`) are backed by a short-lived
+in-process cache (2-second TTL) on top of `QueryUndoAffectedFiles`,
+`GetSavepointRow`, `QueryLogEntry`, and history-row reads. The cache
+exists because each NFS/FUSE RPC during a single user op (`ls`,
+`cat`, `stat`) independently queries the same data, and these reads
+are read-only.
+
+**Apply path is unaffected.** Writing to `.apply` re-queries inside
+`ExecuteUndoTransaction` with no cache involvement, so undo
+correctness does not depend on cache freshness.
+
+**Stale-preview window after a concurrent apply.** Under PostgreSQL
+READ COMMITTED, a preview read whose `SELECT` started *before* a
+concurrent apply transaction COMMITs uses a snapshot taken at
+`SELECT`-start. If the apply commits and invalidates the cache while
+that read is in flight, the read's result reflects pre-undo state;
+the read then re-populates the cache with that stale snapshot.
+Subsequent preview lookups can serve stale data until the 2-second
+TTL expires.
+
+**Affected reads:**
+
+| Cache | Stale data semantically wrong? |
+|-------|-------------------------------|
+| `affectedFiles` (which files would change for target X) | yes -- the answer is invalidated by the just-applied undo |
+| `logEntries`, `savepointRows`, `historyRows` | no -- the underlying tables are append-only or immutable |
+
+So in practice, only the "files affected by undoing target X" preview
+can show a stale list. Listings, log/savepoint/history previews show
+data that is technically a snapshot but still semantically correct.
+
+**Rationale:** the 2-second window is short, the apply path is
+unaffected, and eliminating the race would require either holding a
+process-wide lock for the duration of every undo transaction (kills
+preview concurrency on every other workspace) or threading a
+generation counter through every cache read site (significant API
+churn). The current behavior is the same eventual-consistency tradeoff
+documented above for directory listings.
+
 ---
 
 ## Unmounting and Shutdown
