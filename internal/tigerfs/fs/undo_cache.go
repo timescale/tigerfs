@@ -158,6 +158,24 @@ func (c *undoCache) storeHistoryRow(schema, table, versionID string, row *db.Row
 }
 
 // invalidate clears all undo caches. Called after undo execution.
+//
+// Concurrency note: there is a narrow window where a concurrent reader
+// can re-populate a cache entry with pre-undo data. If a reader's
+// QueryUndoAffectedFiles starts before the undo transaction COMMITs (so
+// PG's READ COMMITTED snapshot reflects pre-undo state), then the writer
+// commits and runs invalidate(), then the reader's query finally returns,
+// the reader calls storeAffected() with stale rows. Subsequent lookups
+// return that stale snapshot until the 2-second TTL expires.
+//
+// This is acceptable: the staleness only affects undo *preview* surfaces
+// (.info/summary, .undo/<target>/<preview>), not the apply path itself,
+// which re-queries fresh inside ExecuteUndoTransaction. The underlying
+// log/savepoint/history rows are append-only or immutable, so stale
+// log/savepoint/history cache entries reflect data that's still valid;
+// only affectedFiles can become semantically stale.
+//
+// See docs/spec.md "Undo Preview Cache" for user-facing documentation
+// of the same tradeoff.
 func (c *undoCache) invalidate() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
