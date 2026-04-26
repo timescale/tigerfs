@@ -1632,6 +1632,78 @@ func TestSynth_HistoryAfterRename(t *testing.T) {
 	assert.Contains(t, names, "original.md", "history should show old filename (from pre-rename versions)")
 }
 
+// TestSynth_HistoryDirCacheUsesUserSchema verifies that readDirHistory's
+// pathCache lookups key under the user's schema, matching every other
+// pathCache writer. Without that, history-path entries land in a disjoint
+// (tigerfs, table) namespace that survives invalidations from the live-
+// path code (delete, mkdir, rename), so a deleted-then-recreated dir
+// returns the OLD dir's history under the new dir's path until the
+// 2-second TTL expires.
+//
+// Repro:
+//  1. mkdir A, write A/x.md, edit A/x.md (history rows reference A.id).
+//  2. ReadDir .history/A/ to populate the path cache for "A".
+//  3. delete A/x.md, delete A, mkdir A (new dir, new id). All three
+//     invalidate the pathCache.
+//  4. ReadDir .history/A/. Should resolve "A" to the NEW id and return
+//     no history entries (the new A has no children with history).
+//
+// Without the fix, step 4 hits a stale (tigerfs, table) cache entry
+// pointing at OLD_A_ID and returns x.md's history under the new A's
+// path -- visibly wrong to the user.
+func TestSynth_HistoryDirCacheUsesUserSchema(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "histcache")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/histcache", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Build state: A/x.md with at least one history version.
+	require.Nil(t, ops.Mkdir(ctx, "/histcache/A"))
+	require.Nil(t, ops.WriteFile(ctx, "/histcache/A/x.md",
+		[]byte("---\ntitle: X V1\n---\nv1\n")))
+	time.Sleep(1100 * time.Millisecond) // distinct UUIDv7
+	require.Nil(t, ops.WriteFile(ctx, "/histcache/A/x.md",
+		[]byte("---\ntitle: X V2\n---\nv2\n")))
+
+	// Prime the path cache for the current "A" -> OLD_ID by reading the
+	// history listing under that path.
+	primeEntries, fsErr := ops.ReadDir(ctx, "/histcache/A/.history")
+	require.Nil(t, fsErr)
+	primeNames := fsEntryNames(primeEntries)
+	require.Contains(t, primeNames, "x.md",
+		"sanity: x.md should appear in A's history before recreate")
+
+	// Tear A down completely.
+	require.Nil(t, ops.Delete(ctx, "/histcache/A/x.md"))
+	require.Nil(t, ops.Delete(ctx, "/histcache/A"))
+
+	// Recreate A. New row, new UUID.
+	require.Nil(t, ops.Mkdir(ctx, "/histcache/A"))
+
+	// Read history under the new A. The pathCache must resolve "A" to the
+	// NEW UUID (because every prior write/delete/mkdir invalidated the
+	// pathCache under the user's schema). With the bug, the stale entry
+	// under (tigerfs, table) keys survives and returns OLD_A_ID, so the
+	// history query for parent_id = OLD_A_ID returns x.md.
+	postEntries, fsErr := ops.ReadDir(ctx, "/histcache/A/.history")
+	require.Nil(t, fsErr)
+	postNames := fsEntryNames(postEntries)
+	if assert.NotContains(t, postNames, "x.md",
+		"history under recreated A should not include the old A's children "+
+			"(stale pathCache entry under (tigerfs, table) keys)") {
+		// extra logging if assertion passed
+		t.Logf("history under recreated A: %v (expected empty)", postNames)
+	}
+}
+
 // TestSynth_RootFilesAndDirsCoexist verifies that root-level files and
 // directories coexist correctly in ReadDir.
 func TestSynth_RootFilesAndDirsCoexist(t *testing.T) {
