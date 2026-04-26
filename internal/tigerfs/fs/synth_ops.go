@@ -837,7 +837,7 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 			o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "edit", fileID, filename)
 		} else {
 			// Ensure parent directories exist, get parent UUID
-			parentID, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
+			parentID, fsErr := o.resolveSynthParentID(ctx, fsCtx.Schema, fsCtx.TableName, info, filename)
 			if fsErr != nil {
 				return fsErr
 			}
@@ -892,7 +892,7 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "edit", pkValue, filename)
 	} else {
 		if info.SupportsHierarchy {
-			if _, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, filename); fsErr != nil {
+			if _, fsErr := o.resolveSynthParentID(ctx, fsCtx.Schema, fsCtx.TableName, info, filename); fsErr != nil {
 				return fsErr
 			}
 		}
@@ -1538,7 +1538,7 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 		}
 
 		// Ensure parent directories exist, get parent UUID
-		parentID, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath)
+		parentID, fsErr := o.resolveSynthParentID(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath)
 		if fsErr != nil {
 			return fsErr
 		}
@@ -1571,7 +1571,7 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 		return &FSError{Code: ErrExists, Message: "directory already exists"}
 	}
 
-	if _, fsErr := o.ensureSynthParentDirs(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath); fsErr != nil {
+	if _, fsErr := o.resolveSynthParentID(ctx, fsCtx.Schema, fsCtx.TableName, info, dirPath); fsErr != nil {
 		return fsErr
 	}
 
@@ -1588,69 +1588,59 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 	return nil
 }
 
-// ensureSynthParentDirs auto-creates parent directory rows for a given path.
-// For "projects/web/todo", creates "projects" and "projects/web" directory rows.
+// resolveSynthParentID returns the UUID of the immediate parent of path,
+// asserting that every ancestor segment already exists in the source
+// table. It does NOT auto-create missing dirs.
 //
-// Returns the parent UUID for the leaf entry. Empty string for root level.
-// When parent_id column exists (ADR-017), creates directories with proper
-// parent_id chain. Otherwise falls back to the old path-encoded model.
-func (o *Operations) ensureSynthParentDirs(ctx context.Context, schema, table string, info *synth.ViewInfo, path string) (string, *FSError) {
+// For root-level paths (no slashes), returns ("", nil) -- meaning "the
+// row will be at root, parent_id = NULL".
+//
+// For nested paths, walks ancestors via the path cache and the
+// resolve_path PL/pgSQL function. If any segment doesn't resolve, returns
+// ErrNotExist; callers should either issue Mkdir per segment first
+// (matching POSIX mkdir(2) semantics that the kernel enforces for
+// FUSE/NFS clients) or use WriteFileEnsureDirs for mkdir-p behavior.
+//
+// For the legacy path-encoded model (no parent_id column, pre-ADR-017),
+// "ancestor" means a directory row whose filename is the parent path
+// prefix; we verify each prefix has a matching row and surface
+// ErrNotExist otherwise.
+func (o *Operations) resolveSynthParentID(ctx context.Context, schema, table string, info *synth.ViewInfo, path string) (string, *FSError) {
 	parts := strings.Split(path, "/")
 	if len(parts) <= 1 {
-		return "", nil // Root level, no parents to create
+		return "", nil // Root level, no parent
 	}
 
-	// Parent-pointer model (ADR-017): chain parent_id values
+	// Parent-pointer model (ADR-017): walk segments, return last UUID.
 	if info.Roles.ParentID != "" {
-		parentID := "" // Start from root (NULL parent_id)
-		for i := 0; i < len(parts)-1; i++ {
-			segName := parts[i]
-
-			// Check cache first
-			if id, ok := o.pathCache.lookup(schema, table, parentID, segName); ok {
-				parentID = id
-				continue
+		parentSegments := parts[:len(parts)-1]
+		parentID, ok := o.resolveSynthPath(ctx, schema, table, parentSegments)
+		if !ok {
+			return "", &FSError{
+				Code:    ErrNotExist,
+				Message: fmt.Sprintf("parent directory does not exist: %s", strings.Join(parentSegments, "/")),
+				Hint:    "use Mkdir per segment, or WriteFileEnsureDirs to materialize the path",
 			}
-
-			// Insert directory if not exists
-			cols := []string{info.Roles.Filename, info.Roles.Filetype}
-			vals := []interface{}{segName, "directory"}
-			if parentID != "" {
-				cols = append(cols, info.Roles.ParentID)
-				vals = append(vals, parentID)
-			}
-			if err := o.db.InsertIfNotExists(ctx, schema, table, cols, vals); err != nil {
-				return "", &FSError{Code: ErrIO, Message: "failed to create parent directory", Cause: err}
-			}
-
-			// Resolve to get the UUID (either just-created or already-existed)
-			results, err := o.db.ResolvePath(ctx, synth.TigerFSSchema, table, parentID, []string{segName})
-			if err != nil || len(results) == 0 {
-				return "", &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve parent directory: %s", segName)}
-			}
-
-			dirID := results[0].ID
-			o.pathCache.put(schema, table, parentID, segName, dirID)
-			parentID = dirID
 		}
 		return parentID, nil
 	}
 
-	// Old path-encoded model (pre-ADR-017)
+	// Old path-encoded model: each ancestor is a directory row whose
+	// filename is the prefix path.
 	for i := 1; i < len(parts); i++ {
 		parentPath := strings.Join(parts[:i], "/")
-		columns := []string{info.Roles.Filename, info.Roles.Filetype}
-		values := []interface{}{parentPath, "directory"}
-		err := o.db.InsertIfNotExists(ctx, schema, table, columns, values)
-		if err != nil {
+		exists, fsErr := o.synthRowExists(ctx, schema, table, info, parentPath, "directory")
+		if fsErr != nil {
+			return "", fsErr
+		}
+		if !exists {
 			return "", &FSError{
-				Code:    ErrIO,
-				Message: "failed to create parent directory",
-				Cause:   err,
+				Code:    ErrNotExist,
+				Message: fmt.Sprintf("parent directory does not exist: %s", parentPath),
+				Hint:    "use Mkdir per segment, or WriteFileEnsureDirs to materialize the path",
 			}
 		}
 	}
-
 	return "", nil
 }
 
