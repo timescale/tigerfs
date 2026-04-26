@@ -2069,3 +2069,375 @@ func TestExecuteUndoTransaction_DefersFKConstraint(t *testing.T) {
 		t.Errorf("modified_at not bumped: oldest restored row is %.0fs old (expected <60s)", ageSec)
 	}
 }
+
+// undoTestEnv holds the per-test PostgreSQL fixture (client, schema, table
+// names) used by the ExecuteUndoTransaction unit tests below.
+type undoTestEnv struct {
+	client                              *Client
+	ctx                                 context.Context
+	schema                              string
+	sourceTable, historyTable, logTable string
+	srcQT, histQT, logQT                string
+}
+
+// setupUndoTestEnv creates the parent_id-FK, UNIQUE, and history/log tables
+// used by the ExecuteUndoTransaction tests, mirroring the synth-app shape from
+// ADR-017. Returns the env and a cleanup func that drops the tables and
+// closes the client. Skips the test if no test DB is available.
+func setupUndoTestEnv(t *testing.T) (*undoTestEnv, func()) {
+	t.Helper()
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available (set PGHOST or skip)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+	cfg := &config.Config{PoolSize: 5, PoolMaxIdle: 2}
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		cancel()
+		t.Fatalf("NewClient() failed: %v", err)
+	}
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	env := &undoTestEnv{
+		client:       client,
+		ctx:          ctx,
+		schema:       "public",
+		sourceTable:  "tundo_src_" + suffix,
+		historyTable: "tundo_hist_" + suffix,
+		logTable:     "tundo_log_" + suffix,
+	}
+	env.srcQT = QuoteTable(env.schema, env.sourceTable)
+	env.histQT = QuoteTable(env.schema, env.historyTable)
+	env.logQT = QuoteTable(env.schema, env.logTable)
+
+	setupSQL := []string{
+		fmt.Sprintf(`CREATE TABLE %s (
+			id UUID PRIMARY KEY,
+			parent_id UUID REFERENCES %s(id) DEFERRABLE INITIALLY IMMEDIATE,
+			filename TEXT NOT NULL,
+			filetype TEXT NOT NULL DEFAULT 'file',
+			body TEXT,
+			modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
+		)`, env.srcQT, env.srcQT),
+		fmt.Sprintf(`CREATE TABLE %s (
+			file_id UUID,
+			parent_id UUID,
+			filename TEXT NOT NULL,
+			filetype TEXT,
+			body TEXT,
+			modified_at TIMESTAMPTZ,
+			version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+			operation TEXT NOT NULL
+		)`, env.histQT),
+		fmt.Sprintf(`CREATE TABLE %s (
+			log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+			file_id UUID NOT NULL,
+			type TEXT NOT NULL,
+			user_id TEXT,
+			filename TEXT NOT NULL,
+			version_id UUID,
+			description TEXT
+		)`, env.logQT),
+	}
+	for _, sql := range setupSQL {
+		if _, err := client.pool.Exec(ctx, sql); err != nil {
+			cancel()
+			_ = client.Close()
+			t.Fatalf("setup failed (%s): %v", sql, err)
+		}
+	}
+
+	cleanup := func() {
+		_, _ = client.pool.Exec(context.Background(),
+			fmt.Sprintf(`DROP TABLE IF EXISTS %s, %s, %s`, env.srcQT, env.histQT, env.logQT))
+		_ = client.Close()
+		cancel()
+	}
+	return env, cleanup
+}
+
+// seedHistory inserts a history row with operation='delete' (the typical
+// archive that an undo would restore from) and modified_at = now() - 1h, so
+// the restored row's modified_at is observably old without the bump.
+func (env *undoTestEnv) seedHistory(t *testing.T, versionID, fileID, parent, filename, filetype, body string) {
+	t.Helper()
+	var parentArg interface{}
+	if parent != "" {
+		parentArg = parent
+	}
+	_, err := env.client.pool.Exec(env.ctx, fmt.Sprintf(
+		`INSERT INTO %s (version_id, file_id, parent_id, filename, filetype, body, modified_at, operation)
+		 VALUES ($1, $2, $3, $4, $5, $6, now() - interval '1 hour', 'delete')`, env.histQT),
+		versionID, fileID, parentArg, filename, filetype, body)
+	if err != nil {
+		t.Fatalf("seed history (%s): %v", filename, err)
+	}
+}
+
+// genUUIDs returns n new UUIDv7 strings.
+func (env *undoTestEnv) genUUIDs(t *testing.T, n int) []string {
+	t.Helper()
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		var u string
+		if err := env.client.pool.QueryRow(env.ctx, `SELECT uuidv7()::text`).Scan(&u); err != nil {
+			t.Fatalf("uuidv7() failed: %v", err)
+		}
+		out[i] = u
+	}
+	return out
+}
+
+// TestExecuteUndoTransaction_DefersUniqueConstraint verifies the second half
+// of the SET CONSTRAINTS ALL DEFERRED contract: the
+// (parent_id, filename, filetype) UNIQUE constraint must also defer to COMMIT.
+//
+// Scenario: rename-as-replace. A and B both exist at root. The user does
+// `mv A B` -- B's row is deleted, A's filename is changed to 'B'. Undoing
+// this restoration must produce both rows with their original filenames.
+//
+// We force RestoreFileIDs in B-first order so B's INSERT runs while A still
+// has filename='B' in the source table -- this is a transient UNIQUE
+// violation that only resolves when A's UPSERT then reverts filename='A'.
+// Without deferral, B's INSERT fails immediately. The pre-existing
+// "filename already occupied (rename-as-replace)" error path at query.go is
+// bypassed by the deferral path -- this test pins that down.
+func TestExecuteUndoTransaction_DefersUniqueConstraint(t *testing.T) {
+	env, cleanup := setupUndoTestEnv(t)
+	defer cleanup()
+
+	ids := env.genUUIDs(t, 4)
+	aID, bID := ids[0], ids[1]
+	aVer, bVer := ids[2], ids[3]
+
+	// History: A's pre-rename state (filename='A'), B's pre-delete state
+	// (filename='B'). Both at root (parent=NULL).
+	env.seedHistory(t, aVer, aID, "", "A", "file", "body A")
+	env.seedHistory(t, bVer, bID, "", "B", "file", "body B")
+
+	// Source post-rename-as-replace: A row exists with filename='B', B row gone.
+	_, err := env.client.pool.Exec(env.ctx,
+		fmt.Sprintf(`INSERT INTO %s (id, parent_id, filename, filetype, body) VALUES ($1, NULL, 'B', 'file', 'body A')`, env.srcQT),
+		aID)
+	if err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+
+	// B-first restore order forces the transient UNIQUE violation.
+	err = env.client.ExecuteUndoTransaction(env.ctx, &UndoTransactionParams{
+		Schema:            env.schema,
+		SourceTable:       env.sourceTable,
+		HistoryTable:      env.historyTable,
+		LogTable:          env.logTable,
+		Description:       "test undo deferred UNIQUE",
+		RestoreVersionIDs: []string{bVer, aVer},
+		RestoreFileIDs:    []string{bID, aID},
+		RestoreFilenames:  []string{"B", "A"},
+		UserID:            "test-user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteUndoTransaction must succeed with deferred UNIQUE: %v", err)
+	}
+
+	// Verify both rows have their restored filenames.
+	rows, err := env.client.pool.Query(env.ctx,
+		fmt.Sprintf(`SELECT id::text, filename FROM %s WHERE id IN ($1, $2) ORDER BY filename`, env.srcQT),
+		aID, bID)
+	if err != nil {
+		t.Fatalf("query source: %v", err)
+	}
+	defer rows.Close()
+	got := map[string]string{}
+	for rows.Next() {
+		var id, filename string
+		if err := rows.Scan(&id, &filename); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got[id] = filename
+	}
+	if got[aID] != "A" {
+		t.Errorf("A.filename = %q, want %q", got[aID], "A")
+	}
+	if got[bID] != "B" {
+		t.Errorf("B.filename = %q, want %q", got[bID], "B")
+	}
+}
+
+// TestExecuteUndoTransaction_BumpsParentMtimeWhenOnlyChildRestored isolates
+// the SELECT-DISTINCT-parent_id branch of the post-undo modified_at bump.
+//
+// The parent dir exists throughout (never in the restore set); only a
+// child file is restored. The bump must still touch the parent so an NFS
+// client with `noac` re-reads its directory listing.
+func TestExecuteUndoTransaction_BumpsParentMtimeWhenOnlyChildRestored(t *testing.T) {
+	env, cleanup := setupUndoTestEnv(t)
+	defer cleanup()
+
+	ids := env.genUUIDs(t, 3)
+	parentID, childID, childVer := ids[0], ids[1], ids[2]
+
+	// Parent dir created an hour ago (set explicitly so we can detect
+	// whether the bump touched it).
+	_, err := env.client.pool.Exec(env.ctx, fmt.Sprintf(
+		`INSERT INTO %s (id, parent_id, filename, filetype, modified_at)
+		 VALUES ($1, NULL, 'parent', 'directory', now() - interval '1 hour')`, env.srcQT),
+		parentID)
+	if err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+
+	// Child existed under parent, then was deleted -- only history retains it.
+	env.seedHistory(t, childVer, childID, parentID, "child.md", "file", "child body")
+
+	// Restore the child only.
+	err = env.client.ExecuteUndoTransaction(env.ctx, &UndoTransactionParams{
+		Schema:            env.schema,
+		SourceTable:       env.sourceTable,
+		HistoryTable:      env.historyTable,
+		LogTable:          env.logTable,
+		Description:       "test undo bumps parent mtime",
+		RestoreVersionIDs: []string{childVer},
+		RestoreFileIDs:    []string{childID},
+		RestoreFilenames:  []string{"child.md"},
+		UserID:            "test-user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteUndoTransaction: %v", err)
+	}
+
+	// Parent's modified_at should be fresh (within 60s of now).
+	var ageSec float64
+	err = env.client.pool.QueryRow(env.ctx,
+		fmt.Sprintf(`SELECT EXTRACT(EPOCH FROM (now() - modified_at)) FROM %s WHERE id = $1`, env.srcQT),
+		parentID).Scan(&ageSec)
+	if err != nil {
+		t.Fatalf("query parent mtime: %v", err)
+	}
+	if ageSec > 60 {
+		t.Errorf("parent.modified_at not bumped: %.0fs old (expected <60s)", ageSec)
+	}
+}
+
+// TestExecuteUndoTransaction_DefersFKMultiLevel extends the FK-deferral
+// coverage to a 3-level hierarchy (grandparent -> parent -> child). The
+// restore order is reversed (child, parent, grandparent), so each row's
+// parent_id references a row that hasn't been UPSERTed yet. The whole
+// chain must resolve at COMMIT.
+//
+// Catches a regression if someone narrows the deferral scope so that only
+// the immediate FK is deferred; here the FK chain spans two hops.
+func TestExecuteUndoTransaction_DefersFKMultiLevel(t *testing.T) {
+	env, cleanup := setupUndoTestEnv(t)
+	defer cleanup()
+
+	ids := env.genUUIDs(t, 6)
+	gID, pID, cID := ids[0], ids[1], ids[2]
+	gVer, pVer, cVer := ids[3], ids[4], ids[5]
+
+	// History: all three exist as deletes (root grandparent, nested parent
+	// under it, leaf child under parent).
+	env.seedHistory(t, gVer, gID, "", "g", "directory", "")
+	env.seedHistory(t, pVer, pID, gID, "p", "directory", "")
+	env.seedHistory(t, cVer, cID, pID, "c.md", "file", "child")
+
+	// Source is empty; everything restores via UPSERT-INSERT.
+	// Reverse order forces the FK chain to be resolved at COMMIT only.
+	err := env.client.ExecuteUndoTransaction(env.ctx, &UndoTransactionParams{
+		Schema:            env.schema,
+		SourceTable:       env.sourceTable,
+		HistoryTable:      env.historyTable,
+		LogTable:          env.logTable,
+		Description:       "test undo 3-level FK",
+		RestoreVersionIDs: []string{cVer, pVer, gVer},
+		RestoreFileIDs:    []string{cID, pID, gID},
+		RestoreFilenames:  []string{"c.md", "p", "g"},
+		UserID:            "test-user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteUndoTransaction must succeed with deferred FK chain: %v", err)
+	}
+
+	// Verify the full chain: g exists at root, p->g, c->p.
+	var gParent, pParent, cParent *string
+	row := env.client.pool.QueryRow(env.ctx,
+		fmt.Sprintf(`SELECT (SELECT parent_id::text FROM %s WHERE id = $1),
+			               (SELECT parent_id::text FROM %s WHERE id = $2),
+			               (SELECT parent_id::text FROM %s WHERE id = $3)`,
+			env.srcQT, env.srcQT, env.srcQT),
+		gID, pID, cID)
+	if err := row.Scan(&gParent, &pParent, &cParent); err != nil {
+		t.Fatalf("query chain: %v", err)
+	}
+	if gParent != nil {
+		t.Errorf("g.parent_id = %v, want NULL", *gParent)
+	}
+	if pParent == nil || *pParent != gID {
+		t.Errorf("p.parent_id = %v, want %s", pParent, gID)
+	}
+	if cParent == nil || *cParent != pID {
+		t.Errorf("c.parent_id = %v, want %s", cParent, pID)
+	}
+}
+
+// TestExecuteUndoTransaction_DeleteOnlyUndo guards the empty-RestoreFileIDs
+// branch of the post-undo modified_at bump. When a user undoes a single
+// 'create' op, the only work is to DELETE the created row from source -- no
+// rows are restored. The mtime-bump SQL uses ANY($1::uuid[]) and would
+// error on an empty array if the branch wasn't gated.
+func TestExecuteUndoTransaction_DeleteOnlyUndo(t *testing.T) {
+	env, cleanup := setupUndoTestEnv(t)
+	defer cleanup()
+
+	ids := env.genUUIDs(t, 1)
+	rID := ids[0]
+
+	// Source has one row; the undo will delete it.
+	_, err := env.client.pool.Exec(env.ctx,
+		fmt.Sprintf(`INSERT INTO %s (id, parent_id, filename, filetype, body) VALUES ($1, NULL, 'r.md', 'file', 'data')`, env.srcQT),
+		rID)
+	if err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+
+	err = env.client.ExecuteUndoTransaction(env.ctx, &UndoTransactionParams{
+		Schema:          env.schema,
+		SourceTable:     env.sourceTable,
+		HistoryTable:    env.historyTable,
+		LogTable:        env.logTable,
+		Description:     "test undo delete-only",
+		DeleteFileIDs:   []string{rID},
+		DeleteFilenames: []string{"r.md"},
+		UserID:          "test-user",
+	})
+	if err != nil {
+		t.Fatalf("ExecuteUndoTransaction (delete-only) must succeed: %v", err)
+	}
+
+	// Row gone from source.
+	var exists bool
+	err = env.client.pool.QueryRow(env.ctx,
+		fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE id = $1)`, env.srcQT),
+		rID).Scan(&exists)
+	if err != nil {
+		t.Fatalf("query source: %v", err)
+	}
+	if exists {
+		t.Errorf("row should be deleted by undo")
+	}
+
+	// Undo log entry was written.
+	var logCount int
+	err = env.client.pool.QueryRow(env.ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE file_id = $1 AND type = 'undo'`, env.logQT),
+		rID).Scan(&logCount)
+	if err != nil {
+		t.Fatalf("query log: %v", err)
+	}
+	if logCount != 1 {
+		t.Errorf("expected 1 undo log entry, got %d", logCount)
+	}
+}
