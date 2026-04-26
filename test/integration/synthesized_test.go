@@ -738,9 +738,9 @@ func TestSynth_HierarchicalMkdirNested(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_mknest", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Create a nested directory — should auto-create parent
-	fsErr = ops.Mkdir(ctx, "/mem_mknest/projects/web")
-	require.Nil(t, fsErr, "Mkdir nested should succeed: %v", fsErr)
+	// Create a nested directory chain via MkdirAll (mkdir-p semantics).
+	fsErr = ops.MkdirAll(ctx, "/mem_mknest/projects/web")
+	require.Nil(t, fsErr, "MkdirAll nested should succeed: %v", fsErr)
 
 	// Verify parent was auto-created
 	entry, fsErr := ops.Stat(ctx, "/mem_mknest/projects")
@@ -774,10 +774,11 @@ func TestSynth_HierarchicalWriteFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_write", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Write a file in a subdirectory — should auto-create parent dirs
+	// Write a file in a subdirectory using WriteFileEnsureDirs (mkdir-p
+	// the ancestors as part of the same call).
 	content := "---\ntitle: Todo\nauthor: alice\n---\n\n# Todo\n\nFix bugs.\n"
-	fsErr = ops.WriteFile(ctx, "/mem_write/projects/web/todo.md", []byte(content))
-	require.Nil(t, fsErr, "WriteFile nested should succeed: %v", fsErr)
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_write/projects/web/todo.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFileEnsureDirs nested should succeed: %v", fsErr)
 
 	// Verify parent directories were auto-created
 	entry, fsErr := ops.Stat(ctx, "/mem_write/projects")
@@ -811,8 +812,8 @@ func TestSynth_HierarchicalReadDir(t *testing.T) {
 	require.Nil(t, fsErr, "build should succeed")
 
 	// Create structure: projects/web/todo.md, projects/web/notes.md, readme.md
-	fsErr = ops.Mkdir(ctx, "/mem_readdir/projects/web")
-	require.Nil(t, fsErr, "Mkdir should succeed")
+	fsErr = ops.MkdirAll(ctx, "/mem_readdir/projects/web")
+	require.Nil(t, fsErr, "MkdirAll should succeed")
 
 	fsErr = ops.WriteFile(ctx, "/mem_readdir/projects/web/todo.md",
 		[]byte("---\ntitle: Todo\n---\n\nContent.\n"))
@@ -863,10 +864,10 @@ func TestSynth_HierarchicalStatFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_stat", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Write a nested file
+	// Write a nested file (mkdir-p the ancestors first via the helper).
 	content := "---\ntitle: Deep File\n---\n\nDeep content.\n"
-	fsErr = ops.WriteFile(ctx, "/mem_stat/deep/nested/file.md", []byte(content))
-	require.Nil(t, fsErr, "WriteFile should succeed")
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_stat/deep/nested/file.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFileEnsureDirs should succeed")
 
 	// Stat the file
 	entry, fsErr := ops.Stat(ctx, "/mem_stat/deep/nested/file.md")
@@ -947,10 +948,10 @@ func TestSynth_HierarchicalDeleteFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_delf", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Create a file in a directory
-	fsErr = ops.WriteFile(ctx, "/mem_delf/docs/readme.md",
+	// Create a file in a directory (mkdir-p the parent via the helper).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_delf/docs/readme.md",
 		[]byte("---\ntitle: Readme\n---\n\nContent.\n"))
-	require.Nil(t, fsErr, "WriteFile should succeed")
+	require.Nil(t, fsErr, "WriteFileEnsureDirs should succeed")
 
 	// Delete the file
 	fsErr = ops.Delete(ctx, "/mem_delf/docs/readme.md")
@@ -1011,10 +1012,10 @@ func TestSynth_HierarchicalRmdirNonEmpty(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_rmne", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Create a directory with a file in it
-	fsErr = ops.WriteFile(ctx, "/mem_rmne/docs/readme.md",
+	// Create a directory with a file in it (mkdir-p the parent).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_rmne/docs/readme.md",
 		[]byte("---\ntitle: Readme\n---\n\nContent.\n"))
-	require.Nil(t, fsErr, "WriteFile should succeed")
+	require.Nil(t, fsErr, "WriteFileEnsureDirs should succeed")
 
 	// Attempt to delete non-empty directory should fail
 	fsErr = ops.Delete(ctx, "/mem_rmne/docs")
@@ -1037,10 +1038,10 @@ func TestSynth_HierarchicalRenameFile(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_renf", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Create a file in a directory
-	fsErr = ops.WriteFile(ctx, "/mem_renf/docs/old-name.md",
+	// Create a file in a directory (mkdir-p the parent).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_renf/docs/old-name.md",
 		[]byte("---\ntitle: My Doc\n---\n\nContent here.\n"))
-	require.Nil(t, fsErr, "WriteFile should succeed")
+	require.Nil(t, fsErr, "WriteFileEnsureDirs should succeed")
 
 	// Rename the file
 	fsErr = ops.Rename(ctx, "/mem_renf/docs/old-name.md", "/mem_renf/docs/new-name.md")
@@ -1072,10 +1073,11 @@ func TestSynth_HierarchicalRenameDir(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_rend", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Create a directory with files
-	fsErr = ops.WriteFile(ctx, "/mem_rend/old-dir/file1.md",
+	// Create a directory with files (mkdir-p the parent for the first
+	// write; the second write only needs the parent that already exists).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_rend/old-dir/file1.md",
 		[]byte("---\ntitle: File One\n---\n\nContent 1.\n"))
-	require.Nil(t, fsErr, "WriteFile file1 should succeed")
+	require.Nil(t, fsErr, "WriteFileEnsureDirs file1 should succeed")
 
 	fsErr = ops.WriteFile(ctx, "/mem_rend/old-dir/file2.md",
 		[]byte("---\ntitle: File Two\n---\n\nContent 2.\n"))
@@ -1119,10 +1121,11 @@ func TestSynth_DeeplyNested(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_deep", []byte("markdown\n"))
 	require.Nil(t, fsErr, "build should succeed")
 
-	// Write a deeply nested file — auto-creates all parent directories
+	// Write a deeply nested file via WriteFileEnsureDirs (creates all
+	// parent directories).
 	content := "---\ntitle: Deep File\n---\n\nVery deep content.\n"
-	fsErr = ops.WriteFile(ctx, "/mem_deep/a/b/c/d/deep.md", []byte(content))
-	require.Nil(t, fsErr, "WriteFile deeply nested should succeed: %v", fsErr)
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_deep/a/b/c/d/deep.md", []byte(content))
+	require.Nil(t, fsErr, "WriteFileEnsureDirs deeply nested should succeed: %v", fsErr)
 
 	// Verify all intermediate directories exist
 	for _, dir := range []string{"/mem_deep/a", "/mem_deep/a/b", "/mem_deep/a/b/c", "/mem_deep/a/b/c/d"} {
@@ -1168,10 +1171,10 @@ func TestSynth_MixedFlatAndHierarchical(t *testing.T) {
 		[]byte("---\ntitle: Flat\n---\n\nFlat content.\n"))
 	require.Nil(t, fsErr, "WriteFile flat should succeed")
 
-	// Create a nested file (creates directory)
-	fsErr = ops.WriteFile(ctx, "/mem_mixed/subdir/nested.md",
+	// Create a nested file (mkdir-p the parent via the helper).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_mixed/subdir/nested.md",
 		[]byte("---\ntitle: Nested\n---\n\nNested content.\n"))
-	require.Nil(t, fsErr, "WriteFile nested should succeed")
+	require.Nil(t, fsErr, "WriteFileEnsureDirs nested should succeed")
 
 	// Root should show both flat file and directory
 	entries, fsErr := ops.ReadDir(ctx, "/mem_mixed")
@@ -1207,9 +1210,9 @@ func TestSynth_HierarchicalPlainText(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/notes_hier", []byte("txt\n"))
 	require.Nil(t, fsErr, "build should succeed: %v", fsErr)
 
-	// Create a nested file
-	fsErr = ops.WriteFile(ctx, "/notes_hier/work/meeting.txt", []byte("Discuss quarterly goals.\n"))
-	require.Nil(t, fsErr, "WriteFile nested txt should succeed: %v", fsErr)
+	// Create a nested file (mkdir-p the parent via the helper).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/notes_hier/work/meeting.txt", []byte("Discuss quarterly goals.\n"))
+	require.Nil(t, fsErr, "WriteFileEnsureDirs nested txt should succeed: %v", fsErr)
 
 	// Verify parent directory was auto-created
 	entry, fsErr := ops.Stat(ctx, "/notes_hier/work")
@@ -1463,9 +1466,9 @@ func TestSynth_RenameDirChildrenUnaffected(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_renchild", []byte("markdown\n"))
 	require.Nil(t, fsErr)
 
-	// Create directory with files
+	// Create directory with files (mkdir-p the parent on first write).
 	content1 := "---\ntitle: A\n---\nFile A\n"
-	fsErr = ops.WriteFile(ctx, "/mem_renchild/mydir/a.md", []byte(content1))
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_renchild/mydir/a.md", []byte(content1))
 	require.Nil(t, fsErr)
 	content2 := "---\ntitle: B\n---\nFile B\n"
 	fsErr = ops.WriteFile(ctx, "/mem_renchild/mydir/b.md", []byte(content2))
@@ -1504,14 +1507,16 @@ func TestSynth_NestedReadDirAtEachLevel(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_levels", []byte("markdown\n"))
 	require.Nil(t, fsErr)
 
-	// Build: root-file.md, L1/L1-file.md, L1/L2/L2-file.md, L1/L2/L3/L3-file.md
+	// Build: root-file.md, L1/L1-file.md, L1/L2/L2-file.md, L1/L2/L3/L3-file.md.
+	// Use WriteFileEnsureDirs for the deep paths; each call mkdir-p's any
+	// missing ancestors before writing the leaf file.
 	fsErr = ops.WriteFile(ctx, "/mem_levels/root-file.md", []byte("---\ntitle: Root\n---\nRoot\n"))
 	require.Nil(t, fsErr)
-	fsErr = ops.WriteFile(ctx, "/mem_levels/L1/L1-file.md", []byte("---\ntitle: L1\n---\nL1\n"))
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_levels/L1/L1-file.md", []byte("---\ntitle: L1\n---\nL1\n"))
 	require.Nil(t, fsErr)
-	fsErr = ops.WriteFile(ctx, "/mem_levels/L1/L2/L2-file.md", []byte("---\ntitle: L2\n---\nL2\n"))
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_levels/L1/L2/L2-file.md", []byte("---\ntitle: L2\n---\nL2\n"))
 	require.Nil(t, fsErr)
-	fsErr = ops.WriteFile(ctx, "/mem_levels/L1/L2/L3/L3-file.md", []byte("---\ntitle: L3\n---\nL3\n"))
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_levels/L1/L2/L3/L3-file.md", []byte("---\ntitle: L3\n---\nL3\n"))
 	require.Nil(t, fsErr)
 
 	// Root level: should have root-file.md and L1 directory
@@ -1562,8 +1567,8 @@ func TestSynth_DeleteNestedFileParentPersists(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/mem_delnest", []byte("markdown\n"))
 	require.Nil(t, fsErr)
 
-	// Create two files in a directory
-	fsErr = ops.WriteFile(ctx, "/mem_delnest/mydir/a.md", []byte("---\ntitle: A\n---\nA\n"))
+	// Create two files in a directory (mkdir-p the parent on first write).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_delnest/mydir/a.md", []byte("---\ntitle: A\n---\nA\n"))
 	require.Nil(t, fsErr)
 	fsErr = ops.WriteFile(ctx, "/mem_delnest/mydir/b.md", []byte("---\ntitle: B\n---\nB\n"))
 	require.Nil(t, fsErr)
@@ -1647,8 +1652,8 @@ func TestSynth_RootFilesAndDirsCoexist(t *testing.T) {
 	fsErr = ops.WriteFile(ctx, "/mem_rootmix/readme.md", []byte("---\ntitle: Root\n---\nRoot file\n"))
 	require.Nil(t, fsErr)
 
-	// Create root-level directory with a file inside
-	fsErr = ops.WriteFile(ctx, "/mem_rootmix/docs/guide.md", []byte("---\ntitle: Guide\n---\nGuide\n"))
+	// Create root-level directory with a file inside (mkdir-p docs/).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/mem_rootmix/docs/guide.md", []byte("---\ntitle: Guide\n---\nGuide\n"))
 	require.Nil(t, fsErr)
 
 	// ReadDir root should show both

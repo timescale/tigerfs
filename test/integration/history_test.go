@@ -622,9 +622,9 @@ func TestSynth_HistoryAfterMoveAccessibleByUUID(t *testing.T) {
 	fsErr := ops.WriteFile(ctx, "/.build/hist_move", []byte("markdown,history\n"))
 	require.Nil(t, fsErr)
 
-	// Create file in inbox, edit to produce history
+	// Create file in inbox, edit to produce history (mkdir-p inbox/).
 	v1 := "---\ntitle: Task V1\n---\nVersion 1\n"
-	fsErr = ops.WriteFile(ctx, "/hist_move/inbox/task.md", []byte(v1))
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/hist_move/inbox/task.md", []byte(v1))
 	require.Nil(t, fsErr, "create task.md v1")
 
 	time.Sleep(1100 * time.Millisecond) // distinct UUIDv7

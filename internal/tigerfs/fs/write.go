@@ -98,6 +98,32 @@ func (o *Operations) WriteFileEnsureDirs(ctx context.Context, path string, data 
 	return o.WriteFile(ctx, path, data)
 }
 
+// MkdirAll is the mkdir-p variant of Mkdir: every segment of path that
+// doesn't already exist is created via Mkdir, in order. The final
+// segment is also created as a directory (unlike WriteFileEnsureDirs,
+// which expects the final segment to be a file).
+//
+// Each new segment produces one "create" log entry -- matching what the
+// kernel would generate from per-segment mkdir(2) syscalls in
+// production. Existing segments are skipped (Mkdir's ErrAlreadyExists
+// is treated as success and not propagated).
+//
+// Use this when a caller wants to materialize a deep directory chain
+// in one call. Production code reaching TigerFS through FUSE/NFS rarely
+// needs MkdirAll because the kernel always issues per-segment mkdir(2)
+// for `mkdir -p` invocations -- but direct-API callers (typically tests
+// or batch import code) may want it.
+func (o *Operations) MkdirAll(ctx context.Context, path string) *FSError {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i := 2; i <= len(parts); i++ {
+		segment := "/" + strings.Join(parts[:i], "/")
+		if fsErr := o.Mkdir(ctx, segment); fsErr != nil && fsErr.Code != ErrAlreadyExists {
+			return fsErr
+		}
+	}
+	return nil
+}
+
 // ValidateCreate reports an FSError if creating a regular file at this path
 // would conflict with a future directory inode on NFS.
 //

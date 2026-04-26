@@ -160,7 +160,12 @@ func TestSynth_LogEntries_NestedFiles(t *testing.T) {
 	require.Nil(t, fsErr, "build logdir app: %v", fsErr)
 	time.Sleep(100 * time.Millisecond)
 
-	// CREATE: nested file (auto-creates parent directories)
+	// MKDIRS: each gets its own 'create' log entry now that mkdirSynth
+	// logs (mirrors per-segment kernel mkdir(2) calls in production).
+	require.Nil(t, ops.Mkdir(ctx, "/logdir/projects"), "mkdir projects")
+	require.Nil(t, ops.Mkdir(ctx, "/logdir/projects/web"), "mkdir projects/web")
+
+	// CREATE: nested file (parents already exist).
 	content := "---\ntitle: Todo\n---\n# Todo\n"
 	fsErr = ops.WriteFile(ctx, "/logdir/projects/web/todo.md", []byte(content))
 	require.Nil(t, fsErr, "create nested file")
@@ -204,32 +209,45 @@ func TestSynth_LogEntries_NestedFiles(t *testing.T) {
 		entries = append(entries, r)
 	}
 
-	// Should have 5 log entries: create, edit, rename, rename(move), delete
-	require.Len(t, entries, 5, "expected 5 log entries, got %d: %+v", len(entries), entries)
+	// 8 log entries total: 3 mkdirs (projects, projects/web, archive)
+	// + 5 file ops (create, edit, rename, move-rename, delete).
+	require.Len(t, entries, 8, "expected 8 log entries, got %d: %+v", len(entries), entries)
 
-	// CREATE: full path of nested file
+	// MKDIR projects (dir, denormalized full path).
 	assert.Equal(t, "create", entries[0].opType)
-	assert.Equal(t, "projects/web/todo.md", entries[0].filename,
+	assert.Equal(t, "projects", entries[0].filename, "mkdir log full path")
+
+	// MKDIR projects/web.
+	assert.Equal(t, "create", entries[1].opType)
+	assert.Equal(t, "projects/web", entries[1].filename, "mkdir log full path")
+
+	// CREATE file: full path of nested file.
+	assert.Equal(t, "create", entries[2].opType)
+	assert.Equal(t, "projects/web/todo.md", entries[2].filename,
 		"create log should store denormalized full path")
 
-	// EDIT: same full path
-	assert.Equal(t, "edit", entries[1].opType)
-	assert.Equal(t, "projects/web/todo.md", entries[1].filename,
+	// EDIT: same full path.
+	assert.Equal(t, "edit", entries[3].opType)
+	assert.Equal(t, "projects/web/todo.md", entries[3].filename,
 		"edit log should store denormalized full path")
 
-	// RENAME: new filename in same directory
-	assert.Equal(t, "rename", entries[2].opType)
-	assert.Equal(t, "projects/web/done.md", entries[2].filename,
+	// RENAME: new filename in same directory.
+	assert.Equal(t, "rename", entries[4].opType)
+	assert.Equal(t, "projects/web/done.md", entries[4].filename,
 		"rename log should store new full path")
 
-	// MOVE: new full path in different directory
-	assert.Equal(t, "rename", entries[3].opType)
-	assert.Equal(t, "archive/done.md", entries[3].filename,
+	// MKDIR archive (between rename and move).
+	assert.Equal(t, "create", entries[5].opType)
+	assert.Equal(t, "archive", entries[5].filename, "mkdir archive log full path")
+
+	// MOVE: new full path in different directory.
+	assert.Equal(t, "rename", entries[6].opType)
+	assert.Equal(t, "archive/done.md", entries[6].filename,
 		"move log should store new full path in target directory")
 
-	// DELETE: full path at time of deletion
-	assert.Equal(t, "delete", entries[4].opType)
-	assert.Equal(t, "archive/done.md", entries[4].filename,
+	// DELETE: full path at time of deletion.
+	assert.Equal(t, "delete", entries[7].opType)
+	assert.Equal(t, "archive/done.md", entries[7].filename,
 		"delete log should store full path at time of deletion")
 
 	t.Logf("Nested log entries verified:")
@@ -257,8 +275,9 @@ func TestSynth_LogEntries_DirRenameOneEntry(t *testing.T) {
 	require.Nil(t, fsErr)
 	time.Sleep(100 * time.Millisecond)
 
-	// Create directory with multiple files
-	fsErr = ops.WriteFile(ctx, "/logdirren/mydir/a.md", []byte("---\ntitle: A\n---\nA\n"))
+	// Create directory with multiple files (mkdir-p the parent on first
+	// write, then siblings just need WriteFile).
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/logdirren/mydir/a.md", []byte("---\ntitle: A\n---\nA\n"))
 	require.Nil(t, fsErr)
 	fsErr = ops.WriteFile(ctx, "/logdirren/mydir/b.md", []byte("---\ntitle: B\n---\nB\n"))
 	require.Nil(t, fsErr)
@@ -573,12 +592,15 @@ func TestSynth_LogInterface_NestedFilename(t *testing.T) {
 	require.Nil(t, fsErr)
 	time.Sleep(100 * time.Millisecond)
 
-	// Create nested file
+	// Create the parent dir then the nested file. Two log entries result
+	// (one for each Mkdir, one for the file create); we want to assert
+	// against the FILE create's denormalized filename specifically.
+	require.Nil(t, ops.Mkdir(ctx, "/logpath/docs"), "mkdir docs")
 	fsErr = ops.WriteFile(ctx, "/logpath/docs/guide.md", []byte("---\ntitle: Guide\n---\n# Guide\n"))
 	require.Nil(t, fsErr)
 
-	// Find the log entry
-	logEntries, fsErr := ops.ReadDir(ctx, "/logpath/.log")
+	// Find the most recent log entry (the file create).
+	logEntries, fsErr := ops.ReadDir(ctx, "/logpath/.log/.last/1")
 	require.Nil(t, fsErr)
 	var entryName string
 	for _, e := range logEntries {
@@ -589,9 +611,9 @@ func TestSynth_LogInterface_NestedFilename(t *testing.T) {
 	}
 	require.NotEmpty(t, entryName)
 
-	// Read the filename column -- should be full denormalized path
-	fnContent, fsErr := ops.ReadFile(ctx, "/logpath/.log/"+entryName+"/filename")
-	require.Nil(t, fsErr, "ReadFile .log/<id>/filename should succeed")
+	// Read the filename column -- should be full denormalized path.
+	fnContent, fsErr := ops.ReadFile(ctx, "/logpath/.log/.last/1/"+entryName+"/filename")
+	require.Nil(t, fsErr, "ReadFile .log/.last/1/<id>/filename should succeed")
 	assert.Equal(t, "docs/guide.md", strings.TrimSpace(string(fnContent.Data)),
 		"log filename should be denormalized full path")
 }
