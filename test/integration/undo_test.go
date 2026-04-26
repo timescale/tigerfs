@@ -158,6 +158,76 @@ func TestUndo_SingleDelete(t *testing.T) {
 	assert.Contains(t, string(fc.Data), "Content")
 }
 
+// TestUndo_Apply_InvalidatesNegativeStatCache pins down the cache-schema
+// bug in writeUndoApply / ExecuteUndo. statSynthFile populates statCache
+// under the user's schema (parsed.Context.Schema, e.g. "public"); both
+// invalidate calls in the undo path used to pass synth.TigerFSSchema
+// instead, leaving cached entries (especially negative entries) in place
+// after undo.
+//
+// Repro:
+//  1. Create then delete a file.
+//  2. Stat the deleted file -- returns ENOENT and *populates* a negative
+//     stat-cache entry under the user's schema.
+//  3. Undo the delete via .apply.
+//  4. Stat the file again. Without the fix, step 3's invalidate runs
+//     under "tigerfs" and doesn't touch the "public" cache, so step 4
+//     returns "(cached)" ENOENT. With the fix, the cache is cleared and
+//     step 4 sees the restored row.
+func TestUndo_Apply_InvalidatesNegativeStatCache(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undocache")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undocache", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Create then delete -- the delete log entry is what we'll undo.
+	require.Nil(t, ops.WriteFile(ctx, "/undocache/hello.md",
+		[]byte("---\ntitle: Hello\n---\nContent\n")))
+	require.Nil(t, ops.Delete(ctx, "/undocache/hello.md"))
+
+	// Stat the deleted file. The error is expected and required: this is
+	// what populates the negative stat-cache entry under "public".
+	_, fsErr = ops.Stat(ctx, "/undocache/hello.md")
+	require.NotNil(t, fsErr, "stat must miss (file is deleted)")
+	require.Equal(t, fs.ErrNotExist, fsErr.Code, "expected ENOENT, got %v", fsErr)
+
+	// Apply undo via the production .apply path. We need the delete log id.
+	entries, fsErr := ops.ReadDir(ctx, "/undocache/.log/.by/type/delete")
+	require.Nil(t, fsErr)
+	var deleteIDs []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			deleteIDs = append(deleteIDs, e.Name)
+		}
+	}
+	require.GreaterOrEqual(t, len(deleteIDs), 1)
+	fsErr = ops.WriteFile(ctx, "/undocache/.undo/id/"+deleteIDs[len(deleteIDs)-1]+"/.apply", []byte(""))
+	require.Nil(t, fsErr, "undo .apply should succeed")
+
+	// Stat must now succeed -- the file is back, and the post-undo cache
+	// invalidation must have cleared the negative entry the earlier Stat
+	// installed. Without the fix, this returns ErrNotExist with message
+	// "file not found: hello.md (cached)".
+	entry, fsErr := ops.Stat(ctx, "/undocache/hello.md")
+	if fsErr != nil {
+		t.Fatalf("stat after undo should succeed; got code=%v message=%q "+
+			"(stale negative-cache entry from before the undo was not invalidated)",
+			fsErr.Code, fsErr.Message)
+	}
+	if entry.Name != "hello.md" {
+		t.Errorf("entry.Name = %q, want %q", entry.Name, "hello.md")
+	}
+}
+
 // --- Multi-file undo to savepoint ---
 
 func TestUndo_ToSavepoint_MultiFile(t *testing.T) {
@@ -1077,13 +1147,14 @@ func TestUndo_ToID_RestoresDeletedDirWithFile(t *testing.T) {
 	// back to this point, both x.md (under A) and A should be restored.
 	targetLogID := mostRecentLogIDRaw(t, ops, ctx, "/undofk")
 
-	// 4. Delete file then dir (rmdir requires empty). We deliberately avoid
-	//    calling Stat between delete and undo: writeUndoApply invalidates
-	//    the stat cache under synth.TigerFSSchema while statSynthFile caches
-	//    under the user's schema, so a sanity Stat here would leave a stale
-	//    negative entry that survives the undo. (Unrelated to the FK fix.)
+	// 4. Delete file then dir (rmdir requires empty). Sanity-stat the
+	//    deleted dir afterward; this populates the negative stat-cache
+	//    entry, which the undo's invalidation must clear (covered
+	//    independently by TestUndo_Apply_InvalidatesNegativeStatCache).
 	require.Nil(t, ops.Delete(ctx, "/undofk/A/x.md"))
 	require.Nil(t, ops.Delete(ctx, "/undofk/A"))
+	_, fsErr = ops.Stat(ctx, "/undofk/A")
+	require.NotNil(t, fsErr, "A should be deleted before undo")
 
 	// Pause so the dir's archived (pre-delete) modified_at is measurably
 	// older than the imminent undo. This makes the post-undo ModTime check

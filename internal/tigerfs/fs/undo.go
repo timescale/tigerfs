@@ -64,7 +64,9 @@ func (o *Operations) ExecuteUndoToLogID(ctx context.Context, schema, tableName, 
 
 // ExecuteUndo undoes all operations after a target point (savepoint_id or log_id).
 // Executes all changes in a single PostgreSQL transaction.
-// The schema parameter is unused -- synth backing tables are always in the tigerfs schema.
+// The schema parameter identifies the user-facing schema for cache
+// invalidation (where the view lives). The synth backing tables themselves
+// always live in synth.TigerFSSchema.
 func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID, description string, filters []db.UndoFilter) (*UndoResult, error) {
 	logTable := tableName + "_log"
 	historyTable := tableName + "_history"
@@ -153,8 +155,11 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 		return nil, fmt.Errorf("undo transaction failed: %w", err)
 	}
 
-	// Invalidate caches
-	o.statCache.invalidate(synth.TigerFSSchema, tableName)
+	// Invalidate caches under the user's schema (where the view lives and
+	// where statSynthFile populates the cache). Using synth.TigerFSSchema
+	// here would leave cached entries -- including negative entries -- in
+	// place after undo.
+	o.statCache.invalidate(schema, tableName)
 	o.undoCache.invalidate()
 
 	result := &UndoResult{
@@ -1026,6 +1031,15 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 		return &FSError{Code: ErrInvalidPath, Message: ".undo/ requires a table context"}
 	}
 
+	// Cache keys are (user_schema, view_name); the synth backing tables live
+	// in synth.TigerFSSchema but stat/path lookups happen against the user's
+	// view. Use the user's schema for invalidation so cached entries
+	// (including negatives) actually clear after undo.
+	cacheSchema := synth.TigerFSSchema
+	if parsed.Context != nil && parsed.Context.Schema != "" {
+		cacheSchema = parsed.Context.Schema
+	}
+
 	// Build filters from pipeline context
 	var filters []db.UndoFilter
 	if parsed.Context != nil {
@@ -1039,11 +1053,11 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 
 	switch parsed.UndoMode {
 	case "id":
-		result, err = o.ExecuteUndoSingle(ctx, synth.TigerFSSchema, tableName, parsed.UndoTarget)
+		result, err = o.ExecuteUndoSingle(ctx, cacheSchema, tableName, parsed.UndoTarget)
 	case "to-id":
-		result, err = o.ExecuteUndoToLogID(ctx, synth.TigerFSSchema, tableName, parsed.UndoTarget, filters)
+		result, err = o.ExecuteUndoToLogID(ctx, cacheSchema, tableName, parsed.UndoTarget, filters)
 	case "to-savepoint":
-		result, err = o.ExecuteUndoToSavepoint(ctx, synth.TigerFSSchema, tableName, parsed.UndoTarget, filters)
+		result, err = o.ExecuteUndoToSavepoint(ctx, cacheSchema, tableName, parsed.UndoTarget, filters)
 	default:
 		return &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown undo mode: %s", parsed.UndoMode)}
 	}
@@ -1061,8 +1075,8 @@ func (o *Operations) writeUndoApply(ctx context.Context, parsed *ParsedPath, dat
 		zap.Int("files_skipped", result.FilesSkipped))
 
 	// Invalidate caches after undo
-	o.statCache.invalidate(synth.TigerFSSchema, tableName)
-	o.pathCache.invalidate(synth.TigerFSSchema, tableName)
+	o.statCache.invalidate(cacheSchema, tableName)
+	o.pathCache.invalidate(cacheSchema, tableName)
 	o.undoCache.invalidate()
 
 	return nil
