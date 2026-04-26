@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -553,23 +554,115 @@ func OpMoveDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceStat
 }
 
 // OpDeleteDir recursively deletes a non-root directory and everything inside.
-func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig) (string, error) {
+//
+// TigerFS records one log entry per delete (parent_id_fkey forces leaves to
+// go first), so a delete_dir produces N entries in total. Each one is an
+// independent undo target -- ExecuteUndoSingle restores exactly one row,
+// not "the whole delete_dir." If we push a single stack entry covering the
+// whole op, undo_single's pop returns "state before delete_dir" while
+// TigerFS only restores one row, and validation fails with state mismatches
+// (cannot recover, since deferred-FK requires the parent dir to exist by
+// COMMIT time -- restoring just a child of a deleted dir would orphan it).
+//
+// Instead, walk the tree explicitly and push one stack entry per deletion.
+// The first deletion uses the entry the runner already pushed before this
+// op; each subsequent deletion gets a fresh entry capturing the state right
+// before that particular row was removed. undo_single can then target any
+// individual deletion safely.
+func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig, stack *StateStack, iteration int) (string, error) {
 	src := pickNonRootDirBiased(rng, pools, state)
 	if src == "" {
 		return "", fmt.Errorf("no non-root dirs to delete")
 	}
 
 	fileCount, subdirCount := countDirContents(src, state)
-
-	fullPath := filepath.Join(wsPath, src)
-	if err := os.RemoveAll(fullPath); err != nil {
-		return "", fmt.Errorf("delete_dir %s: %w", src, err)
+	deletions, err := collectDeletionOrder(wsPath, src)
+	if err != nil {
+		return "", fmt.Errorf("walk %s for deletion: %w", src, err)
 	}
 
-	state.RemoveDir(src)
+	for i, item := range deletions {
+		// First deletion uses the runner-supplied stack entry; subsequent
+		// deletions get a fresh entry with the in-progress state.
+		if i > 0 {
+			stack.Push(state, iteration)
+		}
+
+		fullPath := filepath.Join(wsPath, item.path)
+		if err := os.Remove(fullPath); err != nil {
+			return "", fmt.Errorf("delete %s: %w", item.path, err)
+		}
+		if item.isDir {
+			state.RemoveDir(item.path)
+		} else {
+			state.RemoveFile(item.path)
+		}
+
+		// Pin the freshly-produced log_id on the entry that just captured
+		// the pre-deletion state. The runner's own SetLastLogID after this
+		// op returns will land on the final entry (same id) -- a no-op.
+		if logID := readLatestLogID(wsPath); logID != "" {
+			stack.SetLastLogID(logID)
+		}
+	}
+
 	pools.RemoveDir(src)
 
 	return fmt.Sprintf("delete_dir %s (%d files, %d subdirs)", src, fileCount, subdirCount), nil
+}
+
+// deletionItem is one entry in collectDeletionOrder's output.
+type deletionItem struct {
+	path  string
+	isDir bool
+}
+
+// collectDeletionOrder walks the *actual* filesystem under src and returns
+// every entry in post-order (children before their parent), with src itself
+// last. Hidden entries (those starting with ".") are skipped -- TigerFS
+// virtual paths such as .log/ aren't real children to remove.
+//
+// We walk the FS rather than reading WorkspaceState because mkdirSynth in
+// TigerFS doesn't log, so undo can't roll back Mkdir-created dirs. The
+// stress test's tracked state then drifts from TigerFS's actual state, and
+// a state-based traversal would miss "phantom" dirs the FS still contains
+// -- causing os.Remove on the parent to fail with ENOTEMPTY (surfaced as
+// EIO via the NFS adapter).
+func collectDeletionOrder(wsPath, src string) ([]deletionItem, error) {
+	var out []deletionItem
+	var walk func(rel string) error
+	walk = func(rel string) error {
+		entries, err := os.ReadDir(filepath.Join(wsPath, rel))
+		if err != nil {
+			return err
+		}
+		// Sort for determinism within a directory.
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			childRel := filepath.Join(rel, name)
+			if e.IsDir() {
+				if err := walk(childRel); err != nil {
+					return err
+				}
+				out = append(out, deletionItem{path: childRel, isDir: true})
+			} else {
+				out = append(out, deletionItem{path: childRel, isDir: false})
+			}
+		}
+		return nil
+	}
+
+	if err := walk(src); err != nil {
+		return nil, err
+	}
+	out = append(out, deletionItem{path: src, isDir: true})
+	return out, nil
 }
 
 // OpCreateSavepoint creates a named savepoint.
