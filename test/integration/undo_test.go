@@ -840,6 +840,63 @@ func TestUndo_Interface_ApplyViaID(t *testing.T) {
 	assert.Contains(t, string(fc.Data), "V1", "should be restored to V1")
 }
 
+// TestUndo_Interface_ApplyViaToID_DisplayName verifies that the production
+// .apply path accepts a display-name log_id (the format users see in
+// .log/.by/... listings), not just a raw UUIDv7. ExecuteUndoSingle has
+// resolved display names since inception; ExecuteUndoToLogID was missing
+// the same call, so any user who copied a log id from `ls .log/.by/...`
+// into `.undo/to-id/<id>/.apply` would silently get FilesRestored=0
+// (pgx encodes the string as text, the implicit cast on log_id::text turns
+// the WHERE log_id > $1 comparison lexicographic, and UUID texts beginning
+// with '0' always sort below display names beginning with '2').
+func TestUndo_Interface_ApplyViaToID_DisplayName(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undotidd")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/undotidd", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	require.Nil(t, ops.WriteFile(ctx, "/undotidd/hello.md", []byte("---\ntitle: Hello\n---\nV1\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/undotidd/hello.md", []byte("---\ntitle: Hello\n---\nV2\n")))
+
+	// Capture the create log entry's display-name id from .log/.by/type/create
+	// (this is the canonical UI surface; display names always sort by time).
+	entries, fsErr := ops.ReadDir(ctx, "/undotidd/.log/.by/type/create")
+	require.Nil(t, fsErr)
+	var displayNames []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			displayNames = append(displayNames, e.Name)
+		}
+	}
+	require.GreaterOrEqual(t, len(displayNames), 1)
+	target := displayNames[len(displayNames)-1]
+	if !strings.HasPrefix(target, "20") {
+		t.Fatalf("expected display-name format (e.g. 2026-...) but got %q -- "+
+			"this test is meaningless if .log/ already returns raw UUIDs", target)
+	}
+
+	// Apply undo via .undo/to-id/<display-name>/.apply -- the path the
+	// user would naturally construct from a directory listing.
+	fsErr = ops.WriteFile(ctx, "/undotidd/.undo/to-id/"+target+"/.apply", []byte(""))
+	require.Nil(t, fsErr, "WriteFile .apply via to-id (display name) should succeed")
+
+	// V2's edit is the only op after the create. Undoing back to the create
+	// must roll the edit back, leaving V1 in the file.
+	fc, fsErr := ops.ReadFile(ctx, "/undotidd/hello.md")
+	require.Nil(t, fsErr)
+	assert.Contains(t, string(fc.Data), "V1",
+		"undo_to_id with display-name target must restore V1; if file is still V2 the path silently no-op'd")
+}
+
 func TestUndo_Interface_ApplyNoOp(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {

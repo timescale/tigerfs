@@ -51,7 +51,13 @@ func (o *Operations) ExecuteUndoToSavepoint(ctx context.Context, schema, tableNa
 }
 
 // ExecuteUndoToLogID undoes all operations after a specific log entry.
+// Accepts either a raw UUIDv7 or the display-name form
+// ("2026-04-08T143015.234Z-...") -- the latter is what users see in
+// .log/.by/... listings. ExecuteUndoSingle has the same resolution; this
+// keeps the two log-id entry points symmetric and makes
+// `.undo/to-id/<display-name>/.apply` work end-to-end.
 func (o *Operations) ExecuteUndoToLogID(ctx context.Context, schema, tableName, logID string, filters []db.UndoFilter) (*UndoResult, error) {
+	logID = resolveLogID(logID)
 	desc := fmt.Sprintf("Undo to log entry %s", logID)
 	return o.ExecuteUndo(ctx, schema, tableName, logID, desc, filters)
 }
