@@ -58,6 +58,13 @@ func (o *Operations) readHistoryFileDispatch(ctx context.Context, parsed *Parsed
 func (o *Operations) readDirHistory(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	schema := synth.TigerFSSchema
+	// cacheSchema is the user-facing schema where the live view lives.
+	// resolveSynthPath uses (cacheSchema, table) as the pathCache key, and
+	// every other code path keys cache writes/lookups under the user's
+	// schema, so the history reads must too -- otherwise history's cache
+	// entries land in a disjoint (tigerfs, table) namespace and get neither
+	// shared with normal reads nor cleared by normal invalidate calls.
+	cacheSchema := fsCtx.Schema
 	historyTable := fsCtx.TableName + "_history"
 	now := time.Now()
 
@@ -69,12 +76,16 @@ func (o *Operations) readDirHistory(ctx context.Context, parsed *ParsedPath, inf
 	if parsed.HistoryByID {
 		return o.readDirHistoryByID(ctx, schema, historyTable, parsed, info, now, limit)
 	}
-	return o.readDirHistoryByFilename(ctx, schema, historyTable, parsed, info, now, limit)
+	return o.readDirHistoryByFilename(ctx, schema, cacheSchema, historyTable, parsed, info, now, limit)
 }
 
 // readDirHistoryByFilename lists history entries organized by filename.
 // Uses parsed.PrimaryKey as a directory prefix to show only files at the current level.
-func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, historyTable string, parsed *ParsedPath, info *synth.ViewInfo, now time.Time, limit int) ([]Entry, *FSError) {
+//
+// schema is the synth schema (tigerfs) where the history table lives;
+// cacheSchema is the user's schema, used for pathCache lookups so cache
+// keys match live-table reads.
+func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cacheSchema, historyTable string, parsed *ParsedPath, info *synth.ViewInfo, now time.Time, limit int) ([]Entry, *FSError) {
 	if parsed.HistoryFile == "" {
 		// /{table}/.history/ or /{table}/subdir/.history/ — list filenames at this level
 		dirPrefix := parsed.PrimaryKey
@@ -89,7 +100,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, histo
 				// Resolve directory path in the LIVE table to get its UUID
 				segments := strings.Split(dirPrefix, "/")
 				var ok bool
-				parentID, ok = o.resolveSynthPath(ctx, schema, parsed.Context.TableName, segments)
+				parentID, ok = o.resolveSynthPath(ctx, cacheSchema, parsed.Context.TableName, segments)
 				if !ok {
 					return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", dirPrefix)}
 				}
