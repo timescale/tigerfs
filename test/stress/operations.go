@@ -626,12 +626,15 @@ type deletionItem struct {
 // last. Hidden entries (those starting with ".") are skipped -- TigerFS
 // virtual paths such as .log/ aren't real children to remove.
 //
-// We walk the FS rather than reading WorkspaceState because mkdirSynth in
-// TigerFS doesn't log, so undo can't roll back Mkdir-created dirs. The
-// stress test's tracked state then drifts from TigerFS's actual state, and
-// a state-based traversal would miss "phantom" dirs the FS still contains
-// -- causing os.Remove on the parent to fail with ENOTEMPTY (surfaced as
-// EIO via the NFS adapter).
+// We deliberately walk the FS rather than reading WorkspaceState. After the
+// mkdirSynth-logging fix, the test's tracked state should stay in sync with
+// TigerFS across undos, so a state-based traversal would also work in the
+// common case. Walking the FS is kept as defensive coding: any future state
+// drift (a new unlogged op, a tracking bug in move_dir/rename_dir, etc.)
+// would otherwise surface as cryptic ENOTEMPTY/EIO failures from os.Remove
+// hitting unexpected children. The cost is a few NFS-mediated readdirs per
+// delete_dir, which is negligible next to the N+1 deletes the op already
+// makes.
 func collectDeletionOrder(wsPath, src string) ([]deletionItem, error) {
 	var out []deletionItem
 	var walk func(rel string) error
