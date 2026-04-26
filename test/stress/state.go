@@ -81,6 +81,10 @@ func (ws *WorkspaceState) RenameFile(oldPath, newPath string) {
 }
 
 // RenameDir moves a directory and all its contents from oldPath to newPath.
+//
+// Mutations are collected before the loops finish: adding keys to a map
+// while ranging over it is undefined per the Go spec, and freshly added
+// keys may or may not be visited.
 func (ws *WorkspaceState) RenameDir(oldPath, newPath string) {
 	delete(ws.Dirs, oldPath)
 	ws.Dirs[newPath] = true
@@ -88,22 +92,37 @@ func (ws *WorkspaceState) RenameDir(oldPath, newPath string) {
 	oldPrefix := oldPath + "/"
 	newPrefix := newPath + "/"
 
-	// Move files
+	// Collect file moves first, then apply.
+	type fileMove struct{ oldKey, newKey, hash string }
+	var fileMoves []fileMove
 	for k, v := range ws.Files {
 		if strings.HasPrefix(k, oldPrefix) {
-			newKey := newPrefix + strings.TrimPrefix(k, oldPrefix)
-			delete(ws.Files, k)
-			ws.Files[newKey] = v
+			fileMoves = append(fileMoves, fileMove{
+				oldKey: k,
+				newKey: newPrefix + strings.TrimPrefix(k, oldPrefix),
+				hash:   v,
+			})
 		}
 	}
+	for _, m := range fileMoves {
+		delete(ws.Files, m.oldKey)
+		ws.Files[m.newKey] = m.hash
+	}
 
-	// Move subdirectories
+	// Collect subdirectory moves first, then apply.
+	type dirMove struct{ oldKey, newKey string }
+	var dirMoves []dirMove
 	for k := range ws.Dirs {
 		if strings.HasPrefix(k, oldPrefix) {
-			newKey := newPrefix + strings.TrimPrefix(k, oldPrefix)
-			delete(ws.Dirs, k)
-			ws.Dirs[newKey] = true
+			dirMoves = append(dirMoves, dirMove{
+				oldKey: k,
+				newKey: newPrefix + strings.TrimPrefix(k, oldPrefix),
+			})
 		}
+	}
+	for _, m := range dirMoves {
+		delete(ws.Dirs, m.oldKey)
+		ws.Dirs[m.newKey] = true
 	}
 }
 

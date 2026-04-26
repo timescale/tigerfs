@@ -471,8 +471,22 @@ func OpRenameDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSt
 	if parent == "." {
 		parent = ""
 	}
+	oldName := filepath.Base(oldRelPath)
 
-	newName := randomDirName(rng)
+	// randomDirName has 12 prefixes * 1000 suffixes = 12k options; collisions
+	// with the existing name are rare but possible. Re-roll up to a few
+	// times to avoid `os.Rename(A, A)` which fails with EEXIST.
+	var newName string
+	for attempt := 0; attempt < 5; attempt++ {
+		newName = randomDirName(rng)
+		if newName != oldName {
+			break
+		}
+	}
+	if newName == oldName {
+		return "", fmt.Errorf("rename_dir: could not generate a different name for %s after retries", oldRelPath)
+	}
+
 	newRelPath := newName
 	if parent != "" {
 		newRelPath = parent + "/" + newName
