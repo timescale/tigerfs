@@ -2441,3 +2441,64 @@ func TestExecuteUndoTransaction_DeleteOnlyUndo(t *testing.T) {
 		t.Errorf("expected 1 undo log entry, got %d", logCount)
 	}
 }
+
+// TestExecuteUndoTransaction_FailsAtCommitOnUnrestorableFK verifies that
+// the deferred FK doesn't silently allow orphan rows. If a restore
+// targets a child whose parent_id references a row that's neither in
+// the source table nor in the restore set, the deferred FK *must* fire
+// at COMMIT and the whole undo transaction must roll back.
+//
+// We never expect this state from normal user operations -- the undo
+// classifier always pulls in the parent's row when its children are
+// affected -- but the test pins down what happens if a future refactor
+// or log inconsistency produces an unrestorable child: a clean FK error
+// at COMMIT, no orphan, no silent corruption. The whole point of using
+// DEFERRABLE INITIALLY IMMEDIATE (vs just removing the FK) is that
+// genuinely-broken state still surfaces; we exercise that here.
+func TestExecuteUndoTransaction_FailsAtCommitOnUnrestorableFK(t *testing.T) {
+	env, cleanup := setupUndoTestEnv(t)
+	defer cleanup()
+
+	ids := env.genUUIDs(t, 3)
+	childID, missingParentID, childVer := ids[0], ids[1], ids[2]
+
+	// Seed history with a child whose parent_id points at a UUID that has
+	// no history row and no source row -- the unrestorable case.
+	env.seedHistory(t, childVer, childID, missingParentID, "orphan.md", "file", "body")
+
+	err := env.client.ExecuteUndoTransaction(env.ctx, &UndoTransactionParams{
+		Schema:            env.schema,
+		SourceTable:       env.sourceTable,
+		HistoryTable:      env.historyTable,
+		LogTable:          env.logTable,
+		Description:       "test undo unrestorable FK",
+		RestoreVersionIDs: []string{childVer},
+		RestoreFileIDs:    []string{childID},
+		RestoreFilenames:  []string{"orphan.md"},
+		UserID:            "test-user",
+	})
+	if err == nil {
+		t.Fatal("ExecuteUndoTransaction must fail when restoring a child whose parent doesn't exist anywhere")
+	}
+
+	pgErr := asPgError(err)
+	if pgErr == nil {
+		t.Fatalf("expected pg error, got: %v", err)
+	}
+	if pgErr.Code != "23503" {
+		t.Errorf("expected SQLSTATE 23503 (foreign_key_violation), got %q: %v", pgErr.Code, pgErr.Message)
+	}
+
+	// Source must be empty -- the UPSERT happened during the TX but the
+	// COMMIT rolled back when the deferred FK check failed.
+	var count int
+	err = env.client.pool.QueryRow(env.ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE id = $1`, env.srcQT),
+		childID).Scan(&count)
+	if err != nil {
+		t.Fatalf("query source: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected source to be empty after rolled-back undo, got %d row(s)", count)
+	}
+}

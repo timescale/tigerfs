@@ -356,6 +356,68 @@ func TestUndo_Apply_InvalidatesNegativeStatCache(t *testing.T) {
 
 // --- Multi-file undo to savepoint ---
 
+// TestUndo_ToSavepoint_DefersFKConstraint verifies that the deferred-FK
+// path (SET CONSTRAINTS ALL DEFERRED) applies on the to-savepoint route
+// just like it does on to-id. Same scenario as
+// TestUndo_ToID_RestoresDeletedDirWithFile but driven via .savepoint.
+//
+// The file is created at root before the dir, then moved in. file_id <
+// dir_id, so when undo restores both rows, the file is UPSERTed first
+// (file_id ASC). Its parent_id references the not-yet-restored dir;
+// without deferral that violates parent_id_fkey at INSERT time.
+func TestUndo_ToSavepoint_DefersFKConstraint(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "spfk")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/spfk", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// 1. File at root first (oldest file_id).
+	require.Nil(t, ops.WriteFile(ctx, "/spfk/x.md",
+		[]byte("---\ntitle: X\n---\nbody x\n")))
+
+	// 2. Dir A (newer file_id).
+	require.Nil(t, ops.Mkdir(ctx, "/spfk/A"))
+
+	// 3. Move x.md into A. file_id stays old; parent_id becomes A.id.
+	require.Nil(t, ops.Rename(ctx, "/spfk/x.md", "/spfk/A/x.md"))
+
+	// 4. Savepoint here -- captures "x.md lives at A/x.md".
+	require.Nil(t, ops.WriteFile(ctx, "/spfk/.savepoint/before-deletes.json",
+		[]byte(`{"description":"x.md lives at A/x.md"}`)))
+
+	// 5. Delete file then dir.
+	require.Nil(t, ops.Delete(ctx, "/spfk/A/x.md"))
+	require.Nil(t, ops.Delete(ctx, "/spfk/A"))
+
+	// 6. Apply undo via the to-savepoint route. Without deferred FK
+	//    this fails when x.md (older file_id) is UPSERTed before A.
+	require.Nil(t, ops.WriteFile(ctx, "/spfk/.undo/to-savepoint/before-deletes/.apply",
+		[]byte("")))
+
+	// 7. State at savepoint should be restored: x.md inside A.
+	fc, fsErr := ops.ReadFile(ctx, "/spfk/A/x.md")
+	require.Nil(t, fsErr, "x.md should be restored under A")
+	assert.Contains(t, string(fc.Data), "body x")
+
+	entries, fsErr := ops.ReadDir(ctx, "/spfk/A")
+	require.Nil(t, fsErr, "A should be readable after undo")
+	var names []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			names = append(names, e.Name)
+		}
+	}
+	assert.Contains(t, names, "x.md")
+}
+
 func TestUndo_ToSavepoint_MultiFile(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {
