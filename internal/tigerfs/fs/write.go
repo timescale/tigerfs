@@ -25,9 +25,25 @@ import (
 //   - path: filesystem path to write to
 //   - data: file content (format determined by path extension)
 //
+// Preconditions:
+//   - For writes inside a synth view (i.e., /<app>/<dir>/.../<file>), the
+//     immediate parent directory of path must already exist as a row in
+//     the source table. WriteFile does NOT auto-create ancestor dirs;
+//     callers should issue an explicit Mkdir per missing segment first
+//     (this matches POSIX open(O_CREAT) semantics, which is what the
+//     kernel enforces for FUSE/NFS clients before TigerFS sees a write).
+//     Use WriteFileEnsureDirs if you want mkdir-p behavior in one call.
+//
+// Postconditions on success:
+//   - The row at path exists with the given data.
+//   - If history is enabled, exactly one log entry is written: "create"
+//     when the file was new, "edit" when the file already existed.
+//   - Stat/path caches for the table are invalidated.
+//
 // Returns nil on success, or an FSError describing the failure.
 // Common errors:
 //   - ErrInvalidPath: unsupported path type for writes
+//   - ErrNotExist: an ancestor directory does not exist
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *FSError {
@@ -38,6 +54,48 @@ func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *F
 	o.resolveSynthHierarchy(ctx, parsed)
 
 	return o.writeFileWithParsed(ctx, parsed, data)
+}
+
+// WriteFileEnsureDirs is the mkdir-p variant of WriteFile: any missing
+// ancestor directories of path are created via Mkdir before the file is
+// written. Each new ancestor produces its own "create" log entry --
+// matching what the kernel would generate from per-segment mkdir(2)
+// syscalls in production (the kernel rejects open(O_CREAT) on a path
+// whose parent dir is missing, so a deep WriteFile never reaches TigerFS
+// from FUSE/NFS without all ancestors already in place).
+//
+// Use this when a caller -- typically a test or batch-import code that
+// drives Operations directly -- wants to materialize a deep path in a
+// single call. Prefer WriteFile + explicit Mkdir(s) when you need
+// fine-grained control over ordering or error handling, or when the
+// in-between dirs already exist and there's nothing to ensure.
+//
+// Preconditions:
+//   - The path's first segment must be an existing app/view (Mkdir
+//     against a non-existent app fails just as it would normally).
+//
+// Postconditions on success:
+//   - All ancestors of path exist as directory rows.
+//   - One "create" log entry is written for each ancestor that did NOT
+//     already exist before this call.
+//   - WriteFile's own postconditions (file row + create/edit log entry).
+//
+// Returns the same errors as Mkdir or WriteFile. ErrAlreadyExists from
+// any intermediate Mkdir is treated as "already there, fine" and not
+// propagated.
+func (o *Operations) WriteFileEnsureDirs(ctx context.Context, path string, data []byte) *FSError {
+	// Walk segments shallowest-to-deepest, calling Mkdir on each
+	// ancestor of the file. Index 0 is the app/view name, so we begin
+	// the loop at 2 (the first dir under the app). The final segment is
+	// the filename and goes through WriteFile, not Mkdir.
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i := 2; i < len(parts); i++ {
+		ancestor := "/" + strings.Join(parts[:i], "/")
+		if fsErr := o.Mkdir(ctx, ancestor); fsErr != nil && fsErr.Code != ErrAlreadyExists {
+			return fsErr
+		}
+	}
+	return o.WriteFile(ctx, path, data)
 }
 
 // ValidateCreate reports an FSError if creating a regular file at this path
@@ -956,13 +1014,28 @@ func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FS
 	}
 }
 
-// Mkdir creates a directory for incremental row creation.
+// Mkdir creates a single directory at path.
 //
-// Creating a directory with a primary key value starts the incremental
-// row creation workflow:
+// For synth views, this inserts a row with filetype='directory' and
+// (when history is enabled) writes one "create" log entry. The dir's
+// modified_at is set to now() and the parent dir's modified_at is
+// bumped via the bump_parent_mtime trigger.
+//
+// For non-synth tables, mkdir starts the incremental row creation
+// workflow:
 //  1. mkdir /table/pk → creates staging entry
 //  2. echo "value" > /table/pk/column → sets column value
 //  3. When all NOT NULL columns are provided, row is auto-committed
+//
+// Preconditions:
+//   - Path's immediate parent must already exist as a row in the
+//     source table. Mkdir does NOT auto-create ancestors; if you have
+//     a deep path to materialize, issue one Mkdir per missing segment
+//     (matching POSIX mkdir(2) semantics) or use WriteFileEnsureDirs.
+//
+// Postconditions on success:
+//   - For synth views: a directory row exists at path; one "create"
+//     log entry is written if history is enabled.
 //
 // Parameters:
 //   - ctx: context for database operations and cancellation
@@ -970,7 +1043,8 @@ func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FS
 //
 // Returns nil on success, or an FSError describing the failure.
 // Common errors:
-//   - ErrExists: row already exists in the database
+//   - ErrAlreadyExists: a row already exists at path
+//   - ErrNotExist: an ancestor of path does not exist
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {

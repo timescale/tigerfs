@@ -1550,10 +1550,12 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 			values = append(values, parentID)
 		}
 
-		_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+		insertedPK, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 		if dbErr != nil {
 			return &FSError{Code: ErrIO, Message: "failed to create directory", Cause: dbErr}
 		}
+
+		o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "create", insertedPK, dirPath)
 
 		o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 		o.pathCache.invalidate(fsCtx.Schema, fsCtx.TableName)
@@ -1575,10 +1577,12 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 
 	columns := []string{info.Roles.Filename, info.Roles.Filetype}
 	values := []interface{}{dirPath, "directory"}
-	_, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
+	insertedPK, dbErr := o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 	if dbErr != nil {
 		return &FSError{Code: ErrIO, Message: "failed to create directory", Cause: dbErr}
 	}
+
+	o.logSynthOp(ctx, fsCtx.Schema, fsCtx.TableName, info, "create", insertedPK, dirPath)
 
 	o.statCache.invalidate(fsCtx.Schema, fsCtx.TableName)
 	return nil

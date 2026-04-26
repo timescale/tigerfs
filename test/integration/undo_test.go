@@ -13,6 +13,132 @@ import (
 	"github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
+// --- Mkdir / WriteFileEnsureDirs logging ---
+
+// TestMkdir_LogsCreateEntry verifies that mkdirSynth writes a 'create'
+// log entry, mirroring what WriteFile does for new files. Without this,
+// undo can't roll back a Mkdir-created directory because the dir is
+// invisible to QueryUndoAffectedFiles.
+func TestMkdir_LogsCreateEntry(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "mkdirlog")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/mkdirlog", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Mkdir is the only post-build op, so all of its log entries are new.
+	require.Nil(t, ops.Mkdir(ctx, "/mkdirlog/A"))
+
+	// .log/.by/type/create should now contain exactly one entry whose
+	// filename is the dir we just made.
+	entries, fsErr := ops.ReadDir(ctx, "/mkdirlog/.log/.by/type/create")
+	require.Nil(t, fsErr)
+	var createIDs []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			createIDs = append(createIDs, e.Name)
+		}
+	}
+	if len(createIDs) != 1 {
+		t.Fatalf("expected exactly 1 create log entry after Mkdir, got %d (%v)", len(createIDs), createIDs)
+	}
+}
+
+// TestWriteFileEnsureDirs_LogsEachIntermediateDir verifies that
+// WriteFileEnsureDirs goes through Mkdir for every missing ancestor,
+// producing one 'create' log entry per dir plus one for the file --
+// the same shape the kernel would generate via per-segment mkdir(2)
+// calls in production.
+func TestWriteFileEnsureDirs_LogsEachIntermediateDir(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "ensuredirs")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/ensuredirs", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Single deep write through the helper. Expect 4 create log entries:
+	// A, A/B, A/B/C, plus the file itself.
+	require.Nil(t, ops.WriteFileEnsureDirs(ctx,
+		"/ensuredirs/A/B/C/x.md",
+		[]byte("---\ntitle: X\n---\nbody x\n")))
+
+	entries, fsErr := ops.ReadDir(ctx, "/ensuredirs/.log/.by/type/create")
+	require.Nil(t, fsErr)
+	var createCount int
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			createCount++
+		}
+	}
+	if createCount != 4 {
+		t.Errorf("expected 4 create log entries (3 dirs + 1 file), got %d", createCount)
+	}
+
+	// File and dirs all exist after the call.
+	for _, p := range []string{"/ensuredirs/A", "/ensuredirs/A/B", "/ensuredirs/A/B/C", "/ensuredirs/A/B/C/x.md"} {
+		_, fsErr := ops.Stat(ctx, p)
+		if fsErr != nil {
+			t.Errorf("%s should exist after WriteFileEnsureDirs: %v", p, fsErr)
+		}
+	}
+}
+
+// TestWriteFileEnsureDirs_PreservesExistingDirs verifies that when some
+// ancestors already exist, WriteFileEnsureDirs skips them (Mkdir's
+// ErrAlreadyExists is treated as "fine") and only logs creates for the
+// dirs it actually had to make.
+func TestWriteFileEnsureDirs_PreservesExistingDirs(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "ensuredirs2")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/ensuredirs2", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Pre-create A and A/B.
+	require.Nil(t, ops.Mkdir(ctx, "/ensuredirs2/A"))
+	require.Nil(t, ops.Mkdir(ctx, "/ensuredirs2/A/B"))
+
+	// Now call the helper. It should mkdir only A/B/C and write the file.
+	require.Nil(t, ops.WriteFileEnsureDirs(ctx,
+		"/ensuredirs2/A/B/C/x.md",
+		[]byte("---\ntitle: X\n---\nbody x\n")))
+
+	entries, fsErr := ops.ReadDir(ctx, "/ensuredirs2/.log/.by/type/create")
+	require.Nil(t, fsErr)
+	var createCount int
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			createCount++
+		}
+	}
+	// Expected: 2 from the pre-mkdirs + 1 for A/B/C from the helper
+	// + 1 for the file = 4 total.
+	if createCount != 4 {
+		t.Errorf("expected 4 create log entries total (A, A/B pre-existing + A/B/C + file), got %d", createCount)
+	}
+}
+
 // --- Single operation undo ---
 
 func TestUndo_SingleCreate(t *testing.T) {
