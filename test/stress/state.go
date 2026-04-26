@@ -390,8 +390,19 @@ func HashContent(content []byte) string {
 // ValidateWorkspace compares the actual filesystem state at wsPath against
 // the expected state. Returns nil if they match, or a descriptive error
 // listing all mismatches.
+//
+// Validates four invariants:
+//   - every file in expected.Files exists on disk and hashes correctly,
+//   - no extra files are on disk,
+//   - every dir in expected.Dirs exists on disk,
+//   - no extra dirs are on disk.
+//
+// Dotfiles and dot-prefixed directories (.log, .savepoint, .undo, .history)
+// are TigerFS virtuals, not real children of the workspace; skip them
+// from both sides of the comparison.
 func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
 	actualFiles := make(map[string]string) // relpath -> md5 hash
+	actualDirs := make(map[string]bool)    // relpath -> exists
 
 	err := filepath.WalkDir(wsPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -418,7 +429,8 @@ func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
 		}
 
 		if d.IsDir() {
-			return nil // we just walk into it
+			actualDirs[relPath] = true
+			return nil
 		}
 
 		// Regular file: read and hash
@@ -451,6 +463,20 @@ func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
 	for relPath := range actualFiles {
 		if _, ok := expected.Files[relPath]; !ok {
 			errs = append(errs, fmt.Sprintf("unexpected file: %s", relPath))
+		}
+	}
+
+	// Check for missing dirs (expected but not on disk)
+	for relPath := range expected.Dirs {
+		if !actualDirs[relPath] {
+			errs = append(errs, fmt.Sprintf("missing dir: %s", relPath))
+		}
+	}
+
+	// Check for unexpected dirs (on disk but not expected)
+	for relPath := range actualDirs {
+		if _, ok := expected.Dirs[relPath]; !ok {
+			errs = append(errs, fmt.Sprintf("unexpected dir: %s", relPath))
 		}
 	}
 

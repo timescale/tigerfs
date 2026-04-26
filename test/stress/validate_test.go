@@ -30,6 +30,9 @@ func TestValidateWorkspace_Passing(t *testing.T) {
 	for relPath, content := range files {
 		expected.SetFile(relPath, HashContent([]byte(content)))
 	}
+	// docs/ exists on disk because setupTestDir creates parents implicitly;
+	// expected state must declare it (validation now checks dirs too).
+	expected.AddDir("docs")
 
 	err := ValidateWorkspace(dir, expected)
 	if err != nil {
@@ -126,10 +129,55 @@ func TestValidateWorkspace_NestedDirs(t *testing.T) {
 	for relPath, content := range files {
 		expected.SetFile(relPath, HashContent([]byte(content)))
 	}
+	// Declare every dir setupTestDir's MkdirAll created.
+	for _, d := range []string{"a", "a/b", "a/b/c"} {
+		expected.AddDir(d)
+	}
 
 	err := ValidateWorkspace(dir, expected)
 	if err != nil {
 		t.Errorf("nested dirs should validate: %v", err)
+	}
+}
+
+func TestValidateWorkspace_MissingDir(t *testing.T) {
+	dir := t.TempDir() // empty workspace
+
+	expected := NewWorkspaceState()
+	expected.AddDir("expected-dir")
+
+	err := ValidateWorkspace(dir, expected)
+	if err == nil {
+		t.Error("ValidateWorkspace should fail when an expected dir is missing")
+	}
+}
+
+func TestValidateWorkspace_UnexpectedDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "rogue-dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := NewWorkspaceState() // no dirs declared
+
+	err := ValidateWorkspace(dir, expected)
+	if err == nil {
+		t.Error("ValidateWorkspace should fail when an unexpected dir is on disk")
+	}
+}
+
+func TestValidateWorkspace_EmptyExpectedDir(t *testing.T) {
+	// An empty dir on disk that's also declared in expected.Dirs is fine.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	expected := NewWorkspaceState()
+	expected.AddDir("empty")
+
+	if err := ValidateWorkspace(dir, expected); err != nil {
+		t.Errorf("declared empty dir should validate: %v", err)
 	}
 }
 
