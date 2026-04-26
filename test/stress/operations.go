@@ -384,18 +384,22 @@ func OpMoveFile(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSta
 		oldDir = ""
 	}
 
-	// Pick a different directory
-	var newDir string
-	for attempts := 0; attempts < 10; attempts++ {
-		candidate := pools.Dirs[rng.Intn(len(pools.Dirs))]
-		if candidate != oldDir {
-			newDir = candidate
-			break
+	// Enumerate dirs other than the file's current parent and pick one
+	// uniformly. Random-with-retries can flake here: with only 2 dirs
+	// (root + one), each attempt has a 50% chance of picking oldDir, so
+	// 10 attempts fail ~0.1% of the time. canExecute already guarantees
+	// len(pools.Dirs) >= 2, and oldDir is one of those entries, so the
+	// candidate slice is always non-empty.
+	candidates := make([]string, 0, len(pools.Dirs)-1)
+	for _, d := range pools.Dirs {
+		if d != oldDir {
+			candidates = append(candidates, d)
 		}
 	}
-	if newDir == oldDir {
-		return "", fmt.Errorf("no different directory available")
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no different directory available for move_file %s", oldRelPath)
 	}
+	newDir := candidates[rng.Intn(len(candidates))]
 
 	baseName := filepath.Base(oldRelPath)
 	newRelPath := baseName
