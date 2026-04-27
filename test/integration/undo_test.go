@@ -1155,6 +1155,83 @@ func TestUndo_Interface_ApplyViaToID_DisplayName(t *testing.T) {
 		"undo_to_id with display-name target must restore V1; if file is still V2 the path silently no-op'd")
 }
 
+// TestUndo_ToID_LargeEditOnly verifies that undo_to_id targeting a create
+// log_id rolls back ONLY the subsequent edit, leaving the file at its
+// post-create state. The body is 10 MB so the version-history restoration
+// path is exercised at non-trivial size.
+//
+// At this layer each ops.WriteFile produces one log entry (1 create + 1
+// edit). NFS-driven multi-chunk fan-out -- where a single user-level
+// create produces 1 + ceil(size/wsize) log entries -- lives a layer above
+// and is exercised by the stress test under test/stress/. The DB-level
+// undo path is identical in both cases.
+func TestUndo_ToID_LargeEditOnly(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undolarge")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/undolarge", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// 10 MB body filled with a deterministic non-uniform pattern so the
+	// post-undo readback can't accidentally match via zero-fill.
+	createBody := make([]byte, 10*1024*1024)
+	for i := range createBody {
+		createBody[i] = 'A' + byte(i%26)
+	}
+	createContent := append([]byte("---\ntitle: BigCreate\n---\n"), createBody...)
+	require.Nil(t, ops.WriteFileEnsureDirs(ctx, "/undolarge/dir/big.md", createContent))
+
+	// Capture the create log_id of the file (last create entry; the dir
+	// create from WriteFileEnsureDirs is chronologically earlier).
+	entries, fsErr := ops.ReadDir(ctx, "/undolarge/.log/.by/type/create")
+	require.Nil(t, fsErr)
+	var createIDs []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			createIDs = append(createIDs, e.Name)
+		}
+	}
+	require.GreaterOrEqual(t, len(createIDs), 1)
+	createLogID := createIDs[len(createIDs)-1]
+
+	// Edit with distinguishable, smaller body so length checks can tell
+	// post-undo (10 MB create) from pre-undo (5 MB edit).
+	editBody := make([]byte, 5*1024*1024)
+	for i := range editBody {
+		editBody[i] = 'a' + byte(i%26)
+	}
+	editContent := append([]byte("---\ntitle: BigEdit\n---\n"), editBody...)
+	require.Nil(t, ops.WriteFile(ctx, "/undolarge/dir/big.md", editContent))
+
+	// Sanity: the edit took effect before we undo it.
+	fc, fsErr := ops.ReadFile(ctx, "/undolarge/dir/big.md")
+	require.Nil(t, fsErr)
+	require.Contains(t, string(fc.Data), "BigEdit",
+		"pre-undo body should reflect the edit, not the create")
+
+	// undo_to_id targeting the create's log_id must undo only the edit,
+	// keeping the file present in its post-create state.
+	fsErr = ops.WriteFile(ctx, "/undolarge/.undo/to-id/"+createLogID+"/.apply", []byte(""))
+	require.Nil(t, fsErr, "WriteFile .apply via to-id should succeed")
+
+	fc, fsErr = ops.ReadFile(ctx, "/undolarge/dir/big.md")
+	require.Nil(t, fsErr, "file must still exist after undoing only the edit")
+	assert.Contains(t, string(fc.Data), "BigCreate",
+		"post-undo body must contain the create-time title (edit was undone)")
+	assert.NotContains(t, string(fc.Data), "BigEdit",
+		"post-undo body must NOT contain edit content")
+	// 10 MB create vs 5 MB edit: bracket the size to disambiguate.
+	assert.Greater(t, len(fc.Data), 9*1024*1024,
+		"post-undo body should be ~10MB (create), not ~5MB (edit)")
+}
+
 func TestUndo_Interface_ApplyNoOp(t *testing.T) {
 	result := GetTestDBEmpty(t)
 	if result == nil {

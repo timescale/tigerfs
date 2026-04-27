@@ -109,6 +109,7 @@ Multiple TigerFS mounts may connect to the same database concurrently. This mean
 - **Cache metadata only:** Sizes, permissions, directory entries, column names/types, primary keys, table lists. These change rarely and have short TTLs.
 - **Stat cache keys must be unique per path:** Different pipeline paths (e.g., `.export/json` vs `.filter/active/true/.export/json`) must not share cache entries, even on the same table.
 - **Pattern:** `Stat` may use caches. `ReadFile` must always hit the DB.
+- **Audit invalidation on every new write path:** any write must call `statCache.invalidate(schema, table)` and `pathCache.invalidate(schema, table)` with the *user* schema (not `synth.TigerFSSchema`); a schema-key mismatch silently leaves stale entries cached for up to 2 seconds and surfaces as cross-mount read inconsistencies.
 
 ## Logging
 
