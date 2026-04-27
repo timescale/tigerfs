@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -473,6 +474,98 @@ func TestUndo_ToSavepoint_MultiFile(t *testing.T) {
 	fc, fsErr = ops.ReadFile(ctx, "/undomulti/existing.md")
 	require.Nil(t, fsErr)
 	assert.Contains(t, string(fc.Data), "Original content", "existing should be restored")
+}
+
+// TestUndo_LogReadFreshAfterSavepoint pins down a staleness bug observed
+// in stress-test runs: after a heavy undo_to_savepoint, an *immediate*
+// read of /.log/.last/N/.export/json sometimes returns a snapshot of the
+// log table from before the undo's new log rows were committed.
+// Empirically the kernel-level NFS path triggers it in ~3/500 iters
+// with recovery taking 100-500ms.
+//
+// This test bypasses NFS entirely (calls ops.ReadFile directly), so a
+// failure here would mean the staleness lives in the TigerFS query/
+// cache path. A passing test means the issue is downstream of ops --
+// likely NFS attribute/data cache or kernel-side file-handle reuse.
+//
+// Setup is shaped to match the stress-test pattern that triggers it
+// most reliably: ~100 mixed ops on multiple files (so the undo has
+// real work to do and produces several new log rows), then one
+// undo_to_savepoint, then immediately read the log export and assert
+// the newest log_id is > all log_ids that existed before the undo.
+func TestUndo_LogReadFreshAfterSavepoint(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logfresh")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/logfresh", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Savepoint at iter 0 -- the undo will roll back everything below.
+	require.Nil(t, ops.WriteFile(ctx, "/logfresh/.savepoint/sp.json", []byte("{}")))
+	time.Sleep(50 * time.Millisecond)
+
+	// 100 ops mixing creates and edits across several files. Sized to
+	// produce enough log rows that an undo has substantial work, which
+	// is what the stress-test data shows as the trigger condition.
+	for i := 0; i < 50; i++ {
+		path := fmt.Sprintf("/logfresh/file-%02d.md", i%5)
+		body := fmt.Sprintf("---\ntitle: F%d\n---\nrev %d\n", i%5, i)
+		require.Nil(t, ops.WriteFile(ctx, path, []byte(body)),
+			"write iter %d", i)
+	}
+
+	// Capture the log_id of the newest pre-undo entry. After the undo,
+	// the *post-undo* newest log_id (the last undo log row) MUST be > this.
+	preUndoNewestID := readNewestLogID(t, ctx, ops, "/logfresh")
+	require.NotEmpty(t, preUndoNewestID)
+
+	// Run the heavy undo.
+	_, err := ops.ExecuteUndoToSavepoint(ctx, "public", "logfresh", "sp", nil)
+	require.NoError(t, err)
+
+	// Read the log export immediately, with a tight retry budget so we
+	// can tell freshness from eventual consistency. Each retry is a
+	// fresh ops.ReadFile call.
+	var newestAfterUndo string
+	for attempt := 1; attempt <= 20; attempt++ {
+		newestAfterUndo = readNewestLogID(t, ctx, ops, "/logfresh")
+		if newestAfterUndo > preUndoNewestID {
+			t.Logf("read fresh on attempt %d (~%dms)", attempt, (attempt-1)*25)
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	require.Greater(t, newestAfterUndo, preUndoNewestID,
+		"after undo_to_savepoint, /.log/.last/N must reflect at least one new log_id; "+
+			"read %q vs pre-undo newest %q (staleness in ops layer would mean TigerFS-side cache, not NFS)",
+		newestAfterUndo, preUndoNewestID)
+}
+
+// readNewestLogID reads /.log/.last/1/.export/json and returns the
+// log_id of the single returned entry (which is the table's newest by
+// the LimitLast ORDER BY). Returns "" if the read fails or the JSON
+// has no entries.
+func readNewestLogID(t *testing.T, ctx context.Context, ops *fs.Operations, wsRoot string) string {
+	t.Helper()
+	fc, fsErr := ops.ReadFile(ctx, wsRoot+"/.log/.last/1/.export/json")
+	if fsErr != nil {
+		return ""
+	}
+	var entries []struct {
+		LogID string `json:"log_id"`
+	}
+	if err := json.Unmarshal(fc.Data, &entries); err != nil || len(entries) == 0 {
+		return ""
+	}
+	return entries[0].LogID
 }
 
 // --- Undo by user ---

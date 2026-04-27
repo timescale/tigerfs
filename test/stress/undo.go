@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // LogEntry represents a single entry from .log/.last/N/.export/json.
@@ -59,6 +60,57 @@ func readLatestLogID(wsPath string) string {
 		return ""
 	}
 	return entry.LogID
+}
+
+// monotonicRetryCount caps how many times readLatestLogIDMonotonic will
+// re-poll before giving up. Each retry waits monotonicRetryDelay; the
+// total wait budget is roughly count*delay. Sized for a reasonable
+// commit-visibility window after a heavy undo_to_savepoint without
+// blocking the runner indefinitely.
+const (
+	monotonicRetryCount = 10
+	monotonicRetryDelay = 50 * time.Millisecond
+)
+
+// readLatestLogIDMonotonic wraps readLatestLogID with a safety net for
+// the empirically observed staleness path:
+//
+// After a heavy undo_to_savepoint, an immediate read of
+// `.log/.last/N/.export/json` over NFS sometimes returns a snapshot
+// from before the undo's log rows were visible -- so the "newest"
+// log_id reported is older than ones we've already seen. The post-undo
+// log_id can only ever be greater than every prior log_id (UUIDv7 is
+// time-ordered), so a smaller value is provably stale.
+//
+// The fix: re-poll briefly. If recovery happens within the retry
+// budget, return the larger value. If the read keeps regressing past
+// the budget, log a warning and return the prior known good (we don't
+// regress the runner's lastLogID; downstream ops would over-attribute
+// previously-seen log entries to themselves).
+func readLatestLogIDMonotonic(wsPath, priorLastLogID string, iter int, desc string) string {
+	got := readLatestLogID(wsPath)
+	if got == "" {
+		// Read failed entirely; keep prior. (Also empty/never-set.)
+		return priorLastLogID
+	}
+	if priorLastLogID == "" || got >= priorLastLogID {
+		return got
+	}
+	// Regression. Retry with brief sleeps.
+	for attempt := 1; attempt <= monotonicRetryCount; attempt++ {
+		time.Sleep(monotonicRetryDelay)
+		got = readLatestLogID(wsPath)
+		if got >= priorLastLogID {
+			fmt.Fprintf(os.Stderr,
+				"  [warn iter %d] readLatestLogID regressed after %q; recovered after %d retries (~%v)\n",
+				iter, desc, attempt, time.Duration(attempt)*monotonicRetryDelay)
+			return got
+		}
+	}
+	fmt.Fprintf(os.Stderr,
+		"  [warn iter %d] readLatestLogID regressed after %q and did NOT recover within %d retries; keeping prior %s (got stuck at %s)\n",
+		iter, desc, monotonicRetryCount, priorLastLogID, got)
+	return priorLastLogID
 }
 
 // logScanDepth is the minimum number of log entries to scan when looking for

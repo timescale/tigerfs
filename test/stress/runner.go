@@ -202,11 +202,24 @@ func RunIterations(cfg *Config, infra *Infra) error {
 			}
 		}
 
-		// For undo operations, restore state and rebuild pools
+		// For undo operations, restore state and rebuild pools.
+		//
+		// Defensive: readLatestLogID over NFS has been observed to
+		// return stale results after a heavy undo_to_savepoint -- the
+		// TigerFS-side `.log/.last/N/.export/json` virtual file
+		// occasionally yields a snapshot from before the undo's log
+		// rows were visible, despite noac mounts and unique paths.
+		// When the returned id is *older* than what we already saw,
+		// retry briefly. If it never recovers, keep the old lastLogID
+		// (we know it's at least correct as a lower bound) and warn.
+		// Without this guard, a regressed lastLogID makes the next
+		// non-undo op's readLogIDsSince attribute every previously
+		// observed-but-newer log entry to that op (the iter-107
+		// log_count=61 anomaly was a 60-entry regression of this kind).
 		if isUndo && restoredState != nil {
 			state = restoredState
 			pools = RebuildPools(state)
-			lastLogID = readLatestLogID(wsPath)
+			lastLogID = readLatestLogIDMonotonic(wsPath, lastLogID, i, desc)
 		}
 
 		// Validate
