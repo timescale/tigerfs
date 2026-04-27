@@ -64,12 +64,14 @@ func readLatestLogID(wsPath string) string {
 
 // monotonicRetryCount caps how many times readLatestLogIDMonotonic will
 // re-poll before giving up. Each retry waits monotonicRetryDelay; the
-// total wait budget is roughly count*delay. Sized for a reasonable
-// commit-visibility window after a heavy undo_to_savepoint without
-// blocking the runner indefinitely.
+// total wait budget is roughly count*delay. Sized for the empirically
+// observed lag distribution: regressions recover anywhere from 150ms
+// to ~1.55s, with the runtime distribution biased toward the short end.
+// 2.5s leaves ~60% headroom over the observed max while staying under
+// any reasonable per-iteration budget.
 const (
-	monotonicRetryCount = 10
-	monotonicRetryDelay = 50 * time.Millisecond
+	monotonicRetryCount = 25
+	monotonicRetryDelay = 100 * time.Millisecond
 )
 
 // readLatestLogIDMonotonic wraps readLatestLogID with a safety net for

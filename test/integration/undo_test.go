@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs"
+	"github.com/timescale/tigerfs/internal/tigerfs/nfs"
 )
 
 // --- Mkdir / WriteFileEnsureDirs logging ---
@@ -563,6 +566,107 @@ func readNewestLogID(t *testing.T, ctx context.Context, ops *fs.Operations, wsRo
 		LogID string `json:"log_id"`
 	}
 	if err := json.Unmarshal(fc.Data, &entries); err != nil || len(entries) == 0 {
+		return ""
+	}
+	return entries[0].LogID
+}
+
+// TestUndo_LogReadFreshAfterSavepoint_ViaNFSAdapter is the second
+// boundary test in the iter-107 staleness investigation. It mirrors
+// TestUndo_LogReadFreshAfterSavepoint exactly, but wraps the same
+// fs.Operations in an in-process *nfs.OpsFilesystem and reads the log
+// export through OpenFile + io.ReadAll instead of ops.ReadFile. This
+// exercises the NFS adapter path (file-cache lookup, OpenFile-per-read
+// pattern, billy.File semantics) without involving go-nfs RPC handling
+// or the kernel client.
+//
+// Combined with the ops-only sibling test, this triangulates where the
+// staleness lives:
+//
+//   - ops.ReadFile fresh (already proven by sibling test)
+//   - OpsFilesystem fresh (this test)        --> bug is in go-nfs / kernel
+//   - OpsFilesystem stale (this test)        --> bug is in OpsFilesystem
+//
+// Either outcome is a 2x reduction of the hypothesis space.
+func TestUndo_LogReadFreshAfterSavepoint_ViaNFSAdapter(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logfresh2")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	// Wrap the same ops in the production NFS adapter. The adapter has
+	// its own file cache (cachedFile) and OpenFile/Close lifecycle that
+	// could conceivably hold stale state across opens.
+	nfsFS := nfs.NewOpsFilesystem(ops, &config.Config{
+		DirListingLimit: 10000,
+		QueryTimeout:    30,
+	})
+	defer nfsFS.Close()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/logfresh2", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	require.Nil(t, ops.WriteFile(ctx, "/logfresh2/.savepoint/sp.json", []byte("{}")))
+	time.Sleep(50 * time.Millisecond)
+
+	// Same workload shape as the ops-only test: 50 ops across 5 files
+	// to give the savepoint undo real work.
+	for i := 0; i < 50; i++ {
+		path := fmt.Sprintf("/logfresh2/file-%02d.md", i%5)
+		body := fmt.Sprintf("---\ntitle: F%d\n---\nrev %d\n", i%5, i)
+		require.Nil(t, ops.WriteFile(ctx, path, []byte(body)),
+			"write iter %d", i)
+	}
+
+	preUndoNewestID := readNewestLogIDViaNFS(t, nfsFS, "/logfresh2")
+	require.NotEmpty(t, preUndoNewestID)
+
+	_, err := ops.ExecuteUndoToSavepoint(ctx, "public", "logfresh2", "sp", nil)
+	require.NoError(t, err)
+
+	// Same retry budget as the ops sibling. If the NFS adapter
+	// introduces staleness, we should see attempts > 1 here while the
+	// ops sibling consistently hits attempt 1.
+	var newestAfterUndo string
+	for attempt := 1; attempt <= 20; attempt++ {
+		newestAfterUndo = readNewestLogIDViaNFS(t, nfsFS, "/logfresh2")
+		if newestAfterUndo > preUndoNewestID {
+			t.Logf("read fresh on attempt %d (~%dms)", attempt, (attempt-1)*25)
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	require.Greater(t, newestAfterUndo, preUndoNewestID,
+		"after undo_to_savepoint, /.log/.last/N read via OpsFilesystem must reflect "+
+			"at least one new log_id. read=%q  pre-undo-newest=%q. "+
+			"If THIS test is the one that flakes (ops sibling stays clean), "+
+			"the staleness lives in OpsFilesystem; otherwise it's in go-nfs/kernel.",
+		newestAfterUndo, preUndoNewestID)
+}
+
+// readNewestLogIDViaNFS reads through the NFS adapter using its
+// production OpenFile/Read/Close lifecycle, not ops.ReadFile.
+func readNewestLogIDViaNFS(t *testing.T, nfsFS *nfs.OpsFilesystem, wsRoot string) string {
+	t.Helper()
+	file, err := nfsFS.OpenFile(wsRoot+"/.log/.last/1/.export/json", 0, 0)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return ""
+	}
+	var entries []struct {
+		LogID string `json:"log_id"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil || len(entries) == 0 {
 		return ""
 	}
 	return entries[0].LogID

@@ -195,11 +195,16 @@ func RunIterations(cfg *Config, infra *Infra) error {
 			// LogID stays empty on the stack entry.
 		} else if !isUndo {
 			// Op managed its own stack growth (OpDeleteDir). Refresh
-			// lastLogID to the latest log entry so subsequent ops see all
-			// of the op's log entries as "old".
-			if latest := readLatestLogID(wsPath); latest != "" {
-				lastLogID = latest
-			}
+			// lastLogID to the latest log entry so subsequent ops see
+			// all of the op's log entries as "old".
+			//
+			// Same staleness window as the post-undo read -- the dump
+			// at iter 472 (log_count=65) was caused by *this* call
+			// returning a stale value, cascading into the next op's
+			// readLogIDsSince. Wrap with the monotonic helper so a
+			// regressed read keeps the prior known-good lastLogID
+			// instead of cascading old entries forward.
+			lastLogID = readLatestLogIDMonotonic(wsPath, lastLogID, i, desc)
 		}
 
 		// For undo operations, restore state and rebuild pools.
