@@ -585,6 +585,16 @@ func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSt
 		return "", fmt.Errorf("walk %s for deletion: %w", src, err)
 	}
 
+	// lastSeenLogID enforces monotonicity across the per-row reads below.
+	// Empirically the same staleness window that affects post-undo reads
+	// also affects these per-row reads in tight succession (snapshot dump
+	// at iter 471 caught three reads stale by 1.5s, with each subsequent
+	// read advancing slightly but still trailing the actual newest).
+	// On regression the helper returns the prior; we treat that as "do
+	// not tag this entry" so a stale id never lands on a newer stack
+	// entry (which would point undo_single at the wrong log row).
+	var lastSeenLogID string
+
 	for i, item := range deletions {
 		// First deletion uses the runner-supplied stack entry; subsequent
 		// deletions get a fresh entry with the in-progress state.
@@ -602,11 +612,18 @@ func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSt
 			state.RemoveFile(item.path)
 		}
 
-		// Pin the freshly-produced log_id on the entry that just captured
-		// the pre-deletion state. The runner's own SetLastLogID after this
-		// op returns will land on the final entry (same id) -- a no-op.
-		if logID := readLatestLogID(wsPath); logID != "" {
+		// Pin the freshly-produced log_id on the entry that just
+		// captured the pre-deletion state, but only if it advances past
+		// the prior tagged id. If the read regresses (stale snapshot)
+		// or stays equal (helper kept prior on retry exhaustion), we
+		// leave this entry unlogged so undo_single will skip it -- it's
+		// safer to lose targetability for one deletion than to misroute
+		// undo_single onto a completely unrelated log row.
+		logID := readLatestLogIDMonotonic(wsPath, lastSeenLogID, iteration,
+			fmt.Sprintf("delete_dir per-row %s", item.path))
+		if logID != "" && logID > lastSeenLogID {
 			stack.SetLastLogID(logID)
+			lastSeenLogID = logID
 		}
 	}
 
