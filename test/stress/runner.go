@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Operation types with weights for random selection.
@@ -284,8 +285,31 @@ func RunAndExit(cfg *Config, infra *Infra) int {
 	err := RunIterations(cfg, infra)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n[ERROR] %v\n", err)
-		fmt.Fprintf(os.Stderr, "Replay with: bin/tigerfs-stress start --seed %d --iterations %d\n", cfg.Seed, cfg.Iterations)
+		fmt.Fprintf(os.Stderr, "Replay with: %s\n", replayCommand(cfg))
 		return 1
 	}
 	return 0
+}
+
+// replayCommand reconstructs the full CLI invocation needed to re-run a
+// failing seed. Must include every flag that affects the workload (seed,
+// iterations, validate-every, large-files, many-files, workspace) so the
+// run is bit-for-bit reproducible.
+func replayCommand(cfg *Config) string {
+	parts := []string{
+		"bin/tigerfs-stress start",
+		fmt.Sprintf("--seed %d", cfg.Seed),
+		fmt.Sprintf("--iterations %d", cfg.Iterations),
+		fmt.Sprintf("--validate-every %d", cfg.ValidateEvery),
+	}
+	if cfg.LargeFiles {
+		parts = append(parts, "--large-files")
+	}
+	if cfg.ManyFiles {
+		parts = append(parts, "--many-files")
+	}
+	if cfg.Workspace != "testws" {
+		parts = append(parts, fmt.Sprintf("--workspace %s", cfg.Workspace))
+	}
+	return strings.Join(parts, " ")
 }
