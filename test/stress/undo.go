@@ -61,6 +61,39 @@ func readLatestLogID(wsPath string) string {
 	return entry.LogID
 }
 
+// logScanDepth is the minimum number of log entries to scan when looking for
+// new entries since the last known log_id. Sized to comfortably cover any
+// single user-level op -- the largest fan-out we see is ~10 log entries from
+// a 1MB create_file (one entry per 128KB NFS chunk).
+const logScanDepth = 50
+
+// readLogIDsSince returns log_ids of every entry strictly newer than
+// sinceLogID, in chronological (oldest-first) order. Used after non-undo ops
+// to discover whether a single user-level op produced multiple log entries
+// (NFS multi-chunk writes fan out into N entries), so undo_single can be
+// gated when it can't reach a workspace-trackable state.
+//
+// The N passed to readLogEntries doubles as a cache-buster: the path
+// `.last/N/.export/json` must be unique on every call or the macOS NFS
+// client serves stale attribute/data cache. Use logReadSeq + logScanDepth
+// so N is both unique (logReadSeq increments per call) and large enough to
+// cover any single op's fan-out.
+func readLogIDsSince(wsPath, sinceLogID string) []string {
+	logReadSeq++
+	entries, err := readLogEntries(wsPath, logReadSeq+logScanDepth)
+	if err != nil {
+		return nil
+	}
+	// readLogEntries returns newest-first; iterate reverse for oldest-first.
+	var ids []string
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].LogID > sinceLogID {
+			ids = append(ids, entries[i].LogID)
+		}
+	}
+	return ids
+}
+
 // OpUndoSingle undoes the most recent logged operation.
 // Uses the stack (not the TigerFS log) to identify the target, avoiding issues
 // with NFS caching and undo log entries that TigerFS adds after undo operations.

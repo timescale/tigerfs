@@ -178,10 +178,21 @@ func (ws *WorkspaceState) SubdirCount(dirPath string) int {
 }
 
 // StackEntry is a snapshot of the workspace state at a point in time.
+//
+// LogID holds the log_id of the operation that ran AFTER this state was
+// captured (empty for non-logged ops like create_savepoint). LogCount holds
+// how many log entries that operation produced -- usually 1, but a large
+// create_file or edit_file fans out into multiple log entries because go-nfs
+// fabricates Open/Write/Close per WRITE RPC, so a multi-chunk write commits
+// once per chunk. undo_single only undoes the LAST of those entries; the
+// intermediate states (file with N chunks of content) are not represented in
+// WorkspaceState (which tracks md5 hashes), so undo_single is unsafe for
+// multi-log entries -- use undo_to_id or undo_to_savepoint instead.
 type StackEntry struct {
 	State     *WorkspaceState
 	Iteration int
-	LogID     string // log_id of the operation (empty for non-logged ops like create_dir)
+	LogID     string // log_id of the most recent log entry produced by this op
+	LogCount  int    // number of log entries produced by this op (0 if non-logged)
 }
 
 // StateStack tracks workspace state history for undo operations.
@@ -222,11 +233,43 @@ func (s *StateStack) Len() int {
 	return len(s.entries)
 }
 
-// SetLastLogID sets the LogID on the most recent stack entry.
+// SetLastLogID sets the LogID on the most recent stack entry and marks it
+// as a single-log-entry operation. Used by ops that push one stack entry per
+// log entry (OpDeleteDir walks the deletion tree and pushes per row).
 func (s *StateStack) SetLastLogID(logID string) {
 	if len(s.entries) > 0 {
 		s.entries[len(s.entries)-1].LogID = logID
+		s.entries[len(s.entries)-1].LogCount = 1
 	}
+}
+
+// SetLogIDsForLastEntry records the log_ids produced by the most recent op.
+// LogID is set to the newest id (the one undo_single would target). LogCount
+// captures the total -- if > 1, the most recent op fanned out into multiple
+// log entries (typically multi-chunk NFS writes on large files), and
+// undo_single cannot reach a workspace-trackable state by undoing just one
+// of them.
+func (s *StateStack) SetLogIDsForLastEntry(ids []string) {
+	if len(s.entries) == 0 || len(ids) == 0 {
+		return
+	}
+	s.entries[len(s.entries)-1].LogID = ids[len(ids)-1]
+	s.entries[len(s.entries)-1].LogCount = len(ids)
+}
+
+// MostRecentLogIsAtomic returns true if the most recent logged stack entry
+// produced exactly one log entry. Returns false if no logged entries exist
+// or if the most recent logged op fanned out into multiple log entries.
+// Gates undo_single, which can only safely undo single-log-entry operations
+// (intermediate states from chunked writes aren't representable in
+// WorkspaceState).
+func (s *StateStack) MostRecentLogIsAtomic() bool {
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		if s.entries[i].LogID != "" {
+			return s.entries[i].LogCount == 1
+		}
+	}
+	return false
 }
 
 // LoggedCount returns the number of entries with non-empty LogIDs.

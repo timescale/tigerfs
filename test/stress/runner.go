@@ -103,7 +103,12 @@ func canExecute(op opType, pools *Pools, state *WorkspaceState, stack *StateStac
 	case opCreateSavepoint:
 		return true
 	case opUndoSingle:
-		return stack.LoggedCount() > 0
+		// undo_single only undoes the most recent log entry. If the most
+		// recent op produced multiple log entries (e.g., a multi-chunk NFS
+		// write of a large file), undoing just one leaves the file in a
+		// partial-content state that WorkspaceState (md5-keyed) can't track.
+		// Require atomic (1-log-entry) ops only.
+		return stack.MostRecentLogIsAtomic()
 	case opUndoToID:
 		return stack.LoggedCount() >= 2
 	case opUndoToSavepoint:
@@ -133,6 +138,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		isUndo := op == opUndoSingle || op == opUndoToID || op == opUndoToSavepoint
 
 		// Push state before non-undo operations
+		preStackLen := stack.Len()
 		if !isUndo {
 			stack.Push(state, i)
 		}
@@ -146,15 +152,30 @@ func RunIterations(cfg *Config, infra *Infra) error {
 
 		fmt.Printf("[STEP %d/%d] %s\n", i, cfg.Iterations, desc)
 
-		// Record log_id for non-undo operations
-		if !isUndo {
-			currentLogID := readLatestLogID(wsPath)
-			if currentLogID != "" && currentLogID != lastLogID {
-				stack.SetLastLogID(currentLogID)
-				lastLogID = currentLogID
+		// Record log_ids for non-undo operations. A single op may produce
+		// multiple log entries (e.g., a multi-chunk NFS write of a large
+		// file fans out into 1 create + N edits). Capture all of them so
+		// undo_single can be gated to atomic (1-log-entry) ops.
+		//
+		// Skip when the op grew the stack itself (OpDeleteDir pushes one
+		// entry per deletion via SetLastLogID, each tagged LogCount=1).
+		// Overwriting the final entry with total-deletions LogCount would
+		// incorrectly mark it non-atomic.
+		if !isUndo && stack.Len() == preStackLen+1 {
+			newIDs := readLogIDsSince(wsPath, lastLogID)
+			if len(newIDs) > 0 {
+				stack.SetLogIDsForLastEntry(newIDs)
+				lastLogID = newIDs[len(newIDs)-1]
 			}
-			// If currentLogID == lastLogID, this operation didn't create a log entry
-			// (e.g., create_dir, create_savepoint). LogID stays empty on the stack entry.
+			// If newIDs is empty, this op didn't log (e.g., create_savepoint).
+			// LogID stays empty on the stack entry.
+		} else if !isUndo {
+			// Op managed its own stack growth (OpDeleteDir). Refresh
+			// lastLogID to the latest log entry so subsequent ops see all
+			// of the op's log entries as "old".
+			if latest := readLatestLogID(wsPath); latest != "" {
+				lastLogID = latest
+			}
 		}
 
 		// For undo operations, restore state and rebuild pools
