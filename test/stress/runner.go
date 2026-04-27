@@ -119,12 +119,27 @@ func canExecute(op opType, pools *Pools, state *WorkspaceState, stack *StateStac
 	return false
 }
 
-// ValidationFailure is returned from RunIterations when the live
-// filesystem diverges from the expected WorkspaceState. It carries the
-// dump directory path so RunAndExit can surface it in the failure
-// message and main.go can skip teardown to leave infrastructure live for
-// inspection.
-type ValidationFailure struct {
+// Run-failure kinds. Kept as small string constants so they're stable in
+// summary.json (downstream tooling can switch on them) and self-explanatory
+// when read back from a dump.
+const (
+	runFailureValidation = "validation" // ValidateWorkspace returned mismatches
+	runFailureOperation  = "operation"  // executeOperation returned an error (EIO, etc.)
+)
+
+// RunFailure is returned from RunIterations when the run cannot continue.
+// Carries the dump directory path so RunAndExit can surface it in the
+// failure message and main.go can skip teardown to leave infrastructure
+// live for inspection.
+//
+// Kind distinguishes the cause:
+//   - "validation": the live filesystem diverged from the expected state
+//   - "operation":  an op (create_file, edit_file, etc.) returned an error
+//
+// Both cases produce the same dump format -- the differences live in the
+// summary.txt heading and the dump's `failure_kind` field.
+type RunFailure struct {
+	Kind      string
 	DumpDir   string
 	Iteration int
 	Seed      int64
@@ -132,12 +147,12 @@ type ValidationFailure struct {
 	Err       error
 }
 
-func (v *ValidationFailure) Error() string {
-	return fmt.Sprintf("[STEP %d] Seed=%d validation failed after %s:\n%v",
-		v.Iteration, v.Seed, v.Desc, v.Err)
+func (v *RunFailure) Error() string {
+	return fmt.Sprintf("[STEP %d] Seed=%d %s failure after %s:\n%v",
+		v.Iteration, v.Seed, v.Kind, v.Desc, v.Err)
 }
 
-func (v *ValidationFailure) Unwrap() error { return v.Err }
+func (v *RunFailure) Unwrap() error { return v.Err }
 
 // RunIterations executes the main test loop.
 func RunIterations(cfg *Config, infra *Infra) error {
@@ -169,7 +184,30 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		// Execute operation
 		desc, restoredState, err := executeOperation(op, wsPath, rng, pools, state, opCfg, stack, i, stats)
 		if err != nil {
-			return fmt.Errorf("[STEP %d/%d] %s failed: %w", i, cfg.Iterations, opName(op), err)
+			// Operational failure (EIO, precondition mismatch, etc.).
+			// Append a marker OpRecord so the dump's op trace shows
+			// what failed and why; otherwise the trace would just end
+			// abruptly at iter N-1 with no indication of what went
+			// wrong at iter N.
+			failingDesc := fmt.Sprintf("%s [FAILED: %v]", opName(op), err)
+			opLog = append(opLog, OpRecord{
+				Iteration: i,
+				OpName:    opName(op),
+				Desc:      failingDesc,
+				Validated: false,
+			})
+			dumpDir, dumpErr := WriteDump(DumpKindFailure, runFailureOperation, cfg, infra, state, stack, opLog, err, failingDesc, i)
+			if dumpErr != nil {
+				fmt.Fprintf(os.Stderr, "[WARN] failed to write diagnostics dump: %v\n", dumpErr)
+			}
+			return &RunFailure{
+				Kind:      runFailureOperation,
+				DumpDir:   dumpDir,
+				Iteration: i,
+				Seed:      cfg.Seed,
+				Desc:      failingDesc,
+				Err:       fmt.Errorf("%s failed: %w", opName(op), err),
+			}
 		}
 		stats.RecordOp(opName(op))
 
@@ -238,11 +276,12 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		})
 		if shouldValidate {
 			if err := ValidateWorkspace(wsPath, state); err != nil {
-				dumpDir, dumpErr := WriteDump(DumpKindFailure, cfg, infra, state, stack, opLog, err, desc, i)
+				dumpDir, dumpErr := WriteDump(DumpKindFailure, runFailureValidation, cfg, infra, state, stack, opLog, err, desc, i)
 				if dumpErr != nil {
 					fmt.Fprintf(os.Stderr, "[WARN] failed to write diagnostics dump: %v\n", dumpErr)
 				}
-				return &ValidationFailure{
+				return &RunFailure{
+					Kind:      runFailureValidation,
 					DumpDir:   dumpDir,
 					Iteration: i,
 					Seed:      cfg.Seed,
@@ -257,7 +296,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		// Doesn't stop the run; multiple --dump-at iterations produce
 		// multiple snapshots in one run.
 		if cfg.DumpAt[i] {
-			snapDir, snapErr := WriteDump(DumpKindSnapshot, cfg, infra, state, stack, opLog, nil, desc, i)
+			snapDir, snapErr := WriteDump(DumpKindSnapshot, "", cfg, infra, state, stack, opLog, nil, desc, i)
 			if snapErr != nil {
 				fmt.Fprintf(os.Stderr, "[WARN] --dump-at %d: snapshot dump failed: %v\n", i, snapErr)
 			} else {
@@ -270,11 +309,12 @@ func RunIterations(cfg *Config, infra *Infra) error {
 	fmt.Println()
 	fmt.Print("Final validation... ")
 	if err := ValidateWorkspace(wsPath, state); err != nil {
-		dumpDir, dumpErr := WriteDump(DumpKindFailure, cfg, infra, state, stack, opLog, err, "final-validation", cfg.Iterations)
+		dumpDir, dumpErr := WriteDump(DumpKindFailure, runFailureValidation, cfg, infra, state, stack, opLog, err, "final-validation", cfg.Iterations)
 		if dumpErr != nil {
 			fmt.Fprintf(os.Stderr, "[WARN] failed to write diagnostics dump: %v\n", dumpErr)
 		}
-		return &ValidationFailure{
+		return &RunFailure{
+			Kind:      runFailureValidation,
 			DumpDir:   dumpDir,
 			Iteration: cfg.Iterations,
 			Seed:      cfg.Seed,
@@ -379,15 +419,16 @@ func RunAndExit(cfg *Config, infra *Infra) RunResult {
 
 	fmt.Fprintf(os.Stderr, "\n[ERROR] %v\n", err)
 
-	var vf *ValidationFailure
-	if errors.As(err, &vf) && vf.DumpDir != "" {
+	var rf *RunFailure
+	if errors.As(err, &rf) && rf.DumpDir != "" {
 		// Highlight the dump dir prominently -- it's the first place the
 		// user should look. Surrounding boxes draw the eye in dense
 		// terminal output where the trace can be 1000+ lines.
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, strings.Repeat("=", 70))
-		fmt.Fprintf(os.Stderr, "  Failure dump directory: %s\n", vf.DumpDir)
-		fmt.Fprintf(os.Stderr, "  Open %s/summary.txt first.\n", vf.DumpDir)
+		fmt.Fprintf(os.Stderr, "  Failure dump directory: %s\n", rf.DumpDir)
+		fmt.Fprintf(os.Stderr, "  Failure kind:           %s\n", rf.Kind)
+		fmt.Fprintf(os.Stderr, "  Open %s/summary.txt first.\n", rf.DumpDir)
 		fmt.Fprintln(os.Stderr, strings.Repeat("=", 70))
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintf(os.Stderr, "Infrastructure left running for inspection.\n")
