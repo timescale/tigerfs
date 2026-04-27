@@ -430,22 +430,13 @@ func HashContent(content []byte) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// ValidateWorkspace compares the actual filesystem state at wsPath against
-// the expected state. Returns nil if they match, or a descriptive error
-// listing all mismatches.
-//
-// Validates four invariants:
-//   - every file in expected.Files exists on disk and hashes correctly,
-//   - no extra files are on disk,
-//   - every dir in expected.Dirs exists on disk,
-//   - no extra dirs are on disk.
-//
-// Dotfiles and dot-prefixed directories (.log, .savepoint, .undo, .history)
-// are TigerFS virtuals, not real children of the workspace; skip them
-// from both sides of the comparison.
-func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
-	actualFiles := make(map[string]string) // relpath -> md5 hash
-	actualDirs := make(map[string]bool)    // relpath -> exists
+// snapshotWorkspace walks the live filesystem at wsPath and returns
+// (files: relpath -> md5 hash, dirs: relpath -> true). Dotfiles and
+// dot-prefixed directories (.log, .savepoint, .undo, .history) are TigerFS
+// virtuals, not real children of the workspace, and are skipped.
+func snapshotWorkspace(wsPath string) (map[string]string, map[string]bool, error) {
+	files := make(map[string]string)
+	dirs := make(map[string]bool)
 
 	err := filepath.WalkDir(wsPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -457,12 +448,10 @@ func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
 			return err
 		}
 
-		// Skip root
 		if relPath == "." {
 			return nil
 		}
 
-		// Skip dotfiles and virtual directories
 		name := d.Name()
 		if strings.HasPrefix(name, ".") {
 			if d.IsDir() {
@@ -472,63 +461,147 @@ func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
 		}
 
 		if d.IsDir() {
-			actualDirs[relPath] = true
+			dirs[relPath] = true
 			return nil
 		}
 
-		// Regular file: read and hash
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", relPath, err)
 		}
-		actualFiles[relPath] = HashContent(content)
+		files[relPath] = HashContent(content)
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("walk workspace: %w", err)
+		return nil, nil, fmt.Errorf("walk workspace: %w", err)
 	}
+	return files, dirs, nil
+}
 
-	var errs []string
+// ValidationIssueKind tags one of four divergence types between the
+// stress-test expectation and the live workspace. Used both for the
+// human-readable summary and for the failure-dump diff.
+type ValidationIssueKind string
 
-	// Check for missing files (expected but not on disk)
+const (
+	IssueMissingFile    ValidationIssueKind = "missing_file"
+	IssueUnexpectedFile ValidationIssueKind = "unexpected_file"
+	IssueHashMismatch   ValidationIssueKind = "hash_mismatch"
+	IssueMissingDir     ValidationIssueKind = "missing_dir"
+	IssueUnexpectedDir  ValidationIssueKind = "unexpected_dir"
+)
+
+// ValidationIssue describes a single state divergence. ExpectedHash and
+// ActualHash are populated only for file issues (empty for dir issues).
+type ValidationIssue struct {
+	Kind         ValidationIssueKind `json:"kind"`
+	Path         string              `json:"path"`
+	ExpectedHash string              `json:"expected_hash,omitempty"`
+	ActualHash   string              `json:"actual_hash,omitempty"`
+}
+
+// diffWorkspace compares expected vs snapshot maps and returns a sorted
+// list of issues. Sort order: kind first (so all "missing" group together),
+// then path within each kind. Stable across runs for diffability.
+func diffWorkspace(expected *WorkspaceState, actualFiles map[string]string, actualDirs map[string]bool) []ValidationIssue {
+	var issues []ValidationIssue
+
 	for relPath, expectedHash := range expected.Files {
 		actualHash, ok := actualFiles[relPath]
 		if !ok {
-			errs = append(errs, fmt.Sprintf("missing file: %s (expected hash %s)", relPath, expectedHash[:8]))
+			issues = append(issues, ValidationIssue{
+				Kind:         IssueMissingFile,
+				Path:         relPath,
+				ExpectedHash: expectedHash,
+			})
 			continue
 		}
 		if actualHash != expectedHash {
-			errs = append(errs, fmt.Sprintf("hash mismatch: %s (expected %s, got %s)", relPath, expectedHash[:8], actualHash[:8]))
+			issues = append(issues, ValidationIssue{
+				Kind:         IssueHashMismatch,
+				Path:         relPath,
+				ExpectedHash: expectedHash,
+				ActualHash:   actualHash,
+			})
 		}
 	}
-
-	// Check for unexpected files (on disk but not expected)
-	for relPath := range actualFiles {
+	for relPath, actualHash := range actualFiles {
 		if _, ok := expected.Files[relPath]; !ok {
-			errs = append(errs, fmt.Sprintf("unexpected file: %s", relPath))
+			issues = append(issues, ValidationIssue{
+				Kind:       IssueUnexpectedFile,
+				Path:       relPath,
+				ActualHash: actualHash,
+			})
 		}
 	}
-
-	// Check for missing dirs (expected but not on disk)
 	for relPath := range expected.Dirs {
 		if !actualDirs[relPath] {
-			errs = append(errs, fmt.Sprintf("missing dir: %s", relPath))
+			issues = append(issues, ValidationIssue{Kind: IssueMissingDir, Path: relPath})
 		}
 	}
-
-	// Check for unexpected dirs (on disk but not expected)
 	for relPath := range actualDirs {
 		if _, ok := expected.Dirs[relPath]; !ok {
-			errs = append(errs, fmt.Sprintf("unexpected dir: %s", relPath))
+			issues = append(issues, ValidationIssue{Kind: IssueUnexpectedDir, Path: relPath})
 		}
 	}
 
-	if len(errs) > 0 {
-		sort.Strings(errs)
-		return fmt.Errorf("validation failed (%d issues):\n  %s", len(errs), strings.Join(errs, "\n  "))
-	}
+	sort.Slice(issues, func(i, j int) bool {
+		if issues[i].Kind != issues[j].Kind {
+			return issues[i].Kind < issues[j].Kind
+		}
+		return issues[i].Path < issues[j].Path
+	})
+	return issues
+}
 
-	return nil
+// ValidateWorkspace compares the actual filesystem state at wsPath against
+// the expected state. Returns nil if they match, or an error whose message
+// lists all mismatches.
+//
+// Validates four invariants:
+//   - every file in expected.Files exists on disk and hashes correctly,
+//   - no extra files are on disk,
+//   - every dir in expected.Dirs exists on disk,
+//   - no extra dirs are on disk.
+func ValidateWorkspace(wsPath string, expected *WorkspaceState) error {
+	actualFiles, actualDirs, err := snapshotWorkspace(wsPath)
+	if err != nil {
+		return err
+	}
+	issues := diffWorkspace(expected, actualFiles, actualDirs)
+	if len(issues) == 0 {
+		return nil
+	}
+	lines := make([]string, len(issues))
+	for i, iss := range issues {
+		lines[i] = formatIssue(iss)
+	}
+	return fmt.Errorf("validation failed (%d issues):\n  %s", len(issues), strings.Join(lines, "\n  "))
+}
+
+// formatIssue produces the one-line human-readable summary of an issue,
+// matching the historical text format so existing log greps still work.
+func formatIssue(iss ValidationIssue) string {
+	switch iss.Kind {
+	case IssueMissingFile:
+		return fmt.Sprintf("missing file: %s (expected hash %s)", iss.Path, shortHash(iss.ExpectedHash))
+	case IssueUnexpectedFile:
+		return fmt.Sprintf("unexpected file: %s", iss.Path)
+	case IssueHashMismatch:
+		return fmt.Sprintf("hash mismatch: %s (expected %s, got %s)", iss.Path, shortHash(iss.ExpectedHash), shortHash(iss.ActualHash))
+	case IssueMissingDir:
+		return fmt.Sprintf("missing dir: %s", iss.Path)
+	case IssueUnexpectedDir:
+		return fmt.Sprintf("unexpected dir: %s", iss.Path)
+	}
+	return fmt.Sprintf("unknown issue: %+v", iss)
+}
+
+func shortHash(h string) string {
+	if len(h) >= 8 {
+		return h[:8]
+	}
+	return h
 }
 
 // SnapshotHash computes a deterministic hash of the entire workspace.

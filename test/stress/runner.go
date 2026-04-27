@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -118,6 +119,26 @@ func canExecute(op opType, pools *Pools, state *WorkspaceState, stack *StateStac
 	return false
 }
 
+// ValidationFailure is returned from RunIterations when the live
+// filesystem diverges from the expected WorkspaceState. It carries the
+// dump directory path so RunAndExit can surface it in the failure
+// message and main.go can skip teardown to leave infrastructure live for
+// inspection.
+type ValidationFailure struct {
+	DumpDir   string
+	Iteration int
+	Seed      int64
+	Desc      string
+	Err       error
+}
+
+func (v *ValidationFailure) Error() string {
+	return fmt.Sprintf("[STEP %d] Seed=%d validation failed after %s:\n%v",
+		v.Iteration, v.Seed, v.Desc, v.Err)
+}
+
+func (v *ValidationFailure) Unwrap() error { return v.Err }
+
 // RunIterations executes the main test loop.
 func RunIterations(cfg *Config, infra *Infra) error {
 	rng := rand.New(rand.NewSource(cfg.Seed))
@@ -128,6 +149,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 	stack := NewStateStack()
 	pools := NewPools()
 	stats := NewStats()
+	opLog := make([]OpRecord, 0, cfg.Iterations)
 
 	var lastLogID string
 
@@ -162,8 +184,9 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		// entry per deletion via SetLastLogID, each tagged LogCount=1).
 		// Overwriting the final entry with total-deletions LogCount would
 		// incorrectly mark it non-atomic.
+		var newIDs []string
 		if !isUndo && stack.Len() == preStackLen+1 {
-			newIDs := readLogIDsSince(wsPath, lastLogID)
+			newIDs = readLogIDsSince(wsPath, lastLogID)
 			if len(newIDs) > 0 {
 				stack.SetLogIDsForLastEntry(newIDs)
 				lastLogID = newIDs[len(newIDs)-1]
@@ -188,10 +211,39 @@ func RunIterations(cfg *Config, infra *Infra) error {
 
 		// Validate
 		shouldValidate := isUndo || (cfg.ValidateEvery > 0 && i%cfg.ValidateEvery == 0)
+		opLog = append(opLog, OpRecord{
+			Iteration: i,
+			OpName:    opName(op),
+			Desc:      desc,
+			NewLogIDs: newIDs,
+			Validated: shouldValidate,
+		})
 		if shouldValidate {
 			if err := ValidateWorkspace(wsPath, state); err != nil {
-				return fmt.Errorf("[STEP %d/%d] Seed=%d validation failed after %s:\n%w",
-					i, cfg.Iterations, cfg.Seed, desc, err)
+				dumpDir, dumpErr := WriteDump(DumpKindFailure, cfg, infra, state, stack, opLog, err, desc, i)
+				if dumpErr != nil {
+					fmt.Fprintf(os.Stderr, "[WARN] failed to write diagnostics dump: %v\n", dumpErr)
+				}
+				return &ValidationFailure{
+					DumpDir:   dumpDir,
+					Iteration: i,
+					Seed:      cfg.Seed,
+					Desc:      desc,
+					Err:       err,
+				}
+			}
+		}
+
+		// --dump-at: capture a manual snapshot at this iteration.
+		// Fires after validation so the dump reflects post-op state.
+		// Doesn't stop the run; multiple --dump-at iterations produce
+		// multiple snapshots in one run.
+		if cfg.DumpAt[i] {
+			snapDir, snapErr := WriteDump(DumpKindSnapshot, cfg, infra, state, stack, opLog, nil, desc, i)
+			if snapErr != nil {
+				fmt.Fprintf(os.Stderr, "[WARN] --dump-at %d: snapshot dump failed: %v\n", i, snapErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "  [dump-at %d] snapshot written to %s\n", i, snapDir)
 			}
 		}
 	}
@@ -200,7 +252,17 @@ func RunIterations(cfg *Config, infra *Infra) error {
 	fmt.Println()
 	fmt.Print("Final validation... ")
 	if err := ValidateWorkspace(wsPath, state); err != nil {
-		return fmt.Errorf("Seed=%d final validation failed:\n%w", cfg.Seed, err)
+		dumpDir, dumpErr := WriteDump(DumpKindFailure, cfg, infra, state, stack, opLog, err, "final-validation", cfg.Iterations)
+		if dumpErr != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] failed to write diagnostics dump: %v\n", dumpErr)
+		}
+		return &ValidationFailure{
+			DumpDir:   dumpDir,
+			Iteration: cfg.Iterations,
+			Seed:      cfg.Seed,
+			Desc:      "final-validation",
+			Err:       err,
+		}
 	}
 	fmt.Println("PASSED")
 
@@ -280,15 +342,46 @@ func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
 	}
 }
 
-// RunAndExit runs the test iterations and returns the exit code.
-func RunAndExit(cfg *Config, infra *Infra) int {
+// RunResult is the outcome of a stress run. KeepInfra is true when the
+// caller should skip teardown so the user can inspect the live state
+// (DB rows, mounted workspace, FS-level traces) -- currently set on
+// validation failure where the dump directory references the live infra.
+type RunResult struct {
+	ExitCode  int
+	KeepInfra bool
+}
+
+// RunAndExit runs the test iterations and returns the result. The caller
+// (main) decides whether to skip teardown based on KeepInfra.
+func RunAndExit(cfg *Config, infra *Infra) RunResult {
 	err := RunIterations(cfg, infra)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n[ERROR] %v\n", err)
-		fmt.Fprintf(os.Stderr, "Replay with: %s\n", replayCommand(cfg))
-		return 1
+	if err == nil {
+		return RunResult{ExitCode: 0}
 	}
-	return 0
+
+	fmt.Fprintf(os.Stderr, "\n[ERROR] %v\n", err)
+
+	var vf *ValidationFailure
+	if errors.As(err, &vf) && vf.DumpDir != "" {
+		// Highlight the dump dir prominently -- it's the first place the
+		// user should look. Surrounding boxes draw the eye in dense
+		// terminal output where the trace can be 1000+ lines.
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, strings.Repeat("=", 70))
+		fmt.Fprintf(os.Stderr, "  Failure dump directory: %s\n", vf.DumpDir)
+		fmt.Fprintf(os.Stderr, "  Open %s/summary.txt first.\n", vf.DumpDir)
+		fmt.Fprintln(os.Stderr, strings.Repeat("=", 70))
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "Infrastructure left running for inspection.\n")
+		fmt.Fprintf(os.Stderr, "Mountpoint: %s\n", infra.Mountpoint)
+		fmt.Fprintf(os.Stderr, "Postgres:   %s\n", infra.ConnStr)
+		fmt.Fprintf(os.Stderr, "Tear down with: bin/tigerfs-stress stop\n")
+		fmt.Fprintf(os.Stderr, "\nReplay with: %s\n", replayCommand(cfg))
+		return RunResult{ExitCode: 1, KeepInfra: true}
+	}
+
+	fmt.Fprintf(os.Stderr, "Replay with: %s\n", replayCommand(cfg))
+	return RunResult{ExitCode: 1}
 }
 
 // replayCommand reconstructs the full CLI invocation needed to re-run a
@@ -310,6 +403,9 @@ func replayCommand(cfg *Config) string {
 	}
 	if cfg.Workspace != "testws" {
 		parts = append(parts, fmt.Sprintf("--workspace %s", cfg.Workspace))
+	}
+	if cfg.DumpAtSpec != "" {
+		parts = append(parts, fmt.Sprintf("--dump-at %s", cfg.DumpAtSpec))
 	}
 	return strings.Join(parts, " ")
 }
