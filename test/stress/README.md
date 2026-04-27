@@ -158,10 +158,13 @@ A validation failure also implicitly keeps the infrastructure running so you can
 
 ## Diagnostic Dumps
 
-Two ways a diagnostic dump gets written:
+Three ways a diagnostic dump gets written:
 
-1. **Auto** -- on validation failure (any kind: per-iteration validation, post-undo, or final). The runner writes a `failure` dump and leaves infrastructure running so you can correlate against the live database and mount.
-2. **Manual** -- via `--dump-at N[,M,...]`. Writes a `snapshot` dump after the listed iterations (post-validation, before the next op). The run continues. Useful for forensics on non-reproducible runs (compare snapshots across runs of the same seed) or for narrowing down where divergence first creeps in.
+1. **Auto on validation failure** -- the runner writes a `failure` dump (with `failure_kind: "validation"`) when ValidateWorkspace returns mismatches. Per-iteration, post-undo, or final validation all trigger it.
+2. **Auto on operation failure** -- the runner writes a `failure` dump (with `failure_kind: "operation"`) when an op (create_file, edit_file, etc.) returns an error such as EIO. The op trace records the failing op with a `[FAILED: <err>]` marker.
+3. **Manual via `--dump-at N[,M,...]`** -- writes a `snapshot` dump after the listed iterations (post-validation, before the next op). The run continues. Useful for forensics on non-reproducible runs.
+
+In all three cases the infrastructure is left running so you can correlate the dump against the live database and mount.
 
 Both kinds use the same machinery and produce the same set of files. They differ only in the directory prefix (`failure-` vs `snapshot-`), the `kind` field in `summary.json`, and the `summary.txt` heading. `find /tmp -name 'tigerfs-stress-failure-*'` keeps returning real failures only.
 

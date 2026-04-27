@@ -279,7 +279,7 @@ func TestDiffWorkspace_AllIssueKinds(t *testing.T) {
 func TestWriteDump_FailureKind(t *testing.T) {
 	mountDir, cfg, infra, state, stack, opLog := setupDumpScenario(t)
 
-	dumpDir, err := WriteDump(DumpKindFailure, cfg, infra, state, stack, opLog,
+	dumpDir, err := WriteDump(DumpKindFailure, "validation", cfg, infra, state, stack, opLog,
 		strErr("validation failed (1 issues): missing file: expected-but-missing.md"),
 		"create_file foo", 1)
 	if err != nil {
@@ -325,11 +325,11 @@ func TestWriteDump_FailureKind(t *testing.T) {
 	if err := json.Unmarshal(jb, &s); err != nil {
 		t.Fatalf("summary.json: %v", err)
 	}
-	if s.Kind != DumpKindFailure || s.Seed != 999 || s.IssueCount == 0 || s.DumpDir != dumpDir {
+	if s.Kind != DumpKindFailure || s.FailureKind != "validation" || s.Seed != 999 || s.IssueCount == 0 || s.DumpDir != dumpDir {
 		t.Errorf("summary.json fields: %+v", s)
 	}
-	if s.ValidationMessage == "" {
-		t.Error("failure summary should populate ValidationMessage")
+	if s.ErrorMessage == "" {
+		t.Error("failure summary should populate ErrorMessage")
 	}
 
 	keepOrCleanup(t, dumpDir)
@@ -342,7 +342,7 @@ func TestWriteDump_FailureKind(t *testing.T) {
 func TestWriteDump_SnapshotKind(t *testing.T) {
 	mountDir, cfg, infra, state, stack, opLog := setupDumpScenario(t)
 
-	dumpDir, err := WriteDump(DumpKindSnapshot, cfg, infra, state, stack, opLog,
+	dumpDir, err := WriteDump(DumpKindSnapshot, "", cfg, infra, state, stack, opLog,
 		nil, "create_file foo", 1)
 	if err != nil {
 		t.Fatalf("WriteDump: %v", err)
@@ -367,11 +367,62 @@ func TestWriteDump_SnapshotKind(t *testing.T) {
 	if err := json.Unmarshal(jb, &s); err != nil {
 		t.Fatalf("summary.json: %v", err)
 	}
-	if s.Kind != DumpKindSnapshot {
-		t.Errorf("summary.json kind = %q, want snapshot", s.Kind)
+	if s.Kind != DumpKindSnapshot || s.FailureKind != "" {
+		t.Errorf("summary.json kind = %q failure_kind = %q, want snapshot/empty", s.Kind, s.FailureKind)
 	}
-	if s.ValidationMessage != "" {
-		t.Errorf("snapshot summary.json should have empty ValidationMessage, got %q", s.ValidationMessage)
+	if s.ErrorMessage != "" {
+		t.Errorf("snapshot summary.json should have empty ErrorMessage, got %q", s.ErrorMessage)
+	}
+
+	keepOrCleanup(t, dumpDir)
+	_ = mountDir
+}
+
+// TestWriteDump_OperationFailureKind verifies the third trigger path:
+// an op-level error (e.g. EIO) should also produce a dump with
+// failure_kind="operation". The dump format and machinery are identical
+// to validation failures; only the FailureKind tag and the summary.txt
+// heading differ. Without this path, op failures tear down infra
+// without leaving diagnostic data -- the gap that motivated this test.
+func TestWriteDump_OperationFailureKind(t *testing.T) {
+	mountDir, cfg, infra, state, stack, opLog := setupDumpScenario(t)
+
+	dumpDir, err := WriteDump(DumpKindFailure, "operation", cfg, infra, state, stack, opLog,
+		strErr("write doc-1681.md: open /tmp/.../doc-1681.md: input/output error"),
+		"create_file foo [FAILED: input/output error]", 1)
+	if err != nil {
+		t.Fatalf("WriteDump: %v", err)
+	}
+	if !strings.Contains(dumpDir, "tigerfs-stress-failure-") {
+		t.Errorf("op-failure dump should still use 'failure' prefix, got %s", dumpDir)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dumpDir, "summary.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// summary.txt should label this as an operation error, not a
+	// validation error -- they're different categories of failure.
+	if !strings.Contains(string(body), "Operation error:") {
+		t.Errorf("op-failure summary.txt should say 'Operation error:', got:\n%s", body)
+	}
+	if strings.Contains(string(body), "Validation error:") {
+		t.Errorf("op-failure summary.txt must not say 'Validation error:'")
+	}
+	if !strings.Contains(string(body), "input/output error") {
+		t.Errorf("op-failure summary.txt should include the underlying error message, got:\n%s", body)
+	}
+
+	jb, _ := os.ReadFile(filepath.Join(dumpDir, "summary.json"))
+	var s dumpSummary
+	if err := json.Unmarshal(jb, &s); err != nil {
+		t.Fatalf("summary.json: %v", err)
+	}
+	if s.Kind != DumpKindFailure || s.FailureKind != "operation" {
+		t.Errorf("summary.json kind=%q failure_kind=%q, want failure/operation", s.Kind, s.FailureKind)
+	}
+	if s.ErrorMessage == "" || !strings.Contains(s.ErrorMessage, "input/output error") {
+		t.Errorf("summary.json error_message must carry the op error, got %q", s.ErrorMessage)
 	}
 
 	keepOrCleanup(t, dumpDir)

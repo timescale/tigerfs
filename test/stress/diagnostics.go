@@ -70,24 +70,32 @@ const (
 // flat: anything that fits here doesn't need to be cross-referenced from
 // the other dump files.
 //
-// ValidationMessage is empty for snapshot dumps (validation didn't fail).
+// FailureKind is "" for snapshots, "validation" when ValidateWorkspace
+// returned mismatches, "operation" when an op (create_file, edit_file,
+// etc.) returned an error. Provided so downstream tooling can grep
+// failures by category without parsing free-form text.
+//
+// ErrorMessage carries the abort reason -- the validation issue list
+// for kind=validation, the underlying op error (e.g. EIO) for
+// kind=operation. Empty for snapshots.
 type dumpSummary struct {
-	Kind              DumpKind `json:"kind"`
-	Seed              int64    `json:"seed"`
-	Iteration         int      `json:"iteration"`
-	TotalIterations   int      `json:"total_iterations"`
-	Workspace         string   `json:"workspace"`
-	LargeFiles        bool     `json:"large_files"`
-	ManyFiles         bool     `json:"many_files"`
-	ValidateEvery     int      `json:"validate_every"`
-	Op                string   `json:"op"`
-	IssueCount        int      `json:"issue_count"`
-	ReplayCommand     string   `json:"replay_command"`
-	Mountpoint        string   `json:"mountpoint"`
-	ConnStr           string   `json:"conn_str"`
-	DumpDir           string   `json:"dump_dir"`
-	GeneratedAt       string   `json:"generated_at"`
-	ValidationMessage string   `json:"validation_message,omitempty"`
+	Kind            DumpKind `json:"kind"`
+	FailureKind     string   `json:"failure_kind,omitempty"`
+	Seed            int64    `json:"seed"`
+	Iteration       int      `json:"iteration"`
+	TotalIterations int      `json:"total_iterations"`
+	Workspace       string   `json:"workspace"`
+	LargeFiles      bool     `json:"large_files"`
+	ManyFiles       bool     `json:"many_files"`
+	ValidateEvery   int      `json:"validate_every"`
+	Op              string   `json:"op"`
+	IssueCount      int      `json:"issue_count"`
+	ReplayCommand   string   `json:"replay_command"`
+	Mountpoint      string   `json:"mountpoint"`
+	ConnStr         string   `json:"conn_str"`
+	DumpDir         string   `json:"dump_dir"`
+	GeneratedAt     string   `json:"generated_at"`
+	ErrorMessage    string   `json:"error_message,omitempty"`
 }
 
 // historyDumpLimit caps how many *_history rows we serialize. Versions can
@@ -111,7 +119,7 @@ const historyDumpLimit = 200
 //
 // to disambiguate concurrent runs and let users keep multiple dumps
 // around. Caller is expected to print the returned path.
-func WriteDump(kind DumpKind, cfg *Config, infra *Infra, state *WorkspaceState, stack *StateStack, opLog []OpRecord, valErr error, op string, iteration int) (string, error) {
+func WriteDump(kind DumpKind, failureKind string, cfg *Config, infra *Infra, state *WorkspaceState, stack *StateStack, opLog []OpRecord, runErr error, op string, iteration int) (string, error) {
 	dumpDir := fmt.Sprintf("/tmp/tigerfs-stress-%s-%d-%d-%d", kind, cfg.Seed, iteration, time.Now().Unix())
 	if err := os.MkdirAll(dumpDir, 0755); err != nil {
 		return "", fmt.Errorf("create dump dir: %w", err)
@@ -131,22 +139,23 @@ func WriteDump(kind DumpKind, cfg *Config, infra *Infra, state *WorkspaceState, 
 
 	// summary.json + summary.txt -- the at-a-glance view
 	summary := dumpSummary{
-		Kind:              kind,
-		Seed:              cfg.Seed,
-		Iteration:         iteration,
-		TotalIterations:   cfg.Iterations,
-		Workspace:         cfg.Workspace,
-		LargeFiles:        cfg.LargeFiles,
-		ManyFiles:         cfg.ManyFiles,
-		ValidateEvery:     cfg.ValidateEvery,
-		Op:                op,
-		IssueCount:        len(issues),
-		ReplayCommand:     replayCommand(cfg),
-		Mountpoint:        infra.Mountpoint,
-		ConnStr:           infra.ConnStr,
-		DumpDir:           dumpDir,
-		GeneratedAt:       time.Now().Format(time.RFC3339),
-		ValidationMessage: shortValidationMessage(valErr),
+		Kind:            kind,
+		FailureKind:     failureKind,
+		Seed:            cfg.Seed,
+		Iteration:       iteration,
+		TotalIterations: cfg.Iterations,
+		Workspace:       cfg.Workspace,
+		LargeFiles:      cfg.LargeFiles,
+		ManyFiles:       cfg.ManyFiles,
+		ValidateEvery:   cfg.ValidateEvery,
+		Op:              op,
+		IssueCount:      len(issues),
+		ReplayCommand:   replayCommand(cfg),
+		Mountpoint:      infra.Mountpoint,
+		ConnStr:         infra.ConnStr,
+		DumpDir:         dumpDir,
+		GeneratedAt:     time.Now().Format(time.RFC3339),
+		ErrorMessage:    shortErrorMessage(runErr),
 	}
 	writeJSON(dumpDir, "summary.json", summary)
 	writeText(dumpDir, "summary.txt", renderSummaryText(summary, issues))
@@ -214,8 +223,17 @@ func renderSummaryText(s dumpSummary, issues []ValidationIssue) string {
 	if len(issues) > 0 {
 		fmt.Fprintf(&b, "\nIssue summary:\n%s\n", renderDiffText(issues))
 	}
-	if s.ValidationMessage != "" {
-		fmt.Fprintf(&b, "\nValidation error:\n  %s\n", s.ValidationMessage)
+	if s.ErrorMessage != "" {
+		// Heading adapts to whether this was a validation diff or an
+		// op-level error; both flow through the same field.
+		heading := "Error"
+		switch s.FailureKind {
+		case "validation":
+			heading = "Validation error"
+		case "operation":
+			heading = "Operation error"
+		}
+		fmt.Fprintf(&b, "\n%s:\n  %s\n", heading, s.ErrorMessage)
 	}
 	return b.String()
 }
@@ -269,9 +287,10 @@ func renderOpLogText(opLog []OpRecord) string {
 	return b.String()
 }
 
-// shortValidationMessage extracts just the human summary from the wrapped
-// validation error -- the goroutine stack inside `%w(...)` is noise here.
-func shortValidationMessage(err error) string {
+// shortErrorMessage extracts just the human summary from a wrapped run
+// error -- the goroutine stack inside `%w(...)` is noise here. Used for
+// both validation-diff messages and op-level error chains.
+func shortErrorMessage(err error) string {
 	if err == nil {
 		return ""
 	}
