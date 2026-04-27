@@ -30,6 +30,7 @@ type Infra struct {
 	TigerFSPid  int
 	ComposePath string
 	RepoRoot    string
+	ConnStr     string // postgres URL used by the mounted tigerfs (also reusable for diagnostics)
 	tigerfsCmd  *exec.Cmd
 	sigChan     chan os.Signal
 }
@@ -92,6 +93,7 @@ func SetupInfra(cfg *Config) (*Infra, error) {
 	// Step 5: Mount TigerFS
 	fmt.Print("Mounting TigerFS... ")
 	connStr := fmt.Sprintf("postgres://%s:%s@localhost:%s/%s", pgUser, pgPassword, pgPort, pgDatabase)
+	infra.ConnStr = connStr
 
 	args := []string{"mount", "--insecure-no-ssl", "--user-id", "stress-test"}
 	if cfg.Debug {

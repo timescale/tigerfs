@@ -13,10 +13,16 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // Config holds all CLI options for the stress test.
+//
+// DumpAtSpec is the raw `--dump-at` flag value (kept for the startup
+// banner / replay command). DumpAt is the parsed lookup set used during
+// the run: a key per iteration where a manual snapshot should fire.
 type Config struct {
 	Seed          int64
 	Iterations    int
@@ -26,6 +32,8 @@ type Config struct {
 	ValidateEvery int
 	LargeFiles    bool
 	ManyFiles     bool
+	DumpAtSpec    string
+	DumpAt        map[int]bool
 }
 
 func main() {
@@ -62,6 +70,7 @@ func parseStartFlags(args []string) *Config {
 	fs.IntVar(&cfg.ValidateEvery, "validate-every", 1, "validate workspace every N ops (undo always validates)")
 	fs.BoolVar(&cfg.LargeFiles, "large-files", false, "enable large file generation (up to 10MB)")
 	fs.BoolVar(&cfg.ManyFiles, "many-files", false, "enable dense directories (up to 1000 files/dir)")
+	fs.StringVar(&cfg.DumpAtSpec, "dump-at", "", "comma-separated iteration numbers to write a snapshot dump after (e.g., 100,250)")
 
 	fs.Parse(args)
 
@@ -70,7 +79,40 @@ func parseStartFlags(args []string) *Config {
 		cfg.Seed = time.Now().UnixNano()
 	}
 
+	cfg.DumpAt = parseDumpAtSpec(cfg.DumpAtSpec, cfg.Iterations)
+
 	return cfg
+}
+
+// parseDumpAtSpec splits a comma-separated iteration list into a
+// deduplicated lookup set. Empty input returns nil (no snapshots).
+// Invalid entries (non-integer, <=0, or > max) are warned to stderr and
+// skipped so a typo doesn't silently neutralize the flag.
+func parseDumpAtSpec(spec string, maxIter int) map[int]bool {
+	if spec == "" {
+		return nil
+	}
+	out := map[int]bool{}
+	for _, part := range strings.Split(spec, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n <= 0 {
+			fmt.Fprintf(os.Stderr, "[WARN] --dump-at: ignoring invalid iteration %q\n", part)
+			continue
+		}
+		if n > maxIter {
+			fmt.Fprintf(os.Stderr, "[WARN] --dump-at %d: past --iterations %d, will never fire\n", n, maxIter)
+			continue
+		}
+		out[n] = true
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func runStart(cfg *Config) int {
@@ -82,6 +124,9 @@ func runStart(cfg *Config) int {
 	fmt.Printf("LargeFiles: %v\n", cfg.LargeFiles)
 	fmt.Printf("ManyFiles:  %v\n", cfg.ManyFiles)
 	fmt.Printf("Validate:   every %d ops\n", cfg.ValidateEvery)
+	if len(cfg.DumpAt) > 0 {
+		fmt.Printf("DumpAt:     %s\n", cfg.DumpAtSpec)
+	}
 	fmt.Println()
 
 	// Set up infrastructure
@@ -91,19 +136,21 @@ func runStart(cfg *Config) int {
 		return 2
 	}
 
-	// Ensure teardown on exit (unless --keep)
-	if !cfg.Keep {
-		defer infra.Teardown()
-	} else {
-		defer fmt.Printf("\n--keep: infrastructure left running at %s\n", infra.Mountpoint)
-	}
-
 	fmt.Printf("Infrastructure ready. Mountpoint: %s\n", infra.Mountpoint)
 	fmt.Printf("Workspace path: %s/%s\n", infra.Mountpoint, cfg.Workspace)
 	fmt.Println()
 
-	// Run test iterations
-	return RunAndExit(cfg, infra)
+	// Run test iterations. RunAndExit returns KeepInfra=true on a
+	// validation failure (so the user can inspect live state alongside
+	// the failure dump); we honour both that signal and the explicit
+	// --keep flag.
+	res := RunAndExit(cfg, infra)
+	if cfg.Keep || res.KeepInfra {
+		fmt.Printf("\nInfrastructure left running at %s (use 'bin/tigerfs-stress stop' to tear down)\n", infra.Mountpoint)
+	} else {
+		infra.Teardown()
+	}
+	return res.ExitCode
 }
 
 func runStop() int {
@@ -132,12 +179,14 @@ Options:
   --validate-every N    Validate every N ops (default: 1; undo always validates)
   --large-files         Enable large files up to 10MB (default max: 100KB)
   --many-files          Enable dense directories up to 1000 files/dir (default: 10)
+  --dump-at LIST        Write a snapshot dump after these iterations (e.g., 100,250)
 
 Examples:
   tigerfs-stress start
   tigerfs-stress start --seed 42 --iterations 50
   tigerfs-stress start --large-files --many-files --iterations 100 --validate-every 5
   tigerfs-stress start --debug --keep --seed 42
+  tigerfs-stress start --seed 42 --iterations 1000 --dump-at 100,500,778
   tigerfs-stress stop
 `)
 }
