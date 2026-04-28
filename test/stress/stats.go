@@ -5,13 +5,28 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 )
 
-// Stats tracks operation counts and created-file sizes over a stress-test run.
-// Printed after final validation to give a summary of what the run exercised.
+// MonotonicWarning records a single readLatestLogIDMonotonic regression
+// event so the runner can emit a per-run summary at the end. The
+// warnings stream individually to stderr as they happen; the summary is
+// the at-a-glance view of "is the NFS-layer staleness behavior stable?"
+type MonotonicWarning struct {
+	Iteration int
+	OpDesc    string        // op that just ran when the regression was detected
+	Retries   int           // number of retries until recovery (or hit the cap)
+	Recovered bool          // false = retry budget exhausted, prior was kept
+	Elapsed   time.Duration // wall-clock time spent in retries (Retries * monotonicRetryDelay)
+}
+
+// Stats tracks operation counts, created-file sizes, and monotonicity
+// warnings over a stress-test run. Printed after final validation to
+// give a summary of what the run exercised.
 type Stats struct {
 	ops         map[string]int
 	createSizes []int
+	warnings    []MonotonicWarning
 }
 
 // NewStats returns an empty Stats.
@@ -28,6 +43,13 @@ func (s *Stats) RecordOp(name string) {
 // Only called for create_file; edits and other writes are not tracked.
 func (s *Stats) RecordCreatedFileSize(bytes int) {
 	s.createSizes = append(s.createSizes, bytes)
+}
+
+// RecordMonotonicWarning appends a regression event for end-of-run
+// summary. Called from readLatestLogIDMonotonic each time a regressed
+// read is observed (whether or not it later recovers).
+func (s *Stats) RecordMonotonicWarning(w MonotonicWarning) {
+	s.warnings = append(s.warnings, w)
 }
 
 // Print writes operation counts/percentages and a file-size histogram to stdout.
@@ -56,6 +78,91 @@ func (s *Stats) Print() {
 	fmt.Printf("  %-20s %5d   %5.1f%%\n", "Total:", total, 100.0)
 
 	s.printHistogram()
+	s.printMonotonicWarnings(total)
+}
+
+// printMonotonicWarnings renders the per-run monotonicity-warning
+// summary -- count, recovery rate, retry distribution, and which op
+// categories triggered the regressions. Surfaces whether NFS-layer
+// staleness is stable across runs without requiring the reader to
+// scroll through the trace looking for `[warn iter ...]` lines.
+//
+// The "total" param is the total op count from Print(), used to
+// compute the regression rate as a percentage of all ops.
+func (s *Stats) printMonotonicWarnings(total int) {
+	fmt.Println()
+	fmt.Println("=== Monotonicity Warnings ===")
+	if len(s.warnings) == 0 {
+		fmt.Println("(none -- no readLatestLogID regressions observed)")
+		return
+	}
+
+	recovered := 0
+	for _, w := range s.warnings {
+		if w.Recovered {
+			recovered++
+		}
+	}
+	rate := 0.0
+	if total > 0 {
+		rate = 100.0 * float64(len(s.warnings)) / float64(total)
+	}
+	fmt.Printf("Total:     %d regressions across %d ops (%.2f%%)\n",
+		len(s.warnings), total, rate)
+	fmt.Printf("Recovered: %d / %d (%d kept prior lastLogID after retry exhaustion)\n",
+		recovered, len(s.warnings), len(s.warnings)-recovered)
+
+	// Recovery-time distribution: bucket by retry count so the reader
+	// can spot whether most recoveries are quick (1-3 retries) or
+	// approaching the cap (a sign the budget needs to grow).
+	buckets := map[string]int{}
+	for _, w := range s.warnings {
+		switch {
+		case !w.Recovered:
+			buckets["stuck (>cap)"]++
+		case w.Retries <= 3:
+			buckets["fast (≤3 retries, ~300ms)"]++
+		case w.Retries <= 10:
+			buckets["medium (4-10 retries, ~1s)"]++
+		default:
+			buckets["slow (>10 retries, >1s)"]++
+		}
+	}
+	for _, label := range []string{
+		"fast (≤3 retries, ~300ms)",
+		"medium (4-10 retries, ~1s)",
+		"slow (>10 retries, >1s)",
+		"stuck (>cap)",
+	} {
+		if c := buckets[label]; c > 0 {
+			fmt.Printf("  %-30s %d\n", label, c)
+		}
+	}
+
+	// Which op kind preceded each regression -- helps spot whether the
+	// staleness only follows particular op types (e.g., undo_to_savepoint
+	// was the original suspect; deletion-loop reads also contribute).
+	opKindCounts := map[string]int{}
+	for _, w := range s.warnings {
+		// w.OpDesc is the full description like "undo_to_savepoint sp-..."
+		// or "create_file foo.md (1KB)"; first token is the op kind.
+		kind := w.OpDesc
+		if idx := strings.IndexByte(kind, ' '); idx > 0 {
+			kind = kind[:idx]
+		}
+		opKindCounts[kind]++
+	}
+	if len(opKindCounts) > 0 {
+		fmt.Println("Op kinds preceding regressions:")
+		var kinds []string
+		for k := range opKindCounts {
+			kinds = append(kinds, k)
+		}
+		sort.Strings(kinds)
+		for _, k := range kinds {
+			fmt.Printf("  %-22s %d\n", k, opKindCounts[k])
+		}
+	}
 }
 
 func (s *Stats) printGroup(title string, names []string, notes map[string]string, total int) {

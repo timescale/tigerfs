@@ -155,6 +155,10 @@ For each implementation task:
 
 Integration tests use testcontainers-go for PostgreSQL. See `test/integration/` for examples.
 
+### Stress-test monotonicity warnings
+
+Stress runs (`bin/tigerfs-stress start`) may emit `[warn iter ...] readLatestLogID regressed after ...` lines. These are **expected** — they indicate the macOS NFS layer (go-nfs library or kernel client, ruled out at every TigerFS layer) returned a stale `.log/.last/N/.export/json` snapshot after a heavy commit. The runner's monotonic helper retries up to 2.5s and falls back to the prior known-good `lastLogID`; the run continues correctly. The end-of-run "Monotonicity Warnings" section summarizes rate, recovery distribution, and op kinds preceding regressions. Do not treat these as bugs to fix in TigerFS; see the iter-107 investigation arc on `feat/undo` (commits `85a2495` → `f59cfcf`) for context.
+
 ### Test Naming Convention
 
 Integration tests that mount the filesystem work with **both** FUSE (Linux) and NFS (macOS) — the mount method is auto-detected. Name tests by what they test, not the mount method:
