@@ -242,7 +242,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 			// readLogIDsSince. Wrap with the monotonic helper so a
 			// regressed read keeps the prior known-good lastLogID
 			// instead of cascading old entries forward.
-			lastLogID = readLatestLogIDMonotonic(wsPath, lastLogID, i, desc)
+			lastLogID = readLatestLogIDMonotonic(wsPath, lastLogID, i, desc, stats)
 		}
 
 		// For undo operations, restore state and rebuild pools.
@@ -262,7 +262,7 @@ func RunIterations(cfg *Config, infra *Infra) error {
 		if isUndo && restoredState != nil {
 			state = restoredState
 			pools = RebuildPools(state)
-			lastLogID = readLatestLogIDMonotonic(wsPath, lastLogID, i, desc)
+			lastLogID = readLatestLogIDMonotonic(wsPath, lastLogID, i, desc, stats)
 		}
 
 		// Validate
@@ -384,7 +384,7 @@ func executeOperation(op opType, wsPath string, rng *rand.Rand, pools *Pools,
 		desc, err := OpMoveDir(wsPath, rng, pools, state, cfg)
 		return desc, nil, err
 	case opDeleteDir:
-		desc, err := OpDeleteDir(wsPath, rng, pools, state, cfg, stack, iteration)
+		desc, err := OpDeleteDir(wsPath, rng, pools, state, cfg, stack, iteration, stats)
 		return desc, nil, err
 	case opCreateSavepoint:
 		desc, err := OpCreateSavepoint(wsPath, rng, pools, state, cfg, iteration, stack)

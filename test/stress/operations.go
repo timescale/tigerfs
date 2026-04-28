@@ -573,7 +573,7 @@ func OpMoveDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceStat
 // op; each subsequent deletion gets a fresh entry capturing the state right
 // before that particular row was removed. undo_single can then target any
 // individual deletion safely.
-func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig, stack *StateStack, iteration int) (string, error) {
+func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceState, _ *OpConfig, stack *StateStack, iteration int, stats *Stats) (string, error) {
 	src := pickNonRootDirBiased(rng, pools, state)
 	if src == "" {
 		return "", fmt.Errorf("no non-root dirs to delete")
@@ -620,7 +620,7 @@ func OpDeleteDir(wsPath string, rng *rand.Rand, pools *Pools, state *WorkspaceSt
 		// safer to lose targetability for one deletion than to misroute
 		// undo_single onto a completely unrelated log row.
 		logID := readLatestLogIDMonotonic(wsPath, lastSeenLogID, iteration,
-			fmt.Sprintf("delete_dir per-row %s", item.path))
+			fmt.Sprintf("delete_dir per-row %s", item.path), stats)
 		if logID != "" && logID > lastSeenLogID {
 			stack.SetLastLogID(logID)
 			lastSeenLogID = logID

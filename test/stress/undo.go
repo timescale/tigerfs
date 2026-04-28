@@ -89,7 +89,11 @@ const (
 // the budget, log a warning and return the prior known good (we don't
 // regress the runner's lastLogID; downstream ops would over-attribute
 // previously-seen log entries to themselves).
-func readLatestLogIDMonotonic(wsPath, priorLastLogID string, iter int, desc string) string {
+//
+// Stats is optional (may be nil for call sites that don't have one
+// available, like test fixtures). When non-nil, every observed
+// regression is recorded for the end-of-run summary.
+func readLatestLogIDMonotonic(wsPath, priorLastLogID string, iter int, desc string, stats *Stats) string {
 	got := readLatestLogID(wsPath)
 	if got == "" {
 		// Read failed entirely; keep prior. (Also empty/never-set.)
@@ -103,15 +107,29 @@ func readLatestLogIDMonotonic(wsPath, priorLastLogID string, iter int, desc stri
 		time.Sleep(monotonicRetryDelay)
 		got = readLatestLogID(wsPath)
 		if got >= priorLastLogID {
+			elapsed := time.Duration(attempt) * monotonicRetryDelay
 			fmt.Fprintf(os.Stderr,
 				"  [warn iter %d] readLatestLogID regressed after %q; recovered after %d retries (~%v)\n",
-				iter, desc, attempt, time.Duration(attempt)*monotonicRetryDelay)
+				iter, desc, attempt, elapsed)
+			if stats != nil {
+				stats.RecordMonotonicWarning(MonotonicWarning{
+					Iteration: iter, OpDesc: desc, Retries: attempt,
+					Recovered: true, Elapsed: elapsed,
+				})
+			}
 			return got
 		}
 	}
+	elapsed := time.Duration(monotonicRetryCount) * monotonicRetryDelay
 	fmt.Fprintf(os.Stderr,
 		"  [warn iter %d] readLatestLogID regressed after %q and did NOT recover within %d retries; keeping prior %s (got stuck at %s)\n",
 		iter, desc, monotonicRetryCount, priorLastLogID, got)
+	if stats != nil {
+		stats.RecordMonotonicWarning(MonotonicWarning{
+			Iteration: iter, OpDesc: desc, Retries: monotonicRetryCount,
+			Recovered: false, Elapsed: elapsed,
+		})
+	}
 	return priorLastLogID
 }
 
