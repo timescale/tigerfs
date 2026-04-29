@@ -248,8 +248,8 @@ func TestGenerateBuildSQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, `"tigerfs"."posts"`) {
 		t.Errorf("table should be in tigerfs schema, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, `"public"."posts" AS SELECT * FROM "tigerfs"."posts"`) {
-		t.Errorf("view should be in public schema referencing tigerfs, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, `"public"."posts" WITH (security_invoker = true) AS SELECT * FROM "tigerfs"."posts"`) {
+		t.Errorf("view should be in public schema referencing tigerfs with security_invoker, got:\n%s", allSQL)
 	}
 	// Should have 10 statements: schema, resolve_path, table, parent_index, view, comment,
 	// modified_at function + trigger, parent_mtime function + trigger
