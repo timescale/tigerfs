@@ -30,11 +30,13 @@ type Server struct {
 }
 
 // NewServer creates a new NFS server.
-func NewServer(ctx context.Context, cfg *config.Config, dbClient *db.Client) (*Server, error) {
+func NewServer(ctx context.Context, cfg *config.Config, dbClient *db.Client, mountPoint string) (*Server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	// Create shared fs.Operations
 	ops := fs.NewOperations(cfg, dbClient)
+	ops.SetMountPoint(mountPoint)
+	ops.SetUserID(cfg.UserID)
 	// Wrap in billy.Filesystem adapter for go-nfs
 	billyFS := NewOpsFilesystem(ops, cfg)
 

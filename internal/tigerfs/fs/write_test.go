@@ -63,6 +63,147 @@ func TestWriteFile_InsertRow(t *testing.T) {
 	assert.True(t, mockDB.insertCalled)
 }
 
+// TestWriteFile_InsertRow_TSV_MergesPK tests that TSV insert merges the PK from the filename.
+// e.g., echo -e "name\tdescription\nTest\tA test" > categories/test-cat.tsv
+// should INSERT with slug='test-cat' even though slug isn't in the TSV headers.
+func TestWriteFile_InsertRow_TSV_MergesPK(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"categories"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.categories": {column: "slug"},
+		},
+		lastInsertReturnPK: "test-cat",
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// TSV with headers: PK (slug) is NOT in the headers
+	data := []byte("name\tdescription\nTest Category\tA test\n")
+	err := ops.WriteFile(context.Background(), "/categories/test-cat.tsv", data)
+
+	require.Nil(t, err)
+	require.True(t, mockDB.insertCalled)
+	require.Len(t, mockDB.insertedRows, 1)
+
+	row := mockDB.insertedRows[0]
+	// Should have 3 columns: name, description (from TSV) + slug (merged from filename)
+	assert.Contains(t, row.columns, "slug", "PK column should be merged from filename")
+	assert.Contains(t, row.columns, "name")
+	assert.Contains(t, row.columns, "description")
+
+	// Find slug value
+	for i, col := range row.columns {
+		if col == "slug" {
+			assert.Equal(t, "test-cat", row.values[i], "slug should be the filename PK value")
+		}
+	}
+}
+
+// TestWriteFile_InsertRow_TSV_PKInBody tests that PK already in TSV headers is not duplicated.
+func TestWriteFile_InsertRow_TSV_PKInBody(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"categories"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.categories": {column: "slug"},
+		},
+		lastInsertReturnPK: "test-cat",
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// TSV with PK in headers
+	data := []byte("slug\tname\ntest-cat\tTest Category\n")
+	err := ops.WriteFile(context.Background(), "/categories/test-cat.tsv", data)
+
+	require.Nil(t, err)
+	require.Len(t, mockDB.insertedRows, 1)
+
+	row := mockDB.insertedRows[0]
+	// Count slug occurrences -- should be exactly 1 (not duplicated)
+	slugCount := 0
+	for _, col := range row.columns {
+		if col == "slug" {
+			slugCount++
+		}
+	}
+	assert.Equal(t, 1, slugCount, "PK should not be duplicated when already in TSV body")
+}
+
+// TestWriteFile_InsertRow_BareFormat_Rejected tests that bare path (no extension)
+// inserts are rejected to avoid NFS inode cache conflicts.
+func TestWriteFile_InsertRow_BareFormat_Rejected(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"categories"},
+		},
+		columns: map[string][]mockColumn{
+			"public.categories": {
+				{name: "slug", dataType: "text"},
+				{name: "name", dataType: "text"},
+				{name: "description", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.categories": {column: "slug"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Bare path insert should be rejected (no format suffix)
+	data := []byte("test-cat\tTest Category\tA test\n")
+	err := ops.WriteFile(context.Background(), "/categories/test-cat", data)
+
+	require.NotNil(t, err, "bare-path INSERT should be rejected")
+	assert.Equal(t, ErrInvalidArgument, err.Code)
+	assert.Contains(t, err.Message, "without a format suffix")
+	assert.Contains(t, err.Hint, "test-cat.json", "hint should suggest suffixed alternatives")
+	assert.False(t, mockDB.insertCalled, "should not have attempted INSERT")
+}
+
+// TestWriteFile_UpdateRow_BareFormat_Allowed tests that bare path (no extension)
+// updates to existing rows still work.
+func TestWriteFile_UpdateRow_BareFormat_Allowed(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"categories"},
+		},
+		columns: map[string][]mockColumn{
+			"public.categories": {
+				{name: "slug", dataType: "text"},
+				{name: "name", dataType: "text"},
+				{name: "description", dataType: "text"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.categories": {column: "slug"},
+		},
+		rowData: map[string]*mockRow{
+			"public.categories.test-cat": {
+				columns: []string{"slug", "name", "description"},
+				values:  []interface{}{"test-cat", "Old Name", "Old Desc"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	// Bare path update should work (row already exists, no NFS conflict)
+	data := []byte("test-cat\tNew Name\tNew Desc\n")
+	err := ops.WriteFile(context.Background(), "/categories/test-cat", data)
+
+	require.Nil(t, err, "bare-path UPDATE should be allowed")
+	assert.True(t, mockDB.updateCalled, "should have called UpdateRow")
+}
+
 // TestWriteFile_UpdateColumn tests updating a single column.
 func TestWriteFile_UpdateColumn(t *testing.T) {
 	cfg := &config.Config{}

@@ -189,7 +189,7 @@ email: bob@example.com
 ### Read Semantics (Export)
 
 **Size limits:**
-- Limited to `DirListingLimit` rows (default 10,000)
+- Limited to `DirListingLimit` rows (default 1,000)
 - For larger exports, use explicit pagination: `.first/10000/.export/csv`
 - Error message suggests pagination if limit exceeded
 

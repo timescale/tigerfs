@@ -34,6 +34,9 @@ info "Creating blog app (markdown, history)..."
 echo 'markdown,history' > "$MOUNT/.build/blog"
 sleep 1  # let the build settle
 
+# Create savepoint before any content
+echo -e "description\nClean slate before blog content" > "$MOUNT/blog/.savepoint/before-content.tsv"
+
 # Create subdirectories
 mkdir -p "$MOUNT/blog/tutorials"
 mkdir -p "$MOUNT/blog/deep-dives"
@@ -220,6 +223,9 @@ FROM users;
 
 Refresh them with `REFRESH MATERIALIZED VIEW user_stats;`
 ENDOFFILE
+
+# Create savepoint before edits
+echo -e "description\nAll posts created, before any edits" > "$MOUNT/blog/.savepoint/before-edits.tsv"
 
 # Seed blog history by updating posts (captures originals as history entries)
 info "Seeding blog history..."

@@ -207,18 +207,9 @@
 │   │           ├── test.log              # Validation result (read-only)
 │   │           ├── .commit               # Touch to execute
 │   │           └── .abort                # Touch to cancel
-│   ├── .sample/                          # Random samples
-│   │   └── 100/                          # 100 random rows
-│   │       ├── 47392/                    # Row directory
-│   │       └── 103847/                   # Row directory
-│   ├── .first/                           # First N rows (ascending)
-│   │   └── 50/                           # First 50 rows by PK
-│   │       ├── 1/                        # Row directory
-│   │       └── 2/                        # Row directory
-│   ├── .last/                            # Last N rows (descending)
-│   │   └── 50/                           # Last 50 rows by PK
-│   │       ├── 99999/                    # Row directory
-│   │       └── 99998/                    # Row directory
+│   ├── .sample/N/                        # Random N rows (navigate directly, e.g. .sample/100/)
+│   ├── .first/N/                         # First N rows by PK (navigate directly, e.g. .first/50/)
+│   ├── .last/N/                          # Last N rows by PK (navigate directly, e.g. .last/50/)
 │   └── 123/                              # Row directory - shown in ls
 │       ├── email.txt                     # Individual column file
 │       ├── name.txt                      # Individual column file
@@ -322,6 +313,14 @@ Synthesized apps, DDL operations, and pipeline queries add additional dotfile di
 - `.stats` - Performance monitoring
 - `.views/` - Database views and view creation
 
+**User Dotfiles:**
+
+Files and directories starting with `.` that are not in the reserved list above are treated as regular files/directories. For example, `.gitignore`, `.env`, `.git/`, `.vscode/` can be created and used normally in file-first workspaces. They are stored in the database like any other filename.
+
+**Reserved Name Enforcement:**
+
+The dotfile names listed above are reserved for TigerFS virtual directories. Attempts to create files, create directories, or rename to these names return `EACCES` (permission denied). If hard links, symlinks, or mknod are added in the future, they must also enforce this restriction.
+
 **Rationale:**
 - Standard Unix convention (dotfiles hidden from `ls`)
 - `ls -a` reveals metadata and special paths
@@ -341,7 +340,7 @@ Every row accessible in **two ways**:
 **Directory Listing Behavior:**
 ```bash
 $ ls /mount/users/
-.all/  .by/  .columns/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
+.by/  .columns/  .export/  .filter/  .first/  .import/  .info/  .last/  .order/  .sample/
 1/  2/  3/  ...
 
 $ cd /mount/users/1        # Enter row directory
@@ -577,12 +576,14 @@ SELECT id FROM users ORDER BY id;
 ```
 
 **Output:**
-- Capability directories: `.all/`, `.by/`, `.columns/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
+- Capability directories: `.by/`, `.columns/`, `.export/`, `.filter/`, `.first/`, `.import/`, `.info/`, `.last/`, `.order/`, `.sample/`
 - Row directories: `1/`, `2/`, `3/`, ... (primary key values)
 
-**Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings.
+**Note:** Row files (`1.json`, `1.csv`, etc.) are accessible via direct path but not shown in listings. Similarly, `.all/` is accessible but not listed (it is equivalent to the table listing itself). Pagination directories (`.first/`, `.last/`, `.sample/`) appear in listings but show empty contents -- navigate directly with a number, e.g., `.first/50/`. These are hidden from `ls` to prevent recursive scanners (`rm -rf`, `find`, AI agents) from triggering expensive or infinite directory traversals.
 
-**Constraint:** Tables > `dir_listing_limit` (default: 10,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
+**Virtual directories in file-first workspaces:** `.history/`, `.log/`, `.savepoint/`, `.undo/` only appear at the workspace root level, not inside subdirectories. Pipeline capabilities (`.by/`, `.filter/`, `.order/`, `.export/`) inside `.log/` and `.savepoint/` are accessible by explicit path but hidden from `ls` listings. A configurable `max_pipeline_depth` (default: 10) provides defense-in-depth by suppressing capability listings after N chained pipeline operations.
+
+**Constraint:** Tables > `dir_listing_limit` (default: 1,000) return EIO with helpful log message directing users to `.first/` or `.sample/`.
 
 #### Indexed Lookups
 
@@ -921,7 +922,7 @@ Tables with millions of rows make `ls /mount/users/` unusable:
 **Configuration:**
 ```yaml
 filesystem:
-  dir_listing_limit: 10000  # Default threshold
+  dir_listing_limit: 1000   # Default threshold
 ```
 
 **Behavior:**
@@ -1209,7 +1210,7 @@ ls /mnt/db/events/.first/200/.last/100/
 cat /mnt/db/orders/.by/status/pending/.filter/priority/high/.order/amount/.last/20/.export/json
 ```
 
-For complete documentation, see [docs/native-tables.md](../docs/native-tables.md).
+For complete documentation, see [docs/data-first.md](../docs/data-first.md).
 
 ---
 
@@ -1221,7 +1222,7 @@ Synthesized apps present database rows as domain-specific files — markdown doc
 
 This is the primary user interface for content-oriented workflows: blog posts, knowledge bases, meeting notes, and agent-generated documents are all managed as plain files while being stored transactionally in PostgreSQL.
 
-For the complete user guide with examples, see [docs/markdown-app.md](../docs/markdown-app.md).
+For the complete user guide with examples, see [docs/file-first.md](../docs/file-first.md).
 
 ### Creation: `.build/` and `.format/`
 
@@ -1298,20 +1299,27 @@ The `.build/` command creates a table with this schema (for markdown apps):
 
 ```sql
 CREATE TABLE tigerfs.notes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    parent_id UUID REFERENCES tigerfs.notes(id) DEFERRABLE INITIALLY IMMEDIATE,
     filename TEXT NOT NULL,
     filetype TEXT NOT NULL DEFAULT 'file' CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB DEFAULT '{}'::jsonb,
     body TEXT,
+    encoding TEXT NOT NULL DEFAULT 'utf8' CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(filename, filetype)
+    UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY IMMEDIATE
 );
 ```
 
-A `BEFORE UPDATE` trigger automatically sets `modified_at = now()` on every update.
+The `parent_id` column implements a parent-pointer directory model (ADR-017): `filename` stores only the leaf name (e.g., `todo.md`), and `parent_id` references the parent directory row. NULL for root-level entries. Directory renames and moves are single-row updates. The `DEFERRABLE` constraints support undo transactions.
+
+Two triggers maintain timestamps:
+
+1. **`BEFORE UPDATE` trigger** (`trg_<name>_modified_at`): Sets `modified_at = now()` on every row update.
+2. **`AFTER INSERT OR DELETE OR UPDATE OF parent_id, filename` trigger** (`trg_<name>_parent_mtime`): Bumps the parent directory's `modified_at` when children are added, removed, or moved. Uses column-level filtering so content-only edits (body, title, headers) never fire it. This gives directories POSIX-correct mtime semantics.
 
 ### View Architecture
 
@@ -1359,34 +1367,42 @@ Each history-enabled app gets a companion table named `tigerfs.<name>_history`:
 ```sql
 CREATE TABLE tigerfs.notes_history (
     -- Mirrors all source table columns --
-    id UUID,
+    file_id UUID,
+    parent_id UUID,
     filename TEXT NOT NULL,
-    filetype TEXT,
+    filetype TEXT CHECK (filetype IN ('file', 'directory')),
     title TEXT,
     author TEXT,
     headers JSONB,
     body TEXT,
+    encoding TEXT CHECK (encoding IN ('utf8', 'base64')),
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     -- History metadata --
-    _history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    _operation TEXT NOT NULL  -- 'UPDATE' or 'DELETE'
+    version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'version_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'version_id DESC'
 );
 ```
 
-Indexes are created on `(filename, _history_id DESC)` and `(id, _history_id DESC)` for efficient lookups by filename or row UUID.
+Indexes are created on `(filename, version_id DESC)` and `(file_id, version_id DESC)` for efficient lookups by filename or row UUID.
 
 ### Trigger Mechanism
 
-A `BEFORE UPDATE OR DELETE` trigger on the source table copies the `OLD` row into the history table with a UUIDv7 `_history_id` (encoding the current timestamp) and the operation type (`UPDATE` or `DELETE`).
+A `BEFORE UPDATE OR DELETE` trigger on the source table copies the `OLD` row (including `parent_id`) into the history table with a UUIDv7 `version_id` (encoding the current timestamp) and the operation type (`UPDATE` or `DELETE`).
 
 ### TimescaleDB Integration
 
-The history table is converted to a TimescaleDB hypertable for efficient time-partitioned storage:
+The history table uses the modern `CREATE TABLE WITH` syntax to configure the hypertable and columnstore inline:
 
-- **Chunk interval:** 1 month (partitioned by `_history_id`)
-- **Compression:** `segment_by='filename'`, `order_by='_history_id DESC'`
-- **Compression policy:** After 1 day
+- **Chunk interval:** 7 days (partitioned by `version_id`)
+- **Compression:** `segmentby='file_id'`, `orderby='version_id DESC'`
+- **Compression policy:** Automatic (matches chunk interval)
 
 History requires **TimescaleDB** — it will not work on vanilla PostgreSQL.
 
@@ -1405,7 +1421,7 @@ The `.history/` directory appears inside each synthesized app:
 | `app/.history/.by/<uuid>/<timestamp>` | Read a past version by UUID |
 | `app/subdir/.history/` | Per-directory history (scoped to that directory) |
 
-Version timestamps are extracted from the UUIDv7 `_history_id`, formatted as `2006-01-02T150405Z` (filesystem-safe, no colons). Versions are listed newest-first.
+Version IDs are derived from the UUIDv7 `version_id`, displayed as a timestamp+base36 string (e.g., `2026-04-10T173000.123Z-abc123`). This display name format is lossless and case-insensitive safe (ADR-016 Section 11). Versions are listed newest-first.
 
 **Cross-rename tracking:** Every row has a stable UUID that persists across renames. The `.by/` directory enables lookups by UUID even after a file is renamed. `.by/` is only available at the root `.history/` level.
 
@@ -1416,6 +1432,180 @@ Version timestamps are extracted from the UUIDv7 `_history_id`, formatted as `20
 TigerFS detects history support via:
 1. **View comment** — parsing `tigerfs:md,history` from `COMMENT ON VIEW`
 2. **Companion table** -- checking for a `tigerfs.<name>_history` table if the comment doesn't specify history
+
+---
+
+## Operation Log, Savepoints, and Undo
+
+History-enabled synth apps (those created with `markdown,history` or `plaintext,history`) automatically gain three additional capabilities: an operation log, savepoints, and undo. These are described in detail in [ADR-016](adr/016-undo-and-recovery.md).
+
+### User Identity
+
+Each mount has an optional user identity for tracking who made changes:
+
+```bash
+tigerfs mount --user-id agent-7 postgres://... /mnt/db       # Set at mount time
+export TIGERFS_USER_ID=agent-7                                # Or via environment
+echo "agent-7" > /mnt/db/.info/user                          # Or change at runtime
+cat /mnt/db/.info/user                                        # Read current identity
+```
+
+Precedence: flag > environment > empty (anonymous). The identity is stored in-memory per-mount and used for log entries, savepoint auto-injection, and per-user undo filtering.
+
+### Operation Log (.log/)
+
+Every create, edit, rename, and delete is recorded in the `.log/` directory:
+
+| Path | Description |
+|------|-------------|
+| `app/.log/` | List log entries (default: last 100) |
+| `app/.log/.last/N/` | Last N entries |
+| `app/.log/.by/user_id/agent-7/` | Filter by user |
+| `app/.log/.by/type/edit/` | Filter by operation type |
+| `app/.log/<log_id>/` | Single entry as directory (column files + diff symlinks) |
+| `app/.log/.export/json` | Export entries as JSON |
+
+The log table schema:
+
+```sql
+CREATE TABLE tigerfs.<app>_log (
+    log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    file_id UUID NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo')),
+    user_id TEXT,
+    filename TEXT NOT NULL,
+    version_id UUID,
+    description TEXT
+) WITH (
+    tsdb.hypertable,
+    tsdb.partition_column = 'log_id',
+    tsdb.chunk_interval = '7 days',
+    tsdb.segmentby = 'file_id',
+    tsdb.orderby = 'log_id ASC'
+);
+```
+
+Indexed on `(file_id, log_id ASC)` for efficient per-file lookups and SkipScan-optimized DISTINCT ON queries.
+
+#### Diff Symlinks
+
+Each log entry directory contains three symlinks for diffing:
+
+| Symlink | Target |
+|---------|--------|
+| `before` | History version before this operation (or `/dev/null` for creates) |
+| `after` | History version after this operation (or current file, or `/dev/null`) |
+| `current` | Live file path (or `/dev/null` if deleted) |
+
+History symlink paths are per-directory: a file at `tutorials/getting-started.md` links to `tutorials/.history/getting-started.md/<version>`, not `.history/tutorials/getting-started.md/<version>`.
+
+```bash
+diff -u --color app/.log/<id>/before app/.log/<id>/after      # What this edit changed
+diff -u --color app/.log/<id>/before app/.log/<id>/current     # Drift since this edit
+```
+
+Log entry IDs use UUIDv7 display format (e.g., `2026-04-07T143000.123Z-abc123`).
+
+### Savepoints (.savepoint/)
+
+Named bookmarks for undo-to-savepoint operations:
+
+| Path | Description |
+|------|-------------|
+| `app/.savepoint/` | List savepoints |
+| `app/.savepoint/name.json` | Create savepoint (write JSON with description) |
+| `app/.savepoint/name/description` | Read savepoint description |
+| `app/.savepoint/name/savepoint_id` | Read auto-generated UUIDv7 |
+
+Schema:
+
+```sql
+CREATE TABLE tigerfs.<app>_savepoint (
+    name TEXT NOT NULL PRIMARY KEY,
+    savepoint_id UUID NOT NULL DEFAULT uuidv7() UNIQUE,
+    user_id TEXT,
+    description TEXT
+);
+```
+
+Creation requires a format suffix (`.json`, `.tsv`, `.csv`, `.yaml`). This avoids a macOS NFS client inode cache conflict where bare-path writes create FILE handles that conflict with DIRECTORY handles in READDIRPLUS. If `--user-id` is set, `user_id` is auto-injected into the savepoint.
+
+#### Auto-Savepoints
+
+TigerFS creates savepoints automatically when the gap since the last write exceeds a configurable threshold:
+
+- **Config:** `auto_savepoint_interval` (default: 30 minutes)
+- **Flag:** `--auto-savepoint-interval` (e.g., `30m`, `1h`, `0` to disable)
+- **Env:** `TIGERFS_AUTO_SAVEPOINT_INTERVAL`
+- **Naming:** `auto-<user>-<timestamp>` or `auto-<timestamp>` (anonymous)
+- **Detection:** In-memory per-table timestamp, no DB query
+
+### Undo (.undo/)
+
+The `.undo/` directory provides a preview-then-apply interface for reversing operations:
+
+| Path | Description |
+|------|-------------|
+| `app/.undo/` | List modes: `id/`, `to-id/`, `to-savepoint/` |
+| `app/.undo/id/<log_id>/` | Single operation undo (summary + apply only) |
+| `app/.undo/to-id/<log_id>/` | Multi-file undo to a log entry (preview tree) |
+| `app/.undo/to-savepoint/<name>/` | Multi-file undo to a savepoint (preview tree) |
+
+#### Preview
+
+For `to-id/` and `to-savepoint/` modes, the target directory contains:
+- `.info/summary` -- TSV with metadata headers and affected files (also `.json`, `.csv`, `.yaml`)
+- `.apply` -- touch or write to execute the undo
+- Affected files rendered from history (restore) or as `/dev/null` symlinks (delete)
+
+The `.info/summary` TSV format includes comment headers with metadata:
+
+```
+# savepoint: before-edits
+# created: 2026-04-13T14:28:15Z
+# user: agent-7
+# description: All posts created, before any edits
+# affected: 2 files
+# type	filename	user	timestamp
+edit	hello-world.md	agent-7	2026-04-13T14:28:17Z
+edit	tutorials/getting-started-with-sql.md	agent-7	2026-04-13T14:28:17Z
+```
+
+For `id/` mode (single operation), only `.info/summary` and `.apply` are present -- no preview tree. Use `.log/<id>/before` and `.log/<id>/after` for diffs.
+
+#### Applying Undo
+
+```bash
+touch app/.undo/to-savepoint/before-edits/.apply          # Undo to savepoint
+touch app/.undo/id/<log_id>/.apply                        # Undo single operation
+touch app/.undo/to-savepoint/X/.by/user_id/agent-7/.apply # Per-user undo
+```
+
+The `.apply` trigger works via both `touch` (SETATTR/Chtimes) and `echo` (Write/Close) on NFS and FUSE.
+
+Pipeline capabilities filter which operations are undone: `.by/user_id/`, `.filter/type/delete/`, `.last/N/`. `.sample/` is rejected on `.apply`.
+
+#### Execution
+
+Undo executes in a single PostgreSQL transaction:
+1. Query affected files using DISTINCT ON with SkipScan on the `(file_id, log_id ASC)` index
+2. DELETE rows created after the target point
+3. UPSERT rows from history for edits, renames, and deletes (restores before-state including `parent_id`)
+4. INSERT `type='undo'` log entries for each affected file
+
+Undo is idempotent: undoing to the same savepoint twice produces the same data state (with additional log/history entries). Undo operations are themselves logged, so you can undo an undo.
+
+#### DDL Limitations
+
+Undo operates on data (DML) only. If a column was added or removed after the savepoint, the UPSERT may fail. TigerFS detects PostgreSQL error codes 42703 (undefined column) and 42P01 (undefined table) and returns a descriptive error instead of a raw SQL message.
+
+#### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `undo_list_limit` | 100 | Default listing limit for `.undo/` sub-directories |
+| Flag: `--undo-list-limit` | | Override at mount time |
+| Env: `TIGERFS_UNDO_LIST_LIMIT` | | Override via environment |
 
 ---
 
@@ -1470,7 +1660,8 @@ connection:
 
 # Filesystem behavior
 filesystem:
-  dir_listing_limit: 10000           # Max rows returned by ls (prevents huge listings)
+  dir_listing_limit: 1000            # Max rows returned by ls (prevents huge listings)
+  max_pipeline_depth: 10            # Max chained pipeline ops before capabilities hidden (0=unlimited)
   trailing_newlines: true            # Add \n to column and .count file reads
   no_filename_extensions: false      # Disable type-based extensions (.txt, .json, etc.)
   attr_timeout: 1                    # FUSE attribute cache (seconds, FUSE backend only)
@@ -1580,7 +1771,8 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 
 **Filesystem Behavior:**
 ```bash
---max-ls-rows N           Large table threshold (default: 10000)
+--max-ls-rows N           Large table threshold (default: 1000)
+--max-pipeline-depth N    Max chained pipeline ops in ReadDir (default: 10; 0=unlimited)
 --unlimited-ls            Disable row limit for ls operations
 --read-only               Mount as read-only
 --allow-other             Allow other users to access mount (FUSE)
@@ -1597,6 +1789,13 @@ tigerfs --foreground --log-level=debug postgres://localhost/mydb /mnt/db
 --attr-timeout SECS       FUSE attribute cache timeout (FUSE backend only, default: 1)
 --entry-timeout SECS      FUSE entry cache timeout (FUSE backend only, default: 1)
 --metadata-refresh SECS   Table metadata refresh interval (default: 30)
+```
+
+**Identity & Undo:**
+```bash
+--user-id ID              User identity for undo log entries (also: TIGERFS_USER_ID env)
+--auto-savepoint-interval DUR  Inactivity gap before auto-savepoint (default: 30m, 0 disables)
+--undo-list-limit N       Default listing limit for .undo/ sub-directories (default: 100)
 ```
 
 **Logging/Debug:**
@@ -1963,6 +2162,30 @@ tigerfs fork /mnt/db --no-mount
 - Unless `--no-mount`, spawns a background `tigerfs mount` process for the fork
 - `--json` outputs the fork result (source ID, fork ID, name, connection string, mountpoint)
 
+#### 12. migrate
+
+**Syntax:**
+```bash
+tigerfs migrate CONNECTION [--describe] [--dry-run] [--insecure-no-ssl] [--schema SCHEMA]
+```
+
+**Description:** Detect and run pending database migrations. Migrations are named actions that update database structures for compatibility with newer TigerFS versions.
+
+**Modes:**
+- `--describe`: List pending migrations without generating SQL
+- `--dry-run`: Show the SQL that would be executed without running it
+- (default): Execute all pending migrations
+
+**Current migrations (run in order):**
+
+| Migration | Description |
+|-----------|-------------|
+| `move-backing-tables` | Move backing tables from user schema to tigerfs schema |
+| `relational-directories` | Add parent-pointer directory model (parent_id column) |
+| `parent-dir-mtime-trigger` | Add trigger to update parent directory mtime when children change |
+
+Each migration has a Detect function that checks whether it's needed (queries system catalogs) and a Plan function that generates SQL. Migrations are idempotent -- running `migrate` when nothing is pending is a no-op.
+
 ---
 
 ## Connection and Authentication
@@ -2321,7 +2544,13 @@ tigerfs mount tiger:<service-id> /mnt/cloud
 **mtime (Modification Time):**
 - Check for `updated_at` or `modified_at` column (common convention)
 - Use column value if exists
-- Fallback to current time if column doesn't exist
+- Fallback to `created_at`, then to mount time if neither exists
+
+**Directory mtime (File-First Workspaces):**
+- Directory `modified_at` is updated by a database trigger when children are added, removed, renamed, or moved
+- Content-only edits to files do NOT change the parent directory's mtime (POSIX-correct behavior)
+- This ensures NFS/FUSE clients detect directory content changes and re-fetch listings
+- Cross-mount visibility: another mount sees directory changes within the stat cache TTL (2 seconds)
 
 **ctime (Change Time) and atime (Access Time):**
 - Use same as mtime or current time
@@ -2331,6 +2560,7 @@ tigerfs mount tiger:<service-id> /mnt/cloud
 - Meaningful timestamps when available
 - Graceful degradation for tables without timestamp columns
 - No extra queries just for timestamps
+- Directory mtime enables correct NFS/FUSE cache invalidation after undo and cross-mount operations
 
 ### Ownership
 
@@ -3007,9 +3237,10 @@ For multi-chunk writes, this produces **O(n²) total DB write volume**: the firs
 **Mitigations in place:**
 
 1. **wsize=128KB** (macOS mount option): 4x fewer RPCs than macOS default (32KB-64KB). Larger values (e.g., 1MB) can trigger GC deadlocks in test environments where the NFS server runs in the same process as the client. 128KB is a safe balance.
-2. **Schema caching**: Schema resolution is cached with `sync.Once`, eliminating ~4-6 DB queries per RPC.
-3. **Stat cache**: Dirty cached files return size from memory, avoiding a DB read after each write.
-4. **Per-RPC overhead**: Reduced from ~7-9 DB queries to ~1 DB write per WRITE RPC.
+2. **noac** (macOS mount option): Disables NFS client attribute caching. Without this, the client caches file attributes (mtime, size) for up to 60 seconds (`acregmax`), causing stale reads after undo operations or cross-mount changes. This does not increase SQL queries -- GETATTR requests are served from TigerFS's in-memory stat cache (2s TTL). The cost is only additional loopback NFS round-trips (~0.1ms each).
+3. **Schema caching**: Schema resolution is cached with `sync.Once`, eliminating ~4-6 DB queries per RPC.
+4. **Stat cache**: Dirty cached files return size from memory, avoiding a DB read after each write.
+5. **Per-RPC overhead**: Reduced from ~7-9 DB queries to ~1 DB write per WRITE RPC.
 
 **Behavior:**
 
@@ -3239,6 +3470,48 @@ echo 1 > /mnt/db/.refresh
 - Document 1-2 second staleness as acceptable trade-off
 - Manual refresh available for immediate consistency
 - Most use cases tolerate eventual consistency
+
+### Undo Preview Cache
+
+Undo preview surfaces (`.undo/<mode>/<target>/.info/summary`,
+`.undo/<mode>/<target>/<preview-file>`) are backed by a short-lived
+in-process cache (2-second TTL) on top of `QueryUndoAffectedFiles`,
+`GetSavepointRow`, `QueryLogEntry`, and history-row reads. The cache
+exists because each NFS/FUSE RPC during a single user op (`ls`,
+`cat`, `stat`) independently queries the same data, and these reads
+are read-only.
+
+**Apply path is unaffected.** Writing to `.apply` re-queries inside
+`ExecuteUndoTransaction` with no cache involvement, so undo
+correctness does not depend on cache freshness.
+
+**Stale-preview window after a concurrent apply.** Under PostgreSQL
+READ COMMITTED, a preview read whose `SELECT` started *before* a
+concurrent apply transaction COMMITs uses a snapshot taken at
+`SELECT`-start. If the apply commits and invalidates the cache while
+that read is in flight, the read's result reflects pre-undo state;
+the read then re-populates the cache with that stale snapshot.
+Subsequent preview lookups can serve stale data until the 2-second
+TTL expires.
+
+**Affected reads:**
+
+| Cache | Stale data semantically wrong? |
+|-------|-------------------------------|
+| `affectedFiles` (which files would change for target X) | yes -- the answer is invalidated by the just-applied undo |
+| `logEntries`, `savepointRows`, `historyRows` | no -- the underlying tables are append-only or immutable |
+
+So in practice, only the "files affected by undoing target X" preview
+can show a stale list. Listings, log/savepoint/history previews show
+data that is technically a snapshot but still semantically correct.
+
+**Rationale:** the 2-second window is short, the apply path is
+unaffected, and eliminating the race would require either holding a
+process-wide lock for the duration of every undo transaction (kills
+preview concurrency on every other workspace) or threading a
+generation counter through every cache read site (significant API
+churn). The current behavior is the same eventual-consistency tradeoff
+documented above for directory listings.
 
 ---
 
@@ -3897,9 +4170,9 @@ go install github.com/timescale/tigerfs/cmd/tigerfs@latest
 
 ### Phase 2: Feature Documentation (Shipped)
 
-- [docs/markdown-app.md](../docs/markdown-app.md) — Markdown synthesized app guide (creation, usage, column mapping)
+- [docs/file-first.md](../docs/file-first.md) — Markdown synthesized app guide (creation, usage, column mapping)
 - [docs/history.md](../docs/history.md) — Version history feature (browsing, recovery, UUID tracking)
-- [docs/native-tables.md](../docs/native-tables.md) — Native table access reference (pipeline queries, DDL)
+- [docs/data-first.md](../docs/data-first.md) — Native table access reference (pipeline queries, DDL)
 - [docs/quickstart.md](../docs/quickstart.md) — Guided scenarios with sample data
 
 ### Phase 3: Advanced Documentation

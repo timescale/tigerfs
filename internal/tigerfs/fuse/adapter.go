@@ -103,6 +103,10 @@ func (a *FSAdapter) EntryToAttr(entry *tigerfs.Entry, out *gofuse.Attr) {
 		// Directory mode: include S_IFDIR flag
 		out.Mode = syscall.S_IFDIR | uint32(entry.Mode&0777)
 		out.Nlink = 2 // directories have . and ..
+	} else if entry.IsSymlink() {
+		// Symlink mode: include S_IFLNK flag
+		out.Mode = syscall.S_IFLNK | 0777 // symlinks are always 0777
+		out.Nlink = 1
 	} else {
 		// File mode: include S_IFREG flag
 		out.Mode = syscall.S_IFREG | uint32(entry.Mode&0777)
@@ -185,6 +189,11 @@ func (a *FSAdapter) EntriesToDirEntries(entries []tigerfs.Entry) []gofuse.DirEnt
 			result[i] = gofuse.DirEntry{
 				Name: entry.Name,
 				Mode: syscall.S_IFDIR,
+			}
+		} else if entry.IsSymlink() {
+			result[i] = gofuse.DirEntry{
+				Name: entry.Name,
+				Mode: syscall.S_IFLNK,
 			}
 		} else {
 			result[i] = gofuse.DirEntry{

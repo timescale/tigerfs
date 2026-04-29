@@ -87,6 +87,17 @@ type FSContext struct {
 	// IsTerminal indicates this context has reached .export/ and no more
 	// capabilities can be added.
 	IsTerminal bool
+
+	// PipelineDepth tracks the number of pipeline operations applied.
+	// Used to enforce MaxPipelineDepth and prevent infinite recursion
+	// from recursive scanners (rm -rf, find, agents).
+	PipelineDepth int
+
+	// HideCapabilities suppresses pipeline capability directories in ReadDir.
+	// Used for .log and .savepoint virtual directories inside file-first
+	// workspaces, where capabilities are accessible by explicit path but
+	// hidden from listing to prevent recursive scanner blowup.
+	HideCapabilities bool
 }
 
 // NewFSContext creates a new filesystem context for a table.
@@ -163,6 +174,7 @@ func (ctx *FSContext) WithFilter(col, val string, indexed bool) *FSContext {
 		Value:   val,
 		Indexed: indexed,
 	})
+	clone.PipelineDepth++
 	return clone
 }
 
@@ -179,6 +191,7 @@ func (ctx *FSContext) WithOrder(col string, desc bool) *FSContext {
 	clone.OrderBy = col
 	clone.OrderDesc = desc
 	clone.HasOrdered = true
+	clone.PipelineDepth++
 	return clone
 }
 
@@ -202,6 +215,7 @@ func (ctx *FSContext) WithLimit(limit int, limitType LimitType) *FSContext {
 
 	clone.Limit = limit
 	clone.LimitType = limitType
+	clone.PipelineDepth++
 	return clone
 }
 
@@ -225,6 +239,7 @@ func (ctx *FSContext) WithColumns(columns []string) *FSContext {
 	clone.Columns = make([]string, len(columns))
 	copy(clone.Columns, columns)
 	clone.HasColumns = true
+	clone.PipelineDepth++
 	return clone
 }
 

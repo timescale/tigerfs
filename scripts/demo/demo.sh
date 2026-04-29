@@ -24,14 +24,16 @@ error() { echo -e "${RED}==>${NC} $1"; }
 # ---------------------------------------------------------------------------
 COMMAND="${1:-start}"
 MODE=""
+DEBUG=""
 
 for arg in "$@"; do
     case "$arg" in
         --docker) MODE="docker" ;;
         --mac)    MODE="mac" ;;
+        --debug)  DEBUG="--log-level debug" ;;
         start|stop|status|restart|shell) ;;
         *)
-            echo "Usage: $0 {start|stop|status|restart|shell} [--docker|--mac]"
+            echo "Usage: $0 {start|stop|status|restart|shell} [--docker|--mac] [--debug]"
             echo ""
             echo "Commands:"
             echo "  start   - Start PostgreSQL, mount TigerFS, seed demo apps"
@@ -40,9 +42,10 @@ for arg in "$@"; do
             echo "  restart - Stop and start again"
             echo "  shell   - Enter the TigerFS environment"
             echo ""
-            echo "Modes:"
+            echo "Options:"
             echo "  --docker  Docker containers for both PostgreSQL and TigerFS (default)"
             echo "  --mac     PostgreSQL in Docker, TigerFS runs natively on macOS"
+            echo "  --debug   Enable debug logging (--log-level debug)"
             exit 1
             ;;
     esac
@@ -134,7 +137,7 @@ docker_start() {
 
     info "Mounting TigerFS at $MOUNTPOINT (inside container)..."
     docker compose -f "$COMPOSE_FILE" exec -T tigerfs \
-        tigerfs mount --insecure-no-ssl "$CONN_STR" "$MOUNTPOINT" &
+        tigerfs mount --insecure-no-ssl $DEBUG "$CONN_STR" "$MOUNTPOINT" &
 
     sleep 2
     if ! docker_is_mounted; then
@@ -242,7 +245,7 @@ mac_start() {
     mkdir -p "$MOUNTPOINT"
 
     info "Mounting TigerFS at $MOUNTPOINT..."
-    "$REPO_ROOT/bin/tigerfs" mount "$CONN_STR" "$MOUNTPOINT" &
+    "$REPO_ROOT/bin/tigerfs" mount --insecure-no-ssl $DEBUG "$CONN_STR" "$MOUNTPOINT" &
     TIGERFS_PID=$!
 
     sleep 2

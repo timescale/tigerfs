@@ -36,7 +36,7 @@ CREATE TABLE %s (
     -- Primary key (choose one pattern):
     -- id SERIAL PRIMARY KEY,
     -- id BIGSERIAL PRIMARY KEY,
-    -- id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- id UUID PRIMARY KEY DEFAULT uuidv7(),
 
     -- Add columns here:
     -- name TEXT NOT NULL,

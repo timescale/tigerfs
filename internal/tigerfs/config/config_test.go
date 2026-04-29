@@ -107,7 +107,7 @@ func TestInit_SetsDefaults(t *testing.T) {
 		{"default_schema", ""}, // Empty = inherit from PostgreSQL's current_schema()
 		{"pool_size", 10},
 		{"pool_max_idle", 5},
-		{"dir_listing_limit", 10000},
+		{"dir_listing_limit", 1000},
 		{"attr_timeout", 1 * time.Second},
 		{"entry_timeout", 1 * time.Second},
 		{"query_timeout", 30 * time.Second},
@@ -177,8 +177,8 @@ func TestLoad_UnmarshalConfig(t *testing.T) {
 	if cfg.PoolMaxIdle != 5 {
 		t.Errorf("Expected PoolMaxIdle=5, got %d", cfg.PoolMaxIdle)
 	}
-	if cfg.DirListingLimit != 10000 {
-		t.Errorf("Expected DirListingLimit=10000, got %d", cfg.DirListingLimit)
+	if cfg.DirListingLimit != 1000 {
+		t.Errorf("Expected DirListingLimit=1000, got %d", cfg.DirListingLimit)
 	}
 	if cfg.AttrTimeout != 1*time.Second {
 		t.Errorf("Expected AttrTimeout=1s, got %v", cfg.AttrTimeout)
@@ -542,8 +542,8 @@ func TestConfig_FilesystemFields(t *testing.T) {
 		t.Fatalf("Load() failed: %v", err)
 	}
 
-	if cfg.DirListingLimit != 10000 {
-		t.Errorf("Expected DirListingLimit=10000, got %d", cfg.DirListingLimit)
+	if cfg.DirListingLimit != 1000 {
+		t.Errorf("Expected DirListingLimit=1000, got %d", cfg.DirListingLimit)
 	}
 	if cfg.AttrTimeout != 1*time.Second {
 		t.Errorf("Expected AttrTimeout=1s, got %v", cfg.AttrTimeout)

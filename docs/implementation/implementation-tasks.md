@@ -744,7 +744,7 @@ cat /tmp/testmount/users/.schema
 go run ./cmd/tigerfs postgres://... /tmp/testmount
 
 # Test TSV update
-echo -e "1\tnew@example.com" > /tmp/testmount/users/1
+echo -e "id\temail\n1\tnew@example.com" > /tmp/testmount/users/1.tsv
 cat /tmp/testmount/users/1/email
 # Should show: new@example.com
 
@@ -8663,3 +8663,622 @@ goreleaser release --snapshot --clean
 - **Ask questions when blocked** - Don't guess or skip ahead
 
 **Ready to begin! Start with Task 1.1: Evaluate and Select FUSE Library**
+
+
+---
+
+## Phase 12: Undo and Recovery
+
+Design spec: `docs/adr/016-undo-and-recovery.md`
+
+Tasks ordered: infrastructure first (UUIDv7 display format, symlink support), then undo features incrementally. Demo data grows with each step so every feature can be manually tested as it lands.
+
+### Task 12.1: UUIDv7 Display Format
+Implement timestamp+base36 globally before any new undo code exists. All new code uses the new format from day one.
+
+**Depends on:** Nothing
+**Files:** `internal/tigerfs/fs/synth/format.go`, `internal/tigerfs/db/query.go`, `internal/tigerfs/db/pk_match.go`, `internal/tigerfs/fs/history.go`
+**Tasks:**
+1. Add `UUIDv7ToDisplayName()` and `DisplayNameToUUIDv7()` in synth/format.go
+2. Add `isUUIDv7()` helper (check version bits 48-51 = 0111)
+3. Update `scanAndEncodePK()`: detect UUIDv7, use display format for filenames
+4. Update PK path resolution (pk_match.go): accept display format, convert back to UUID
+5. Update `.history/` version ID generation (replaces `UUIDv7ToVersionID`)
+6. Update `.history/` version ID parsing to accept new format
+7. Accept both hex UUID and display format in `.by/<column>/<value>` paths
+8. Update ALL existing tests referencing hex UUIDs or old version ID format
+9. Unit tests: encode/decode round-trip, isUUIDv7 detection, mixed v4/v7 tables
+10. Integration tests: data-first table with UUIDv7 PK, .history/ display
+**Manual test:** `ls mount/notes/.history/hello.md/` shows timestamp+base36 entries
+
+### Task 12.2: Symlink Support (Adapter Plumbing)
+Add full symlink lifecycle to FUSE + NFS adapters: create, stat, readlink, read-through, write-through, delete.
+
+**Depends on:** Nothing
+**Files:** `internal/tigerfs/fs/operations.go`, `internal/tigerfs/fs/types.go`, `internal/tigerfs/nfs/ops_filesystem.go`, `internal/tigerfs/fuse/ops_node.go`, `internal/tigerfs/fuse/adapter.go`
+**Tasks:**
+1. Add `Readlink(ctx, path) (string, *FSError)` to fs.Operations (stub returning ErrNotSupported for non-symlink paths)
+2. Add `os.ModeSymlink` support to Entry.Mode in types.go
+3. NFS adapter: implement `Readlink()` -> delegate to ops; update `Lstat()` to return symlink info without following; update `opsFileInfo.Mode()` for S_IFLNK; ensure `Stat()` follows symlinks (returns target's info)
+4. FUSE adapter: add `Readlink(ctx) ([]byte, syscall.Errno)` on OpsNode; update `EntryToAttr` for S_IFLNK
+5. Ensure kernel/client-level symlink following works: `cat <symlink>` should resolve through to the target file and return its content; `echo > <symlink>` should write to the target
+6. Unit tests for symlink Entry mode handling, adapter dispatch, Lstat vs Stat behavior
+7. Integration tests:
+   - Create symlink at table root level, verify: `readlink` returns target path, `stat` shows S_IFLNK mode, `cat` returns target file content
+   - Create symlink within a subdirectory, verify same behaviors
+   - Write through symlink, verify target file is modified
+   - `stat` on symlink shows S_IFLNK; `stat` following symlink shows target's type/size
+   - Delete symlink, verify gone; verify target file still exists and unchanged
+   - Symlink to `/dev/null`: verify `cat` returns empty, `stat` works
+8. **Cross-platform verification:** Run symlink integration tests on both NFS (macOS) and FUSE (Linux). Both adapters must handle all symlink operations identically.
+
+### Task 12.3: Log and Savepoint Table DDL
+Extend `synth/build.go` to create the log hypertable and savepoint table. **Only for history-enabled synth apps** -- apps without history do not get these tables.
+
+**Depends on:** Nothing
+**Files:** `internal/tigerfs/fs/synth/build.go`
+**Tasks:**
+1. Add `CREATE TABLE tigerfs.<app>_log` with all columns from ADR Section 1.2 (log_id, file_id, type, user_id, filename, version_id, description)
+2. Add `create_hypertable()` with `chunk_time_interval => INTERVAL '1 month'` (Section 1.3)
+3. Add composite index `(file_id, log_id ASC)` (Section 1.4)
+4. Add compression policy: `segmentby=file_id`, `orderby=log_id ASC`, compress after 1 day (Section 1.5)
+5. Add `CREATE TABLE tigerfs.<app>_savepoint` with all columns (Section 2.2)
+6. Conditional: only create log/savepoint tables when history feature is enabled. Synth apps without history skip these.
+7. Unit tests for DDL generation (verify SQL includes all columns, hypertable, index, compression)
+8. Integration tests:
+   - Create synth app WITH history: verify log and savepoint tables exist with correct schema
+   - Create synth app WITHOUT history: verify log and savepoint tables do NOT exist
+**Prerequisites note:** Requires TimescaleDB >= 2.20.0 and PostgreSQL >= 16 (for compressed-chunk SkipScan)
+**Manual test:** Connect to DB, confirm tables, indexes, and compression policies
+
+### Task 12.4: Log Entry Creation in Write Path
+Insert log entries on writes. Every file operation now produces a log record.
+
+**Depends on:** 12.3 (log table exists)
+**Files:** `internal/tigerfs/fs/write.go`, `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Add `InsertLogEntry()` to DB layer
+2. Determine `version_id` capture mechanism (ADR Section 7.2)
+3. Integrate into `writeSynthFile()` (insert/update), `deleteSynthFile()`, `renameSynthFile()`
+4. user_id is NULL for now (identity not yet wired)
+5. Unit tests for log entry creation
+6. Integration tests: create/edit/delete/rename files, verify log entries with correct type, file_id, filename, version_id (NULL for create, non-NULL for edit/rename/delete)
+**Demo data:** Create `_demo` synth app with history. Write several files across subdirectories (`docs/intro.md`, `docs/api.md`, `guides/setup.md`). Edit some files. Delete one. Rename one. Query the DB directly to confirm log entries exist with correct data.
+
+### Task 12.5: User Identity (.info/user)
+Add mount-level user identity. Wire into log entries so operations are tagged with who made them. Identity is in-memory only -- does NOT persist across unmount/remount. This is by design: identity is a session-level setting. For persistent identity, use `--user-id` at mount time or `TIGERFS_USER_ID` env var (both are set before mount, so they're "persistent" in that sense).
+
+**Depends on:** 12.4 (log entries exist, now add user_id to them)
+**Files:** `internal/tigerfs/fs/operations.go`, `internal/tigerfs/cmd/mount.go`, `internal/tigerfs/config/config.go`
+**Tasks:**
+1. Add `UserID` field to Config, bind `--user-id` flag and `TIGERFS_USER_ID` env
+2. Add `userID` field to Operations struct, initialized from config at mount time
+3. Add root-level `.info/` directory with `user` file (read/write)
+4. Wire `userID` into `InsertLogEntry()` calls from 12.4
+5. Unit tests for identity resolution (flag > env > NULL)
+6. Integration tests:
+   - Mount with --user-id, `cat .info/user` returns it
+   - `echo "new-user" > .info/user`, subsequent log entries have new user_id
+   - Unmount/remount without --user-id: `.info/user` is empty/NULL (not persisted)
+   - Remount with --user-id: `.info/user` has the flag value again
+**Demo step:** Set `.info/user` to `demo-user`. Make more edits. Query DB to confirm log entries now have user_id set. Change user to `agent-explorer`, make more edits, confirm different user_id in log.
+
+### Task 12.6: Path Parsing for .log/, .savepoint/, .undo/
+Add new path types and parsing. Key design: `.log/` and `.savepoint/` delegate to existing data-first pipeline parsing (reuse `processSegments` for `.by/`, `.filter/`, `.last/`, `.first/`, `.order/`, `.export/`, `.columns/`, `.sample/`, `.all/`). No new pipeline parsing code needed -- just new entry points that set the target table and delegate. `.undo/` has additional structure (`id/`, `to-id/`, `to-savepoint/` routing + `.apply` trigger + `.info/summary`) that requires new parsing.
+
+**Depends on:** Nothing (pure parsing logic)
+**Files:** `internal/tigerfs/fs/path.go`, `internal/tigerfs/fs/constants.go`
+**Tasks:**
+1. Add constants: `DirLog`, `DirSavepoint`, `DirUndo`
+2. Add to `capabilityDirectories` map
+3. Add `PathLog`, `PathSavepoint`, `PathUndo` path types with parsed fields
+4. `.log/` and `.savepoint/` paths: after recognizing the dot-directory, delegate remaining segments to existing pipeline parsing (same code that handles `.by/`, `.filter/`, etc. for data-first tables)
+5. `.undo/` paths: parse `id/`, `to-id/`, `to-savepoint/` routing, then target identifiers, then pipeline segments (reuse), then `.info/summary` or `.apply` leaf
+6. Unit tests for all path variants:
+   - `.log/.last/10`, `.log/.by/user_id/agent-7/.export/json`, `.log/<id>/before`, `.log/<id>/after`, `.log/<id>/current`
+   - `.savepoint/name/description`, `.savepoint/.by/user_id/agent-7/.last/5`
+   - `.undo/id/<id>/.apply`, `.undo/id/<id>/.info/summary`
+   - `.undo/to-id/<id>/.apply`, `.undo/to-id/<id>/.by/user_id/<user>/.apply`
+   - `.undo/to-savepoint/<name>/.apply`, `.undo/to-savepoint/<name>/.by/user_id/<user>/.info/summary`
+   - `.undo/to-savepoint/<name>/.filter/type/delete/.apply`
+   - `.undo/to-savepoint/<name>/.last/5/.info/summary`
+   - `.undo/to-savepoint/<name>/.sample/5/` -- path parses but `.apply` not available under `.sample/`
+
+### Task 12.7: .log/ Interface (Data-First on Log Table)
+Expose the log through the filesystem using existing data-first pipeline code (no new pipeline logic -- just create FSContext targeting the log table and delegate). Add diff symlinks on log entries.
+
+**Depends on:** 12.2 (symlinks), 12.4 (log entries exist), 12.6 (path parsing)
+**Files:** `internal/tigerfs/fs/operations.go`
+**Tasks:**
+1. Add `readDirLog()`, `statLog()`, `readFileLog()` -- create FSContext targeting `tigerfs.<app>_log`, delegate to existing data-first pipeline handlers
+2. Add `readlinkLog()` -- resolve before/after/current symlinks (ADR Section 4.1.1)
+3. Wire into dispatch switch statements
+4. Unit tests for symlink resolution (all state matrix cases from ADR: INSERT/UPDATE/DELETE/UNDO, /dev/null for missing states)
+5. Integration tests -- pipeline operations:
+   - `ls .log/.last/10` -- most recent entries
+   - `ls .log/.first/5` -- oldest entries
+   - `cat .log/<id>/type` -- single column access
+   - `cat .log/<id>.json` -- row as JSON
+   - `ls .log/.by/user_id/agent-7` -- filter by user
+   - `ls .log/.by/type/delete` -- filter by type
+   - `ls .log/.by/filename/hello.md` -- filter by filename
+   - `cat .log/.by/user_id/agent-7/.last/5/.export/json` -- chained pipeline
+   - `cat .log/.export/tsv` -- bulk export
+   - `ls .log/.order/filename` -- sorted
+6. Integration tests -- diff symlinks:
+   - `readlink .log/<update_id>/before` -- points to .history/ path
+   - `readlink .log/<update_id>/after` -- points to .history/ path or current file
+   - `readlink .log/<update_id>/current` -- points to current file or /dev/null
+   - `readlink .log/<insert_id>/before` -- points to /dev/null
+   - `readlink .log/<delete_id>/after` -- points to /dev/null
+   - `diff -u --color .log/<id>/before .log/<id>/after` -- produces correct diff output
+   - `cat .log/<id>/before` -- read through symlink returns file content
+7. **SkipScan verification:** Run `EXPLAIN ANALYZE` on the pipeline query used for `.log/.last/N` or `.log/.by/file_id/<uuid>` listings. Verify the `(file_id, log_id ASC)` index is used and SkipScan activates for `DISTINCT ON` queries when applicable.
+**Demo step:** With the demo data:
+- `ls mount/demo/.log/.last/10` -- see recent operations with timestamp+base36 IDs
+- `cat mount/demo/.log/.last/5/.export/json` -- JSON output
+- `diff -u --color mount/demo/.log/<id>/before mount/demo/.log/<id>/after` -- see a colored diff
+- `ls mount/demo/.log/.by/user_id/demo-user` vs `.by/user_id/agent-explorer` -- filtered views
+
+### Task 12.8: .savepoint/ Interface (Data-First on Savepoint Table)
+Expose savepoints using existing data-first pipeline code (FSContext targets savepoint table with `name` as display filename). Add write support for create/update/rename/delete.
+
+**Depends on:** 12.3 (savepoint table), 12.6 (path parsing)
+**Files:** `internal/tigerfs/fs/operations.go`, `internal/tigerfs/fs/write.go`
+**Tasks:**
+1. Add `readDirSavepoint()`, `statSavepoint()`, `readFileSavepoint()` -- delegate to pipeline with `name` as display filename
+2. With `name` as PK, savepoints use standard `writeRowFile` (no custom CRUD functions). A thin `writeSavepoint` wrapper injects `user_id` from mount identity. Format suffix required for creation (`.tsv`, `.json`, `.csv`) to avoid macOS NFS inode cache conflicts.
+3. Wire into dispatch switch statements
+4. Unit tests
+5. Integration tests -- CRUD operations:
+   - `echo '{}' > .savepoint/my-checkpoint.json` -- creates with name only
+   - `echo -e "description\nmy desc" > .savepoint/my-checkpoint.tsv` -- creates with description
+   - `echo '{"description":"my desc","user_id":"agent-7"}' > .savepoint/my-checkpoint.json` -- creates with all fields
+   - `cat .savepoint/my-checkpoint/description` -- read individual field
+   - `cat .savepoint/my-checkpoint/savepoint_id` -- read auto-generated UUIDv7
+   - `cat .savepoint/my-checkpoint.json` -- read full row as JSON
+   - `echo "new desc" > .savepoint/my-checkpoint/description` -- update description
+   - `rm .savepoint/my-checkpoint` -- delete
+   - Verify delete only removes bookmark, not log entries
+6. Integration tests -- pipeline operations:
+   - `ls .savepoint/.last/5` -- most recent
+   - `ls .savepoint/.by/user_id/demo-user` -- filter by user
+   - `cat .savepoint/.export/json` -- bulk export
+   - `ls .savepoint/.order/name` -- sorted
+   - `ls .savepoint/.all/` -- full listing
+**Demo step:** With demo data:
+- `echo -e "description\nInitial data loaded" > mount/demo/.savepoint/initial-data.tsv`
+- Make more edits (update files, delete one, create new one)
+- `echo -e "description\nAfter edits" > mount/demo/.savepoint/after-edits.tsv`
+- `ls mount/demo/.savepoint/` -- see both savepoints listed by name
+- `cat mount/demo/.savepoint/initial-data.json` -- see details
+- `rm mount/demo/.savepoint/initial-data` -- delete
+
+### Task 12.9: Auto-Savepoints
+Implement session-based auto-savepoint creation.
+
+**Depends on:** 12.4 (log entries for gap detection), 12.8 (savepoint write)
+**Files:** `internal/tigerfs/fs/operations.go`, `internal/tigerfs/config/config.go`
+**Tasks:**
+1. Add `AutoSavepointInterval` to Config (default 30m), bind flag and env
+2. Check last log entry timestamp before each write; create auto-savepoint if gap > threshold
+3. Auto-savepoint naming: `auto-<user_id>-<timestamp>` or `auto-<timestamp>`
+4. Unit tests for gap detection and naming (use injected clock, not real sleeps, to avoid flaky tests). Test that interval=0 disables auto-savepoints entirely.
+5. Integration test: use a very short interval (100ms), perform two writes separated by a `time.Sleep(150ms)`, verify auto-savepoint created between them. Use generous timing margins to avoid flakiness. Alternatively, use a mock/injectable clock in the gap detection logic so tests don't depend on wall-clock timing at all.
+**Demo step:** Set interval to 1s for testing. Write, wait, write. `ls mount/demo/.savepoint/auto-*`
+
+### Task 12.10: Undo Execution Logic
+Implement core undo operations. Tested via direct function calls.
+
+**Depends on:** 12.4 (log entries), 12.8 (savepoints for to-savepoint lookups)
+**Files:** `internal/tigerfs/db/query.go`, `internal/tigerfs/fs/undo.go` (new)
+**Tasks:**
+1. Add `QueryUndoAffectedFiles()` -- DISTINCT ON query (ADR Section 1.8). Also add `QueryNextLogEntry(file_id, log_id)` for `after` symlink resolution using the `(file_id, log_id ASC)` index.
+2. Add `ExecuteUndo()` -- single transaction: DELETE inserts, UPSERT updates/deletes, AND insert `type='undo'` log entries for each restored file within the same transaction (ADR Section 3.3). Set `description` on undo log entries (e.g., "Undo to savepoint before-exploration").
+3. Add `ExecuteUndoSingle()` -- single operation undo, also inserts `type='undo'` log entry.
+4. Handle pipeline filter composition (`.by/user_id/`, `.filter/type/`, `.filter/filename/`, `.last/N/`, `.first/N/`). Reject `.sample/` (return error if `.apply` attempted after `.sample/`).
+5. Handle DDL limitation gracefully: if undo SQL fails due to schema mismatch (column removed after savepoint), return a descriptive error rather than crashing.
+6. Unit tests for query generation with filters
+7. Integration tests (direct function calls, not filesystem):
+   - Undo single INSERT/UPDATE/DELETE
+   - Undo to savepoint (multiple files, mixed ops)
+   - Undo to log_id
+   - Undo by user
+   - Undo with `.filter/type/delete/`
+   - Undo-of-undo
+   - Idempotent double undo to same savepoint
+8. **SkipScan verification:** Run `EXPLAIN ANALYZE` on the `QueryUndoAffectedFiles()` DISTINCT ON query against a test table with log entries. Verify the plan shows `Custom Scan (SkipScan)` nodes, confirming the `(file_id, log_id ASC)` index is being used efficiently.
+
+### Task 12.11: .undo/ Interface (Preview + Apply)
+Expose undo preview and apply through the filesystem. Full end-to-end demo. The default listing limit for undo sub-directories is configurable (not hardcoded).
+
+**Depends on:** 12.2 (symlinks for /dev/null), 12.6 (path parsing), 12.10 (undo execution)
+**Files:** `internal/tigerfs/fs/operations.go`, `internal/tigerfs/fs/write.go`, `internal/tigerfs/fs/undo.go`, `internal/tigerfs/config/config.go`
+**Tasks:**
+1. Add `UndoListLimit` to Config (default 100), bind `--undo-list-limit` flag and `TIGERFS_UNDO_LIST_LIMIT` env. Store in standard config location alongside other limit configs.
+2. Add `readDirUndo()` -- top-level `id/`, `to-id/`, `to-savepoint/`; sub-dirs use `UndoListLimit` as default + full pipeline; leaf entries as preview directory trees with /dev/null symlinks for deletes
+3. Add `statUndo()`, `readFileUndo()` -- .info/summary (TSV + format suffixes), affected file content from history
+4. Add `writeUndoApply()` -- trigger on both Create (`touch`) and Write (`echo`), following the DDL Chtimes adapter pattern. Log at Info level with structured fields: `zap.String("target", ...)`, `zap.Int("files_restored", ...)`, `zap.Int("files_deleted", ...)`
+5. Wire into all dispatch switch statements including Readlink
+6. Unit tests for preview generation, summary formatting (TSV and JSON), /dev/null symlinks in preview tree
+7. Integration tests -- navigation and preview:
+   - `ls .undo/` shows `id/`, `to-id/`, `to-savepoint/`
+   - `ls .undo/id/` shows entries up to UndoListLimit
+   - `ls .undo/id/.all/` shows all entries
+   - `ls .undo/to-savepoint/` shows savepoints
+   - `cat .undo/to-savepoint/<name>/.info/summary` -- correct TSV
+   - `cat .undo/to-savepoint/<name>/.info/summary.json` -- correct JSON
+   - `cat .undo/to-savepoint/<name>/docs/hello.md` -- restored content
+   - `ls .undo/to-savepoint/<name>/` -- shows affected file directory tree
+8. Integration tests -- apply via `id/`:
+   - Undo single INSERT: file is deleted
+   - Undo single UPDATE: file restored to before-state
+   - Undo single DELETE: file re-inserted from history
+   - Undo an UNDO operation: original state returns (undo-of-undo)
+   - Verify log entries created with type=undo for each apply
+9. Integration tests -- apply via `to-savepoint/`:
+   - Create savepoint, make mixed ops (insert + update + delete), undo to savepoint
+   - Verify all files restored to savepoint state, new file deleted, deleted file re-inserted
+   - Idempotent: undo to same savepoint again, verify same data state
+10. Integration tests -- apply via `to-id/`:
+    - Undo to a specific log entry, verify ops after that entry are reversed
+11. Integration tests -- filtered undo:
+    - `.undo/to-savepoint/<name>/.by/user_id/<user>/.apply` -- only that user's ops undone
+    - `.undo/to-savepoint/<name>/.filter/type/delete/.apply` -- only deletes undone
+    - `.undo/to-savepoint/<name>/.filter/filename/hello.md/.apply` -- only one file undone
+    - `.undo/to-savepoint/<name>/.last/3/.apply` -- only last 3 ops undone
+    - Combined: `.undo/to-savepoint/<name>/.by/user_id/<user>/.filter/type/delete/.apply`
+12. Integration tests -- pipeline on undo sub-directories:
+    - `ls .undo/id/.by/user_id/agent-7` -- filtered listing
+    - `ls .undo/id/.by/type/update/.last/5` -- chained
+    - `cat .undo/to-savepoint/.export/json` -- export savepoints
+13. Integration tests -- edge cases:
+    - Undo with no operations to undo (empty summary, .apply is no-op)
+    - Undo on a file that was inserted then deleted after savepoint (no-op, correct)
+    - Undo on a file that was updated then deleted (re-insert from history)
+    - Preview then apply: verify preview content matches what actually gets restored
+    - Invalid log_id in `.undo/id/<bad_id>/`: returns ENOENT
+    - Invalid savepoint name in `.undo/to-savepoint/<bad_name>/`: returns ENOENT
+    - `.undo/to-savepoint/<name>/.sample/5/.apply`: returns error (`.sample/` restriction)
+    - `.undo/to-savepoint/<name>/.order/filename/.apply`: succeeds (`.order/` ignored by apply)
+    - `.undo/to-savepoint/<name>/.columns/log_id,filename/.apply`: succeeds (`.columns/` ignored)
+    - `echo "confirm" > .undo/to-savepoint/<name>/.apply`: works same as `touch` (both trigger mechanisms)
+14. Integration tests -- filename resolution in preview:
+    - Create file A, savepoint, rename A to B, preview undo to savepoint: verify preview shows A (from history entry), not B (from current/log)
+    - Create file, savepoint, delete file, preview undo: verify deleted file appears as /dev/null symlink in preview tree
+15. Integration tests -- `to-id/` with `.by/user_id/`:
+    - Set user to agent-7, make edits; set user to agent-9, make edits; undo to-id with .by/user_id/agent-7: verify only agent-7's ops reversed
+**Demo step:** Full manual walkthrough with demo data:
+- `cat mount/demo/.undo/to-savepoint/initial-data/.info/summary`
+- `diff -u --color mount/demo/docs/intro.md mount/demo/.undo/to-savepoint/initial-data/docs/intro.md`
+- Combined diff one-liner from ADR Section 4.3.12
+- `touch mount/demo/.undo/to-savepoint/after-edits/.apply` -- undo to savepoint
+- Verify files restored
+- Undo the undo: `touch mount/demo/.undo/id/<undo_log_id>/.apply`
+- Per-user undo: `touch mount/demo/.undo/to-savepoint/initial-data/.by/user_id/agent-explorer/.apply`
+
+### Task 12.12: Short-Lived Caching for Undo, Log, and Savepoint Queries
+Add short-lived caching to reduce redundant DB queries across undo preview, log symlink resolution, and savepoint lookups. NFS/FUSE make multiple RPCs (GETATTR, LOOKUP, READ) per user operation, and each RPC independently runs the full query chain. A single `cat` on a preview file generates ~20 queries; target is ~5.
+
+**Depends on:** 12.11 (.undo/ interface)
+**Files:** `internal/tigerfs/fs/undo.go`, `internal/tigerfs/fs/operations.go`
+
+**Caches to implement (2-second TTL, matching statCache/pathCache patterns):**
+
+1. **queryUndoAffected cache** (highest impact): Cache the DISTINCT ON query result by (undoMode, target, filters). The same affected-files list is queried 3-6 times per preview file access: stat computes size by rendering content, readFile renders content again, and NFS repeats GETATTR multiple times. This is a read-only query on the append-only log table. Stale data means the preview might miss an operation written by another mount during the 2s window, but apply re-queries fresh, so execution is always correct. **Risk: Very low.**
+
+2. **Savepoint name-to-ID cache**: Cache the savepoint row (including savepoint_id) by (schema, table, name). The same savepoint is looked up 4+ times per preview navigation: validateUndoTarget, queryUndoAffected (to resolve savepoint_id), statUndo, and readFileUndo each independently call GetRow. Savepoint rows are rarely modified -- the savepoint_id is immutable once created. The only risk is a savepoint deleted during the 2s window, which would fail at apply time with a clear error. **Risk: None.**
+
+3. **Log entry cache**: Cache QueryLogEntry result by (schema, logTable, logID). The same log entry is fetched 3-4 times per `id/` operation: validateUndoTarget, queryUndoAffected (for single-op mode), readUndoPreviewFile, and during log diff symlink resolution. Log entries are append-only and immutable -- once written, file_id, type, version_id, and filename never change. **Risk: None.**
+
+**Rejected: File existence cache (QueryFileExists).** Evaluated and rejected due to concurrent write risk. QueryFileExists is used in undo execution (to decide DELETE vs skip for create-type entries) and log diff symlink resolution (current symlink). Caching could cause stale data under concurrent multi-mount writes: undo might skip deleting a file it thinks doesn't exist, or try to delete an already-deleted file. The cost of not caching is low -- undo apply runs the check once per file (not repeated), and symlink resolution adds only 2-3 extra queries per log entry listing.
+
+**Implementation:**
+1. Follow established patterns: mutex-protected map, per-table namespace, 2-second TTL, explicit invalidation on undo execution and writes.
+2. Unit tests for cache hit/miss behavior
+3. Verify query reduction: `cat .undo/to-savepoint/X/file.md` should go from ~20 queries to ~5
+
+### Task 12.13: Skills
+Update agent skills for undo and recovery features.
+
+**Depends on:** 12.1-12.12 (all features complete)
+**Files:** `skills/tigerfs/SKILL.md`, `skills/tigerfs/files.md`, `skills/tigerfs/recipes.md`, `skills/tigerfs/data.md`, `skills/tigerfs/ops.md`
+**Tasks:**
+1. SKILL.md: "Safe Editing with Savepoints" section; undo in "What you can build"; Quick Reference; anti-pattern
+2. files.md: Operation Log, Savepoints, Undo sections; update history for UUIDv7 format
+3. recipes.md: Recipe 5 (Safe Agent Exploration), Recipe 6 (Multi-Agent Selective Undo)
+4. data.md: `.info/user`, UUIDv7 display format
+5. ops.md: `--user-id`, `TIGERFS_USER_ID`, `--auto-savepoint-interval`, `--undo-list-limit`
+
+### Task 12.14: Documentation
+Update spec and implementation docs for undo and recovery.
+
+**Depends on:** 12.1-12.12 (all features complete)
+**Files:** `docs/spec.md`, `docs/implementation/`
+**Tasks:**
+1. spec.md: `.log/`, `.savepoint/`, `.undo/`, user identity, DDL limitations (undo doesn't cross schema changes)
+2. implementation-tasks.md and checklist with Phase 12
+
+
+---
+
+## Verification (Phase 12)
+
+1. `go fmt ./... && go vet ./... && go test ./...` passes after every task
+2. Each task's integration tests pass before starting the next
+3. Demo data grows incrementally -- each new feature can be manually explored as it lands
+4. Full end-to-end lifecycle tested in 12.11 (15 categories of integration tests)
+
+---
+
+## Notes for Claude Code
+
+- **Each task is designed to be self-contained** - You can complete it with the information provided
+- **Verification commands are provided** - Run them to confirm success
+- **Tests are integrated throughout** - Not deferred to the end
+- **Dependencies are explicit** - Tasks build on previous work
+- **Commit after each task** - Keep git history clean and logical
+- **Ask questions when blocked** - Don't guess or skip ahead
+
+**Ready to begin! Start with Task 1.1: Evaluate and Select FUSE Library**
+---
+
+## Phase 13: Relational Directory Structure
+
+Design spec: `docs/adr/017-relational-directory-structure.md`
+
+Replaces path-encoded filenames with a parent-pointer model. Must be completed before resuming Phase 12 undo tasks (12.5+).
+
+### Task 13.1: Schema and DDL Changes
+
+**Objective:** Update synth/build.go to generate the new source table, history table, log table, and BEFORE trigger with parent_id and renamed columns.
+
+**Depends on:** Nothing
+**Files:** `internal/tigerfs/fs/synth/build.go`
+**Tasks:**
+1. Source table: add `parent_id UUID REFERENCES ... DEFERRABLE INITIALLY DEFERRED`, change `filename` semantics to leaf name, `UNIQUE NULLS NOT DISTINCT (parent_id, filename, filetype) DEFERRABLE INITIALLY DEFERRED`, index on `(parent_id, filename)`
+2. History table: rename `id` → `file_id`, `_history_id` → `version_id`, `_operation` → `operation`, add `parent_id`, CHECK constraints, modern CREATE TABLE WITH syntax
+3. Log table: rename `history_id` → `version_id`, update CHECK constraint to `create/edit/rename/delete/undo`
+4. BEFORE trigger: copy `parent_id`, use new column names (`file_id`, `version_id`, `operation`)
+5. Create `resolve_path` PL/pgSQL function
+6. Unit tests for all DDL generation
+
+### Task 13.2: Path Resolution
+
+**Objective:** Implement resolve_path Go wrapper and path cache.
+
+**Depends on:** 13.1
+**Files:** `internal/tigerfs/db/query.go`, `internal/tigerfs/fs/operations.go`
+**Tasks:**
+1. Add `ResolvePath(ctx, schema, table, startParent, segments)` to DB layer -- calls resolve_path function, returns intermediate IDs
+2. Add Go-level `pathCache` with 2-second TTL, keyed on `(parent_id, filename)` → `id`
+3. Integration: walk path segments checking cache, call ResolvePath for remaining segments, populate cache from results
+4. Unit tests for cache behavior (hits, misses, TTL, partial hits)
+5. Integration test: resolve_path against real DB
+
+### Task 13.3: ReadDir by parent_id
+
+**Objective:** Replace GetAllRows + in-memory filtering with direct parent_id queries.
+
+**Depends on:** 13.1, 13.2
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Add `GetRowsByParent(ctx, schema, table, parentID)` to DB layer
+2. Remove `filterHierarchicalChildren`
+3. Update `readDirSynthView` (root level: `WHERE parent_id IS NULL`)
+4. Update `readDirSynthHierarchical` (subdirectory: `WHERE parent_id = X`)
+5. Unit and integration tests
+
+### Task 13.4: Write Path Updates
+
+**Objective:** Update file creation and editing to use parent_id.
+
+**Depends on:** 13.2, 13.3
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/fs/write.go`
+**Tasks:**
+1. `writeSynthFile`: resolve parent_id from path, insert/update with parent_id
+2. `ensureSynthParentDirs`: create parent chain with parent_id linking
+3. `mkdirSynth`: insert with parent_id
+4. Unit and integration tests
+
+### Task 13.5: Rename and Move
+
+**Objective:** Replace RenameByPrefix with single-row updates.
+
+**Depends on:** 13.4
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`, `internal/tigerfs/db/interfaces.go`
+**Tasks:**
+1. Directory rename: `UPDATE SET filename='new' WHERE id=dir_id` (1 row)
+2. File rename: `UPDATE SET filename='new' WHERE id=file_id`
+3. File/directory move: `UPDATE SET parent_id=new_parent WHERE id=X`
+4. Remove `RenameByPrefix`, `HasChildrenWithPrefix` from DB layer and interfaces
+5. Log entries use filesystem-centric types: `rename` for rename/move
+6. Unit and integration tests including: rename dir with children, move dir between parents, concurrent rename
+
+### Task 13.6: Delete Path Updates
+
+**Objective:** Update delete operations to use parent_id for child checks.
+
+**Depends on:** 13.3
+**Files:** `internal/tigerfs/fs/synth_ops.go`
+**Tasks:**
+1. Check children: `SELECT EXISTS(... WHERE parent_id = dir_id)` instead of LIKE prefix
+2. Delete file: standard DELETE, no FK issues (leaf node)
+3. Delete empty directory: DELETE after child check
+4. Delete non-empty directory: return ENOTEMPTY
+5. Unit and integration tests
+
+### Task 13.7: History and .history/ Updates
+
+**Objective:** Update history queries for new column names and parent_id navigation.
+
+**Depends on:** 13.1
+**Files:** `internal/tigerfs/fs/history.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Update all history queries: `file_id` (was `id`), `version_id` (was `_history_id`), `operation` (was `_operation`)
+2. `.history/` navigation uses parent_id traversal
+3. `.history/.by/<uuid>/` unchanged (queries by file_id)
+4. Unit and integration tests
+
+### Task 13.8: Log Entry Updates
+
+**Objective:** Update log entry creation for new column names and filesystem-centric types.
+
+**Depends on:** 13.5
+**Files:** `internal/tigerfs/fs/synth_ops.go`, `internal/tigerfs/db/query.go`
+**Tasks:**
+1. Rename types: `insert`→`create`, `update`→`edit`/`rename`, `delete`→`delete`, `undo`→`undo`
+2. `logSynthOp`: compute denormalized full path by walking parent chain at log-write time
+3. Update `InsertLogEntry` for `version_id` column name
+4. Update `QueryLatestHistoryID` for `version_id` column name
+5. Unit and integration tests
+
+### Task 13.9: Migration
+
+**Objective:** Add `relational-directories` migration to `tigerfs migrate` framework.
+
+**Depends on:** 13.1-13.8
+**Files:** `internal/tigerfs/cmd/migrate.go`, `test/integration/migrate_test.go`
+**Tasks:**
+1. Add `relational-directories` migration to the `migrations` slice in `cmd/migrate.go`
+2. Detect: find synth apps in tigerfs schema without parent_id column
+3. Plan: add parent_id, populate from path parsing, strip to leaf names, replace constraints, recreate view, rename history/log columns, update log type values
+4. Integration test: create old-schema tables, run migration, verify parent_id chain + leaf filenames + column renames + TigerFS operations work on migrated data + idempotency
+
+### Task 13.10: Update Existing Tests
+
+**Objective:** Rewrite all synth hierarchy tests for parent_id model.
+
+**Depends on:** 13.1-13.8
+**Tasks:**
+1. Rewrite synth_ops_test.go hierarchy tests
+2. Rewrite integration tests for hierarchy operations
+3. Add complex undo scenarios from ADR-017 verification section (45 test cases)
+4. Run full test suite: `go fmt ./... && go vet ./... && go test ./...`
+
+### Task 13.11: Update ADR-016 and Phase 12 Tasks
+
+**Objective:** Ensure consistency across ADRs and implementation tasks.
+
+**Depends on:** 13.1-13.10
+**Tasks:**
+1. Rewrite ADR-016 sections: log schema (version_id, filesystem-centric types), history references, UPSERT SQL (includes parent_id)
+2. Update Phase 12 tasks 12.5-12.12 in implementation-tasks.md for new schema
+3. Verify consistency between ADR-016, ADR-017, and implementation tasks
+
+### Task 13.12: Documentation
+
+**Objective:** Finalize documentation.
+
+**Depends on:** 13.1-13.11
+**Tasks:**
+1. Save ADR-017 to `docs/adr/017-relational-directory-structure.md`
+2. Update `docs/spec.md` with new schema and directory model
+3. Update skills if needed
+4. Update implementation-tasks-checklist.md
+
+---
+
+## Verification (Phase 13)
+
+1. `go fmt ./... && go vet ./... && go test ./...` passes after every task
+2. All 45 verification scenarios from ADR-017 covered by tests
+3. Demo: directory rename produces one log entry, undo restores correctly
+4. `tigerfs migrate` relational-directories migration tested with integration test
+
+---
+
+## Phase 14: Stress Test (`tigerfs-stress`)
+
+A comprehensive, repeatable stress test for file-first workspaces. Exercises all filesystem operations (create, edit, rename, move, delete files and directories) and all undo operations (single undo by log_id, multi-op undo to log_id, undo to savepoint). Deterministic via PRNG seeding, self-verifying via content hashing, self-contained (spins up own Docker PostgreSQL + TigerFS). All operations go through the real mounted filesystem -- the stress tester is a pure filesystem client with no tigerfs internal imports.
+
+**Location:** `test/stress/`
+**Binary:** `go build -o bin/tigerfs-stress ./test/stress` (not packaged with releases)
+
+### Task 14.1: Scaffolding + Infrastructure
+
+**Objective:** Standalone binary that spins up Docker PostgreSQL, builds and mounts TigerFS, creates a workspace, and tears down cleanly on exit or via `stop` command.
+
+**Files:** `test/stress/main.go`, `test/stress/infra.go`, `test/stress/docker-compose.yml`, `test/stress/README.md`
+**Tasks:**
+1. CLI parsing with `flag` package: `start` and `stop` subcommands, all flags (--seed, --iterations, --debug, --keep, --workspace, --large-files, --many-files, --validate-every)
+2. Infrastructure lifecycle: Docker compose up (timescale/timescaledb-ha:pg18, port 5433), pg_isready wait loop, tigerfs build, mount to `/tmp/tigerfs-stress-<timestamp>`, workspace creation via `.build/`
+3. Teardown: kill tigerfs (SIGTERM then SIGKILL), unmount (diskutil/umount), remove mountpoint, docker compose down -v, remove PID/info files
+4. Signal handling: trap SIGINT/SIGTERM for clean teardown when Ctrl-C'd
+5. `stop` command: read `/tmp/tigerfs-stress.info`, execute teardown from another terminal
+6. Initial README with build instructions and flag reference
+
+### Task 14.2: State Tracking + Validation
+
+**Objective:** In-memory expected state tracking with push/pop stack for undo rollback, and a standalone validation function that compares expected state against the actual mounted filesystem.
+
+**Depends on:** 14.1
+**Files:** `test/stress/state.go`, `test/stress/state_test.go`, `test/stress/validate_test.go`
+**Tasks:**
+1. `WorkspaceState` struct: `Files map[string]string` (path to md5 hash), `Dirs map[string]bool`
+2. Deep copy function for WorkspaceState
+3. `StateStack`: push before every operation, pop on undo_single, restore to savepoint index on undo_to_savepoint, restore to iteration on undo_to_id. `savepoints map[string]int` for savepoint-to-stack-index mapping
+4. `ValidateWorkspace(wsPath, expected)`: walk filesystem skipping dotfiles/virtual dirs, compute md5 per file, compare to expected, detect missing/unexpected/mismatched files
+5. `SnapshotHash(wsPath)`: deterministic hash of sorted "relpath:filehash" lines
+6. Unit tests: deep copy correctness, push/pop, savepoint restore, stack trim, ValidateWorkspace against real temp dirs (passing, unexpected file, missing file, hash mismatch, dotfile skipping)
+
+### Task 14.3: Operations + Content Generation
+
+**Objective:** All filesystem operations with deterministic PRNG-driven content generation, log-normal file size distribution, and directory density control.
+
+**Depends on:** 14.2
+**Files:** `test/stress/operations.go`, `test/stress/operations_test.go`
+**Tasks:**
+1. `SizeConfig` struct with default (max 100KB, typical ~5KB) and large (max 10MB, typical ~22KB) presets
+2. `generateFileSize(rng, cfg)`: log-normal distribution clamped to [64, MaxBytes]
+3. `generateContent(rng, title, targetSize)`: deterministic markdown filling target size
+4. `randomName(rng)`, `randomWords(rng, n)`: deterministic name/content generation
+5. File/dir pool management: `[]string` slices, capacity tracking per directory
+6. All filesystem operations: create_file, edit_file, rename_file, move_file, delete_file, create_dir, rename_dir, create_savepoint -- each takes `rng`, pools, state, wsPath; performs the real filesystem operation; updates expected state
+7. Directory density: default max 10 files/3 subdirs per dir, --many-files max 1000/20
+8. Unit tests: size bounds, content determinism with fixed seed, valid filenames
+
+### Task 14.4: Runner + Undo + End-to-End
+
+**Objective:** Main test loop with weighted operation selection, undo operations through the real filesystem, and full end-to-end wiring.
+
+**Depends on:** 14.3
+**Files:** `test/stress/runner.go`, `test/stress/undo.go`, `test/stress/runner_test.go`
+**Tasks:**
+1. Weighted operation selection: weighted random via `rng` with precondition checks. Re-roll on invalid preconditions, force create_file when nothing else possible
+2. Operation table with weights: create_file(25), edit_file(25), rename_file(10), move_file(10), delete_file(10), create_dir(5), rename_dir(5), create_savepoint(5), undo_single(3), undo_to_id(2), undo_to_savepoint(2)
+3. `undo_single`: read `.log/.last/1/.export/json`, parse LogEntry JSON, apply `.undo/id/<log_id>/.apply`, pop state stack
+4. `undo_to_id`: read `.log/.last/N/.export/json`, pick entry, apply `.undo/to-id/<log_id>/.apply`, restore state to stack index
+5. `undo_to_savepoint`: apply `.undo/to-savepoint/<name>/.apply`, restore state from savepoint snapshot
+6. `--validate-every N` logic: validate every N operations, always validate after undo
+7. Step logging to stdout, error reporting to stderr with seed for replay
+8. Wire runner into main.go start command: after infrastructure ready, run iterations, then teardown
+9. Unit tests: fixed seed produces identical operation sequence, empty pool re-roll, precondition checks
+
+### Task 14.5: README Finalization
+
+**Objective:** Complete documentation with architecture description and usage guide.
+
+**Depends on:** 14.4
+**Files:** `test/stress/README.md`
+**Tasks:**
+1. Expanded "What it is" section: stress test architecture, infrastructure lifecycle, PRNG-seeded operation loop, state tracking model (hash-based verification with push/pop stack), undo rollback testing approach
+2. Prerequisites (Docker, Go, macOS or Linux)
+3. Full flag reference table
+4. Examples: default, reproducible, large-scale, debug, keep-for-inspection
+5. What it tests: full operation list
+6. Stopping a run: `stop` command and Ctrl-C
+7. Interpreting output: stdout progress, stderr errors, tigerfs.log
+8. Replaying failures: copy seed, re-run with --seed
+9. Running unit tests: `go test ./test/stress/...`
+
+---
+
+## Verification (Phase 14)
+
+1. `go test ./test/stress/...` passes (unit tests for state, operations, validation, runner)
+2. `bin/tigerfs-stress start --seed 42 --iterations 20` completes with exit 0
+3. Same seed produces identical output across runs
+4. `bin/tigerfs-stress stop` cleanly tears down from another terminal
+5. Ctrl-C during a run triggers clean teardown
+6. `--large-files --many-files --iterations 50` completes without OOM or timeouts

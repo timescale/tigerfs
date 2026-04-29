@@ -64,6 +64,11 @@ type ColumnRoles struct {
 	// Expected values: "file", "directory". Empty if no matching column found.
 	Filetype string
 
+	// ParentID is the column referencing the parent directory row (self-referencing FK).
+	// NULL for root-level entries. When present with Filetype, enables the relational
+	// parent-pointer directory model (ADR-017). Empty if no matching column found.
+	ParentID string
+
 	// Encoding is the column indicating how body content is encoded.
 	// Values: "utf8" (plain text, default), "base64" (binary data encoded as base64).
 	// Empty if no matching column found (treated as utf8).
@@ -114,6 +119,9 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 	// Detect optional filetype column (for hierarchical directory support)
 	roles.Filetype = findMatchingColumn(columnNames, []string{"filetype"})
 
+	// Detect optional parent_id column (for relational directory model, ADR-017)
+	roles.ParentID = findMatchingColumn(columnNames, []string{"parent_id"})
+
 	// Detect optional encoding column
 	roles.Encoding = findMatchingColumn(columnNames, encodingConventions)
 
@@ -136,6 +144,9 @@ func DetectColumnRoles(columnNames []string, format SynthFormat, pkColumn string
 		}
 		if roles.Filetype != "" {
 			excluded[strings.ToLower(roles.Filetype)] = true
+		}
+		if roles.ParentID != "" {
+			excluded[strings.ToLower(roles.ParentID)] = true
 		}
 		if roles.Encoding != "" {
 			excluded[strings.ToLower(roles.Encoding)] = true

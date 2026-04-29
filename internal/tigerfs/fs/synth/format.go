@@ -8,12 +8,12 @@
 package synth
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
 // SynthFormat represents a synthesized file format.
@@ -213,34 +213,45 @@ func detectFormatFromSuffix(viewName string) SynthFormat {
 	return FormatNative
 }
 
-// VersionIDLayout is the time format for history version IDs.
-// Uses a filesystem-safe format without colons: "2006-01-02T150405Z"
-const VersionIDLayout = "2006-01-02T150405Z"
-
-// UUIDv7ToVersionID extracts the embedded timestamp from a UUIDv7 and
-// formats it as a filesystem-safe version ID string.
-func UUIDv7ToVersionID(id uuid.UUID) string {
-	ts := extractUUIDv7Time(id)
-	return ts.UTC().Format(VersionIDLayout)
+// UUIDv7ToDisplayName converts a UUIDv7 to a human-readable display name.
+// Delegates to format.UUIDv7ToDisplayName. See ADR-016 Section 11.
+func UUIDv7ToDisplayName(id uuid.UUID) string {
+	return format.UUIDv7ToDisplayName(id)
 }
 
-// VersionIDToTimestamp parses a version ID string back to a time.Time.
+// DisplayNameToUUIDv7 parses a display name back to a UUIDv7.
+// Delegates to format.DisplayNameToUUIDv7.
+func DisplayNameToUUIDv7(name string) (uuid.UUID, error) {
+	return format.DisplayNameToUUIDv7(name)
+}
+
+// IsUUIDv7 checks whether a UUID is version 7.
+// Delegates to format.IsUUIDv7.
+func IsUUIDv7(id [16]byte) bool {
+	return format.IsUUIDv7(id)
+}
+
+// UUIDv7ToVersionID is the old version ID function name.
+// Deprecated: Use UUIDv7ToDisplayName instead.
+func UUIDv7ToVersionID(id uuid.UUID) string {
+	return format.UUIDv7ToDisplayName(id)
+}
+
+// VersionIDToTimestamp parses a version ID (old or new format) back to a time.Time.
 func VersionIDToTimestamp(versionID string) (time.Time, error) {
-	t, err := time.Parse(VersionIDLayout, versionID)
+	// Try new display name format first
+	if format.IsDisplayName(versionID) {
+		id, err := format.DisplayNameToUUIDv7(versionID)
+		if err == nil {
+			return format.ExtractUUIDv7Time(id), nil
+		}
+	}
+	// Fall back to old format (second precision)
+	t, err := time.Parse("2006-01-02T150405Z", versionID)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("invalid version ID %q: %w", versionID, err)
 	}
 	return t, nil
-}
-
-// extractUUIDv7Time extracts the millisecond timestamp from a UUIDv7.
-// UUIDv7 stores a Unix timestamp in milliseconds in the first 48 bits.
-func extractUUIDv7Time(id uuid.UUID) time.Time {
-	// First 6 bytes contain the 48-bit Unix timestamp in milliseconds
-	b := id[:]
-	msec := int64(binary.BigEndian.Uint16(b[0:2]))<<32 |
-		int64(binary.BigEndian.Uint32(b[2:6]))
-	return time.UnixMilli(msec)
 }
 
 // detectFormatFromColumns infers the format from column name patterns.

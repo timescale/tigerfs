@@ -13,7 +13,7 @@ import (
 func TestNewAllRowsNode(t *testing.T) {
 	cfg := &config.Config{
 		DefaultSchema:   "public",
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	partialRows := NewPartialRowTracker(nil)
@@ -47,7 +47,7 @@ func TestNewAllRowsNode(t *testing.T) {
 func TestAllRowsNode_Getattr(t *testing.T) {
 	cfg := &config.Config{
 		DefaultSchema:   "public",
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	allNode := NewAllRowsNode(cfg, nil, nil, "public", "users", nil)
@@ -92,7 +92,7 @@ func TestAllRowsNode_Interfaces(t *testing.T) {
 // TestAllRowsNode_Readdir_WithMock tests Readdir listing all rows
 func TestAllRowsNode_Readdir_WithMock(t *testing.T) {
 	cfg := &config.Config{
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	mock := db.NewMockDBClient()
@@ -140,7 +140,7 @@ func TestAllRowsNode_Readdir_WithMock(t *testing.T) {
 // TestAllRowsNode_Readdir_WithMock_Empty tests Readdir with no rows
 func TestAllRowsNode_Readdir_WithMock_Empty(t *testing.T) {
 	cfg := &config.Config{
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	mock := db.NewMockDBClient()
@@ -176,7 +176,7 @@ func TestAllRowsNode_Readdir_WithMock_Empty(t *testing.T) {
 // TestAllRowsNode_Readdir_WithMock_PKError tests Readdir when GetPrimaryKey fails
 func TestAllRowsNode_Readdir_WithMock_PKError(t *testing.T) {
 	cfg := &config.Config{
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	mock := db.NewMockDBClient()
@@ -197,7 +197,7 @@ func TestAllRowsNode_Readdir_WithMock_PKError(t *testing.T) {
 // TestAllRowsNode_Readdir_WithMock_ListError tests Readdir when ListAllRows fails
 func TestAllRowsNode_Readdir_WithMock_ListError(t *testing.T) {
 	cfg := &config.Config{
-		DirListingLimit: 10000,
+		DirListingLimit: 1000,
 	}
 
 	mock := db.NewMockDBClient()

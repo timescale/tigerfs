@@ -6,17 +6,18 @@ import (
 
 func TestDetectColumnRoles_Markdown(t *testing.T) {
 	tests := []struct {
-		name      string
-		columns   []string
-		pk        string
-		wantFile  string
-		wantBody  string
-		wantFront []string
-		wantModAt string
-		wantCreAt string
-		wantExtra string
-		wantEnc   string
-		wantErr   bool
+		name       string
+		columns    []string
+		pk         string
+		wantFile   string
+		wantBody   string
+		wantFront  []string
+		wantModAt  string
+		wantCreAt  string
+		wantExtra  string
+		wantEnc    string
+		wantParent string
+		wantErr    bool
 	}{
 		{
 			name:      "standard columns",
@@ -163,6 +164,18 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			wantCreAt: "created_at",
 			wantEnc:   "encoding",
 		},
+		{
+			name:       "parent_id column detected and excluded from frontmatter",
+			columns:    []string{"id", "parent_id", "filename", "filetype", "title", "author", "body", "encoding", "created_at", "modified_at"},
+			pk:         "id",
+			wantFile:   "filename",
+			wantBody:   "body",
+			wantFront:  []string{"title", "author"},
+			wantModAt:  "modified_at",
+			wantCreAt:  "created_at",
+			wantEnc:    "encoding",
+			wantParent: "parent_id",
+		},
 	}
 
 	for _, tt := range tests {
@@ -197,6 +210,9 @@ func TestDetectColumnRoles_Markdown(t *testing.T) {
 			}
 			if roles.Encoding != tt.wantEnc {
 				t.Errorf("Encoding = %q, want %q", roles.Encoding, tt.wantEnc)
+			}
+			if roles.ParentID != tt.wantParent {
+				t.Errorf("ParentID = %q, want %q", roles.ParentID, tt.wantParent)
 			}
 			if len(roles.Frontmatter) != len(tt.wantFront) {
 				t.Fatalf("Frontmatter = %v, want %v", roles.Frontmatter, tt.wantFront)

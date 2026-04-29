@@ -402,6 +402,8 @@ func cleanupTigerFSTables(t *testing.T, connStr string, tableNames ...string) {
 		for _, name := range tableNames {
 			pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS tigerfs.%s CASCADE", name))
 			pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS tigerfs.%s_history CASCADE", name))
+			pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS tigerfs.%s_log CASCADE", name))
+			pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS tigerfs.%s_savepoint CASCADE", name))
 		}
 	})
 }
