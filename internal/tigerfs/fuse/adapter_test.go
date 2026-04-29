@@ -67,6 +67,54 @@ func TestFSAdapter_EntryToAttr_File(t *testing.T) {
 	assert.Equal(t, uint32(1), out.Nlink) // regular files have nlink=1
 }
 
+// TestFSAdapter_EntryToAttr_Symlink tests converting a symlink entry.
+func TestFSAdapter_EntryToAttr_Symlink(t *testing.T) {
+	cfg := &config.Config{}
+	ops := tigerfs.NewOperations(cfg, nil)
+	adapter := NewFSAdapter(ops)
+
+	entry := &tigerfs.Entry{
+		Name:    "before",
+		IsDir:   false,
+		Size:    42,
+		Mode:    os.ModeSymlink | 0777,
+		Target:  "../../.history/docs/hello.md/2026-04-07T143000.123Z-abc",
+		ModTime: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+
+	var out gofuse.Attr
+	adapter.EntryToAttr(entry, &out)
+
+	assert.Equal(t, uint32(syscall.S_IFLNK|0777), out.Mode)
+	assert.Equal(t, uint64(42), out.Size)
+	assert.Equal(t, uint32(1), out.Nlink) // symlinks have nlink=1
+}
+
+// TestFSAdapter_EntriesToDirEntries_Symlink tests directory listing with symlinks.
+func TestFSAdapter_EntriesToDirEntries_Symlink(t *testing.T) {
+	cfg := &config.Config{}
+	ops := tigerfs.NewOperations(cfg, nil)
+	adapter := NewFSAdapter(ops)
+
+	entries := []tigerfs.Entry{
+		{Name: "docs", IsDir: true, Mode: os.ModeDir | 0755},
+		{Name: "hello.md", Mode: 0644},
+		{Name: "before", Mode: os.ModeSymlink | 0777, Target: "/dev/null"},
+	}
+
+	dirEntries := adapter.EntriesToDirEntries(entries)
+	require.Len(t, dirEntries, 3)
+
+	assert.Equal(t, "docs", dirEntries[0].Name)
+	assert.Equal(t, uint32(syscall.S_IFDIR), dirEntries[0].Mode)
+
+	assert.Equal(t, "hello.md", dirEntries[1].Name)
+	assert.Equal(t, uint32(syscall.S_IFREG), dirEntries[1].Mode)
+
+	assert.Equal(t, "before", dirEntries[2].Name)
+	assert.Equal(t, uint32(syscall.S_IFLNK), dirEntries[2].Mode)
+}
+
 // TestFSAdapter_ErrorToErrno tests error code conversion.
 func TestFSAdapter_ErrorToErrno(t *testing.T) {
 	cfg := &config.Config{}

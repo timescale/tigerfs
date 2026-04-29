@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 )
 
 // MockDDLExecutor is a mock implementation of DDLExecutor for testing.
@@ -170,6 +171,7 @@ type MockRowWriter struct {
 	UpdateColumnFunc    func(ctx context.Context, schema, table string, pk *PKMatch, columnName, newValue string) error
 	UpdateColumnCASFunc func(ctx context.Context, schema, table string, pk *PKMatch, setColumn, newValue, whereColumn, whereValue string) error
 	DeleteRowFunc       func(ctx context.Context, schema, table string, pk *PKMatch) error
+	DeleteAndUpdateFunc func(ctx context.Context, schema, table string, deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error
 }
 
 var _ RowWriter = (*MockRowWriter)(nil)
@@ -205,6 +207,13 @@ func (m *MockRowWriter) UpdateColumnCAS(ctx context.Context, schema, table strin
 func (m *MockRowWriter) DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error {
 	if m.DeleteRowFunc != nil {
 		return m.DeleteRowFunc(ctx, schema, table, pk)
+	}
+	return nil
+}
+
+func (m *MockRowWriter) DeleteAndUpdate(ctx context.Context, schema, table string, deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error {
+	if m.DeleteAndUpdateFunc != nil {
+		return m.DeleteAndUpdateFunc(ctx, schema, table, deletePK, updatePK, updateCols, updateVals)
 	}
 	return nil
 }
@@ -578,6 +587,8 @@ type MockHierarchyWriter struct {
 	RenameByPrefixFn        func(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
 	HasChildrenWithPrefixFn func(ctx context.Context, schema, table, column, prefix string) (bool, error)
 	InsertIfNotExistsFn     func(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+	GetRowByParentAndNameFn func(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error)
+	GetRowsByParentFn       func(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error)
 }
 
 func (m *MockHierarchyWriter) RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error) {
@@ -601,15 +612,30 @@ func (m *MockHierarchyWriter) InsertIfNotExists(ctx context.Context, schema, tab
 	return nil
 }
 
+func (m *MockHierarchyWriter) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
+	if m.GetRowByParentAndNameFn != nil {
+		return m.GetRowByParentAndNameFn(ctx, schema, table, parentID, filename)
+	}
+	return nil, nil, nil
+}
+
+func (m *MockHierarchyWriter) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
+	if m.GetRowsByParentFn != nil {
+		return m.GetRowsByParentFn(ctx, schema, table, parentID, limit)
+	}
+	return nil, nil, nil
+}
+
 // MockHistoryReader is a mock for HistoryReader.
 type MockHistoryReader struct {
-	HasExtensionFn                  func(ctx context.Context, extName string) (bool, error)
-	TableExistsFn                   func(ctx context.Context, schema, table string) (bool, error)
-	QueryHistoryByFilenameFn        func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
-	QueryHistoryByIDFn              func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
-	QueryHistoryDistinctFilenamesFn func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
-	QueryHistoryDistinctIDsFn       func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
-	QueryHistoryVersionByTimeFn     func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+	HasExtensionFn                          func(ctx context.Context, extName string) (bool, error)
+	TableExistsFn                           func(ctx context.Context, schema, table string) (bool, error)
+	QueryHistoryByFilenameFn                func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryByIDFn                      func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryDistinctFilenamesFn         func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryDistinctFilenamesByParentFn func(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
+	QueryHistoryDistinctIDsFn               func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryVersionByTimeFn             func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
 }
 
 func (m *MockHistoryReader) HasExtension(ctx context.Context, extName string) (bool, error) {
@@ -647,6 +673,13 @@ func (m *MockHistoryReader) QueryHistoryDistinctFilenames(ctx context.Context, s
 	return nil, nil
 }
 
+func (m *MockHistoryReader) QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error) {
+	if m.QueryHistoryDistinctFilenamesByParentFn != nil {
+		return m.QueryHistoryDistinctFilenamesByParentFn(ctx, schema, historyTable, parentID, limit)
+	}
+	return nil, nil
+}
+
 func (m *MockHistoryReader) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	if m.QueryHistoryDistinctIDsFn != nil {
 		return m.QueryHistoryDistinctIDsFn(ctx, schema, historyTable, limit)
@@ -659,6 +692,18 @@ func (m *MockHistoryReader) QueryHistoryVersionByTime(ctx context.Context, schem
 		return m.QueryHistoryVersionByTimeFn(ctx, schema, historyTable, filterColumn, filterValue, targetTime, limit)
 	}
 	return nil, nil, nil
+}
+
+// MockPathResolver implements PathResolver for testing.
+type MockPathResolver struct {
+	ResolvePathFn func(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error)
+}
+
+func (m *MockPathResolver) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error) {
+	if m.ResolvePathFn != nil {
+		return m.ResolvePathFn(ctx, schema, table, startParentID, segments)
+	}
+	return nil, nil
 }
 
 type MockDBClient struct {
@@ -675,6 +720,8 @@ type MockDBClient struct {
 	*MockPipelineReader
 	*MockHierarchyWriter
 	*MockHistoryReader
+	*MockPathResolver
+	*MockLogWriter
 }
 
 var _ DBClient = (*MockDBClient)(nil)
@@ -695,5 +742,55 @@ func NewMockDBClient() *MockDBClient {
 		MockPipelineReader:   &MockPipelineReader{},
 		MockHierarchyWriter:  &MockHierarchyWriter{},
 		MockHistoryReader:    &MockHistoryReader{},
+		MockPathResolver:     &MockPathResolver{},
+		MockLogWriter:        &MockLogWriter{},
 	}
+}
+
+// MockLogWriter implements LogWriter for testing.
+type MockLogWriter struct {
+	LogEntries []MockLogEntry    // Recorded log entries for verification
+	VersionIDs map[string]string // fileID -> latest versionID
+}
+
+// MockLogEntry records a single log entry for test verification.
+type MockLogEntry struct {
+	Schema, LogTable, UserID, OpType, FileID, Filename, VersionID, Description string
+}
+
+func (m *MockLogWriter) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
+	m.LogEntries = append(m.LogEntries, MockLogEntry{
+		Schema: schema, LogTable: logTable, UserID: userID, OpType: opType,
+		FileID: fileID, Filename: filename, VersionID: versionID, Description: description,
+	})
+	return nil
+}
+
+func (m *MockLogWriter) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
+	return "", "", nil
+}
+
+func (m *MockLogWriter) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	return false, nil
+}
+
+func (m *MockLogWriter) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	if m.VersionIDs != nil {
+		if id, ok := m.VersionIDs[fileID]; ok {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *MockLogWriter) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
+	return nil, nil
+}
+
+func (m *MockLogWriter) QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error) {
+	return nil, fmt.Errorf("log entry not found: %s", logID)
+}
+
+func (m *MockLogWriter) ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error {
+	return nil
 }

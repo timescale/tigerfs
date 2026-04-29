@@ -493,13 +493,18 @@ func TestSynth_HistoryPerDirectory(t *testing.T) {
 		[]byte("---\ntitle: README\n---\n\nReadme v2.\n"))
 	require.Nil(t, fsErr, "WriteFile readme v2 should succeed")
 
-	// 1. Subdirectory listing should include .history/
+	// 1. Subdirectory listing should NOT include virtual dirs
+	// (.log, .savepoint, .undo, .history are workspace-level only)
 	entries, fsErr := ops.ReadDir(ctx, "/hist_pdir/getting-started")
 	require.Nil(t, fsErr, "ReadDir getting-started should succeed")
 	names := fsEntryNames(entries)
-	assert.Contains(t, names, ".history", "subdirectory should contain .history")
+	assert.NotContains(t, names, ".history", "subdirectory should NOT contain .history (workspace-level only)")
+	assert.NotContains(t, names, ".log", "subdirectory should NOT contain .log")
+	assert.NotContains(t, names, ".savepoint", "subdirectory should NOT contain .savepoint")
+	assert.NotContains(t, names, ".undo", "subdirectory should NOT contain .undo")
 
-	// 2. Subdirectory .history/ should show only local files (not root files)
+	// 2. Subdirectory .history/ should still be accessible by explicit path
+	// and show only local files (not root files)
 	entries, fsErr = ops.ReadDir(ctx, "/hist_pdir/getting-started/.history")
 	require.Nil(t, fsErr, "ReadDir getting-started/.history should succeed")
 	names = fsEntryNames(entries)
@@ -598,4 +603,75 @@ func TestSynth_HistoryPerDirectoryStatVersion(t *testing.T) {
 		assert.False(t, entry.IsDir, "version file should not be a directory")
 		assert.Greater(t, entry.Size, int64(0), "version file should have content")
 	}
+}
+
+// TestSynth_HistoryAfterMoveAccessibleByUUID verifies that after moving a file
+// between directories, its history versions are accessible via .history/.by/<uuid>/
+// (ADR-017 verification scenario #40).
+func TestSynth_HistoryAfterMoveAccessibleByUUID(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "hist_move")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/hist_move", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+
+	// Create file in inbox, edit to produce history (mkdir-p inbox/).
+	v1 := "---\ntitle: Task V1\n---\nVersion 1\n"
+	fsErr = ops.WriteFileEnsureDirs(ctx, "/hist_move/inbox/task.md", []byte(v1))
+	require.Nil(t, fsErr, "create task.md v1")
+
+	time.Sleep(1100 * time.Millisecond) // distinct UUIDv7
+
+	v2 := "---\ntitle: Task V2\n---\nVersion 2\n"
+	fsErr = ops.WriteFile(ctx, "/hist_move/inbox/task.md", []byte(v2))
+	require.Nil(t, fsErr, "edit task.md v2")
+
+	// Get the file's UUID via .history/.by/ before moving
+	entries, fsErr := ops.ReadDir(ctx, "/hist_move/.history")
+	require.Nil(t, fsErr)
+	names := fsEntryNames(entries)
+	require.Contains(t, names, ".by", "root .history should have .by")
+
+	// Read .id to get the file UUID
+	idContent, fsErr := ops.ReadFile(ctx, "/hist_move/.history/inbox/task.md/.id")
+	require.Nil(t, fsErr, "should read .id file")
+	fileUUID := strings.TrimSpace(string(idContent.Data))
+	require.Len(t, fileUUID, 36, ".id should be a UUID")
+
+	// Move file from inbox to archive
+	fsErr = ops.Mkdir(ctx, "/hist_move/archive")
+	require.Nil(t, fsErr)
+	fsErr = ops.Rename(ctx, "/hist_move/inbox/task.md", "/hist_move/archive/task.md")
+	require.Nil(t, fsErr, "move task.md to archive")
+
+	// History should still be accessible via .by/<uuid>/
+	byEntries, fsErr := ops.ReadDir(ctx, "/hist_move/.history/.by")
+	require.Nil(t, fsErr, "ReadDir .history/.by should succeed")
+	byNames := fsEntryNames(byEntries)
+	assert.Contains(t, byNames, fileUUID, ".by/ should list the file's UUID")
+
+	// List versions for this UUID -- should have 2:
+	// 1. v1→v2 edit (OLD body = "Version 1")
+	// 2. move from inbox to archive (OLD body = "Version 2", parent_id change)
+	versionEntries, fsErr := ops.ReadDir(ctx, "/hist_move/.history/.by/"+fileUUID)
+	require.Nil(t, fsErr, "ReadDir .by/<uuid>/ should succeed")
+	assert.GreaterOrEqual(t, len(versionEntries), 2,
+		"should have at least 2 versions (edit + move)")
+
+	// Versions are ordered most-recent-first. The OLDEST version (last in list)
+	// has the v1 content from before the edit.
+	oldestVersion := versionEntries[len(versionEntries)-1].Name
+	require.NotEmpty(t, oldestVersion)
+
+	vContent, fsErr := ops.ReadFile(ctx, "/hist_move/.history/.by/"+fileUUID+"/"+oldestVersion)
+	require.Nil(t, fsErr, "ReadFile oldest version via .by/ should succeed")
+	assert.Contains(t, string(vContent.Data), "Version 1",
+		"oldest version via .by/<uuid>/ should contain v1 content")
 }

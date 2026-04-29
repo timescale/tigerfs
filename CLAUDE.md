@@ -63,7 +63,7 @@ Capability directories (`.filter`, `.order`, `.first`, `.last`, `.export`, `.col
 
 ### Synth Apps
 
-Tables whose names start with `_` (e.g., `_blog`, `_docs`) can be exposed as synthesized views -- markdown files, task lists, or plain text snippets. The synth layer (`fs/synth/`) maps filesystem operations to table rows using format-specific conventions. See `docs/markdown-app.md` and `docs/tasks-app.md`.
+Tables whose names start with `_` (e.g., `_blog`, `_docs`) can be exposed as synthesized views -- markdown files, task lists, or plain text snippets. The synth layer (`fs/synth/`) maps filesystem operations to table rows using format-specific conventions. See `docs/file-first.md`.
 
 ### SQL Identifier Quoting
 
@@ -109,6 +109,7 @@ Multiple TigerFS mounts may connect to the same database concurrently. This mean
 - **Cache metadata only:** Sizes, permissions, directory entries, column names/types, primary keys, table lists. These change rarely and have short TTLs.
 - **Stat cache keys must be unique per path:** Different pipeline paths (e.g., `.export/json` vs `.filter/active/true/.export/json`) must not share cache entries, even on the same table.
 - **Pattern:** `Stat` may use caches. `ReadFile` must always hit the DB.
+- **Audit invalidation on every new write path:** any write must call `statCache.invalidate(schema, table)` and `pathCache.invalidate(schema, table)` with the *user* schema (not `synth.TigerFSSchema`); a schema-key mismatch silently leaves stale entries cached for up to 2 seconds and surfaces as cross-mount read inconsistencies.
 
 ## Logging
 
@@ -153,6 +154,10 @@ For each implementation task:
 2. **Propose integration tests** for workflows crossing package boundaries (ask before implementing)
 
 Integration tests use testcontainers-go for PostgreSQL. See `test/integration/` for examples.
+
+### Stress-test monotonicity warnings
+
+Stress runs (`bin/tigerfs-stress start`) may emit `[warn iter ...] readLatestLogID regressed after ...` lines. These are **expected** — they indicate the macOS NFS layer (go-nfs library or kernel client, ruled out at every TigerFS layer) returned a stale `.log/.last/N/.export/json` snapshot after a heavy commit. The runner's monotonic helper retries up to 2.5s and falls back to the prior known-good `lastLogID`; the run continues correctly. The end-of-run "Monotonicity Warnings" section summarizes rate, recovery distribution, and op kinds preceding regressions. Do not treat these as bugs to fix in TigerFS; see the iter-107 investigation arc on `feat/undo` (commits `85a2495` → `f59cfcf`) for context.
 
 ### Test Naming Convention
 

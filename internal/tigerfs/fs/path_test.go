@@ -741,7 +741,6 @@ func TestParsePathInvalid(t *testing.T) {
 		{"users", "no leading slash"},
 		{"/users/.first/abc", "non-numeric limit"},
 		{"/users/.first/-1", "negative limit"},
-		{"/users/.unknown/foo", "unknown capability"},
 	}
 
 	for _, tt := range tests {
@@ -751,6 +750,57 @@ func TestParsePathInvalid(t *testing.T) {
 				t.Errorf("ParsePath(%q) should return error for %s", tt.path, tt.desc)
 			}
 		})
+	}
+}
+
+// TestParsePathDotfiles verifies that unknown dot-prefixed names are treated as regular
+// filenames/directories, not rejected as unknown capabilities.
+func TestParsePathDotfiles(t *testing.T) {
+	tests := []struct {
+		path     string
+		desc     string
+		pathType PathType
+		pk       string
+		column   string
+	}{
+		{"/docs/.gitignore", "dotfile as row", PathRow, ".gitignore", ""},
+		{"/docs/.env", "env dotfile", PathRow, ".env", ""},
+		{"/docs/.git/config", "dotfile dir with column", PathColumn, ".git", "config"},
+		{"/docs/.vscode/settings.json", "dotfile dir with file", PathColumn, ".vscode", "settings.json"},
+		{"/users/.unknown/foo", "unknown dot as row+column", PathColumn, ".unknown", "foo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			result, err := ParsePath(tt.path)
+			if err != nil {
+				t.Fatalf("ParsePath(%q) returned error: %v", tt.path, err)
+			}
+			if result.Type != tt.pathType {
+				t.Errorf("Type = %v, want %v", result.Type, tt.pathType)
+			}
+			if result.PrimaryKey != tt.pk {
+				t.Errorf("PrimaryKey = %q, want %q", result.PrimaryKey, tt.pk)
+			}
+			if tt.column != "" && result.Column != tt.column {
+				t.Errorf("Column = %q, want %q", result.Column, tt.column)
+			}
+		})
+	}
+}
+
+// TestParsePathDotfileThenCapability verifies that a dotfile followed by a known
+// capability directory is correctly parsed via scan-ahead.
+func TestParsePathDotfileThenCapability(t *testing.T) {
+	result, err := ParsePath("/docs/.git/.history")
+	if err != nil {
+		t.Fatalf("ParsePath returned error: %v", err)
+	}
+	if result.PrimaryKey != ".git" {
+		t.Errorf("PrimaryKey = %q, want %q", result.PrimaryKey, ".git")
+	}
+	if result.Type != PathHistory {
+		t.Errorf("Type = %v, want PathHistory", result.Type)
 	}
 }
 
@@ -1360,19 +1410,29 @@ func TestSynth_ParsePathCapabilityAfterDirSegments(t *testing.T) {
 }
 
 // TestSynth_IsVersionID verifies version ID format detection.
+// Recognizes both legacy 18-char timestamps and UUIDv7 display names (ADR-016).
 func TestSynth_IsVersionID(t *testing.T) {
 	tests := []struct {
 		seg  string
 		want bool
 	}{
+		// Legacy format: "2006-01-02T150405Z" (18 chars)
 		{"2026-02-12T013000Z", true},
 		{"2025-01-01T000000Z", true},
+		{"xxxx-xx-xxTxxxxxxZ", true}, // structural match (length + separators)
+
+		// UUIDv7 display name format: "2006-01-02T150405.000Z-<base36>" (ADR-016)
+		{"2026-04-10T173000.123Z-zzz0063hd8e5r42", true},
+		{"2025-01-01T000000.000Z-0", true},
+		{"2026-12-31T235959.999Z-abc", true},
+
+		// Invalid
 		{"foo.md", false},
 		{".id", false},
 		{"", false},
 		{"2026-02-12", false},          // too short
-		{"2026-02-12T013000Zx", false}, // too long
-		{"xxxx-xx-xxTxxxxxxZ", true},   // structural match (length + separators)
+		{"2026-02-12T013000Zx", false}, // 19 chars, not legacy, not display name
+		{"not-a-timestamp.000Z-abc", false},
 	}
 
 	for _, tt := range tests {

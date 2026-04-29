@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,9 +25,25 @@ import (
 //   - path: filesystem path to write to
 //   - data: file content (format determined by path extension)
 //
+// Preconditions:
+//   - For writes inside a synth view (i.e., /<app>/<dir>/.../<file>), the
+//     immediate parent directory of path must already exist as a row in
+//     the source table. WriteFile does NOT auto-create ancestor dirs;
+//     callers should issue an explicit Mkdir per missing segment first
+//     (this matches POSIX open(O_CREAT) semantics, which is what the
+//     kernel enforces for FUSE/NFS clients before TigerFS sees a write).
+//     Use WriteFileEnsureDirs if you want mkdir-p behavior in one call.
+//
+// Postconditions on success:
+//   - The row at path exists with the given data.
+//   - If history is enabled, exactly one log entry is written: "create"
+//     when the file was new, "edit" when the file already existed.
+//   - Stat/path caches for the table are invalidated.
+//
 // Returns nil on success, or an FSError describing the failure.
 // Common errors:
 //   - ErrInvalidPath: unsupported path type for writes
+//   - ErrNotExist: an ancestor directory does not exist
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *FSError {
@@ -39,10 +56,143 @@ func (o *Operations) WriteFile(ctx context.Context, path string, data []byte) *F
 	return o.writeFileWithParsed(ctx, parsed, data)
 }
 
+// WriteFileEnsureDirs is the mkdir-p variant of WriteFile: any missing
+// ancestor directories of path are created via Mkdir before the file is
+// written. Each new ancestor produces its own "create" log entry --
+// matching what the kernel would generate from per-segment mkdir(2)
+// syscalls in production (the kernel rejects open(O_CREAT) on a path
+// whose parent dir is missing, so a deep WriteFile never reaches TigerFS
+// from FUSE/NFS without all ancestors already in place).
+//
+// Use this when a caller -- typically a test or batch-import code that
+// drives Operations directly -- wants to materialize a deep path in a
+// single call. Prefer WriteFile + explicit Mkdir(s) when you need
+// fine-grained control over ordering or error handling, or when the
+// in-between dirs already exist and there's nothing to ensure.
+//
+// Preconditions:
+//   - The path's first segment must be an existing app/view (Mkdir
+//     against a non-existent app fails just as it would normally).
+//
+// Postconditions on success:
+//   - All ancestors of path exist as directory rows.
+//   - One "create" log entry is written for each ancestor that did NOT
+//     already exist before this call.
+//   - WriteFile's own postconditions (file row + create/edit log entry).
+//
+// Returns the same errors as Mkdir or WriteFile. ErrAlreadyExists from
+// any intermediate Mkdir is treated as "already there, fine" and not
+// propagated.
+func (o *Operations) WriteFileEnsureDirs(ctx context.Context, path string, data []byte) *FSError {
+	// Walk segments shallowest-to-deepest, calling Mkdir on each
+	// ancestor of the file. Index 0 is the app/view name, so we begin
+	// the loop at 2 (the first dir under the app). The final segment is
+	// the filename and goes through WriteFile, not Mkdir.
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i := 2; i < len(parts); i++ {
+		ancestor := "/" + strings.Join(parts[:i], "/")
+		if fsErr := o.Mkdir(ctx, ancestor); fsErr != nil && fsErr.Code != ErrAlreadyExists {
+			return fsErr
+		}
+	}
+	return o.WriteFile(ctx, path, data)
+}
+
+// MkdirAll is the mkdir-p variant of Mkdir: every segment of path that
+// doesn't already exist is created via Mkdir, in order. The final
+// segment is also created as a directory (unlike WriteFileEnsureDirs,
+// which expects the final segment to be a file).
+//
+// Each new segment produces one "create" log entry -- matching what the
+// kernel would generate from per-segment mkdir(2) syscalls in
+// production. Existing segments are skipped (Mkdir's ErrAlreadyExists
+// is treated as success and not propagated).
+//
+// Use this when a caller wants to materialize a deep directory chain
+// in one call. Production code reaching TigerFS through FUSE/NFS rarely
+// needs MkdirAll because the kernel always issues per-segment mkdir(2)
+// for `mkdir -p` invocations -- but direct-API callers (typically tests
+// or batch import code) may want it.
+func (o *Operations) MkdirAll(ctx context.Context, path string) *FSError {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i := 2; i <= len(parts); i++ {
+		segment := "/" + strings.Join(parts[:i], "/")
+		if fsErr := o.Mkdir(ctx, segment); fsErr != nil && fsErr.Code != ErrAlreadyExists {
+			return fsErr
+		}
+	}
+	return nil
+}
+
+// ValidateCreate reports an FSError if creating a regular file at this path
+// would conflict with a future directory inode on NFS.
+//
+// The only case we reject: a bare-path write (no format suffix) that would
+// create a new row in a non-synth-view table. The server later exposes that
+// row as a directory in READDIRPLUS, but if the kernel already cached a
+// file-typed positive dentry from Create, the entry gets suppressed from
+// `ls` because the inode types disagree. Failing at Create time prevents
+// the file-typed dentry from ever forming.
+//
+// Returns nil for every other path: synth views (bare filename is user
+// content), format-suffix writes (distinct file inode from the row
+// directory), non-row paths (columns, DDL, undo, etc.), existing rows, and
+// any path the parser cannot fully resolve. Adapters should call this
+// before issuing a file handle.
+func (o *Operations) ValidateCreate(ctx context.Context, filePath string) *FSError {
+	parsed, err := o.parsePath(ctx, filePath)
+	if err != nil {
+		return nil
+	}
+	o.resolveSynthHierarchy(ctx, parsed)
+	if parsed.Type != PathRow || parsed.Format != "" {
+		return nil
+	}
+	fsCtx := parsed.Context
+	if fsCtx == nil {
+		return nil
+	}
+	// Synth views route bare-path writes through writeSynthFile; the
+	// filename is user content, not a PK. Mirrors writeRowFile's dispatch.
+	if info := o.getSynthViewInfo(ctx, fsCtx.Schema, fsCtx.TableName); info != nil {
+		return nil
+	}
+	pk, mErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, fsCtx.TableName)
+	if mErr != nil {
+		return nil
+	}
+	match, dErr := pk.Decode(parsed.PrimaryKey)
+	if dErr != nil {
+		return nil
+	}
+	if _, gErr := o.db.GetRow(ctx, fsCtx.Schema, fsCtx.TableName, match); gErr == nil {
+		return nil // row exists; writeRowFile will UPDATE
+	}
+	return newBarePathRejection(parsed.PrimaryKey)
+}
+
+// newBarePathRejection builds the FSError returned for bare-path new-row
+// writes. Shared by ValidateCreate (adapter-level pre-check) and writeRowFile
+// (defense-in-depth guard) so the user-visible message, hint, and cause
+// stay in lockstep.
+func newBarePathRejection(pk string) *FSError {
+	return &FSError{
+		Code:    ErrInvalidArgument,
+		Message: fmt.Sprintf("cannot create %q without a format suffix", pk),
+		Hint:    fmt.Sprintf("retry as %q, %q, or %q (bare-path writes conflict with the row directory inode on NFS)", pk+".json", pk+".tsv", pk+".csv"),
+		Cause:   errors.New("format suffix required for new rows"),
+	}
+}
+
 // writeFileWithParsed implements write logic for a parsed path.
 func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
 	switch parsed.Type {
 	case PathRow:
+		// Savepoint create: echo -e "description\nStarting" > .savepoint/name.tsv
+		// Thin wrapper injects user_id then delegates to writeRowFile.
+		if parsed.OrigTableName != "" && strings.HasSuffix(parsed.Context.TableName, "_savepoint") {
+			return o.writeSavepoint(ctx, parsed, data)
+		}
 		return o.writeRowFile(ctx, parsed, data)
 	case PathColumn:
 		return o.writeColumnFile(ctx, parsed, data)
@@ -50,10 +200,14 @@ func (o *Operations) writeFileWithParsed(ctx context.Context, parsed *ParsedPath
 		return o.writeImportFile(ctx, parsed, data)
 	case PathDDL:
 		return o.writeDDLFile(ctx, parsed, data)
+	case PathRootInfo:
+		return o.writeRootInfoFile(parsed, data)
 	case PathBuild:
 		return o.writeBuildFile(ctx, parsed, data)
 	case PathFormat:
 		return o.writeFormatFile(ctx, parsed, data)
+	case PathUndo:
+		return o.writeUndoApply(ctx, parsed, data)
 	case PathHistory:
 		return &FSError{
 			Code:    ErrPermission,
@@ -120,10 +274,17 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 	}
 
 	if parseErr != nil {
-		return &FSError{
-			Code:    ErrInvalidPath,
-			Message: "failed to parse write data",
-			Cause:   parseErr,
+		// Empty body with a format suffix is valid -- creates a row with just the PK
+		// and DEFAULTs for all other columns. e.g., echo "" > .savepoint/name.tsv
+		if parsed.Format != "" && len(strings.TrimSpace(string(data))) == 0 {
+			columns = nil
+			values = nil
+		} else {
+			return &FSError{
+				Code:    ErrInvalidPath,
+				Message: "failed to parse write data",
+				Cause:   parseErr,
+			}
 		}
 	}
 
@@ -142,7 +303,37 @@ func (o *Operations) writeRowFile(ctx context.Context, parsed *ParsedPath, data 
 			}
 		}
 	} else {
-		// INSERT new row
+		// INSERT new row -- require format suffix (.tsv, .json, .csv) for new rows.
+		// On macOS NFS, bare-path writes (no extension) create a FILE inode that conflicts
+		// with the DIRECTORY inode returned by READDIRPLUS, causing the entry to silently
+		// disappear from ls. Format suffixes avoid this because the write path (e.g.,
+		// "test-cat.tsv") differs from the listing name ("test-cat").
+		//
+		// Adapters call ValidateCreate before issuing a file handle; this guard
+		// stays as defense-in-depth for callers that bypass the adapter (tests,
+		// direct WriteFile). Both paths share newBarePathRejection so the
+		// user-visible error stays identical.
+		if parsed.Format == "" {
+			return newBarePathRejection(parsed.PrimaryKey)
+		}
+
+		// Merge PK columns from the path if not already in the data.
+		// e.g., writing to /categories/test-cat.tsv with body "name\tvalue" should
+		// include slug=test-cat in the INSERT even though it's not in the TSV body.
+		for i, pkCol := range match.Columns {
+			found := false
+			for _, col := range columns {
+				if col == pkCol {
+					found = true
+					break
+				}
+			}
+			if !found {
+				columns = append(columns, pkCol)
+				values = append(values, match.Values[i])
+			}
+		}
+
 		_, err = o.db.InsertRow(ctx, fsCtx.Schema, fsCtx.TableName, columns, values)
 		if err != nil {
 			return &FSError{
@@ -635,6 +826,7 @@ func (o *Operations) Delete(ctx context.Context, path string) *FSError {
 func (o *Operations) deleteWithParsed(ctx context.Context, parsed *ParsedPath) *FSError {
 	switch parsed.Type {
 	case PathRow:
+		// With name as PK, standard deleteRow works for savepoints too.
 		return o.deleteRow(ctx, parsed)
 	case PathColumn:
 		return o.deleteColumn(ctx, parsed)
@@ -848,13 +1040,28 @@ func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FS
 	}
 }
 
-// Mkdir creates a directory for incremental row creation.
+// Mkdir creates a single directory at path.
 //
-// Creating a directory with a primary key value starts the incremental
-// row creation workflow:
+// For synth views, this inserts a row with filetype='directory' and
+// (when history is enabled) writes one "create" log entry. The dir's
+// modified_at is set to now() and the parent dir's modified_at is
+// bumped via the bump_parent_mtime trigger.
+//
+// For non-synth tables, mkdir starts the incremental row creation
+// workflow:
 //  1. mkdir /table/pk → creates staging entry
 //  2. echo "value" > /table/pk/column → sets column value
 //  3. When all NOT NULL columns are provided, row is auto-committed
+//
+// Preconditions:
+//   - Path's immediate parent must already exist as a row in the
+//     source table. Mkdir does NOT auto-create ancestors; if you have
+//     a deep path to materialize, issue one Mkdir per missing segment
+//     (matching POSIX mkdir(2) semantics) or use WriteFileEnsureDirs.
+//
+// Postconditions on success:
+//   - For synth views: a directory row exists at path; one "create"
+//     log entry is written if history is enabled.
 //
 // Parameters:
 //   - ctx: context for database operations and cancellation
@@ -862,7 +1069,8 @@ func (o *Operations) Create(ctx context.Context, path string) (*WriteHandle, *FS
 //
 // Returns nil on success, or an FSError describing the failure.
 // Common errors:
-//   - ErrExists: row already exists in the database
+//   - ErrAlreadyExists: a row already exists at path
+//   - ErrNotExist: an ancestor of path does not exist
 //   - ErrPermission: view is not updatable
 //   - ErrIO: database operation failed
 func (o *Operations) Mkdir(ctx context.Context, path string) *FSError {

@@ -21,6 +21,9 @@ Key flags:
 - `--schema` -- default schema for queries
 - `--query-timeout` -- global query timeout (e.g., `30s`, `1m`)
 - `--foreground` -- run in foreground (don't daemonize)
+- `--user-id <id>` -- user identity for undo log entries (also: `TIGERFS_USER_ID` env)
+- `--auto-savepoint-interval <duration>` -- inactivity gap before auto-savepoint (default `30m`, `0` disables)
+- `--undo-list-limit <N>` -- default listing limit for `.undo/` sub-directories (default `100`)
 
 ## Cloud Backends
 

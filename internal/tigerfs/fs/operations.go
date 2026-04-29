@@ -43,8 +43,37 @@ type Operations struct {
 	// Invalidated by write operations; 2-second TTL as safety net.
 	statCache statCache
 
+	// pathCache maps (parentID, filename) -> row ID for the parent-pointer
+	// directory model (ADR-017). Used to avoid calling resolve_path for
+	// repeated access to the same directory subtree. 2-second TTL.
+	pathCache pathCache
+
+	// mountPoint is the filesystem mount path (e.g., "/mnt/tigerfs").
+	// Used for user-facing log messages. Empty if not set.
+	mountPoint string
+
+	// userID is the current mount-level identity for undo log entries.
+	// Set from --user-id flag or TIGERFS_USER_ID env at mount time.
+	// Can be changed at runtime via writing to .info/user.
+	// Empty means anonymous (user_id = NULL in log entries).
+	userID        string
+	userIDModTime time.Time // stable mtime for .info/user Stat responses
+
 	// legacyWarnOnce ensures the legacy backing table warning is logged only once.
 	legacyWarnOnce sync.Once
+
+	// Auto-savepoints: track last write time per app to detect inactivity gaps.
+	// Key is "schema.tableName" (the source table, not _log or _savepoint).
+	lastWriteTime map[string]time.Time
+	lastWriteMu   sync.Mutex
+
+	// nowFunc returns the current time. Overridable in tests for deterministic timing.
+	nowFunc func() time.Time
+
+	// undoCache provides short-lived caching for undo preview queries.
+	// Reduces redundant DB queries when multiple NFS/FUSE RPCs access
+	// the same undo target within a 2-second window.
+	undoCache undoCache
 }
 
 // NewOperations creates a new Operations instance.
@@ -55,6 +84,27 @@ func NewOperations(cfg *config.Config, dbClient db.DBClient) *Operations {
 		ddl:       NewDDLManager(dbClient, cfg.DDLGracePeriod),
 		metaCache: NewMetadataCache(cfg, dbClient),
 	}
+}
+
+// SetMountPoint records the filesystem mount path for user-facing log messages.
+func (o *Operations) SetMountPoint(path string) {
+	o.mountPoint = path
+}
+
+// SetNowFunc overrides the clock for testing. Pass nil to restore real time.
+func (o *Operations) SetNowFunc(fn func() time.Time) {
+	o.nowFunc = fn
+}
+
+// SetUserID sets the mount-level user identity for undo log entries.
+func (o *Operations) SetUserID(id string) {
+	o.userID = id
+	o.userIDModTime = time.Now()
+}
+
+// GetUserID returns the current mount-level user identity.
+func (o *Operations) GetUserID() string {
+	return o.userID
 }
 
 // statCache caches Entry metadata from ReadDir results.
@@ -297,6 +347,16 @@ func (o *Operations) readDirWithParsed(ctx context.Context, parsed *ParsedPath) 
 		return o.readDirViews(ctx)
 	case PathTable:
 		return o.readDirTable(ctx, parsed)
+	case PathLog:
+		// Data-first pipeline on log table
+		return o.readDirTable(ctx, parsed)
+	case PathSavepoint:
+		// With name as PK, readDirTable naturally lists by human-readable name.
+		return o.readDirTable(ctx, parsed)
+	case PathUndo:
+		return o.readDirUndo(ctx, parsed)
+	case PathRootInfo:
+		return o.readDirRootInfo(ctx, parsed)
 	case PathInfo:
 		return o.readDirInfo(ctx, parsed)
 	case PathRow:
@@ -372,6 +432,7 @@ func (o *Operations) readDirRoot(ctx context.Context) ([]Entry, *FSError) {
 	entries = append(entries,
 		Entry{Name: ".build", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".create", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
+		Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".tables", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
 		Entry{Name: ".views", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now},
@@ -554,7 +615,7 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
-		limit = 10000
+		limit = 1000
 	}
 
 	var rows []string
@@ -595,8 +656,17 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 	// Build entries: capability directories first, then rows
 	entries := make([]Entry, 0, len(rows)+15)
 
+	// Check if pipeline depth exceeds the configured maximum.
+	// When exceeded, hide capability directories to prevent infinite recursion
+	// from recursive scanners (rm -rf, find, agents). Rows are still listed.
+	maxDepth := o.config.MaxPipelineDepth
+	depthExceeded := maxDepth > 0 && fsCtx.PipelineDepth >= maxDepth
+
 	// Add capability directories based on what's available in current context
-	if fsCtx.HasPipelineOperations() {
+	if fsCtx.HideCapabilities || depthExceeded {
+		// Depth exceeded: only show .info for metadata, no further pipeline capabilities
+		entries = append(entries, Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
+	} else if fsCtx.HasPipelineOperations() {
 		// Use available capabilities based on pipeline state
 		for _, cap := range fsCtx.AvailableCapabilities() {
 			entries = append(entries, Entry{Name: cap, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
@@ -604,9 +674,11 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		// Always include .info for metadata access
 		entries = append(entries, Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 	} else {
-		// Show all capabilities for raw table access
+		// Show all capabilities for raw table access.
+		// Note: DirAll is omitted because it's a no-op (same as the table listing)
+		// and creates infinite recursion for recursive scanners (rm -rf, find, agents).
 		capabilities := []string{
-			DirAll, DirBy, DirColumns, DirDelete, DirExport, DirFilter, DirFirst,
+			DirBy, DirColumns, DirDelete, DirExport, DirFilter, DirFirst,
 			DirFormat, DirImport, DirIndexes, DirInfo, DirLast, DirModify, DirOrder, DirSample,
 		}
 		for _, cap := range capabilities {
@@ -718,16 +790,259 @@ func (o *Operations) readDirRow(ctx context.Context, parsed *ParsedPath) ([]Entr
 		cacheEntries[filename] = entry
 	}
 
+	// Include format entries in cache so Stat works for .json, .tsv, .csv, .yaml
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name, ".") {
+			cacheEntries[e.Name] = e
+		}
+	}
+
 	// Prime row-level stat cache so statColumn can use it
 	if len(cacheEntries) > 0 {
 		o.statCache.prime(fsCtx.Schema, fsCtx.TableName+"/"+parsed.PrimaryKey, cacheEntries)
 	}
 
+	// Add diff symlinks for log entry rows (before/after/current)
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_log") {
+		entries = append(entries,
+			Entry{Name: "before", IsDir: false, Mode: os.ModeSymlink | 0777, ModTime: now},
+			Entry{Name: "after", IsDir: false, Mode: os.ModeSymlink | 0777, ModTime: now},
+			Entry{Name: "current", IsDir: false, Mode: os.ModeSymlink | 0777, ModTime: now},
+		)
+	}
+
 	return entries, nil
+}
+
+// resolveLogDiffSymlink resolves a before/after/current symlink on a log entry.
+// The symlink targets are relative paths from .log/<log_id>/ to the app root (../../).
+func (o *Operations) resolveLogDiffSymlink(ctx context.Context, parsed *ParsedPath) (string, *FSError) {
+	fsCtx := parsed.Context
+	logTable := fsCtx.TableName
+	appName := parsed.OrigTableName
+
+	// Fetch the log entry to get version_id, file_id, filename
+	pk, pkErr := o.metaCache.GetPrimaryKey(ctx, fsCtx.Schema, logTable)
+	if pkErr != nil {
+		return "", &FSError{Code: ErrIO, Message: "failed to get log table PK", Cause: pkErr}
+	}
+	match, decodeErr := pk.Decode(parsed.PrimaryKey)
+	if decodeErr != nil {
+		return "", &FSError{Code: ErrInvalidArgument, Message: fmt.Sprintf("invalid log_id: %v", decodeErr)}
+	}
+	row, rowErr := o.db.GetRow(ctx, synth.TigerFSSchema, logTable, match)
+	if rowErr != nil {
+		return "", &FSError{Code: ErrIO, Message: "failed to fetch log entry", Cause: rowErr}
+	}
+	if row == nil {
+		return "", &FSError{Code: ErrNotExist, Message: "log entry not found"}
+	}
+
+	// Extract fields from the row
+	rowMap := make(map[string]interface{}, len(row.Columns))
+	for i, col := range row.Columns {
+		rowMap[col] = row.Values[i]
+	}
+
+	versionID, _ := format.ConvertValueToText(rowMap["version_id"])
+	fileID, _ := format.ConvertValueToText(rowMap["file_id"])
+	filename, _ := format.ConvertValueToText(rowMap["filename"])
+	logID, _ := format.ConvertValueToText(rowMap["log_id"])
+
+	switch parsed.Column {
+	case "before":
+		if versionID == "" {
+			return "/dev/null", nil
+		}
+		// Convert version_id UUID to display name for .history/ path.
+		// .history/ is per-directory: tutorials/foo.md → ../../tutorials/.history/foo.md/<version>
+		displayName := o.uuidToDisplayName(versionID)
+		return "../../" + historySymlinkPath(filename, displayName), nil
+
+	case "after":
+		// Find next log entry for this file
+		nextVersionID, nextFilename, err := o.db.QueryNextLogEntry(ctx, synth.TigerFSSchema, logTable, fileID, logID)
+		if err != nil {
+			return "", &FSError{Code: ErrIO, Message: "failed to query next log entry", Cause: err}
+		}
+		if nextVersionID != "" {
+			// Next entry has a version_id → point to that history version
+			displayName := o.uuidToDisplayName(nextVersionID)
+			fn := nextFilename
+			if fn == "" {
+				fn = filename
+			}
+			return "../../" + historySymlinkPath(fn, displayName), nil
+		}
+		if nextFilename != "" {
+			// Next entry exists but version_id is NULL (was a create) → current file
+			return "../../" + nextFilename, nil
+		}
+		// No next entry → file is either current or deleted
+		exists, _ := o.db.QueryFileExists(ctx, synth.TigerFSSchema, appName, fileID)
+		if exists {
+			return "../../" + filename, nil
+		}
+		return "/dev/null", nil
+
+	case "current":
+		exists, _ := o.db.QueryFileExists(ctx, synth.TigerFSSchema, appName, fileID)
+		if exists {
+			return "../../" + filename, nil
+		}
+		return "/dev/null", nil
+	}
+
+	return "", &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown symlink: %s", parsed.Column)}
+}
+
+// uuidToDisplayName converts a hex UUID string to a UUIDv7 display name.
+// Returns the original string if it's not a valid UUIDv7.
+func (o *Operations) uuidToDisplayName(hexUUID string) string {
+	_, err := format.DisplayNameToUUIDv7(hexUUID)
+	if err == nil {
+		// It's already a display name
+		return hexUUID
+	}
+	// Try to parse as hex UUID
+	if len(hexUUID) == 36 {
+		var id [16]byte
+		b, parseErr := parseUUIDBytes(hexUUID)
+		if parseErr == nil {
+			copy(id[:], b)
+			if format.IsUUIDv7(id) {
+				return format.UUIDv7ToDisplayName(id)
+			}
+		}
+	}
+	return hexUUID
+}
+
+// parseUUIDBytes parses a hex UUID string to bytes.
+func parseUUIDBytes(s string) ([]byte, error) {
+	s = strings.ReplaceAll(s, "-", "")
+	if len(s) != 32 {
+		return nil, fmt.Errorf("invalid UUID length: %d", len(s))
+	}
+	b := make([]byte, 16)
+	for i := 0; i < 16; i++ {
+		_, err := fmt.Sscanf(s[i*2:i*2+2], "%02x", &b[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return b, nil
+}
+
+// historySymlinkPath constructs the correct .history/ path for a file.
+// .history/ is per-directory, so "tutorials/foo.md" becomes "tutorials/.history/foo.md/<version>"
+// and root-level "hello.md" becomes ".history/hello.md/<version>".
+func historySymlinkPath(filename, version string) string {
+	if idx := strings.LastIndex(filename, "/"); idx >= 0 {
+		dir := filename[:idx]
+		leaf := filename[idx+1:]
+		return dir + "/.history/" + leaf + "/" + version
+	}
+	return ".history/" + filename + "/" + version
+}
+
+// writeSavepoint injects user_id from mount identity then delegates to writeRowFile.
+// The user can override user_id by including it in the TSV/JSON/CSV body.
+func (o *Operations) writeSavepoint(ctx context.Context, parsed *ParsedPath, data []byte) *FSError {
+	if o.userID != "" && (parsed.Format == "tsv" || parsed.Format == "csv") {
+		// Inject user_id into TSV/CSV data if not already present.
+		// Format: first line is headers, second line is values.
+		sep := "\t"
+		if parsed.Format == "csv" {
+			sep = ","
+		}
+		trimmed := strings.TrimRight(string(data), "\n")
+		lines := strings.SplitN(trimmed, "\n", 2)
+		if len(lines) == 2 && !strings.Contains(lines[0], "user_id") {
+			lines[0] += sep + "user_id"
+			lines[1] += sep + o.userID
+			data = []byte(lines[0] + "\n" + lines[1] + "\n")
+		} else if trimmed == "" || len(lines) < 2 {
+			// Empty body -- create minimal TSV with just user_id
+			data = []byte("user_id\n" + o.userID + "\n")
+		}
+	} else if o.userID != "" && parsed.Format == "json" {
+		// Inject user_id into JSON data if not already present.
+		s := strings.TrimSpace(string(data))
+		if s == "" {
+			data = []byte(`{"user_id":"` + o.userID + `"}`)
+		} else if strings.HasPrefix(s, "{") && !strings.Contains(s, "\"user_id\"") {
+			if s == "{}" {
+				data = []byte(`{"user_id":"` + o.userID + `"}`)
+			} else {
+				s = s[:len(s)-1] + ",\"user_id\":\"" + o.userID + "\"}"
+				data = []byte(s)
+			}
+		}
+	} else if o.userID != "" && parsed.Format == "yaml" {
+		// Inject user_id into YAML data if not already present.
+		s := strings.TrimSpace(string(data))
+		if s == "" {
+			data = []byte("user_id: " + o.userID + "\n")
+		} else if !strings.Contains(s, "user_id:") {
+			data = []byte(s + "\nuser_id: " + o.userID + "\n")
+		}
+	}
+	// Delegate to standard row write (handles INSERT/UPDATE, PK merge, format check)
+	return o.writeRowFile(ctx, parsed, data)
 }
 
 // readDirInfo lists the .info metadata directory.
 // Files match FUSE behavior: count, ddl, schema, columns, indexes (no dot prefix).
+// readDirRootInfo lists the root-level .info/ directory (mount metadata).
+func (o *Operations) readDirRootInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
+	modTime := o.userIDModTime
+	if modTime.IsZero() {
+		modTime = time.Now()
+	}
+	entries := []Entry{
+		{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(o.userID) + 1), ModTime: modTime},
+	}
+	return entries, nil
+}
+
+// statRootInfo returns metadata for root-level .info/ paths.
+func (o *Operations) statRootInfo(parsed *ParsedPath, now time.Time) (*Entry, *FSError) {
+	if parsed.InfoFile == "" {
+		return &Entry{Name: DirInfo, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+	}
+	if parsed.InfoFile == FileUser {
+		modTime := o.userIDModTime
+		if modTime.IsZero() {
+			modTime = now
+		}
+		content := o.userID + "\n"
+		return &Entry{Name: FileUser, IsDir: false, Mode: 0644, Size: int64(len(content)), ModTime: modTime}, nil
+	}
+	return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", parsed.InfoFile)}
+}
+
+// readRootInfoFile reads a root-level .info/ file.
+func (o *Operations) readRootInfoFile(parsed *ParsedPath) (*FileContent, *FSError) {
+	if parsed.InfoFile == FileUser {
+		return &FileContent{Data: []byte(o.userID + "\n")}, nil
+	}
+	return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("unknown info file: %s", parsed.InfoFile)}
+}
+
+// writeRootInfoFile writes a root-level .info/ file.
+// Writes to unknown files (e.g., editor temp files like #user#) are silently
+// ignored -- they're ephemeral artifacts that don't persist in a virtual filesystem.
+func (o *Operations) writeRootInfoFile(parsed *ParsedPath, data []byte) *FSError {
+	if parsed.InfoFile == FileUser {
+		o.userID = strings.TrimSpace(string(data))
+		o.userIDModTime = time.Now()
+		return nil
+	}
+	return nil // ignore unknown files (editor temp files, etc.)
+}
+
+// readDirInfo lists the table-level .info/ metadata directory.
 func (o *Operations) readDirInfo(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
 	now := time.Now()
 	entries := []Entry{
@@ -797,7 +1112,7 @@ func (o *Operations) readDirByCapability(ctx context.Context, parsed *ParsedPath
 	// List distinct values for the column (use DirListingLimit for .by/)
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
-		limit = 10000
+		limit = 1000
 	}
 	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
 }
@@ -862,7 +1177,7 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 	// List distinct values for the column (use DirFilterLimit for .filter/)
 	limit := o.config.DirFilterLimit
 	if limit <= 0 {
-		limit = 100000
+		limit = 10000
 	}
 	return o.readDistinctColumnValues(ctx, fsCtx, parsed.CapabilityArg, limit)
 }
@@ -935,15 +1250,11 @@ func (o *Operations) readDirOrderCapability(ctx context.Context, parsed *ParsedP
 }
 
 // readDirPaginationCapability lists options for .first/, .last/, .sample/.
+// Returns an empty listing to prevent recursive scanners (rm -rf, find, agents)
+// from descending into multiple limit values and triggering parallel queries.
+// Users navigate directly via .first/50, .last/100, etc.
 func (o *Operations) readDirPaginationCapability(ctx context.Context, parsed *ParsedPath) ([]Entry, *FSError) {
-	now := time.Now()
-	// Show common limit values
-	limits := []string{"10", "25", "50", "100", "500", "1000"}
-	entries := make([]Entry, len(limits))
-	for i, l := range limits {
-		entries[i] = Entry{Name: l, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
-	}
-	return entries, nil
+	return []Entry{}, nil
 }
 
 // readDirIndexesCapability lists indexes for /{table}/.indexes/.
@@ -1194,6 +1505,24 @@ func (o *Operations) Stat(ctx context.Context, path string) (*Entry, *FSError) {
 	return o.statWithParsed(ctx, parsed, path)
 }
 
+// Readlink returns the target path of a symlink. Returns ErrInvalidOperation
+// if the path is not a symlink. This is a stub that will be wired to specific
+// path handlers (e.g., .log/ diff symlinks, .undo/ preview symlinks) in later tasks.
+func (o *Operations) Readlink(ctx context.Context, path string) (string, *FSError) {
+	// First, stat the path to check if it's a symlink
+	entry, err := o.Stat(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	if !entry.IsSymlink() {
+		return "", &FSError{
+			Code:    ErrInvalidOperation,
+			Message: "not a symlink",
+		}
+	}
+	return entry.Target, nil
+}
+
 // StatWithContext returns metadata using a pre-parsed context.
 func (o *Operations) StatWithContext(ctx context.Context, fsCtx *FSContext) (*Entry, *FSError) {
 	parsed := &ParsedPath{
@@ -1213,6 +1542,18 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 	switch parsed.Type {
 	case PathRoot:
 		return &Entry{Name: "", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
+	case PathRootInfo:
+		return o.statRootInfo(parsed, now)
+
+	case PathLog:
+		return &Entry{Name: DirLog, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now}, nil
+
+	case PathSavepoint:
+		return &Entry{Name: DirSavepoint, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+
+	case PathUndo:
+		return o.statUndo(ctx, parsed)
 
 	case PathSchemaList:
 		return &Entry{Name: ".schemas", IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
@@ -1460,6 +1801,24 @@ func (o *Operations) statColumn(ctx context.Context, parsed *ParsedPath) (*Entry
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
 			Message: "missing context for column path",
+		}
+	}
+
+	// Diff symlinks on log entry rows (before/after/current)
+	if parsed.OrigTableName != "" && strings.HasSuffix(fsCtx.TableName, "_log") {
+		switch parsed.Column {
+		case "before", "after", "current":
+			target, fsErr := o.resolveLogDiffSymlink(ctx, parsed)
+			if fsErr != nil {
+				return nil, fsErr
+			}
+			return &Entry{
+				Name:    parsed.Column,
+				IsDir:   false,
+				Mode:    os.ModeSymlink | 0777,
+				Target:  target,
+				ModTime: time.Now(),
+			}, nil
 		}
 	}
 
@@ -1888,6 +2247,8 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return o.readRowFile(ctx, parsed)
 	case PathColumn:
 		return o.readColumnFile(ctx, parsed)
+	case PathRootInfo:
+		return o.readRootInfoFile(parsed)
 	case PathInfo:
 		return o.readInfoFile(ctx, parsed)
 	case PathExport:
@@ -1904,6 +2265,8 @@ func (o *Operations) readFileWithParsed(ctx context.Context, parsed *ParsedPath)
 		return &FileContent{Data: []byte{}}, nil
 	case PathHistory:
 		return o.readHistoryFileDispatch(ctx, parsed)
+	case PathUndo:
+		return o.readFileUndo(ctx, parsed)
 	default:
 		return nil, &FSError{
 			Code:    ErrInvalidPath,
@@ -2173,7 +2536,7 @@ func (o *Operations) readExportFile(ctx context.Context, parsed *ParsedPath) (*F
 	// Default limit from config
 	limit := o.config.DirListingLimit
 	if limit <= 0 {
-		limit = 10000
+		limit = 1000
 	}
 
 	// Validate column names if column projection is specified

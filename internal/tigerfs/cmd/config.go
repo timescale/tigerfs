@@ -98,6 +98,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 		Filesystem struct {
 			DirListingLimit      int    `yaml:"dir_listing_limit"`
 			DirWritingLimit      int    `yaml:"dir_writing_limit"`
+			MaxPipelineDepth     int    `yaml:"max_pipeline_depth"`
 			TrailingNewlines     bool   `yaml:"trailing_newlines"`
 			NoFilenameExtensions bool   `yaml:"no_filename_extensions"`
 			AttrTimeout          string `yaml:"attr_timeout"`
@@ -155,6 +156,7 @@ func showConfig(w io.Writer, cfg *config.Config) error {
 	// Filesystem
 	display.Filesystem.DirListingLimit = cfg.DirListingLimit
 	display.Filesystem.DirWritingLimit = cfg.DirWritingLimit
+	display.Filesystem.MaxPipelineDepth = cfg.MaxPipelineDepth
 	display.Filesystem.TrailingNewlines = cfg.TrailingNewlines
 	display.Filesystem.NoFilenameExtensions = cfg.NoFilenameExtensions
 	display.Filesystem.AttrTimeout = cfg.AttrTimeout.String()

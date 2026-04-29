@@ -58,6 +58,13 @@ func (o *Operations) readHistoryFileDispatch(ctx context.Context, parsed *Parsed
 func (o *Operations) readDirHistory(ctx context.Context, parsed *ParsedPath, info *synth.ViewInfo) ([]Entry, *FSError) {
 	fsCtx := parsed.Context
 	schema := synth.TigerFSSchema
+	// cacheSchema is the user-facing schema where the live view lives.
+	// resolveSynthPath uses (cacheSchema, table) as the pathCache key, and
+	// every other code path keys cache writes/lookups under the user's
+	// schema, so the history reads must too -- otherwise history's cache
+	// entries land in a disjoint (tigerfs, table) namespace and get neither
+	// shared with normal reads nor cleared by normal invalidate calls.
+	cacheSchema := fsCtx.Schema
 	historyTable := fsCtx.TableName + "_history"
 	now := time.Now()
 
@@ -69,21 +76,56 @@ func (o *Operations) readDirHistory(ctx context.Context, parsed *ParsedPath, inf
 	if parsed.HistoryByID {
 		return o.readDirHistoryByID(ctx, schema, historyTable, parsed, info, now, limit)
 	}
-	return o.readDirHistoryByFilename(ctx, schema, historyTable, parsed, info, now, limit)
+	return o.readDirHistoryByFilename(ctx, schema, cacheSchema, historyTable, parsed, info, now, limit)
 }
 
 // readDirHistoryByFilename lists history entries organized by filename.
 // Uses parsed.PrimaryKey as a directory prefix to show only files at the current level.
-func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, historyTable string, parsed *ParsedPath, info *synth.ViewInfo, now time.Time, limit int) ([]Entry, *FSError) {
+//
+// schema is the synth schema (tigerfs) where the history table lives;
+// cacheSchema is the user's schema, used for pathCache lookups so cache
+// keys match live-table reads.
+func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cacheSchema, historyTable string, parsed *ParsedPath, info *synth.ViewInfo, now time.Time, limit int) ([]Entry, *FSError) {
 	if parsed.HistoryFile == "" {
 		// /{table}/.history/ or /{table}/subdir/.history/ — list filenames at this level
-		filenames, err := o.db.QueryHistoryDistinctFilenames(ctx, schema, historyTable, limit)
+		dirPrefix := parsed.PrimaryKey
+
+		var filenames []string
+		var err error
+
+		// Parent-pointer model (ADR-017): query history by parent_id
+		if info.Roles.ParentID != "" {
+			var parentID string
+			if dirPrefix != "" {
+				// Resolve directory path in the LIVE table to get its UUID
+				segments := strings.Split(dirPrefix, "/")
+				var ok bool
+				parentID, ok = o.resolveSynthPath(ctx, cacheSchema, parsed.Context.TableName, segments)
+				if !ok {
+					return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", dirPrefix)}
+				}
+			}
+			filenames, err = o.db.QueryHistoryDistinctFilenamesByParent(ctx, schema, historyTable, parentID, limit)
+		} else {
+			// Old model: get all filenames and filter by prefix
+			filenames, err = o.db.QueryHistoryDistinctFilenames(ctx, schema, historyTable, limit)
+		}
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to list history filenames", Cause: err}
 		}
 
-		dirPrefix := parsed.PrimaryKey
-		filtered := filterHistoryAtLevel(filenames, dirPrefix)
+		var filtered []Entry
+		if info.Roles.ParentID != "" {
+			// Parent-pointer: filenames are already scoped to the directory
+			for _, fn := range filenames {
+				filtered = append(filtered, Entry{
+					Name: fn, IsDir: true,
+					Mode: os.ModeDir | 0555, ModTime: now,
+				})
+			}
+		} else {
+			filtered = filterHistoryAtLevel(filenames, dirPrefix)
+		}
 
 		entries := make([]Entry, 0, len(filtered)+1)
 		// Add .by/ entry only at root level (dirPrefix == "")
@@ -95,8 +137,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, histo
 	}
 
 	// /{table}/.history/foo.md/ — list versions for filename + .id file
-	// Build full DB filename from directory prefix + local filename
-	rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
+	rawFilename := historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
 
 	columns, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, limit)
 	if err != nil {
@@ -107,7 +148,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, histo
 	// Add .id virtual file
 	entries = append(entries, Entry{Name: ".id", IsDir: false, Mode: 0444, Size: 36, ModTime: now})
 
-	historyIDIdx := columnIndex(columns, "_history_id")
+	historyIDIdx := columnIndex(columns, "version_id")
 	for _, row := range rows {
 		if historyIDIdx < 0 {
 			continue
@@ -155,7 +196,7 @@ func (o *Operations) readDirHistoryByID(ctx context.Context, schema, historyTabl
 	}
 
 	entries := make([]Entry, 0, len(rows))
-	historyIDIdx := columnIndex(columns, "_history_id")
+	historyIDIdx := columnIndex(columns, "version_id")
 	for _, row := range rows {
 		if historyIDIdx < 0 {
 			continue
@@ -205,12 +246,12 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 
 	// .history/.by/<uuid>/<versionID> — version file by UUID
 	if parsed.HistoryByID && parsed.HistoryVersionID != "" {
-		return o.statHistoryVersion(ctx, schema, historyTable, "id", parsed.HistoryRowID, parsed.HistoryVersionID, info, now)
+		return o.statHistoryVersion(ctx, schema, historyTable, "file_id", parsed.HistoryRowID, parsed.HistoryVersionID, info, now)
 	}
 
 	// .history/foo.md/ — filename directory
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID == "" {
-		rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
+		rawFilename := historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
 		_, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to check history by filename", Cause: err}
@@ -228,7 +269,7 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 
 	// .history/foo.md/<versionID> — version file by filename
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID != "" {
-		rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
+		rawFilename := historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
 		return o.statHistoryVersion(ctx, schema, historyTable, "filename", rawFilename, parsed.HistoryVersionID, info, now)
 	}
 
@@ -264,7 +305,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 
 	// .id file: return the row UUID for this filename
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID == ".id" {
-		rawFilename := buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
+		rawFilename := historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
 		columns, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to query history for .id", Cause: err}
@@ -272,9 +313,9 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 		if len(rows) == 0 {
 			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("no history for %s", parsed.HistoryFile)}
 		}
-		idIdx := columnIndex(columns, "id")
+		idIdx := columnIndex(columns, "file_id")
 		if idIdx < 0 {
-			return nil, &FSError{Code: ErrIO, Message: "id column not found in history table"}
+			return nil, &FSError{Code: ErrIO, Message: "file_id column not found in history table"}
 		}
 		idStr := synth.ValueToString(rows[0][idIdx])
 		return []byte(idStr + "\n"), nil
@@ -283,11 +324,11 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 	// Version file: read and synthesize content
 	var filterColumn, filterValue string
 	if parsed.HistoryByID {
-		filterColumn = "id"
+		filterColumn = "file_id"
 		filterValue = parsed.HistoryRowID
 	} else {
 		filterColumn = "filename"
-		filterValue = buildHistoryFilename(parsed.PrimaryKey, parsed.HistoryFile)
+		filterValue = historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
 	}
 
 	columns, rows, err := o.db.QueryHistoryVersionByTime(ctx, schema, historyTable, filterColumn, filterValue, parsed.HistoryVersionID, 100)
@@ -308,9 +349,9 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 	return content, nil
 }
 
-// findVersionRow scans rows for one whose _history_id matches the given versionID.
+// findVersionRow scans rows for one whose version_id matches the given versionID.
 func findVersionRow(columns []string, rows [][]interface{}, versionID string) []interface{} {
-	historyIDIdx := columnIndex(columns, "_history_id")
+	historyIDIdx := columnIndex(columns, "version_id")
 	if historyIDIdx < 0 {
 		return nil
 	}
@@ -333,7 +374,7 @@ func columnIndex(columns []string, name string) int {
 	return -1
 }
 
-// historyIDToVersionID converts a _history_id value (UUIDv7) to a version ID string.
+// historyIDToVersionID converts a version_id value (UUIDv7) to a display version ID string.
 func historyIDToVersionID(val interface{}) string {
 	// The value may be a [16]byte, uuid.UUID, or string
 	switch v := val.(type) {
@@ -385,6 +426,21 @@ func parseUUID(s string) ([16]byte, error) {
 // buildHistoryFilename constructs the full DB filename from a directory prefix and local name.
 // At root level (dirPrefix=""), returns just the localName.
 // In subdirectories, returns "dirPrefix/localName".
+// historyDBFilename returns the filename to use for history table queries.
+// For parent-pointer model: extracts the leaf name (history stores leaf names).
+// The greedy history path parser may produce multi-segment localName like
+// "inbox/task.md" -- only the leaf "task.md" is in the history table.
+// For old model: builds full path from directory prefix + local filename.
+func historyDBFilename(info *synth.ViewInfo, dirPrefix, localName string) string {
+	if info.Roles.ParentID != "" {
+		if idx := strings.LastIndex(localName, "/"); idx >= 0 {
+			return localName[idx+1:]
+		}
+		return localName
+	}
+	return buildHistoryFilename(dirPrefix, localName)
+}
+
 func buildHistoryFilename(dirPrefix, localName string) string {
 	if dirPrefix == "" {
 		return localName

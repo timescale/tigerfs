@@ -261,6 +261,58 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 
 ---
 
+## Phase 12: Undo and Recovery
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ✅ | 12.1 | UUIDv7 Display Format (timestamp+base36) | ~8680 |
+| ✅ | 12.2 | Symlink Support (Adapter Plumbing) | ~8730 |
+| ✅ | 12.3 | Log and Savepoint Table DDL | ~8780 |
+| ✅ | 12.4 | Log Entry Creation in Write Path | ~8820 |
+| ✅ | 12.5 | User Identity (.info/user) | ~8860 |
+| ✅ | 12.6 | Path Parsing for .log/, .savepoint/, .undo/ | ~8900 |
+| ✅ | 12.7 | .log/ Interface (Data-First on Log Table + Diff Symlinks) | ~8930 |
+| ✅ | 12.8 | .savepoint/ Interface (Data-First + Write Support) | ~8970 |
+| ✅ | 12.9 | Auto-Savepoints (Session-Based) | ~9000 |
+| ✅ | 12.10 | Undo Execution Logic (Core Engine) | ~9030 |
+| ✅ | 12.11 | .undo/ Interface (Preview + Apply) | ~9080 |
+| ✅ | 12.12 | Short-Lived Caching (Undo, Log, Savepoint) | ~9100 |
+| ✅ | 12.13 | Skills | ~9150 |
+| ✅ | 12.14 | Documentation | ~9180 |
+
+---
+
+## Phase 13: Relational Directory Structure
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ✅ | 13.1 | Schema and DDL Changes (parent_id, version_id, resolve_path) | ~9200 |
+| ✅ | 13.2 | Path Resolution (resolve_path + Go cache) | ~9230 |
+| ✅ | 13.3 | ReadDir by parent_id | ~9260 |
+| ✅ | 13.4 | Write Path Updates (parent_id) | ~9280 |
+| ✅ | 13.5 | Rename and Move (single-row operations) | ~9300 |
+| ✅ | 13.6 | Delete Path Updates | ~9330 |
+| ✅ | 13.7 | History and .history/ Updates | ~9350 |
+| ✅ | 13.8 | Log Entry Updates (FS-centric types, version_id) | ~9370 |
+| ✅ | 13.9 | Migration Script | ~9390 |
+| ✅ | 13.10 | Update Existing Tests (45 verification scenarios) | ~9410 |
+| ✅ | 13.11 | Update ADR-016 and Phase 12 Tasks | ~9430 |
+| ✅ | 13.12 | Documentation (ADR-017, spec, skills) | ~9450 |
+
+---
+
+## Phase 14: Stress Test (`tigerfs-stress`)
+
+| Status | Task | Description | Line |
+|--------|------|-------------|------|
+| ✅ | 14.1 | Scaffolding + Infrastructure (CLI, Docker, mount, teardown) | ~9470 |
+| ✅ | 14.2 | State Tracking + Validation (WorkspaceState, stack, ValidateWorkspace) | ~9500 |
+| ✅ | 14.3 | Operations + Content Generation (all FS ops, size distribution, pools) | ~9530 |
+| ✅ | 14.4 | Runner + Undo + End-to-End (test loop, undo ops, wiring) | ~9560 |
+| ✅ | 14.5 | README Finalization (architecture docs, usage guide) | ~9590 |
+
+---
+
 ## Summary
 
 | Phase | Complete | Total | Progress |
@@ -280,4 +332,7 @@ Quick reference for task status. Line numbers reference `implementation-tasks.md
 | Phase 9: Shared Core Library | 17 | 17 | 100% |
 | Phase 10: Performance | 0 | 4 | 0% |
 | Phase 11: Skills | 1 | 1 | 100% |
-| **Total** | **106** | **123** | **86%** |
+| Phase 12: Undo and Recovery | 14 | 14 | 100% |
+| Phase 13: Relational Directory Structure | 12 | 12 | 100% |
+| Phase 14: Stress Test | 5 | 5 | 100% |
+| **Total** | **133** | **154** | **86%** |

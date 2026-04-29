@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
 // PathType indicates what kind of filesystem path was parsed.
@@ -62,6 +64,23 @@ const (
 
 	// PathTablesList is the /.tables/ directory listing backing tables in tigerfs schema.
 	PathTablesList
+
+	// PathRootInfo is the root-level /.info/ directory for mount metadata (user identity).
+	// Distinct from PathInfo which is table-level /{table}/.info/.
+	PathRootInfo
+
+	// PathLog is the /{table}/.log/ directory exposing the operation log table.
+	// Delegates to data-first pipeline on the tigerfs.<table>_log table.
+	PathLog
+
+	// PathSavepoint is the /{table}/.savepoint/ directory exposing savepoints.
+	// Delegates to data-first pipeline on the tigerfs.<table>_savepoint table.
+	PathSavepoint
+
+	// PathUndo is the /{table}/.undo/ directory for preview-then-apply undo.
+	// Contains routing (id/, to-id/, to-savepoint/), target selection, optional
+	// pipeline filters, and .apply/.info/summary leaves.
+	PathUndo
 )
 
 // ParsedPath holds the result of parsing a filesystem path.
@@ -139,6 +158,25 @@ type ParsedPath struct {
 	// processing. Used by synth hierarchy to reconstruct multi-segment filenames.
 	// For example, /memory/projects/web/todo.md → ["projects", "web", "todo.md"].
 	RawSubPath []string
+
+	// UndoMode is the undo routing mode: "id", "to-id", or "to-savepoint".
+	// Set when Type is PathUndo.
+	UndoMode string
+
+	// UndoTarget is the target identifier for undo: a log_id display name
+	// (for id/ and to-id/) or a savepoint name (for to-savepoint/).
+	UndoTarget string
+
+	// UndoApply is true when the path ends with .apply (trigger to execute undo).
+	UndoApply bool
+
+	// UndoFile is a file path within the undo preview directory.
+	// E.g., "docs/hello.md" in .undo/to-savepoint/before-refactor/docs/hello.md
+	UndoFile string
+
+	// OrigTableName preserves the original synth app table name when the context
+	// is redirected to a different table (e.g., .log/ redirects to _log table).
+	OrigTableName string
 }
 
 // knownFormats maps format extensions to format names.
@@ -147,6 +185,17 @@ var knownFormats = map[string]string{
 	".csv":  "csv",
 	".tsv":  "tsv",
 	".yaml": "yaml",
+}
+
+// IsRowFormatFile returns true if the filename has a known row format extension
+// (.json, .csv, .tsv, .yaml). Used by adapters to detect row-level writes.
+func IsRowFormatFile(filename string) bool {
+	for ext := range knownFormats {
+		if strings.HasSuffix(filename, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParsePath converts a filesystem path to a ParsedPath.
@@ -207,6 +256,9 @@ func ParsePath(path string) (*ParsedPath, *FSError) {
 		return parseBuildPath(segments)
 	case ".tables":
 		return parseTablesPath(segments)
+	case DirInfo:
+		// Root-level .info/ (mount metadata: user identity, etc.)
+		return parseRootInfoPath(segments)
 	}
 
 	// Otherwise, it's a table path (possibly with schema prefix)
@@ -223,6 +275,18 @@ func splitPath(path string) []string {
 		}
 	}
 	return segments
+}
+
+// parseRootInfoPath handles root-level /.info/ paths (mount metadata).
+// Supports:
+//   - /.info/ → list metadata files (user)
+//   - /.info/user → read/write mount-level user identity
+func parseRootInfoPath(segments []string) (*ParsedPath, *FSError) {
+	result := &ParsedPath{Type: PathRootInfo}
+	if len(segments) >= 2 {
+		result.InfoFile = segments[1]
+	}
+	return result, nil
 }
 
 // parseSchemaPath handles /.schemas/ paths.
@@ -440,8 +504,10 @@ func processSegments(result *ParsedPath, segments []string) (*ParsedPath, *FSErr
 	for i < len(segments) {
 		seg := segments[i]
 
-		// Check for capability directories
-		if strings.HasPrefix(seg, ".") {
+		// Check for known capability directories (e.g., .info, .by, .filter, .history).
+		// Unknown dot-prefixed segments (e.g., .git, .gitignore, .env) fall through
+		// to the scan-ahead logic and are treated as regular filenames/directories.
+		if strings.HasPrefix(seg, ".") && isKnownCapability(seg) {
 			consumed, err := processCapability(result, seg, segments[i:])
 			if err != nil {
 				return nil, err
@@ -485,7 +551,7 @@ func isKnownCapability(seg string) bool {
 	switch seg {
 	case DirInfo, DirBy, DirColumns, DirFilter, DirOrder, DirFirst, DirLast, DirSample,
 		DirExport, DirImport, DirAll, DirModify, DirDelete, DirIndexes,
-		DirFormat, DirHistory:
+		DirFormat, DirHistory, DirLog, DirSavepoint, DirUndo:
 		return true
 	default:
 		return false
@@ -529,10 +595,17 @@ func processCapability(result *ParsedPath, cap string, remaining []string) (int,
 		return processFormat(result, remaining)
 	case DirHistory:
 		return processHistory(result, remaining)
+	case DirLog:
+		return processLog(result, remaining)
+	case DirSavepoint:
+		return processSavepoint(result, remaining)
+	case DirUndo:
+		return processUndo(result, remaining)
 	default:
+		// Should not reach here -- callers check isKnownCapability() first.
 		return 0, &FSError{
 			Code:    ErrInvalidPath,
-			Message: fmt.Sprintf("unknown capability: %s", cap),
+			Message: fmt.Sprintf("internal error: processCapability called with unknown capability: %s", cap),
 		}
 	}
 }
@@ -577,7 +650,9 @@ func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 	column := remaining[1]
 	value := remaining[2]
 	result.Context = result.Context.WithFilter(column, value, true)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 3, nil
 }
 
@@ -617,7 +692,9 @@ func processColumns(result *ParsedPath, remaining []string) (int, *FSError) {
 	}
 
 	result.Context = result.Context.WithColumns(columns)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 2, nil
 }
 
@@ -649,7 +726,9 @@ func processFilter(result *ParsedPath, remaining []string) (int, *FSError) {
 	column := remaining[1]
 	value := remaining[2]
 	result.Context = result.Context.WithFilter(column, value, false)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 3, nil
 }
 
@@ -686,7 +765,9 @@ func processOrder(result *ParsedPath, remaining []string) (int, *FSError) {
 		desc = true
 	}
 	result.Context = result.Context.WithOrder(col, desc)
-	result.Type = PathTable
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 2, nil
 }
 
@@ -735,7 +816,11 @@ func processLimit(result *ParsedPath, remaining []string, limitType LimitType) (
 	}
 
 	result.Context = result.Context.WithLimit(n, limitType)
-	result.Type = PathTable
+	// Preserve the original type for .log/.savepoint/.undo redirected tables.
+	// Only reset to PathTable if already a table path.
+	if result.Type == PathTable || result.Type == PathCapability {
+		result.Type = PathTable
+	}
 	return 2, nil
 }
 
@@ -992,10 +1077,284 @@ func processHistory(result *ParsedPath, remaining []string) (int, *FSError) {
 	return consumed, nil
 }
 
-// isVersionID returns true if a segment looks like a history version ID timestamp.
-// Version IDs have the format "2006-01-02T150405Z" (e.g., "2026-02-12T013000Z").
+// processLog handles .log/ paths. Redirects the FSContext to the _log table
+// in the tigerfs schema and delegates remaining segments to pipeline parsing.
+// The path type becomes PathLog for the listing, or the standard PathRow/PathColumn
+// types for accessing specific log entries via pipeline.
+func processLog(result *ParsedPath, remaining []string) (int, *FSError) {
+	if result.Context == nil {
+		return 0, &FSError{Code: ErrInvalidPath, Message: ".log/ requires a table context"}
+	}
+
+	// Preserve original table name and redirect to log table
+	result.OrigTableName = result.Context.TableName
+	result.Context.TableName = result.Context.TableName + "_log"
+	result.Context.Schema = "tigerfs"
+	result.Context.HideCapabilities = true // suppress pipeline dirs in listing
+	result.Type = PathLog
+
+	if len(remaining) == 1 {
+		// Just .log/ -- listing
+		return 1, nil
+	}
+
+	// Delegate remaining segments to standard pipeline/row parsing.
+	// This handles .log/.last/10, .log/.by/user_id/agent-7, .log/<log_id>/type, etc.
+	// Use processSegmentsFrom which returns consumed count.
+	pConsumed, err := processSegmentsFrom(result, remaining[1:])
+	return 1 + pConsumed, err
+}
+
+// processSavepoint handles .savepoint/ paths. Redirects the FSContext to the
+// _savepoint table in the tigerfs schema and delegates to pipeline parsing.
+func processSavepoint(result *ParsedPath, remaining []string) (int, *FSError) {
+	if result.Context == nil {
+		return 0, &FSError{Code: ErrInvalidPath, Message: ".savepoint/ requires a table context"}
+	}
+
+	result.OrigTableName = result.Context.TableName
+	result.Context.TableName = result.Context.TableName + "_savepoint"
+	result.Context.Schema = "tigerfs"
+	result.Context.HideCapabilities = true // suppress pipeline dirs in listing
+	result.Type = PathSavepoint
+
+	if len(remaining) == 1 {
+		return 1, nil
+	}
+
+	pConsumed, err := processSegmentsFrom(result, remaining[1:])
+	return 1 + pConsumed, err
+}
+
+// processSegmentsFrom is like processSegments but returns the number of segments
+// consumed instead of a new ParsedPath. Used by .log/ and .savepoint/ which need
+// to redirect the context and then delegate remaining parsing.
+func processSegmentsFrom(result *ParsedPath, segments []string) (int, *FSError) {
+	if len(segments) == 0 {
+		return 0, nil
+	}
+
+	consumed := 0
+	for consumed < len(segments) {
+		seg := segments[consumed]
+
+		// Capability directory?
+		if strings.HasPrefix(seg, ".") && isKnownCapability(seg) {
+			n, err := processCapability(result, seg, segments[consumed:])
+			if err != nil {
+				return 0, err
+			}
+			consumed += n
+			continue
+		}
+
+		// Not a capability -- treat as row PK (data-first table access)
+		result.Type = PathRow
+		pk := seg
+		for ext, fmt := range knownFormats {
+			if strings.HasSuffix(pk, ext) {
+				pk = strings.TrimSuffix(pk, ext)
+				result.Format = fmt
+				break
+			}
+		}
+		result.PrimaryKey = pk
+		consumed++
+
+		// If there are more segments, check if it's a format file or column name
+		if consumed < len(segments) {
+			nextSeg := segments[consumed]
+			if strings.HasPrefix(nextSeg, ".") && isKnownCapability(nextSeg) {
+				continue // pipeline after row
+			}
+			// Check if it's a row format file (.json, .csv, .tsv, .yaml)
+			if fmt, ok := knownFormats[nextSeg]; ok {
+				result.Format = fmt
+			} else {
+				result.Type = PathColumn
+				result.Column = nextSeg
+			}
+			consumed++
+		}
+		break
+	}
+
+	return consumed, nil
+}
+
+// processUndo handles .undo/ paths with routing structure:
+//
+//	.undo/                              → listing of undo modes
+//	.undo/id/                           → list recent log entries
+//	.undo/id/<log_id>/                  → preview single undo
+//	.undo/id/<log_id>/.apply            → execute single undo
+//	.undo/id/<log_id>/.info/summary     → preview summary
+//	.undo/id/<log_id>/docs/hello.md     → preview file content
+//	.undo/to-id/<log_id>/               → preview undo-to-point
+//	.undo/to-savepoint/<name>/          → preview undo-to-savepoint
+//	.undo/to-savepoint/<name>/.by/user_id/agent-7/.apply  → filtered undo
+//
+// Pipeline segments (.by/, .filter/, .last/, etc.) after the target narrow
+// which operations are included in the undo scope.
+func processUndo(result *ParsedPath, remaining []string) (int, *FSError) {
+	if result.Context == nil {
+		return 0, &FSError{Code: ErrInvalidPath, Message: ".undo/ requires a table context"}
+	}
+
+	result.OrigTableName = result.Context.TableName
+	result.Type = PathUndo
+
+	if len(remaining) == 1 {
+		// Just .undo/ -- list modes (id/, to-id/, to-savepoint/)
+		return 1, nil
+	}
+
+	// Parse mode
+	mode := remaining[1]
+	switch mode {
+	case "id", "to-id", "to-savepoint":
+		result.UndoMode = mode
+	default:
+		return 0, &FSError{Code: ErrInvalidPath, Message: fmt.Sprintf("unknown undo mode: %s (expected id, to-id, or to-savepoint)", mode)}
+	}
+
+	if len(remaining) == 2 {
+		// .undo/<mode>/ -- list targets (log entries or savepoints)
+		return 2, nil
+	}
+
+	// Parse target (log_id display name or savepoint name)
+	result.UndoTarget = remaining[2]
+
+	if len(remaining) == 3 {
+		// .undo/<mode>/<target>/ -- preview directory
+		return 3, nil
+	}
+
+	// Parse remaining segments: pipeline capabilities, .apply, .info/summary, or file paths
+	consumed := 3
+	for i := 3; i < len(remaining); i++ {
+		seg := remaining[i]
+
+		// Check for .apply trigger
+		if seg == FileApply {
+			result.UndoApply = true
+			consumed = i + 1
+			return consumed, nil
+		}
+
+		// Check for .info/summary
+		if seg == DirInfo {
+			if i+1 < len(remaining) {
+				result.InfoFile = remaining[i+1]
+				consumed = i + 2
+			} else {
+				result.InfoFile = "." // sentinel: inside .info/ directory
+				consumed = i + 1
+			}
+			return consumed, nil
+		}
+
+		// Check for pipeline capability
+		if isKnownCapability(seg) {
+			// Process pipeline segments starting at this position.
+			// Build a sub-remaining slice from this point.
+			pipelineRemaining := remaining[i:]
+			pipelineConsumed, err := processCapabilityChain(result, pipelineRemaining)
+			if err != nil {
+				return 0, err
+			}
+			consumed = i + pipelineConsumed
+			return consumed, nil
+		}
+
+		// Not a capability, not .apply, not .info -- it's a file path in the preview
+		var fileParts []string
+		for j := i; j < len(remaining); j++ {
+			seg := remaining[j]
+			if seg == FileApply {
+				result.UndoApply = true
+				consumed = j + 1
+				result.UndoFile = strings.Join(fileParts, "/")
+				return consumed, nil
+			}
+			if seg == DirInfo || isKnownCapability(seg) {
+				break
+			}
+			fileParts = append(fileParts, seg)
+			consumed = j + 1
+		}
+		result.UndoFile = strings.Join(fileParts, "/")
+		return consumed, nil
+	}
+
+	return consumed, nil
+}
+
+// processCapabilityChain processes a chain of pipeline capabilities starting
+// from the current position. Used by .undo/ to handle pipeline segments after
+// the target. Returns the number of segments consumed.
+func processCapabilityChain(result *ParsedPath, remaining []string) (int, *FSError) {
+	consumed := 0
+	for consumed < len(remaining) {
+		seg := remaining[consumed]
+
+		// Check for .apply at any point in the chain
+		if seg == FileApply {
+			result.UndoApply = true
+			consumed++
+			return consumed, nil
+		}
+
+		// Check for .info/summary
+		if seg == DirInfo {
+			consumed++
+			if consumed < len(remaining) {
+				result.InfoFile = remaining[consumed]
+				consumed++
+			}
+			return consumed, nil
+		}
+
+		if !isKnownCapability(seg) {
+			break
+		}
+
+		n, err := processCapability(result, seg, remaining[consumed:])
+		if err != nil {
+			return 0, err
+		}
+		consumed += n
+	}
+
+	// Check if remaining segments after pipeline are .apply or .info
+	if consumed < len(remaining) {
+		seg := remaining[consumed]
+		if seg == FileApply {
+			result.UndoApply = true
+			consumed++
+		} else if seg == DirInfo {
+			consumed++
+			if consumed < len(remaining) {
+				result.InfoFile = remaining[consumed]
+				consumed++
+			}
+		}
+	}
+
+	return consumed, nil
+}
+
+// isVersionID returns true if a segment looks like a history version ID.
+// Recognizes two formats:
+//   - Legacy: "2006-01-02T150405Z" (18 chars, second-precision timestamp)
+//   - Display name: "2006-01-02T150405.000Z-<base36>" (UUIDv7 display format, ADR-016)
 func isVersionID(seg string) bool {
-	// Quick length check: "2006-01-02T150405Z" = 18 chars
+	// Check for UUIDv7 display name format (e.g., "2026-04-10T173000.123Z-abc123")
+	if format.IsDisplayName(seg) {
+		return true
+	}
+	// Legacy: "2006-01-02T150405Z" = 18 chars
 	if len(seg) != 18 {
 		return false
 	}

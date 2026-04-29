@@ -3,6 +3,8 @@ package db
 import (
 	"fmt"
 	"strings"
+
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 )
 
 // PKMatch holds the column names and values needed to identify a specific row
@@ -226,7 +228,18 @@ func (pk *PrimaryKey) Decode(dirname string) (*PKMatch, error) {
 
 // pkDecodeSingle decodes a single-column PK value, only unescaping
 // filesystem-unsafe characters (slash and null byte).
+//
+// If the value is a UUIDv7 display name (timestamp+base36 format), it is
+// converted back to the standard hex UUID format for database queries.
 func pkDecodeSingle(encoded string) string {
+	// Check for UUIDv7 display name format and convert to hex UUID
+	if format.IsDisplayName(encoded) {
+		id, err := format.DisplayNameToUUIDv7(encoded)
+		if err == nil {
+			return id.String()
+		}
+	}
+
 	if !strings.Contains(encoded, "%") {
 		return encoded
 	}

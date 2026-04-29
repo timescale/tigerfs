@@ -16,26 +16,36 @@ import (
 	"time"
 )
 
-// Entry represents a filesystem entry (file or directory).
+// Entry represents a filesystem entry (file, directory, or symlink).
 // Used by ReadDir and Stat operations to describe filesystem structure.
 type Entry struct {
 	// Name is the entry name (filename or directory name, not full path).
 	Name string
 
-	// IsDir is true for directories, false for files.
+	// IsDir is true for directories, false for files and symlinks.
 	IsDir bool
 
 	// Size is the content size in bytes. For directories, this is typically
-	// a nominal value (e.g., 4096).
+	// a nominal value (e.g., 4096). For symlinks, this is the length of
+	// the target path.
 	Size int64
 
 	// Mode contains the permission bits and file type.
-	// Use os.ModeDir for directories.
+	// Use os.ModeDir for directories, os.ModeSymlink for symlinks.
 	Mode os.FileMode
 
 	// ModTime is the modification time. For database rows, this may be
 	// derived from a timestamp column or default to mount time.
 	ModTime time.Time
+
+	// Target is the symlink target path. Only set when Mode includes
+	// os.ModeSymlink. Empty for regular files and directories.
+	Target string
+}
+
+// IsSymlink returns true if the entry represents a symlink.
+func (e *Entry) IsSymlink() bool {
+	return e.Mode&os.ModeSymlink != 0
 }
 
 // FileContent holds the content of a file read operation.

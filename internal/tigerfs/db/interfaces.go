@@ -95,6 +95,10 @@ type RowWriter interface {
 
 	// DeleteRow deletes a row by primary key.
 	DeleteRow(ctx context.Context, schema, table string, pk *PKMatch) error
+
+	// DeleteAndUpdate atomically deletes one row and updates another in a single
+	// transaction. Used for POSIX rename-as-replace (mv over existing file).
+	DeleteAndUpdate(ctx context.Context, schema, table string, deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error
 }
 
 // IndexReader provides index metadata and lookup operations.
@@ -272,6 +276,10 @@ type HistoryReader interface {
 	// QueryHistoryDistinctFilenames returns distinct filenames from the history table.
 	QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
 
+	// QueryHistoryDistinctFilenamesByParent returns distinct filenames from the history table
+	// filtered by parent_id. Empty parentID means root level. Used by ADR-017.
+	QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
+
 	// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
 	QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
 
@@ -283,13 +291,114 @@ type HistoryReader interface {
 // Used by synth views with filetype column for directory rename, child checks, etc.
 type HierarchyWriter interface {
 	// RenameByPrefix atomically renames all rows where column starts with oldPrefix.
+	// Deprecated: Will be removed when all tables use parent-pointer model (ADR-017).
 	RenameByPrefix(ctx context.Context, schema, table, column, oldPrefix, newPrefix string) (int64, error)
 
 	// HasChildrenWithPrefix checks if any rows have column values starting with prefix + "/".
+	// Deprecated: Will be removed when all tables use parent-pointer model (ADR-017).
 	HasChildrenWithPrefix(ctx context.Context, schema, table, column, prefix string) (bool, error)
 
-	// InsertIfNotExists inserts a row only if no conflict (ON CONFLICT DO NOTHING).
+	// InsertIfNotExists inserts a row only if no conflict.
+	// Uses plain INSERT with unique-violation error handling (no ON CONFLICT)
+	// to support deferrable constraints required by undo transactions (ADR-017).
 	InsertIfNotExists(ctx context.Context, schema, table string, columns []string, values []interface{}) error
+
+	// GetRowByParentAndName returns a single row matching parent_id + filename.
+	// Empty parentID means root level (WHERE parent_id IS NULL).
+	// Combines path resolution with row fetch for ReadFile (ADR-017).
+	GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error)
+
+	// GetRowsByParent returns all rows with the given parent_id, up to limit.
+	// Empty parentID means root level (WHERE parent_id IS NULL).
+	// Used by the parent-pointer directory model (ADR-017) for ReadDir.
+	GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error)
+}
+
+// PathResolver provides path resolution for the parent-pointer directory model (ADR-017).
+type PathResolver interface {
+	// ResolvePath resolves a sequence of path segments to row IDs by calling
+	// the tigerfs.resolve_path PL/pgSQL function. startParentID is empty for root.
+	// Returns one PathSegment per resolved segment; fewer than len(segments)
+	// means a segment didn't resolve (path doesn't exist).
+	ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error)
+}
+
+// LogWriter provides operations for the undo operation log.
+// Used by synth write operations to record changes for undo/recovery.
+type LogWriter interface {
+	// InsertLogEntry inserts an operation log entry into the log hypertable.
+	// Parameters:
+	//   - logTable: the log table name (e.g., "notes_log")
+	//   - userID: the user/agent identity (may be empty for anonymous)
+	//   - opType: operation type ("create", "edit", "rename", "delete", "undo")
+	//   - fileID: stable UUID of the affected row
+	//   - filename: filename at time of operation (denormalized full path for log display)
+	//   - versionID: UUID of the history entry (before-state), empty for creates
+	//   - description: optional human-readable note
+	InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error
+
+	// QueryNextLogEntry finds the next log entry for a file after a given log_id.
+	// Returns (version_id, filename) of the next entry, or empty strings if none.
+	QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error)
+
+	// QueryFileExists checks if a row with the given id exists in the source table.
+	QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error)
+
+	// QueryLatestVersionID returns the most recent version_id for a given
+	// file_id from the history table. Used to capture the before-state pointer
+	// after an UPDATE/DELETE fires the BEFORE trigger.
+	QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error)
+
+	// QueryUndoAffectedFiles returns the first log entry per file after a target point.
+	// Uses DISTINCT ON with SkipScan on the (file_id, log_id ASC) index.
+	// The version_id on each entry is the before-state at the target point.
+	// Optional userID filter limits to operations by a specific user.
+	QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error)
+
+	// QueryLogEntry fetches a single log entry by log_id.
+	QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error)
+
+	// ExecuteUndoTransaction executes a batch of undo operations in a single transaction.
+	// Deletes rows that were created after the target, upserts rows from history
+	// for edits/renames/deletes, and inserts undo log entries -- all atomically.
+	ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error
+}
+
+// UndoAffectedFile represents a file affected by operations after the undo target.
+type UndoAffectedFile struct {
+	FileID    string // stable UUID of the affected row
+	Type      string // first operation type after target (create, edit, rename, delete, undo)
+	VersionID string // version_id of the before-state (empty for creates)
+	Filename  string // filename at time of operation
+	LogID     string // log_id of the first operation (UUIDv7, encodes timestamp)
+	UserID    string // user who performed the operation
+}
+
+// UndoFilter narrows the scope of an undo operation.
+type UndoFilter struct {
+	Column string // e.g., "user_id", "type", "filename"
+	Value  string
+}
+
+// UndoTransactionParams holds all parameters for an atomic undo transaction.
+type UndoTransactionParams struct {
+	Schema       string
+	SourceTable  string // e.g., "blog" (the synth app source table)
+	LogTable     string // e.g., "blog_log"
+	HistoryTable string // e.g., "blog_history"
+	Description  string // description for undo log entries
+
+	// Files to DELETE (created after target point)
+	DeleteFileIDs   []string
+	DeleteFilenames []string // corresponding filenames for log entries (parallel array)
+
+	// Files to UPSERT from history (edited/renamed/deleted after target)
+	RestoreVersionIDs []string // version_ids to fetch from history and restore
+	RestoreFileIDs    []string // corresponding file_ids (parallel array)
+	RestoreFilenames  []string // corresponding filenames for log entries
+
+	// Identity for undo log entries
+	UserID string
 }
 
 // DBClient is the composite interface combining all database capabilities.
@@ -309,6 +418,8 @@ type DBClient interface {
 	PipelineReader
 	HierarchyWriter
 	HistoryReader
+	PathResolver
+	LogWriter
 }
 
 // Compile-time verification that *Client implements DBClient

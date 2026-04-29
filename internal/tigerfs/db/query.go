@@ -2,13 +2,30 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
+
+// isUniqueViolation returns true if the error is a PostgreSQL unique violation (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// asPgError extracts a pgconn.PgError from an error chain, or returns nil.
+func asPgError(err error) *pgconn.PgError {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr
+	}
+	return nil
+}
 
 // Row represents a database row with column names and values
 type Row struct {
@@ -38,9 +55,16 @@ func pkOrderByList(pkColumns []string, direction string) string {
 
 // scanAndEncodePK scans multiple PK column values from a row and encodes them
 // into a single string using the PrimaryKey's encoding rules.
+//
+// For single-column UUIDv7 primary keys, this produces a human-readable
+// timestamp+base36 display name instead of the standard hex UUID format.
+// Non-v7 UUIDs continue to display as hex. See ADR-016 Section 11.
 func scanAndEncodePK(values []interface{}, pkColumns []string) (string, error) {
 	if len(pkColumns) == 1 {
-		// Single-column: convert directly
+		// Single-column: check for UUIDv7 before generic conversion
+		if bytes, ok := values[0].([16]byte); ok && format.IsUUIDv7(bytes) {
+			return format.UUIDv7ToDisplayName(bytes), nil
+		}
 		return format.ConvertValueToText(values[0])
 	}
 	// Multi-column: convert each value, then encode
@@ -445,6 +469,47 @@ func (c *Client) DeleteRow(ctx context.Context, schema, table string, pk *PKMatc
 	return DeleteRow(ctx, c.pool, schema, table, pk)
 }
 
+// DeleteAndUpdate atomically deletes one row and updates another in a single
+// PostgreSQL transaction. Used for POSIX rename-as-replace semantics where
+// the target file must be removed before the source file can be renamed to it.
+// Both BEFORE triggers (history capture) fire within the transaction.
+func (c *Client) DeleteAndUpdate(ctx context.Context, schema, table string,
+	deletePK *PKMatch, updatePK *PKMatch, updateCols []string, updateVals []interface{}) error {
+
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Step 1: Delete the target row
+	deleteSQL := fmt.Sprintf(`DELETE FROM %s WHERE %s`, qt(schema, table), deletePK.WhereClause(1))
+	_, err = tx.Exec(ctx, deleteSQL, deletePK.WhereArgs()...)
+	if err != nil {
+		return fmt.Errorf("failed to delete target row: %w", err)
+	}
+
+	// Step 2: Update the source row (rename)
+	setClauses := make([]string, len(updateCols))
+	for i, col := range updateCols {
+		setClauses[i] = fmt.Sprintf(`%s = $%d`, qi(col), i+1)
+	}
+	whereStart := len(updateVals) + 1
+	updateSQL := fmt.Sprintf(`UPDATE %s SET %s WHERE %s`,
+		qt(schema, table), strings.Join(setClauses, ", "), updatePK.WhereClause(whereStart))
+	allValues := append(updateVals, updatePK.WhereArgs()...)
+	_, err = tx.Exec(ctx, updateSQL, allValues...)
+	if err != nil {
+		return fmt.Errorf("failed to update source row: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
 // GetFirstNRows returns the first N primary key values ordered by PK ascending.
 // Returns encoded PK strings (comma-delimited for composite PKs).
 func GetFirstNRows(ctx context.Context, dbtx DBTX, schema, table string, pkColumns []string, limit int) ([]string, error) {
@@ -721,16 +786,439 @@ func (c *Client) InsertIfNotExists(ctx context.Context, schema, table string, co
 		placeholders[i] = fmt.Sprintf("$%d", i+1)
 	}
 
+	// Plain INSERT without ON CONFLICT -- deferrable unique constraints (required
+	// by ADR-017 for undo transactions) don't support ON CONFLICT as arbiter.
+	// Instead, catch the unique violation error (23505) and treat it as a no-op.
 	query := fmt.Sprintf(
-		`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING`,
+		`INSERT INTO %s (%s) VALUES (%s)`,
 		qt(schema, table), strings.Join(quotedCols, ", "), strings.Join(placeholders, ", "),
 	)
 
 	_, err := c.pool.Exec(ctx, query, values...)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return nil // Row already exists, no-op
+		}
 		return fmt.Errorf("failed to insert if not exists: %w", err)
 	}
 
+	return nil
+}
+
+// GetRowsByParent returns rows with a specific parent_id, up to limit.
+// Empty parentID means root level (WHERE parent_id IS NULL).
+// Used by the parent-pointer directory model (ADR-017) for ReadDir.
+func (c *Client) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
+	if c.pool == nil {
+		return nil, nil, fmt.Errorf("database connection not initialized")
+	}
+
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" IS NULL LIMIT $1`,
+			qt(schema, table),
+		)
+		args = []interface{}{limit}
+	} else {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" = $1 LIMIT $2`,
+			qt(schema, table),
+		)
+		args = []interface{}{parentID, limit}
+	}
+
+	return c.queryRows(ctx, query, args...)
+}
+
+// GetRowByParentAndName returns a single row matching parent_id + filename.
+// Empty parentID means root level (WHERE parent_id IS NULL).
+// Returns (columns, row, error); row is nil if not found.
+// Used by ReadFile to combine path resolution with row fetch in one query (ADR-017).
+func (c *Client) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
+	if c.pool == nil {
+		return nil, nil, fmt.Errorf("database connection not initialized")
+	}
+
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" IS NULL AND "filename" = $1 LIMIT 1`,
+			qt(schema, table),
+		)
+		args = []interface{}{filename}
+	} else {
+		query = fmt.Sprintf(
+			`SELECT * FROM %s WHERE "parent_id" = $1 AND "filename" = $2 LIMIT 1`,
+			qt(schema, table),
+		)
+		args = []interface{}{parentID, filename}
+	}
+
+	columns, rows, err := c.queryRows(ctx, query, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rows) == 0 {
+		return columns, nil, nil
+	}
+	return columns, rows[0], nil
+}
+
+// QueryNextLogEntry finds the next log entry for a file after a given log_id.
+// Returns the version_id and filename of the next entry, or empty strings if none.
+// Used by diff symlink resolution to determine the "after" state.
+func (c *Client) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
+	if c.pool == nil {
+		return "", "", fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT COALESCE("version_id"::text, ''), "filename" FROM %s WHERE "file_id" = $1 AND "log_id" > $2 ORDER BY "log_id" ASC LIMIT 1`,
+		qt(schema, logTable),
+	)
+
+	var versionID, filename string
+	err := c.pool.QueryRow(ctx, query, fileID, afterLogID).Scan(&versionID, &filename)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return "", "", nil // No next entry
+		}
+		return "", "", fmt.Errorf("failed to query next log entry: %w", err)
+	}
+	return versionID, filename, nil
+}
+
+// QueryFileExists checks if a row with the given id exists in the source table.
+// Used by diff symlink resolution to determine if a file still exists.
+func (c *Client) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	if c.pool == nil {
+		return false, fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT EXISTS(SELECT 1 FROM %s WHERE "id" = $1)`,
+		qt(schema, table),
+	)
+
+	var exists bool
+	err := c.pool.QueryRow(ctx, query, fileID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check file existence: %w", err)
+	}
+	return exists, nil
+}
+
+// QueryUndoAffectedFiles returns the first log entry per file after a target point.
+// Uses DISTINCT ON to find one entry per file_id, ordered by log_id ASC (oldest first).
+// TimescaleDB's SkipScan optimizes this on the (file_id, log_id ASC) index.
+func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
+	// Build WHERE clause
+	conditions := []string{fmt.Sprintf("%s > $1", qi("log_id"))}
+	args := []interface{}{afterID}
+	argIdx := 2
+
+	if userID != "" {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", qi("user_id"), argIdx))
+		args = append(args, userID)
+		argIdx++
+	}
+
+	for _, f := range filters {
+		conditions = append(conditions, fmt.Sprintf("%s = $%d", qi(f.Column), argIdx))
+		args = append(args, f.Value)
+		argIdx++
+	}
+
+	where := strings.Join(conditions, " AND ")
+
+	query := fmt.Sprintf(
+		`SELECT DISTINCT ON (%s) %s, %s, %s, %s, %s, %s FROM %s WHERE %s ORDER BY %s, %s ASC`,
+		qi("file_id"),
+		qi("file_id"), qi("type"), qi("version_id"), qi("filename"), qi("log_id"), qi("user_id"),
+		qt(schema, logTable),
+		where,
+		qi("file_id"), qi("log_id"),
+	)
+
+	rows, err := c.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query undo affected files: %w", err)
+	}
+	defer rows.Close()
+
+	var result []UndoAffectedFile
+	for rows.Next() {
+		var f UndoAffectedFile
+		var versionID *string
+		var userID *string
+		if err := rows.Scan(&f.FileID, &f.Type, &versionID, &f.Filename, &f.LogID, &userID); err != nil {
+			return nil, fmt.Errorf("failed to scan undo affected file: %w", err)
+		}
+		if versionID != nil {
+			f.VersionID = *versionID
+		}
+		if userID != nil {
+			f.UserID = *userID
+		}
+		result = append(result, f)
+	}
+	return result, nil
+}
+
+// QueryLogEntry fetches a single log entry by log_id.
+func (c *Client) QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error) {
+	if c.pool == nil {
+		return nil, fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT %s, %s, %s, %s, %s, %s FROM %s WHERE %s = $1`,
+		qi("file_id"), qi("type"), qi("version_id"), qi("filename"), qi("log_id"), qi("user_id"),
+		qt(schema, logTable),
+		qi("log_id"),
+	)
+
+	var f UndoAffectedFile
+	var versionID, userID *string
+	err := c.pool.QueryRow(ctx, query, logID).Scan(&f.FileID, &f.Type, &versionID, &f.Filename, &f.LogID, &userID)
+	if err != nil {
+		return nil, fmt.Errorf("log entry not found: %s", logID)
+	}
+	if versionID != nil {
+		f.VersionID = *versionID
+	}
+	if userID != nil {
+		f.UserID = *userID
+	}
+	return &f, nil
+}
+
+// ExecuteUndoTransaction executes a batch of undo operations atomically.
+// Within a single transaction: deletes created rows, upserts from history,
+// and inserts undo log entries. BEFORE triggers fire on each restore,
+// creating history entries for the undo itself.
+func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error {
+	if c.pool == nil {
+		return fmt.Errorf("database connection not initialized")
+	}
+
+	tx, err := c.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin undo transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Defer FK and UNIQUE checks to COMMIT so we can DELETE/INSERT/UPSERT
+	// rows in any order within the undo. This is the deferral path documented
+	// in ADR-017: parent_id_fkey and the (parent_id, filename, filetype)
+	// uniqueness constraint are DEFERRABLE INITIALLY IMMEDIATE specifically
+	// to support this. Without deferral, restoring a child file before its
+	// parent directory row fails with a parent_id_fkey violation
+	// (e.g., undoing a delete_dir that contained logged children).
+	if _, err := tx.Exec(ctx, `SET CONSTRAINTS ALL DEFERRED`); err != nil {
+		return fmt.Errorf("failed to defer constraints in undo transaction: %w", err)
+	}
+
+	sourceTable := qt(params.Schema, params.SourceTable)
+	historyTable := qt(params.Schema, params.HistoryTable)
+	logTable := qt(params.Schema, params.LogTable)
+
+	// Step 1: DELETE rows that were created after the target point.
+	for _, fileID := range params.DeleteFileIDs {
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE %s = $1`, sourceTable, qi("id")),
+			fileID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to delete created row %s: %w", fileID, err)
+		}
+	}
+
+	// Step 2: UPSERT rows from history for edits/renames/deletes.
+	// Fetch each history row by version_id and restore it.
+	for i, versionID := range params.RestoreVersionIDs {
+		fileID := params.RestoreFileIDs[i]
+
+		// Fetch history row -- get all columns dynamically
+		historyRow, err := tx.Query(ctx,
+			fmt.Sprintf(`SELECT * FROM %s WHERE %s = $1`, historyTable, qi("version_id")),
+			versionID,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to fetch history for version %s: %w", versionID, err)
+		}
+
+		if !historyRow.Next() {
+			historyRow.Close()
+			return fmt.Errorf("history entry not found for version_id %s", versionID)
+		}
+
+		// Get column descriptions from the result set
+		fieldDescs := historyRow.FieldDescriptions()
+		values, err := historyRow.Values()
+		historyRow.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read history row for version %s: %w", versionID, err)
+		}
+
+		// Build column/value maps, mapping history columns to source columns.
+		// History has: version_id, file_id, operation, + all source columns.
+		// Source has: id, + all other columns. file_id in history = id in source.
+		var sourceCols []string
+		var sourceVals []interface{}
+		for j, fd := range fieldDescs {
+			colName := string(fd.Name)
+			// Skip history-only columns
+			if colName == "version_id" || colName == "operation" {
+				continue
+			}
+			// Map file_id (history) → id (source)
+			if colName == "file_id" {
+				colName = "id"
+			}
+			sourceCols = append(sourceCols, colName)
+			sourceVals = append(sourceVals, values[j])
+		}
+
+		// Build UPSERT: INSERT ... ON CONFLICT (id) DO UPDATE SET ...
+		placeholders := make([]string, len(sourceCols))
+		quotedCols := make([]string, len(sourceCols))
+		updateSet := make([]string, 0, len(sourceCols))
+		for j, col := range sourceCols {
+			placeholders[j] = fmt.Sprintf("$%d", j+1)
+			quotedCols[j] = qi(col)
+			if col != "id" { // Don't update the PK
+				updateSet = append(updateSet, fmt.Sprintf("%s = EXCLUDED.%s", qi(col), qi(col)))
+			}
+		}
+
+		upsertSQL := fmt.Sprintf(
+			`INSERT INTO %s (%s) VALUES (%s) ON CONFLICT (%s) DO UPDATE SET %s`,
+			sourceTable,
+			strings.Join(quotedCols, ", "),
+			strings.Join(placeholders, ", "),
+			qi("id"),
+			strings.Join(updateSet, ", "),
+		)
+
+		_, err = tx.Exec(ctx, upsertSQL, sourceVals...)
+		if err != nil {
+			// Detect unique constraint violation: happens when undoing a delete
+			// after a rename-as-replace -- the renamed file now occupies the filename.
+			if isUniqueViolation(err) {
+				return fmt.Errorf("cannot restore file %s: filename already occupied "+
+					"(possibly by a rename-as-replace; undo the rename first)", fileID)
+			}
+			// Detect DDL schema mismatch: column removed/renamed after the savepoint.
+			// PostgreSQL returns SQLSTATE 42703 (undefined_column) or 42P01 (undefined_table).
+			if pgErr := asPgError(err); pgErr != nil && (pgErr.Code == "42703" || pgErr.Code == "42P01") {
+				return fmt.Errorf("cannot undo: table schema has changed since the target point "+
+					"(a column or table may have been added or removed). "+
+					"Original error: %w", err)
+			}
+			return fmt.Errorf("failed to restore file %s from history: %w", fileID, err)
+		}
+	}
+
+	// Step 3: Insert undo log entries for each affected file.
+	// DELETE targets get a log entry too (we're undoing the creation).
+	for i, fileID := range params.DeleteFileIDs {
+		filename := ""
+		if i < len(params.DeleteFilenames) {
+			filename = params.DeleteFilenames[i]
+		}
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4)`,
+				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("filename"), qi("description"),
+			),
+			fileID, params.UserID, filename, params.Description,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert undo log entry for delete: %w", err)
+		}
+	}
+	for i, fileID := range params.RestoreFileIDs {
+		// Capture version_id of the state just before our restore (the BEFORE trigger has fired)
+		var latestVersionID *string
+		err := tx.QueryRow(ctx,
+			fmt.Sprintf(
+				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
+				qi("version_id"), qt(params.Schema, params.HistoryTable),
+				qi("file_id"), qi("version_id"),
+			),
+			fileID,
+		).Scan(&latestVersionID)
+		if err != nil {
+			latestVersionID = nil
+		}
+
+		versionIDVal := ""
+		if latestVersionID != nil {
+			versionIDVal = *latestVersionID
+		}
+
+		_, err = tx.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
+				logTable,
+				qi("log_id"), qi("file_id"), qi("type"), qi("user_id"),
+				qi("filename"), qi("version_id"), qi("description"),
+			),
+			fileID, params.UserID, params.RestoreFilenames[i], versionIDVal, params.Description,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert undo log entry for restore: %w", err)
+		}
+	}
+
+	// Step 4: Bump modified_at on restored rows and their parent dirs.
+	//
+	// The bump_parent_mtime AFTER trigger normally keeps directory mtimes
+	// fresh on child changes, but it can miss bumps during undo:
+	//   * Restored rows inserted via UPSERT's INSERT branch carry their
+	//     historical modified_at (pre-delete value), not now().
+	//   * With deferred FK ordering, a child can be inserted before its
+	//     parent dir row exists. The trigger's UPDATE on the (missing)
+	//     parent matches 0 rows, and the parent restored later doesn't
+	//     re-trigger the bump on its already-inserted children.
+	//
+	// Without an updated mtime, NFS clients with `noac` won't invalidate
+	// their readdir cache and will serve ghost entries from before the
+	// undo (file appears in `ls`, but stat/open returns ENOENT).
+	//
+	// We force the bump explicitly: each restored row's own mtime, plus
+	// the mtime of any parent dir that contains a restored row.
+	if len(params.RestoreFileIDs) > 0 {
+		_, err := tx.Exec(ctx,
+			fmt.Sprintf(
+				`UPDATE %s SET %s = now() WHERE %s = ANY($1::uuid[])
+				   OR %s IN (
+				       SELECT DISTINCT %s FROM %s
+				       WHERE %s = ANY($1::uuid[]) AND %s IS NOT NULL
+				   )`,
+				sourceTable, qi("modified_at"), qi("id"),
+				qi("id"),
+				qi("parent_id"), sourceTable,
+				qi("id"), qi("parent_id"),
+			),
+			params.RestoreFileIDs,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to bump modified_at after undo: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit undo transaction: %w", err)
+	}
 	return nil
 }
 
@@ -764,20 +1252,20 @@ func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, e
 }
 
 // QueryHistoryByFilename queries the history table for versions of a file by filename.
-// Returns columns and rows ordered by _history_id DESC (most recent first).
+// Returns columns and rows ordered by version_id DESC (most recent first).
 func (c *Client) QueryHistoryByFilename(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE "filename" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		`SELECT * FROM %s WHERE "filename" = $1 ORDER BY "version_id" DESC LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, filename)
 }
 
-// QueryHistoryByID queries the history table for versions of a row by its UUID.
-// Returns columns and rows ordered by _history_id DESC (most recent first).
+// QueryHistoryByID queries the history table for versions of a row by its file_id UUID.
+// Returns columns and rows ordered by version_id DESC (most recent first).
 func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE "id" = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		`SELECT * FROM %s WHERE "file_id" = $1 ORDER BY "version_id" DESC LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, rowID)
@@ -806,10 +1294,46 @@ func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, hist
 	return filenames, nil
 }
 
-// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
+// QueryHistoryDistinctFilenamesByParent returns distinct filenames from the history table
+// filtered by parent_id. Empty parentID means root level (WHERE parent_id IS NULL).
+// Used by the parent-pointer model (ADR-017) for per-directory .history/ listing.
+func (c *Client) QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error) {
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT DISTINCT "filename" FROM %s WHERE "parent_id" IS NULL ORDER BY "filename" LIMIT %d`,
+			qt(schema, historyTable), limit,
+		)
+	} else {
+		query = fmt.Sprintf(
+			`SELECT DISTINCT "filename" FROM %s WHERE "parent_id" = $1 ORDER BY "filename" LIMIT %d`,
+			qt(schema, historyTable), limit,
+		)
+		args = []interface{}{parentID}
+	}
+
+	rows, err := c.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query distinct filenames by parent: %w", err)
+	}
+	defer rows.Close()
+
+	var filenames []string
+	for rows.Next() {
+		var fn string
+		if err := rows.Scan(&fn); err != nil {
+			return nil, fmt.Errorf("failed to scan filename: %w", err)
+		}
+		filenames = append(filenames, fn)
+	}
+	return filenames, nil
+}
+
+// QueryHistoryDistinctIDs returns distinct row UUIDs (file_id) from the history table.
 func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	query := fmt.Sprintf(
-		`SELECT DISTINCT "id"::text FROM %s ORDER BY "id" LIMIT %d`,
+		`SELECT DISTINCT "file_id"::text FROM %s ORDER BY "file_id" LIMIT %d`,
 		qt(schema, historyTable), limit,
 	)
 	rows, err := c.pool.Query(ctx, query)
@@ -831,13 +1355,106 @@ func (c *Client) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTab
 
 // QueryHistoryVersionByTime finds a history row matching a version ID timestamp.
 // Version IDs have second precision; UUIDv7 has millisecond precision. This queries
-// with a 1-second window around the target timestamp plus filename or id filter.
+// with a 1-second window around the target timestamp plus filename or file_id filter.
 func (c *Client) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
 	query := fmt.Sprintf(
-		`SELECT * FROM %s WHERE %s = $1 ORDER BY "_history_id" DESC LIMIT %d`,
+		`SELECT * FROM %s WHERE %s = $1 ORDER BY "version_id" DESC LIMIT %d`,
 		qt(schema, historyTable), qi(filterColumn), limit,
 	)
 	return c.queryRows(ctx, query, filterValue)
+}
+
+// InsertLogEntry inserts an operation log entry into the log hypertable.
+func (c *Client) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
+	query := fmt.Sprintf(
+		`INSERT INTO %s (user_id, type, file_id, filename, version_id, description) VALUES ($1, $2, $3, $4, $5, $6)`,
+		qt(schema, logTable),
+	)
+
+	// Convert empty strings to nil for nullable columns
+	var userIDVal, versionIDVal, descVal interface{}
+	if userID != "" {
+		userIDVal = userID
+	}
+	if versionID != "" {
+		versionIDVal = versionID
+	}
+	if description != "" {
+		descVal = description
+	}
+
+	_, err := c.pool.Exec(ctx, query, userIDVal, opType, fileID, filename, versionIDVal, descVal)
+	if err != nil {
+		return fmt.Errorf("failed to insert log entry: %w", err)
+	}
+	return nil
+}
+
+// QueryLatestVersionID returns the most recent version_id for a given
+// file_id from the history table. Returns empty string if no history entry found.
+func (c *Client) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	query := fmt.Sprintf(
+		`SELECT "version_id" FROM %s WHERE "file_id" = $1 ORDER BY "version_id" DESC LIMIT 1`,
+		qt(schema, historyTable),
+	)
+	var versionID string
+	err := c.pool.QueryRow(ctx, query, fileID).Scan(&versionID)
+	if err != nil {
+		return "", fmt.Errorf("failed to query latest version ID: %w", err)
+	}
+	return versionID, nil
+}
+
+// PathSegment represents one resolved segment from the resolve_path function.
+type PathSegment struct {
+	Depth int    // 1-based depth in the resolved path
+	ID    string // UUID of the resolved row
+	Name  string // filename segment that was resolved
+}
+
+// ResolvePath calls the tigerfs.resolve_path PL/pgSQL function to resolve
+// a sequence of path segments to row IDs using the parent-pointer model.
+// startParentID is the UUID of the starting parent (empty string for root/NULL).
+// Returns one PathSegment per resolved segment. If a segment doesn't resolve,
+// fewer segments are returned than requested (no error).
+func (c *Client) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]PathSegment, error) {
+	if len(segments) == 0 {
+		return nil, nil
+	}
+
+	qualifiedTable := fmt.Sprintf("%s.%s", qi(schema), qi(table))
+
+	// Convert empty startParentID to SQL NULL
+	var parentArg interface{}
+	if startParentID != "" {
+		parentArg = startParentID
+	}
+
+	query := fmt.Sprintf(
+		`SELECT depth, resolved_id, resolved_name FROM %s.resolve_path($1::regclass, $2::uuid, $3::text[])`,
+		qi("tigerfs"),
+	)
+
+	rows, err := c.pool.Query(ctx, query, qualifiedTable, parentArg, segments)
+	if err != nil {
+		return nil, fmt.Errorf("resolve_path failed: %w", err)
+	}
+	defer rows.Close()
+
+	var result []PathSegment
+	for rows.Next() {
+		var seg PathSegment
+		var id [16]byte
+		if err := rows.Scan(&seg.Depth, &id, &seg.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan resolve_path result: %w", err)
+		}
+		// Convert UUID bytes to hex string
+		s, _ := format.ConvertValueToText(id)
+		seg.ID = s
+		result = append(result, seg)
+	}
+
+	return result, nil
 }
 
 // queryRows executes a query and returns columns and row data.

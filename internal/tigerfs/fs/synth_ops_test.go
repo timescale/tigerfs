@@ -2,12 +2,14 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
@@ -106,6 +108,59 @@ func TestSynth_ExtractModTime(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSynth_StatDirectory_UsesModifiedAt(t *testing.T) {
+	dirModifiedAt := time.Date(2025, 3, 15, 10, 30, 0, 0, time.UTC)
+
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "parent_id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "filetype", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		// resolveSynthPath returns the directory UUID
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-dir-1", Name: "docs"},
+		},
+		// GetRow returns the directory row with a known modified_at
+		rowData: map[string]*mockRow{
+			"public.notes.uuid-dir-1": {
+				columns: []string{"id", "parent_id", "filename", "filetype", "title", "body", "encoding", "created_at", "modified_at"},
+				values:  []interface{}{"uuid-dir-1", nil, "docs", "directory", nil, nil, "utf8", dirModifiedAt, dirModifiedAt},
+			},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	entry, fsErr := ops.Stat(ctx, "/notes/docs")
+	require.Nil(t, fsErr, "Stat should succeed for directory")
+	require.NotNil(t, entry)
+
+	assert.True(t, entry.IsDir, "should be a directory")
+	assert.Equal(t, "docs", entry.Name)
+	assert.True(t, entry.ModTime.Equal(dirModifiedAt),
+		"directory ModTime should come from database modified_at, got %v, want %v", entry.ModTime, dirModifiedAt)
 }
 
 // newSynthHierarchicalMockDB creates a mock DB configured with a hierarchical synth markdown view.
@@ -342,4 +397,426 @@ func TestSynth_NonHierarchicalViewUnchanged(t *testing.T) {
 	assert.Contains(t, names, "hello-world.md")
 	assert.Contains(t, names, "second-post.md")
 	assert.Len(t, entries, 2, "flat view should have exactly 2 entries")
+}
+
+// TestSynth_LogEntries_WriteSynthFile verifies that write operations on
+// history-enabled synth apps create log entries.
+func TestSynth_LogEntries_WriteSynthFile(t *testing.T) {
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md,history"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "filename", "title", "body", "encoding", "created_at", "modified_at"},
+				rows:    [][]interface{}{},
+			},
+		},
+		// InsertRow returns a fake PK
+		lastInsertReturnPK: "uuid-new-1",
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// INSERT: write a new file
+	content := "---\ntitle: Hello\n---\n# Hello\n"
+	writeErr := ops.WriteFile(ctx, "/notes/hello.md", []byte(content))
+	require.Nil(t, writeErr, "WriteFile should succeed for insert")
+
+	// Verify a log entry was created for the insert
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after insert")
+	assert.Equal(t, "create", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-new-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
+	assert.Empty(t, mockDB.logEntries[0].versionID, "create should have no version_id")
+}
+
+// TestSynth_LogEntries_NoHistory verifies that write operations on synth apps
+// WITHOUT history do NOT create log entries.
+func TestSynth_LogEntries_NoHistory(t *testing.T) {
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md"}, // no ",history"
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "filename", "title", "body", "encoding", "created_at", "modified_at"},
+				rows:    [][]interface{}{},
+			},
+		},
+		lastInsertReturnPK: "uuid-new-1",
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	content := "---\ntitle: Hello\n---\n# Hello\n"
+	writeErr := ops.WriteFile(ctx, "/notes/hello.md", []byte(content))
+	require.Nil(t, writeErr)
+
+	// No history → no log entries
+	assert.Empty(t, mockDB.logEntries, "non-history app should not create log entries")
+}
+
+// newHistoryMockDB creates a mock DB with a history-enabled synth app that has
+// one existing row (hello.md with PK uuid-1). Used for UPDATE/DELETE/RENAME tests.
+func newHistoryMockDB() *mockDBClient {
+	return &mockDBClient{
+		tables: map[string][]string{"public": {"_notes"}},
+		views:  map[string][]string{"public": {"notes"}},
+		viewComments: map[string]map[string]string{
+			"public": {"notes": "tigerfs:md,history"},
+		},
+		columns: map[string][]mockColumn{
+			"public.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public._notes": {column: "id"},
+			"public.notes":  {column: "id"},
+		},
+		allRowsData: map[string]*mockAllRows{
+			"public.notes": {
+				columns: []string{"id", "filename", "title", "body", "encoding", "created_at", "modified_at"},
+				rows: [][]interface{}{
+					{"uuid-1", "hello.md", "Hello", "# Hello\n", "utf8", nil, nil},
+				},
+			},
+		},
+		latestVersionIDs: map[string]string{
+			"uuid-1": "history-uuid-abc",
+		},
+		// rowData is checked by DeleteRow mock
+		rowData: map[string]*mockRow{
+			"public.notes.uuid-1": {
+				columns: []string{"id", "filename", "title", "body"},
+				values:  []interface{}{"uuid-1", "hello.md", "Hello", "# Hello\n"},
+			},
+		},
+	}
+}
+
+// TestSynth_LogEntries_EditSynthFile verifies that updating an existing file
+// creates a log entry with type=edit and captures the version_id.
+func TestSynth_LogEntries_EditSynthFile(t *testing.T) {
+	mockDB := newHistoryMockDB()
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	// EDIT: write to an existing file
+	content := "---\ntitle: Hello Updated\n---\n# Hello Updated\n"
+	writeErr := ops.WriteFile(context.Background(), "/notes/hello.md", []byte(content))
+	require.Nil(t, writeErr, "WriteFile should succeed for edit")
+
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after edit")
+	assert.Equal(t, "edit", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "edit should capture version_id")
+}
+
+// TestSynth_LogEntries_DeleteSynthFile verifies that deleting a file creates
+// a log entry with type=delete and captures the version_id.
+func TestSynth_LogEntries_DeleteSynthFile(t *testing.T) {
+	mockDB := newHistoryMockDB()
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	deleteErr := ops.Delete(context.Background(), "/notes/hello.md")
+	require.Nil(t, deleteErr, "Delete should succeed")
+
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after delete")
+	assert.Equal(t, "delete", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "hello.md", mockDB.logEntries[0].filename)
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "delete should capture version_id")
+}
+
+// TestSynth_LogEntries_RenameSynthFile verifies that renaming a file creates
+// a log entry with type=rename, the new filename, and captures the version_id.
+func TestSynth_LogEntries_RenameSynthFile(t *testing.T) {
+	mockDB := newHistoryMockDB()
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	renameErr := ops.Rename(context.Background(), "/notes/hello.md", "/notes/goodbye.md")
+	require.Nil(t, renameErr, "Rename should succeed")
+
+	require.Len(t, mockDB.logEntries, 1, "should have 1 log entry after rename")
+	assert.Equal(t, "rename", mockDB.logEntries[0].opType)
+	assert.Equal(t, "uuid-1", mockDB.logEntries[0].fileID)
+	assert.Equal(t, "goodbye.md", mockDB.logEntries[0].filename, "rename should log the NEW filename")
+	assert.Equal(t, "history-uuid-abc", mockDB.logEntries[0].versionID, "rename should capture version_id")
+}
+
+// --- resolveSynthPath tests ---
+
+// TestSynth_ResolvePath_FullCacheMiss verifies that resolveSynthPath calls
+// the DB resolve_path when the cache is empty and populates the cache.
+func TestSynth_ResolvePath_FullCacheMiss(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-proj", Name: "projects"},
+			{Depth: 2, ID: "uuid-web", Name: "web"},
+			{Depth: 3, ID: "uuid-todo", Name: "todo.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-todo", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls, "should call DB once")
+
+	// Cache should now be populated -- second call should not hit DB
+	id, ok = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-todo", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls, "should still be 1 DB call (cache hit)")
+}
+
+// TestSynth_ResolvePath_PartialCacheHit verifies that resolveSynthPath
+// only queries the DB for unresolved segments.
+func TestSynth_ResolvePath_PartialCacheHit(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-notes", Name: "notes.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// Pre-populate cache for "projects" and "web"
+	ops.pathCache.put("public", "notes", "", "projects", "uuid-proj")
+	ops.pathCache.put("public", "notes", "uuid-proj", "web", "uuid-web")
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-notes", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls)
+
+	// Verify DB was called with only the remaining segment and correct startParentID
+	assert.Equal(t, "uuid-web", mockDB.lastResolveStartParent)
+	assert.Equal(t, []string{"notes.md"}, mockDB.lastResolveSegments)
+}
+
+// TestSynth_ResolvePath_NonexistentPath verifies that resolveSynthPath
+// returns false when a segment doesn't resolve.
+func TestSynth_ResolvePath_NonexistentPath(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			// Only first segment resolves, "nonexistent" doesn't
+			{Depth: 1, ID: "uuid-proj", Name: "projects"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "nonexistent", "file.md"})
+	assert.False(t, ok)
+	assert.Empty(t, id)
+}
+
+// TestSynth_ResolvePath_EmptySegments verifies root-level resolution.
+func TestSynth_ResolvePath_EmptySegments(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, &mockDBClient{})
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{})
+	assert.True(t, ok)
+	assert.Empty(t, id)
+}
+
+// TestSynth_ResolvePath_SingleSegment verifies single-level resolution.
+func TestSynth_ResolvePath_SingleSegment(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-file", Name: "hello.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"hello.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-file", id)
+	assert.Equal(t, "", mockDB.lastResolveStartParent, "root-level should pass empty start parent")
+}
+
+// TestSynth_ResolvePath_CacheInvalidation verifies that invalidation
+// forces the next resolve to hit the DB.
+func TestSynth_ResolvePath_CacheInvalidation(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-1", Name: "file.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First call populates cache
+	ops.resolveSynthPath(ctx, "public", "notes", []string{"file.md"})
+	assert.Equal(t, 1, mockDB.resolvePathCalls)
+
+	// Invalidate cache
+	ops.pathCache.invalidate("public", "notes")
+
+	// Second call should hit DB again
+	ops.resolveSynthPath(ctx, "public", "notes", []string{"file.md"})
+	assert.Equal(t, 2, mockDB.resolvePathCalls)
+}
+
+// TestSynth_ResolvePath_DeeplyNested verifies resolution of a 5-level deep path
+// (ADR-017 verification scenario #13).
+func TestSynth_ResolvePath_DeeplyNested(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-a", Name: "a"},
+			{Depth: 2, ID: "uuid-b", Name: "b"},
+			{Depth: 3, ID: "uuid-c", Name: "c"},
+			{Depth: 4, ID: "uuid-d", Name: "d"},
+			{Depth: 5, ID: "uuid-file", Name: "file.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "app", []string{"a", "b", "c", "d", "file.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-file", id)
+
+	// Verify all 5 levels are cached
+	cached, ok := ops.pathCache.lookup("public", "app", "", "a")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-a", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-a", "b")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-b", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-b", "c")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-c", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-c", "d")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-d", cached)
+
+	cached, ok = ops.pathCache.lookup("public", "app", "uuid-d", "file.md")
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-file", cached)
+}
+
+// TestSynth_ResolvePath_SiblingAccess verifies the sibling resolution pattern
+// described in ADR-017: after resolving projects/web/todo.md, resolving
+// projects/web/notes.md should only query the DB for the last segment.
+func TestSynth_ResolvePath_SiblingAccess(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathResults: []db.PathSegment{
+			{Depth: 1, ID: "uuid-proj", Name: "projects"},
+			{Depth: 2, ID: "uuid-web", Name: "web"},
+			{Depth: 3, ID: "uuid-todo", Name: "todo.md"},
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	// First access: resolve full path (cold cache)
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-todo", id)
+	assert.Equal(t, 1, mockDB.resolvePathCalls)
+
+	// Set up mock for sibling -- only returns the leaf
+	mockDB.resolvePathResults = []db.PathSegment{
+		{Depth: 1, ID: "uuid-notes", Name: "notes.md"},
+	}
+
+	// Second access: sibling file in same directory
+	id, ok = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
+	assert.True(t, ok)
+	assert.Equal(t, "uuid-notes", id)
+	assert.Equal(t, 2, mockDB.resolvePathCalls)
+
+	// DB should have been called with only the leaf segment, starting from uuid-web
+	assert.Equal(t, "uuid-web", mockDB.lastResolveStartParent,
+		"should start from cached parent (web directory)")
+	assert.Equal(t, []string{"notes.md"}, mockDB.lastResolveSegments,
+		"should only query the unresolved leaf segment")
+}
+
+// TestSynth_ResolvePath_DBError verifies that a DB error returns false
+// without panicking.
+func TestSynth_ResolvePath_DBError(t *testing.T) {
+	mockDB := &mockDBClient{
+		resolvePathErr: fmt.Errorf("connection refused"),
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+	ctx := context.Background()
+
+	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "file.md"})
+	assert.False(t, ok)
+	assert.Empty(t, id)
 }

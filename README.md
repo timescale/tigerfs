@@ -2,78 +2,78 @@
 
 A filesystem backed by PostgreSQL, and a filesystem interface to PostgreSQL.
 
-Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. No sync protocols. No coordination layer.  **The filesystem is the API.**
+Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. Every change is versioned and reversible (file-first with history). No sync protocols. No coordination layer.  **The filesystem is the API.**
 
 You can use TigerFS in two ways:
 
-* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, and everything is auto-versioned.  Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight apps via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
+* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, changes are versioned, and everything is reversible.  Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight workspaces via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
 
 * **Data-first**: Mount any Postgres database and explore it with `ls`, `cat`, `grep`, and other unix tools. For
 large databases, chain filters into paths that push down to SQL:
 `.by/customer_id/123/.order/created_at/.last/10/.export/json`. No database client or SQL needed, and ships with agent skills.
 
-Both modes are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. 
+Both modes are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
 
-TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
+### Agent Skills
 
-## Quick Start
+TigerFS ships with agent skills for Claude Code, Gemini CLI, Codex, and others, automatically installed at mount time. You don't need to learn the filesystem interface. Just ask:
+
+- "Create a workspace for my notes"
+- "What changed since the savepoint?"
+- "Undo agent-7's changes"
+- "Show me the last 10 orders by customer 123"
+
+The skills teach your agent the filesystem paths, diff commands, and undo workflows. For details on what's underneath, read on.
+
+### Install
 
 ```bash
-# Install (macOS requires no dependencies; Linux needs fuse3)
 curl -fsSL https://install.tigerfs.io | sh
 ```
 
-| Mode | You have... | You want to... |
-|------|------------|----------------|
-| File-first | A new project or workflow | Store markdown or other files, and build simple apps via the file system (e.g., task queues, agent workspaces, collaborative docs). |
-| Data-first | An existing Postgres database | Explore and operate on it with `ls`, `cat`, `grep` instead of SQL. |
+**New project?** Start file-first. **Existing database?** Start data-first.
 
-### File-first
+### The Filesystem is the API
 
-```bash
-# Mount a database and create a markdown app
-tigerfs mount postgres://localhost/mydb /mnt/db
-echo "markdown,history" > /mnt/db/.build/notes
-
-# Write a file — frontmatter becomes columns, body becomes text
-cat > /mnt/db/notes/hello.md << 'EOF'
----
-title: Hello World
-author: alice
----
-# Hello World
-EOF
-
-# Search, explore, unmount
-grep -l "author: alice" /mnt/db/notes/*.md
-ls /mnt/db/notes/
-tigerfs unmount /mnt/db
-```
-
-### Data-first
+Your data lives in regular files and directories. Metadata, queries, and operations live in dot-directories: invisible by default, always available.
 
 ```bash
-# Mount an existing database
-tigerfs mount postgres://localhost/mydb /mnt/db
+$ ls /mnt/db/notes/
+hello.md  tutorials/
 
-ls /mnt/db/                                    # list tables
-ls /mnt/db/users/                              # list rows
-cat /mnt/db/users/1.json                       # read a row
-cat /mnt/db/users/.by/email/alice@co.com.json  # index lookup
-
-# Chain filters, ordering, pagination — pushed down as one SQL query
-cat /mnt/db/orders/.by/customer_id/1/.order/created_at/.last/5/.export/json
+$ ls -a /mnt/db/notes/
+.  ..  .history/  .log/  .savepoint/  .undo/  hello.md  tutorials/
 ```
+
+Dot-directories are the control surface. Navigate them to browse history, filter data, undo changes, and manage schemas, all through the same filesystem interface.
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Unix Tools  │────▶│  Filesystem  │────▶│   TigerFS    │────▶│  PostgreSQL  │
+│  ls, cat,    │     │   Backend    │     │   Daemon     │     │   Database   │
+│  echo, rm    │◀────│  (FUSE/NFS)  │◀────│              │◀────│              │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
+```
+
+| File-first | Data-first |
+|------------|------------|
+| `.history/` past versions | `.info/` table metadata |
+| `.log/` operation log with diffs | `.by/` index lookups |
+| `.savepoint/` bookmarks for undo | `.filter/` column filtering |
+| `.undo/` preview and apply undo | `.order/`, `.first/`, `.last/` sort and paginate |
+| `.build/` create workspaces | `.export/`, `.import/` bulk I/O |
+| | `.create/`, `.modify/`, `.delete/` schema management |
 
 ## File-First: Transactional Workspace
 
-### Apps
+### Workspaces
 
-Apps tell TigerFS how to present a table as a native file format. Write "markdown" to `.build/` and the table becomes a directory of .md files with YAML frontmatter:
+Workspaces tell TigerFS how to present a table as a native file format. Write "markdown" to `.build/` and the table becomes a directory of .md files with YAML frontmatter:
 
 ```bash
-# Create a markdown app
-echo "markdown" > /mnt/db/.build/blog
+# Mount a database and create a workspace with history
+tigerfs mount postgres://localhost/mydb /mnt/db
+echo "markdown,history" > /mnt/db/.build/blog
 
 # Write a post. Frontmatter becomes columns, body becomes text
 cat > /mnt/db/blog/hello-world.md << 'EOF'
@@ -99,35 +99,26 @@ mkdir /mnt/db/blog/tutorials
 mv /mnt/db/blog/hello-world.md /mnt/db/blog/tutorials/
 ```
 
-See [docs/markdown-app.md](docs/markdown-app.md) for column mapping, frontmatter handling, and use cases.
+See [docs/file-first.md](docs/file-first.md) for column mapping, frontmatter handling, and use cases.
 
-### Version History
+### History, Savepoints, and Undo
 
-Any app can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot under a read-only `.history/` directory.
-
-To enable automatic versioning, write "history" to `.build/` when creating the app:
+Any workspace can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot. Create savepoints before risky work, preview what changed, and undo if needed.
 
 ```bash
-# Create an app with history enabled
-echo "markdown,history" > /mnt/db/.build/notes
-
-# Browse past versions of a file
-ls /mnt/db/notes/.history/hello.md/
-# .id  2026-02-24T150000Z  2026-02-12T013000Z
-
-# Read a past version
-cat /mnt/db/notes/.history/hello.md/2026-02-12T013000Z
+echo '{"description":"Before refactoring"}' > /mnt/db/notes/.savepoint/checkpoint.json
+# ... Perform refactoring ...
+diff -u /mnt/db/notes/.log/<id>/before /mnt/db/notes/.log/<id>/current      # Compare changes to single file
+diff -ru /mnt/db/notes/.undo/to-savepoint/checkpoint /mnt/db/notes/ -x '.*' # Review all changes
+touch /mnt/db/notes/.undo/to-savepoint/checkpoint/.apply                    # Undo all changes since savepoint
 ```
 
-History tracks files across renames via stable row UUIDs and uses TimescaleDB hypertables for compressed storage.
-
-See [docs/history.md](docs/history.md) for cross-rename tracking, subdirectory scoping, and recovery workflows.
+Per-user undo, single-file undo, and full version history are also available. See [docs/history.md](docs/history.md) for the full guide.
 
 ### Use Cases
 
 **Shared agent workspace.**
-Multiple agents and humans operate on the same knowledge base concurrently.
-Every edit is automatically versioned, so if one agent overwrites another's work, recover it from `.history/`.
+Multiple agents and humans operate on the same knowledge base concurrently. Changes are visible instantly. Every edit is automatically versioned, so if one agent overwrites another's work, browse the full edit trail in `.history/` and recover it.
 
 ```bash
 # Agent A writes research findings
@@ -140,6 +131,9 @@ EOF
 
 # Agent B reads it immediately, no sync, no pull
 cat /mnt/db/kb/auth-analysis.md
+
+# Browse the full edit trail
+ls /mnt/db/kb/.history/auth-analysis.md/
 ```
 
 **Multi-agent task queue.** Three directories (`todo/`, `doing/`, `done/`) and `mv` is your only API. Moves are atomic database operations, so two agents can't claim the same task.
@@ -160,37 +154,36 @@ ls /mnt/db/tasks/doing/
 grep "author:" /mnt/db/tasks/doing/*.md
 ```
 
-**Collaborative docs.** A human writes a draft, an agent reviews and edits it, another agent summarizes it. All in the same directory, all visible immediately, no pull/push/merge. History shows who changed what and when.
+**Safe exploration.** An agent creates a savepoint, investigates a bug, makes changes across multiple files. If the approach doesn't work, undo atomically to the savepoint. Every file reverts in one step.
 
 ```bash
-# Human writes a draft
-cat > /mnt/db/docs/proposal.md << 'EOF'
----
-title: Q2 Proposal
-status: draft
----
-We should invest in...
-EOF
+# Agent creates savepoint before investigating
+echo '{"description":"Before investigating auth bug"}' > /mnt/db/notes/.savepoint/pre-investigation.json
 
-# Agent reads, edits, and updates the status
-cat /mnt/db/docs/proposal.md
-cat > /mnt/db/docs/proposal.md << 'EOF'
----
-title: Q2 Proposal
-status: reviewed
-reviewer: agent-b
----
-We should invest in... (with agent edits)
-EOF
-
-# Human sees changes instantly. Browse the full edit trail
-ls /mnt/db/docs/.history/proposal.md/
-cat /mnt/db/docs/.history/proposal.md/2026-02-25T100000Z  # see previous version
+# Agent explores, edits multiple files...
+# User reviews: "that's not right, roll it back"
+touch /mnt/db/notes/.undo/to-savepoint/pre-investigation/.apply
+# All files restored to pre-investigation state
 ```
 
 ## Data-First: Database as Filesystem
 
 Mount any Postgres database and explore it with `ls`, `cat`, `grep`. Every path resolves to optimized SQL pushed down to the database.
+
+```
+  Filesystem                       Database
+  ──────────                       ────────
+  /mnt/db/                     →   tables (default schema)
+  /mnt/db/users/               →   rows (by PK)
+  /mnt/db/users/123/           →   columns as files
+  /mnt/db/.schemas/            →   all schemas (including default)
+```
+
+```bash
+$ ls -a /mnt/db/users/
+.  ..  .by/  .filter/  .order/  .first/  .last/  .info/  .export/  .import/
+1/  2/  3/  4/  5/  ...
+```
 
 **Explore an unfamiliar database.** Point an agent at a mounted database and it understands the schema immediately using `ls` and `cat`. No SQL, no database client, no connection strings to pass around.
 
@@ -201,6 +194,9 @@ Mount any Postgres database and explore it with `ls`, `cat`, `grep`. Every path 
 ### Explore
 
 ```bash
+# Mount an existing database
+tigerfs mount postgres://localhost/mydb /mnt/db
+
 ls /mnt/db/                                      # List tables
 ls /mnt/db/users/                                # List rows (by primary key)
 cat /mnt/db/users/123.json                       # Row as JSON
@@ -212,7 +208,7 @@ cat /mnt/db/users/.by/email/foo@example.com.json # Index lookup
 
 ```bash
 echo 'new@example.com' > /mnt/db/users/123/email.txt            # Update column
-echo '{"email":"a@b.com","name":"A"}' > /mnt/db/users/ 123.json # Update via JSON (PATCH)
+echo '{"email":"a@b.com","name":"A"}' > /mnt/db/users/123.json  # Update via JSON (PATCH)
 mkdir /mnt/db/users/456                                         # Create row
 rm -r /mnt/db/users/456/                                        # Delete row
 ```
@@ -248,7 +244,7 @@ mkdir /mnt/db/.create/orders && echo "CREATE TABLE orders (...)" > /mnt/db/.crea
 touch /mnt/db/.create/orders/.commit
 ```
 
-See [docs/native-tables.md](docs/native-tables.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
+See [docs/data-first.md](docs/data-first.md) for the full reference: row formats, index navigation, pipeline query chaining, schema management workflows, and configuration.
 
 ## Why TigerFS
 
@@ -309,37 +305,12 @@ tigerfs info /mnt/db
 tigerfs info --json /mnt/db           # JSON output for scripting
 ```
 
-## Architecture
-
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│  Unix Tools  │────▶│  Filesystem  │────▶│   TigerFS    │────▶│  PostgreSQL  │
-│  ls, cat,    │     │   Backend    │     │   Daemon     │     │   Database   │
-│  echo, rm    │◀────│  (FUSE/NFS)  │◀────│              │◀────│              │
-└──────────────┘     └──────────────┘     └──────────────┘     └──────────────┘
-```
-
-TigerFS replaces "application-level coordination" with database transactions. **The filesystem becomes the API.**
-
-TigerFS maps filesystem paths to database queries:
-
-```
-  Filesystem                       Database
-  ──────────                       ────────
-  /mnt/db/                     →   schemas
-  /mnt/db/public/              →   tables
-  /mnt/db/public/users/        →   rows (by PK)
-  /mnt/db/public/users/123/    →   columns as files
-```
-
-FUSE on Linux, NFS on macOS. No external dependencies on either platform.
-
 ## Design Principles
 
 - **Keep the interface familiar.** If you can `ls`, you can explore a database.
 - **Make concurrency safe.** Multiple writers without corruption or conflicts.
 - **Push logic down.** Every path resolves to optimized SQL.
-- **Preserve history.** Every change is recoverable.
+- **Make changes reversible.** Savepoints, undo, and version history mean you can always go back.
 - **Remove coordination code.** The database handles it.
 
 ## Try the Demo
@@ -359,9 +330,9 @@ Config file: `~/.config/tigerfs/config.yaml`. Run `tigerfs config show` to see a
 
 | Guide | Description |
 |-------|-------------|
-| [docs/markdown-app.md](docs/markdown-app.md) | Markdown app: column mapping, frontmatter, directories |
-| [docs/history.md](docs/history.md) | Version history: snapshots, cross-rename tracking, recovery |
-| [docs/native-tables.md](docs/native-tables.md) | Native table access: row formats, indexes, pipeline queries, schema management |
+| [docs/file-first.md](docs/file-first.md) | File-first mode: workspaces, column mapping, frontmatter, directories |
+| [docs/history.md](docs/history.md) | History, savepoints, and undo: versioned snapshots, safe exploration, atomic rollback |
+| [docs/data-first.md](docs/data-first.md) | Data-first mode: row formats, indexes, pipeline queries, schema management |
 | [docs/quickstart.md](docs/quickstart.md) | Guided scenarios with sample data |
 
 ## Development
@@ -379,20 +350,28 @@ For development guidelines, architecture details, and the full specification, se
 
 TigerFS is early, but the core idea is stable: transactional, concurrent files as the foundation for human-agent collaboration.
 
-**v0.5.0.** Performance and observability — dramatically fewer SQL queries, flexible logging, and column projection.
+**v0.7.0.** Undo and recovery: savepoints, operation log, and atomic undo for safe exploration.
+
+**v0.6.0.** Dedicated tigerfs schema, security hardening, and unified demo.
 
 **Highlights:**
-- Markdown apps with YAML frontmatter, directory hierarchies, and automatic version history
+- Markdown and plaintext workspaces with YAML frontmatter, directory hierarchies, and version history
+- Savepoints, undo, and operation log: create checkpoints, preview changes, roll back atomically
+- Per-user undo: multiple agents with separate identities, selectively undo one agent's work
+- Auto-savepoints: detect session boundaries on inactivity gaps
+- Relational directory model with parent-pointer hierarchy and UUIDv7 identifiers
+- Dedicated tigerfs schema with migration framework (`tigerfs migrate`)
+- TLS enforcement, SQL injection hardening, and credential sanitization
+- Agent skill auto-install for Claude Code, Gemini CLI, and Codex
 - Cloud backends: mount, create, and fork Tiger Cloud and Ghost databases by service ID
 - Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, `.columns/`, chained pagination, `.export/`)
 - DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
 - Full CRUD with multiple formats (TSV, CSV, JSON, YAML), index navigation, and PATCH semantics
-- Binary distribution via GoReleaser with install script (`curl -fsSL https://install.tigerfs.io | sh`)
+- Binary distribution via GoReleaser with install script
 - Multi-tier stat caching and query reduction for fast operations over remote databases
 
 **Planned:**
 - Tables without primary keys (read-only via ctid)
-- TimescaleDB hypertables (time-based navigation)
 - Windows support
 
 ## Contributing

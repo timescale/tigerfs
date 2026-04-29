@@ -564,7 +564,9 @@ func TestReadDir_OrderCapability(t *testing.T) {
 	assert.Contains(t, names, "name.desc")
 }
 
-// TestReadDir_PaginationCapability tests listing options in .first/.
+// TestReadDir_PaginationCapability tests that .first/ returns empty listing.
+// Pagination directories don't list numeric subdirs to prevent recursive scanners
+// (rm -rf, find, agents) from descending into multiple limit values.
 func TestReadDir_PaginationCapability(t *testing.T) {
 	cfg := &config.Config{}
 	mockDB := &mockDBClient{
@@ -580,14 +582,7 @@ func TestReadDir_PaginationCapability(t *testing.T) {
 	entries, err := ops.ReadDir(context.Background(), "/users/.first")
 
 	require.Nil(t, err)
-	require.NotNil(t, entries)
-
-	names := make([]string, len(entries))
-	for i, e := range entries {
-		names[i] = e.Name
-	}
-	assert.Contains(t, names, "10")
-	assert.Contains(t, names, "100")
+	assert.Empty(t, entries, ".first/ should return empty listing")
 }
 
 // TestReadDir_ExportDirectory tests listing the .export directory.
@@ -1086,6 +1081,45 @@ type mockDBClient struct {
 	execInTxSuccess bool
 	execInTxError   error
 
+	// Log entry tracking
+	logEntries []mockLogEntry
+
+	// Insert return value (PK of inserted row)
+	lastInsertReturnPK string
+
+	// Tracks all inserts for verification
+	insertedRows []mockInsertedRow
+
+	// Version ID return value for QueryLatestVersionID
+	latestVersionIDs map[string]string // fileID -> versionID
+
+	// Row-by-columns lookup data (for savepoint name-based tests)
+	rowByColumnsData map[string]*mockRowByColumns
+
+	// NextLogEntry return values (for diff symlink tests)
+	nextLogVersionID string
+	nextLogFilename  string
+	fileExistsResult bool
+
+	// Undo test tracking
+	undoAffectedFiles    []db.UndoAffectedFile
+	undoLogEntry         *db.UndoAffectedFile
+	undoTransactionCalls int
+	lastUndoParams       *db.UndoTransactionParams
+	fileExistsMap        map[string]bool // fileID -> exists (overrides fileExistsResult)
+
+	// ResolvePath tracking
+	resolvePathResults     []db.PathSegment
+	resolvePathErr         error
+	resolvePathCalls       int
+	resolvePathCallCount   int // separate counter for test-specific resolve functions
+	resolvePathFn          func(ctx context.Context, schema, table string, segments []string) ([]db.PathSegment, error)
+	lastResolveStartParent string
+	lastResolveSegments    []string
+
+	// Rename-as-replace tracking
+	deleteAndUpdateFunc func(ctx context.Context, schema, table string, deletePK *db.PKMatch, updatePK *db.PKMatch, updateCols []string, updateVals []interface{}) error
+
 	// PK match tracking for composite PK tests
 	lastPKMatch *db.PKMatch
 
@@ -1095,6 +1129,26 @@ type mockDBClient struct {
 	getColumnCalls   int
 	getTableDDLCalls int
 	getFullDDLCalls  int
+}
+
+type mockLogEntry struct {
+	userID    string
+	opType    string
+	fileID    string
+	filename  string
+	versionID string
+}
+
+type mockRowByColumns struct {
+	columns []string
+	values  []interface{}
+}
+
+type mockInsertedRow struct {
+	schema  string
+	table   string
+	columns []string
+	values  []interface{}
 }
 
 type mockPK struct {
@@ -1460,6 +1514,14 @@ func (m *mockDBClient) RowExistsByColumns(ctx context.Context, schema, table str
 }
 
 func (m *mockDBClient) GetRowByColumns(ctx context.Context, schema, table string, columns []string, values []interface{}) ([]string, []interface{}, error) {
+	// Check override map first (for savepoint name-based lookups)
+	if m.rowByColumnsData != nil && len(columns) > 0 {
+		overrideKey := fmt.Sprintf("%s.%s.%s=%v", schema, table, columns[0], values[0])
+		if data, ok := m.rowByColumnsData[overrideKey]; ok {
+			return data.columns, data.values, nil
+		}
+	}
+
 	key := schema + "." + table
 	data, ok := m.allRowsData[key]
 	if !ok {
@@ -1515,7 +1577,19 @@ func (m *mockDBClient) InsertRow(ctx context.Context, schema, table string, colu
 	m.insertCalled = true
 	m.lastInsertColumns = columns
 	m.lastInsertValues = values
-	return "1", nil
+	// Copy slices to avoid aliasing with caller
+	colsCopy := make([]string, len(columns))
+	copy(colsCopy, columns)
+	valsCopy := make([]interface{}, len(values))
+	copy(valsCopy, values)
+	m.insertedRows = append(m.insertedRows, mockInsertedRow{
+		schema: schema, table: table, columns: colsCopy, values: valsCopy,
+	})
+	pk := "1"
+	if m.lastInsertReturnPK != "" {
+		pk = m.lastInsertReturnPK
+	}
+	return pk, nil
 }
 
 func (m *mockDBClient) UpdateRow(ctx context.Context, schema, table string, pk *db.PKMatch, columns []string, values []interface{}) error {
@@ -1551,6 +1625,16 @@ func (m *mockDBClient) DeleteRow(ctx context.Context, schema, table string, pk *
 	if _, ok := m.rowData[key]; !ok {
 		return fmt.Errorf("row not found: %s", key)
 	}
+	return nil
+}
+
+func (m *mockDBClient) DeleteAndUpdate(ctx context.Context, schema, table string, deletePK *db.PKMatch, updatePK *db.PKMatch, updateCols []string, updateVals []interface{}) error {
+	if m.deleteAndUpdateFunc != nil {
+		return m.deleteAndUpdateFunc(ctx, schema, table, deletePK, updatePK, updateCols, updateVals)
+	}
+	m.deleteCalled = true
+	m.lastDeletePK = deletePK.Values[0]
+	m.updateCalled = true
 	return nil
 }
 
@@ -1637,12 +1721,89 @@ func (m *mockDBClient) QueryHistoryDistinctFilenames(ctx context.Context, schema
 	return nil, nil
 }
 
+func (m *mockDBClient) QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error) {
+	return nil, nil
+}
+
 func (m *mockDBClient) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	return nil, nil
 }
 
 func (m *mockDBClient) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
 	return nil, nil, nil
+}
+
+func (m *mockDBClient) InsertLogEntry(ctx context.Context, schema, logTable, userID, opType, fileID, filename, versionID, description string) error {
+	m.logEntries = append(m.logEntries, mockLogEntry{
+		userID: userID, opType: opType, fileID: fileID, filename: filename, versionID: versionID,
+	})
+	return nil
+}
+
+func (m *mockDBClient) QueryNextLogEntry(ctx context.Context, schema, logTable, fileID, afterLogID string) (string, string, error) {
+	return m.nextLogVersionID, m.nextLogFilename, nil
+}
+
+func (m *mockDBClient) QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error) {
+	if m.fileExistsMap != nil {
+		if v, ok := m.fileExistsMap[fileID]; ok {
+			return v, nil
+		}
+	}
+	return m.fileExistsResult, nil
+}
+
+func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
+	if m.latestVersionIDs != nil {
+		if vid, ok := m.latestVersionIDs[fileID]; ok {
+			return vid, nil
+		}
+	}
+	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *mockDBClient) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []db.UndoFilter) ([]db.UndoAffectedFile, error) {
+	return m.undoAffectedFiles, nil
+}
+
+func (m *mockDBClient) QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*db.UndoAffectedFile, error) {
+	if m.undoLogEntry != nil {
+		return m.undoLogEntry, nil
+	}
+	return nil, fmt.Errorf("log entry not found: %s", logID)
+}
+
+func (m *mockDBClient) ExecuteUndoTransaction(ctx context.Context, params *db.UndoTransactionParams) error {
+	m.undoTransactionCalls++
+	m.lastUndoParams = params
+	return nil
+}
+
+func (m *mockDBClient) QueryFileExistsForUndo(fileID string) bool {
+	if m.fileExistsMap != nil {
+		if v, ok := m.fileExistsMap[fileID]; ok {
+			return v
+		}
+	}
+	return m.fileExistsResult
+}
+
+func (m *mockDBClient) GetRowByParentAndName(ctx context.Context, schema, table, parentID, filename string) ([]string, []interface{}, error) {
+	return nil, nil, nil
+}
+
+func (m *mockDBClient) GetRowsByParent(ctx context.Context, schema, table, parentID string, limit int) ([]string, [][]interface{}, error) {
+	return nil, nil, nil
+}
+
+func (m *mockDBClient) ResolvePath(ctx context.Context, schema, table, startParentID string, segments []string) ([]db.PathSegment, error) {
+	m.resolvePathCalls++
+	m.lastResolveStartParent = startParentID
+	m.lastResolveSegments = segments
+	if m.resolvePathFn != nil {
+		return m.resolvePathFn(ctx, schema, table, segments)
+	}
+	return m.resolvePathResults, m.resolvePathErr
 }
 
 // ============================================================================
@@ -3542,4 +3703,44 @@ func TestCompositePK_TimestampPK(t *testing.T) {
 		require.NotNil(t, content)
 		assert.Equal(t, "30\n", string(content.Data))
 	})
+}
+
+// TestReadlink_NonSymlink verifies that Readlink on a regular file or directory
+// returns ErrInvalidOperation.
+func TestReadlink_NonSymlink(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"users"}},
+		columns: map[string][]mockColumn{
+			"users": {{name: "id", dataType: "integer"}},
+		},
+		primaryKeys: map[string]*mockPK{
+			"users": {columns: []string{"id"}},
+		},
+	}
+	ops := NewOperations(cfg, mockDB)
+
+	// Root directory is not a symlink
+	_, err := ops.Readlink(context.Background(), "/")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidOperation, err.Code)
+
+	// Table directory is not a symlink
+	_, err = ops.Readlink(context.Background(), "/users")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidOperation, err.Code)
+}
+
+// TestReadlink_NonexistentPath verifies that Readlink on a path that doesn't
+// exist returns ErrNotExist.
+func TestReadlink_NonexistentPath(t *testing.T) {
+	cfg := &config.Config{DirListingLimit: 1000}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{"public": {"users"}},
+	}
+	ops := NewOperations(cfg, mockDB)
+
+	_, err := ops.Readlink(context.Background(), "/nonexistent_table")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrNotExist, err.Code)
 }

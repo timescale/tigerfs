@@ -41,8 +41,9 @@ type Config struct {
 	EntryTimeout         time.Duration `mapstructure:"entry_timeout"`
 
 	// Query Safety
-	QueryTimeout   time.Duration `mapstructure:"query_timeout"`    // Global statement timeout for all queries (default: 30s)
-	DirFilterLimit int           `mapstructure:"dir_filter_limit"` // Row count threshold for .filter/ value listing (default: 100000)
+	QueryTimeout     time.Duration `mapstructure:"query_timeout"`      // Global statement timeout for all queries (default: 30s)
+	DirFilterLimit   int           `mapstructure:"dir_filter_limit"`   // Row count threshold for .filter/ value listing (default: 100000)
+	MaxPipelineDepth int           `mapstructure:"max_pipeline_depth"` // Max chained pipeline ops before capabilities are hidden (default: 10; 0=unlimited)
 
 	// Metadata
 	MetadataRefreshInterval           time.Duration `mapstructure:"metadata_refresh_interval"`            // Catalog TTL: schemas/tables/views (default: 10s)
@@ -67,6 +68,15 @@ type Config struct {
 	DefaultFormat  string `mapstructure:"default_format"`
 	BinaryEncoding string `mapstructure:"binary_encoding"`
 
+	// Identity
+	UserID string `mapstructure:"user_id"` // Mount-level user identity for log entries (--user-id or TIGERFS_USER_ID)
+
+	// Auto-savepoints (ADR-016 Section 4.4)
+	AutoSavepointInterval time.Duration `mapstructure:"auto_savepoint_interval"` // Inactivity gap before auto-savepoint (default: 30m, 0 disables)
+
+	// Undo (ADR-016 Section 4.3)
+	UndoListLimit int `mapstructure:"undo_list_limit"` // Default listing limit for .undo/ sub-directories (default: 100)
+
 	// FUSE backend selection (Linux only)
 	LegacyFuse bool `mapstructure:"legacy_fuse"` // Use legacy specialized FUSE nodes instead of shared Operations
 
@@ -80,7 +90,7 @@ func Init() error {
 	viper.SetDefault("default_schema", "") // Empty = inherit from PostgreSQL's current_schema()
 	viper.SetDefault("pool_size", 10)
 	viper.SetDefault("pool_max_idle", 5)
-	viper.SetDefault("dir_listing_limit", 10000)
+	viper.SetDefault("dir_listing_limit", 1000)
 	viper.SetDefault("dir_writing_limit", 100000)
 	viper.SetDefault("trailing_newlines", true)
 	viper.SetDefault("no_filename_extensions", false)
@@ -88,6 +98,7 @@ func Init() error {
 	viper.SetDefault("entry_timeout", 1*time.Second)
 	viper.SetDefault("query_timeout", 30*time.Second)
 	viper.SetDefault("dir_filter_limit", 100000)
+	viper.SetDefault("max_pipeline_depth", 10)
 	viper.SetDefault("metadata_refresh_interval", 10*time.Second)
 	viper.SetDefault("structural_metadata_refresh_interval", 5*time.Minute)
 	viper.SetDefault("nfs_streaming_threshold", int64(10*1024*1024))
@@ -103,6 +114,8 @@ func Init() error {
 	viper.SetDefault("legacy_fuse", false)
 	viper.SetDefault("default_backend", "")
 	viper.SetDefault("default_mount_dir", "/tmp")
+	viper.SetDefault("auto_savepoint_interval", 30*time.Minute)
+	viper.SetDefault("undo_list_limit", 100)
 	viper.SetDefault("config_dir", GetDefaultConfigDir())
 
 	// Setup config file
