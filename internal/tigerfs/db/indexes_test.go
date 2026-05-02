@@ -679,9 +679,21 @@ func TestGetRowsByIndexValue_UsesIndex(t *testing.T) {
 		_, _ = client.pool.Exec(context.Background(), "DROP TABLE IF EXISTS test_explain_index")
 	}()
 
-	// Run EXPLAIN on our query pattern
+	// Run EXPLAIN on our query pattern. Force the planner off seq scan so the test
+	// asserts on whether our SQL *can* use the index, not on planner cost choice
+	// (a 100-row test table is too small for index scan to win on cost).
+	tx, err := client.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("Begin tx for EXPLAIN failed: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatalf("SET LOCAL enable_seqscan failed: %v", err)
+	}
+
 	query := `EXPLAIN SELECT "id" FROM "public"."test_explain_index" WHERE "email" = $1 ORDER BY "id" LIMIT $2`
-	rows, err := client.pool.Query(ctx, query, "user1@example.com", 100)
+	rows, err := tx.Query(ctx, query, "user1@example.com", 100)
 	if err != nil {
 		t.Fatalf("EXPLAIN query failed: %v", err)
 	}

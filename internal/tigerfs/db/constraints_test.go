@@ -25,9 +25,12 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 	}
 	defer pool.Close()
 
-	// Create test table
+	// Create test table in public schema (information_schema can't see pg_temp).
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS public.test_constraints_notnull`); err != nil {
+		t.Fatalf("Failed to drop pre-existing test table: %v", err)
+	}
 	_, err = pool.Exec(ctx, `
-		CREATE TEMP TABLE test_constraints (
+		CREATE TABLE public.test_constraints_notnull (
 			id SERIAL PRIMARY KEY,
 			email TEXT NOT NULL,
 			name TEXT NOT NULL,
@@ -37,6 +40,9 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS public.test_constraints_notnull`)
+	})
 
 	// Test 1: Valid values (all NOT NULL satisfied)
 	values := map[string]interface{}{
@@ -44,7 +50,7 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 		"name":  "Test User",
 		"bio":   "Bio text",
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_constraints", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_notnull", values)
 	if err != nil {
 		t.Errorf("ValidateConstraints failed with valid values: %v", err)
 	}
@@ -54,7 +60,7 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 		"name": "Test User",
 		"bio":  "Bio text",
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_constraints", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_notnull", values)
 	if err == nil {
 		t.Error("Expected NOT NULL constraint violation for missing email")
 	}
@@ -64,7 +70,7 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 		"email": nil,
 		"name":  "Test User",
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_constraints", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_notnull", values)
 	if err == nil {
 		t.Error("Expected NOT NULL constraint violation for NULL email")
 	}
@@ -74,7 +80,7 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 		"email": "",
 		"name":  "Test User",
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_constraints", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_notnull", values)
 	if err == nil {
 		t.Error("Expected NOT NULL constraint violation for empty email")
 	}
@@ -85,7 +91,7 @@ func TestValidateConstraints_NotNull(t *testing.T) {
 		"name":  "Test User",
 		"bio":   nil,
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_constraints", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_notnull", values)
 	if err != nil {
 		t.Errorf("ValidateConstraints failed with NULL nullable column: %v", err)
 	}
@@ -108,9 +114,12 @@ func TestValidateConstraints_Unique(t *testing.T) {
 	}
 	defer pool.Close()
 
-	// Create test table with unique constraint
+	// Create test table in public schema (information_schema can't see pg_temp).
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS public.test_constraints_unique`); err != nil {
+		t.Fatalf("Failed to drop pre-existing test table: %v", err)
+	}
 	_, err = pool.Exec(ctx, `
-		CREATE TEMP TABLE test_unique (
+		CREATE TABLE public.test_constraints_unique (
 			id SERIAL PRIMARY KEY,
 			email TEXT UNIQUE NOT NULL,
 			username TEXT NOT NULL
@@ -119,9 +128,12 @@ func TestValidateConstraints_Unique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS public.test_constraints_unique`)
+	})
 
 	// Insert a test row
-	_, err = pool.Exec(ctx, `INSERT INTO test_unique (email, username) VALUES ('existing@example.com', 'existing')`)
+	_, err = pool.Exec(ctx, `INSERT INTO public.test_constraints_unique (email, username) VALUES ('existing@example.com', 'existing')`)
 	if err != nil {
 		t.Fatalf("Failed to insert test row: %v", err)
 	}
@@ -131,7 +143,7 @@ func TestValidateConstraints_Unique(t *testing.T) {
 		"email":    "new@example.com",
 		"username": "newuser",
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_unique", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_unique", values)
 	if err != nil {
 		t.Errorf("ValidateConstraints failed with unique value: %v", err)
 	}
@@ -141,7 +153,7 @@ func TestValidateConstraints_Unique(t *testing.T) {
 		"email":    "existing@example.com",
 		"username": "newuser",
 	}
-	err = ValidateConstraints(ctx, pool, "pg_temp", "test_unique", values)
+	err = ValidateConstraints(ctx, pool, "public", "test_constraints_unique", values)
 	if err == nil {
 		t.Error("Expected UNIQUE constraint violation for duplicate email")
 	}
@@ -164,9 +176,12 @@ func TestGetColumnsForConstraintCheck(t *testing.T) {
 	}
 	defer pool.Close()
 
-	// Create test table
+	// Create test table in public schema (information_schema can't see pg_temp).
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS public.test_constraints_columns`); err != nil {
+		t.Fatalf("Failed to drop pre-existing test table: %v", err)
+	}
 	_, err = pool.Exec(ctx, `
-		CREATE TEMP TABLE test_columns (
+		CREATE TABLE public.test_constraints_columns (
 			id SERIAL PRIMARY KEY,
 			email TEXT NOT NULL,
 			age INTEGER DEFAULT 0,
@@ -176,9 +191,12 @@ func TestGetColumnsForConstraintCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS public.test_constraints_columns`)
+	})
 
 	// Get columns
-	columns, err := getColumnsForConstraintCheck(ctx, pool, "pg_temp", "test_columns")
+	columns, err := getColumnsForConstraintCheck(ctx, pool, "public", "test_constraints_columns")
 	if err != nil {
 		t.Fatalf("Failed to get columns: %v", err)
 	}
@@ -239,9 +257,12 @@ func TestGetUniqueConstraints(t *testing.T) {
 	}
 	defer pool.Close()
 
-	// Create test table with unique constraints
+	// Create test table in public schema (information_schema can't see pg_temp).
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS public.test_constraints_unique_meta`); err != nil {
+		t.Fatalf("Failed to drop pre-existing test table: %v", err)
+	}
 	_, err = pool.Exec(ctx, `
-		CREATE TEMP TABLE test_unique_constraints (
+		CREATE TABLE public.test_constraints_unique_meta (
 			id SERIAL PRIMARY KEY,
 			email TEXT UNIQUE NOT NULL,
 			username TEXT NOT NULL
@@ -250,9 +271,12 @@ func TestGetUniqueConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DROP TABLE IF EXISTS public.test_constraints_unique_meta`)
+	})
 
 	// Get unique constraints
-	constraints, err := getUniqueConstraints(ctx, pool, "pg_temp", "test_unique_constraints")
+	constraints, err := getUniqueConstraints(ctx, pool, "public", "test_constraints_unique_meta")
 	if err != nil {
 		t.Fatalf("Failed to get unique constraints: %v", err)
 	}

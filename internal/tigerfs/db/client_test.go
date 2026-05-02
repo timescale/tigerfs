@@ -146,10 +146,11 @@ func TestClient_Close(t *testing.T) {
 		t.Errorf("Close() failed: %v", closeErr)
 	}
 
-	// Pool should be closed, verify by checking if operations fail
-	stats := client2.pool.Stat()
-	if stats.TotalConns() != 0 {
-		t.Error("Expected all connections to be closed")
+	// Pool should be closed, verify by checking that operations fail. (Asserting on
+	// pool.Stat().TotalConns() races with pgxpool's background createIdleResources
+	// goroutine when MinConns > 0; Ping on a closed pool is deterministic.)
+	if err := client2.pool.Ping(context.Background()); err == nil {
+		t.Error("Expected Ping on closed pool to fail")
 	}
 }
 
