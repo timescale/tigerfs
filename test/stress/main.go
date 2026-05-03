@@ -34,6 +34,18 @@ type Config struct {
 	ManyFiles     bool
 	DumpAtSpec    string
 	DumpAt        map[int]bool
+
+	// External-infrastructure overrides. These are independently useful:
+	// a Linux user with their own postgres can pass --external-conn-str +
+	// --tigerfs-binary to skip docker-compose entirely, and the
+	// docker-FUSE launcher (scripts/stress-docker.sh) uses all four to
+	// run the runner inside a privileged Linux container with bind-
+	// mounted dumps. When a flag is empty, behavior matches the native
+	// macOS path byte-for-byte.
+	ExternalConnStr string // skip docker-compose up/down; connect to this URL.
+	TigerFSBinary   string // skip `go build`; use this binary path instead.
+	MountpointDir   string // parent dir for the mountpoint (default: /tmp).
+	DumpDir         string // parent dir for dumps + the info file (default: /tmp).
 }
 
 func main() {
@@ -71,6 +83,10 @@ func parseStartFlags(args []string) *Config {
 	fs.BoolVar(&cfg.LargeFiles, "large-files", false, "enable large file generation (up to 10MB)")
 	fs.BoolVar(&cfg.ManyFiles, "many-files", false, "enable dense directories (up to 1000 files/dir)")
 	fs.StringVar(&cfg.DumpAtSpec, "dump-at", "", "comma-separated iteration numbers to write a snapshot dump after (e.g., 100,250)")
+	fs.StringVar(&cfg.ExternalConnStr, "external-conn-str", "", "use this postgres URL; skip docker-compose up/down")
+	fs.StringVar(&cfg.TigerFSBinary, "tigerfs-binary", "", "path to a prebuilt tigerfs binary; skip `go build`")
+	fs.StringVar(&cfg.MountpointDir, "mountpoint-dir", "", "parent directory for the mountpoint (default: /tmp)")
+	fs.StringVar(&cfg.DumpDir, "dump-dir", "", "parent directory for dumps + info file (default: /tmp)")
 
 	fs.Parse(args)
 
@@ -180,6 +196,10 @@ Options:
   --large-files         Enable large files up to 10MB (default max: 100KB)
   --many-files          Enable dense directories up to 1000 files/dir (default: 10)
   --dump-at LIST        Write a snapshot dump after these iterations (e.g., 100,250)
+  --external-conn-str S Use this postgres URL; skip docker-compose up/down
+  --tigerfs-binary PATH Use this prebuilt tigerfs binary; skip `+"`go build`"+`
+  --mountpoint-dir DIR  Parent directory for the mountpoint (default: /tmp)
+  --dump-dir DIR        Parent directory for dumps + info file (default: /tmp)
 
 Examples:
   tigerfs-stress start
@@ -187,6 +207,9 @@ Examples:
   tigerfs-stress start --large-files --many-files --iterations 100 --validate-every 5
   tigerfs-stress start --debug --keep --seed 42
   tigerfs-stress start --seed 42 --iterations 1000 --dump-at 100,500,778
+  tigerfs-stress start --external-conn-str postgres://user:pw@host:5432/db --tigerfs-binary bin/tigerfs
   tigerfs-stress stop
+
+See also: scripts/stress-docker.sh for FUSE-on-Linux via Docker.
 `)
 }

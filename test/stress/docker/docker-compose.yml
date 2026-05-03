@@ -1,0 +1,49 @@
+# Docker-FUSE compose stack for tigerfs-stress.
+#
+# Usage: ./scripts/stress-docker.sh [tigerfs-stress flags]
+#
+# Two services: postgres (data on tmpfs for speed) and stress (privileged,
+# /dev/fuse, runs both `tigerfs` and `tigerfs-stress` as separate processes).
+# Project name is set to keep this isolated from the existing
+# test/stress/docker-compose.yml (which is the macOS-native postgres-only
+# file driven by the Go runner directly).
+
+name: tigerfs-stress-docker
+
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg18
+    environment:
+      POSTGRES_USER: testundo
+      POSTGRES_PASSWORD: testundo
+      POSTGRES_DB: testundo
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testundo -d testundo"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  stress:
+    build:
+      context: ../../..
+      dockerfile: test/stress/docker/Dockerfile
+    privileged: true
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    # AppArmor escape: needed on Ubuntu hosts where the docker-default
+    # profile blocks the `mount` syscall even with privileged: true.
+    security_opt:
+      - apparmor:unconfined
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Bind-mount for diagnostic dumps + info file. The launcher script
+      # creates host-out before `compose up` so the path always exists.
+      - ./host-out:/out
+    working_dir: /work
+    command: ["sleep", "infinity"]

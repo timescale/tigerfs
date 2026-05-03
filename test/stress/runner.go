@@ -445,8 +445,10 @@ func RunAndExit(cfg *Config, infra *Infra) RunResult {
 
 // replayCommand reconstructs the full CLI invocation needed to re-run a
 // failing seed. Must include every flag that affects the workload (seed,
-// iterations, validate-every, large-files, many-files, workspace) so the
-// run is bit-for-bit reproducible.
+// iterations, validate-every, large-files, many-files, workspace) plus
+// the infrastructure-override flags so a docker-FUSE failure can be
+// replayed by re-running the same launcher (or directly with the listed
+// flags) and reproducing the same conditions.
 func replayCommand(cfg *Config) string {
 	parts := []string{
 		"bin/tigerfs-stress start",
@@ -465,6 +467,18 @@ func replayCommand(cfg *Config) string {
 	}
 	if cfg.DumpAtSpec != "" {
 		parts = append(parts, fmt.Sprintf("--dump-at %s", cfg.DumpAtSpec))
+	}
+	if cfg.ExternalConnStr != "" {
+		parts = append(parts, fmt.Sprintf("--external-conn-str %q", cfg.ExternalConnStr))
+	}
+	if cfg.TigerFSBinary != "" {
+		parts = append(parts, fmt.Sprintf("--tigerfs-binary %s", cfg.TigerFSBinary))
+	}
+	if cfg.MountpointDir != "" {
+		parts = append(parts, fmt.Sprintf("--mountpoint-dir %s", cfg.MountpointDir))
+	}
+	if cfg.DumpDir != "" {
+		parts = append(parts, fmt.Sprintf("--dump-dir %s", cfg.DumpDir))
 	}
 	return strings.Join(parts, " ")
 }

@@ -115,12 +115,17 @@ const historyDumpLimit = 200
 //
 // The dump dir is
 //
-//	/tmp/tigerfs-stress-<kind>-<seed>-<iteration>-<unix>/
+//	<dump-dir>/tigerfs-stress-<kind>-<seed>-<iteration>-<unix>/
 //
-// to disambiguate concurrent runs and let users keep multiple dumps
-// around. Caller is expected to print the returned path.
+// where <dump-dir> is `cfg.DumpDir` (default `/tmp`). The disambiguating
+// suffix lets users keep multiple dumps around without collision. Caller
+// is expected to print the returned path.
 func WriteDump(kind DumpKind, failureKind string, cfg *Config, infra *Infra, state *WorkspaceState, stack *StateStack, opLog []OpRecord, runErr error, op string, iteration int) (string, error) {
-	dumpDir := fmt.Sprintf("/tmp/tigerfs-stress-%s-%d-%d-%d", kind, cfg.Seed, iteration, time.Now().Unix())
+	dumpBase := cfg.DumpDir
+	if dumpBase == "" {
+		dumpBase = defaultDumpDir
+	}
+	dumpDir := filepath.Join(dumpBase, fmt.Sprintf("tigerfs-stress-%s-%d-%d-%d", kind, cfg.Seed, iteration, time.Now().Unix()))
 	if err := os.MkdirAll(dumpDir, 0755); err != nil {
 		return "", fmt.Errorf("create dump dir: %w", err)
 	}

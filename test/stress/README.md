@@ -12,10 +12,10 @@ Integration tests cover individual operations and specific edge cases, but real-
 
 ### Architecture
 
-The stress tester is a standalone Go binary that operates as a **pure filesystem client** -- all operations use `os.WriteFile`, `os.Rename`, `os.Remove`, etc. against the real NFS mount. It has no tigerfs internal imports. Undo is triggered by writing to `.undo/id/<log_id>/.apply` through the filesystem.
+The stress tester is a standalone Go binary that operates as a **pure filesystem client** -- all operations use `os.WriteFile`, `os.Rename`, `os.Remove`, etc. against the real mounted filesystem. It has no tigerfs internal imports. Undo is triggered by writing to `.undo/id/<log_id>/.apply` through the filesystem.
 
 ```
-                                  NFS mount
+                              kernel mount
 tigerfs-stress ── os.WriteFile ─────────────> TigerFS ──> PostgreSQL
      │                                           │
      │  in-memory expected state                 │  actual data
@@ -24,6 +24,18 @@ tigerfs-stress ── os.WriteFile ─────────────> Tige
      └── ValidateWorkspace() ── os.ReadFile ─────┘
                                 + md5 compare
 ```
+
+### Mount-method matrix
+
+`tigerfs` picks the kernel mount type based on the host OS, which means the runner's **mount surface depends on where it executes**:
+
+| Run mode | OS where tigerfs runs | Mount type |
+|----------|------------------------|------------|
+| Native (`bin/tigerfs-stress`) | macOS | NFS (in-process `go-nfs` server) |
+| Native (`bin/tigerfs-stress`) | Linux | FUSE |
+| Docker (`./scripts/stress-docker.sh`) | Linux container (any host) | FUSE |
+
+Because the macOS-native and docker-FUSE paths exercise **different kernel-side code paths**, running both against the same seed is the cheapest way to triangulate "is this an NFS-specific issue?" -- which has been a recurring investigation pattern (see CLAUDE.md "Stress-test monotonicity warnings"). The macOS NFS path is the default; docker-FUSE is additive.
 
 ### Infrastructure Lifecycle
 
@@ -94,6 +106,7 @@ File sizes follow a **log-normal distribution**, which models real-world file si
 - Docker (for PostgreSQL with TimescaleDB)
 - Go 1.22+
 - macOS or Linux
+- For docker-FUSE mode (`scripts/stress-docker.sh`): Docker daemon with `/dev/fuse` available. This is the default on Docker Desktop (macOS/Windows) and on Linux hosts with privileged-container support.
 
 ## Build
 
@@ -126,6 +139,48 @@ bin/tigerfs-stress start --seed 42 --iterations 1000 --dump-at 100,500,778
 bin/tigerfs-stress stop
 ```
 
+### Docker-FUSE mode (Linux container)
+
+Run the stress test against **FUSE on Linux** from any host (including macOS). Both `tigerfs` and `tigerfs-stress` execute inside a privileged Linux container with `/dev/fuse`; postgres is a sibling compose service; diagnostic dumps are bind-mounted to the host so they survive container teardown.
+
+```bash
+# Default: 20 iterations, random seed
+./scripts/stress-docker.sh
+
+# Reproducible run, seed-pinned (replay an issue surfaced on macOS)
+./scripts/stress-docker.sh --seed 42 --iterations 200
+
+# Anything you'd pass to `bin/tigerfs-stress start` is forwarded
+./scripts/stress-docker.sh --large-files --many-files --iterations 1000 --validate-every 5
+./scripts/stress-docker.sh --seed 42 --iterations 1000 --dump-at 100,500
+
+# Keep both containers and the FUSE mount running on exit (for poking after a failure)
+./scripts/stress-docker.sh --keep-infra --seed 42 --iterations 200
+```
+
+The launcher always starts with clean postgres state (a previous `--keep-infra` doesn't carry forward), bind-mounts `test/stress/docker/host-out/` to `/out` inside the container, and on exit runs `tigerfs-stress stop` followed by `docker compose down -v` (skipped under `--keep-infra`).
+
+**Where dumps land**: `test/stress/docker/host-out/tigerfs-stress-<failure|snapshot>-<seed>-<iter>-<unix>/`. Same layout as the native `/tmp/tigerfs-stress-*` paths.
+
+**Stop a long run from another terminal**: the script sets `TIGERFS_STRESS_INFO_FILE=/out/tigerfs-stress.info` so the container's `start` writes the info file on the bind mount; the matching `stop` invocation needs the same env var:
+
+```bash
+docker compose -f test/stress/docker/docker-compose.yml \
+  exec -e TIGERFS_STRESS_INFO_FILE=/out/tigerfs-stress.info \
+  stress /usr/local/bin/tigerfs-stress stop
+```
+
+**Going without the launcher**: the four override flags (`--external-conn-str`, `--tigerfs-binary`, `--mountpoint-dir`, `--dump-dir`) are independently useful. A Linux user with their own postgres can stress-test directly:
+
+```bash
+go build -o bin/tigerfs ./cmd/tigerfs
+go build -o bin/tigerfs-stress ./test/stress
+bin/tigerfs-stress start \
+  --external-conn-str postgres://you:pw@localhost:5432/yourdb \
+  --tigerfs-binary bin/tigerfs \
+  --iterations 1000
+```
+
 ## Flags
 
 | Flag | Default | Description |
@@ -139,19 +194,23 @@ bin/tigerfs-stress stop
 | `--large-files` | false | Enable large files up to 10MB (default max: 100KB) |
 | `--many-files` | false | Enable dense directories up to 1000 files/dir (default: 10) |
 | `--dump-at LIST` | (none) | Comma-separated iteration numbers to write a snapshot dump after (e.g., `100,250,778`) |
+| `--external-conn-str S` | (build/compose path) | Use this postgres URL; skip `docker compose up`/`down` and `go build`. The launcher passes this; standalone users can pass it to point at any postgres. |
+| `--tigerfs-binary PATH` | (build to `bin/tigerfs`) | Use this prebuilt tigerfs binary instead of running `go build`. |
+| `--mountpoint-dir DIR` | `/tmp` | Parent directory for the per-run mountpoint (`<dir>/tigerfs-stress-<unix>`). |
+| `--dump-dir DIR` | `/tmp` | Parent directory for failure/snapshot dumps **and** the info file. The launcher uses `/out` (a host bind mount). |
 
 ## Output
 
 - **stdout**: Step-by-step progress (`[STEP 1/20] create_file docs/intro.md (4.8KB)`)
 - **stderr**: Errors with seed and the full replay command (all workload-affecting flags included)
 - **tigerfs.log**: TigerFS stdout/stderr (written to working directory)
-- **Failure dump**: `/tmp/tigerfs-stress-failure-<seed>-<iteration>-<unixtime>/` (validation failures only; see below)
+- **Failure dump**: `<dump-dir>/tigerfs-stress-failure-<seed>-<iteration>-<unixtime>/` -- defaults to `/tmp`; the docker-FUSE launcher uses `test/stress/docker/host-out/` (bind-mounted to `/out` inside the container).
 - **Exit code**: 0 = pass, 1 = verification failure, 2 = infrastructure failure
 
 ## Stopping a Run
 
 - **Ctrl-C**: Triggers clean teardown (SIGINT trapped)
-- **`bin/tigerfs-stress stop`**: Reads `/tmp/tigerfs-stress.info` and tears down infrastructure (PostgreSQL, mount, mountpoint dir, info file). Does **not** delete failure dumps -- those live in a separate sibling directory and persist until you remove them manually.
+- **`bin/tigerfs-stress stop`**: Reads the info file (default `/tmp/tigerfs-stress.info`; override with the `TIGERFS_STRESS_INFO_FILE` env var, which the docker-FUSE launcher sets to `/out/tigerfs-stress.info`) and tears down infrastructure (PostgreSQL when in non-external mode, mount, mountpoint dir, info file). Does **not** delete failure dumps -- those live in a separate sibling directory and persist until you remove them manually.
 - **`--keep`**: Skips teardown; infrastructure stays running for manual inspection
 
 A validation failure also implicitly keeps the infrastructure running so you can inspect live state alongside the dump. Run `bin/tigerfs-stress stop` when you're done.
@@ -168,7 +227,7 @@ In all three cases the infrastructure is left running so you can correlate the d
 
 Both kinds use the same machinery and produce the same set of files. They differ only in the directory prefix (`failure-` vs `snapshot-`), the `kind` field in `summary.json`, and the `summary.txt` heading. `find /tmp -name 'tigerfs-stress-failure-*'` keeps returning real failures only.
 
-Dump location: `/tmp/tigerfs-stress-<kind>-<seed>-<iteration>-<unixtime>/`
+Dump location: `<dump-dir>/tigerfs-stress-<kind>-<seed>-<iteration>-<unixtime>/`. `<dump-dir>` defaults to `/tmp`; pass `--dump-dir` to override (the docker-FUSE launcher uses `/out`, which is bind-mounted to `test/stress/docker/host-out/` on the host).
 
 Files in the dump:
 
@@ -196,6 +255,9 @@ The dump is best-effort: an I/O error on one file doesn't abort the rest. A warn
 | Heuristic | Catches |
 |-----------|---------|
 | `log_count` exceeds `ceil(write_size / 128KB) + 2` for create/edit | `lastLogID` regression after a heavy undo (the original iter-107 bug pattern) |
+
+> ⚠️ **Caveat for docker-FUSE mode**: the `log_count` heuristic above uses the macOS NFS write-chunk size (128 KB). FUSE's chunk fan-out is different, so docker-FUSE-mode `analysis.txt` may flag false-positive "unexpected log_count" lines for normal large-file writes. Validation correctness is unaffected -- the heuristic only adjusts where `analysis.txt` highlights anomalies. A follow-up will gate the heuristic on the actual mount kind.
+
 | `create_savepoint` with `log_count > 0` | savepoint logging changed (regression in expected behavior) |
 | Stack entry's `LogID` < earlier entry's `LogID` (UUIDv7 lexicographic) | Stack bookkeeping crossed iterations in the wrong order |
 | `MissingFile` + `UnexpectedFile` with the same content hash | Rename / move applied by TigerFS but not WorkspaceState (or vice versa) |

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,17 +13,38 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
-	infoFilePath     = "/tmp/tigerfs-stress.info"
-	pgPort           = "5433"
-	pgUser           = "testundo"
-	pgPassword       = "testundo"
-	pgDatabase       = "testundo"
-	pgReadyTimeout   = 30 * time.Second
-	mountWaitTimeout = 15 * time.Second
+	defaultInfoFileName  = "tigerfs-stress.info"
+	defaultDumpDir       = "/tmp"
+	defaultMountpointDir = "/tmp"
+	pgPort               = "5433"
+	pgUser               = "testundo"
+	pgPassword           = "testundo"
+	pgDatabase           = "testundo"
+	pgReadyTimeout       = 30 * time.Second
+	mountWaitTimeout     = 15 * time.Second
 )
+
+// envInfoFilePath is the env var that overrides the info-file location.
+// scripts/stress-docker.sh sets this so `tigerfs-stress stop` inside the
+// container reads the same path that `start` wrote on the bind-mounted /out.
+const envInfoFilePath = "TIGERFS_STRESS_INFO_FILE"
+
+// resolveInfoFilePath returns the info file path, honoring (in order):
+// the env var override, the supplied dumpDir, then the legacy /tmp default.
+func resolveInfoFilePath(dumpDir string) string {
+	if v := os.Getenv(envInfoFilePath); v != "" {
+		return v
+	}
+	if dumpDir == "" {
+		dumpDir = defaultDumpDir
+	}
+	return filepath.Join(dumpDir, defaultInfoFileName)
+}
 
 // Infra holds the state of the running infrastructure.
 type Infra struct {
@@ -31,58 +53,113 @@ type Infra struct {
 	ComposePath string
 	RepoRoot    string
 	ConnStr     string // postgres URL used by the mounted tigerfs (also reusable for diagnostics)
-	tigerfsCmd  *exec.Cmd
-	sigChan     chan os.Signal
+	// External is true when --external-conn-str was supplied: the runner
+	// neither owns the postgres lifecycle nor will it run `go build`. The
+	// launcher (scripts/stress-docker.sh or whoever set the flag) is
+	// responsible for those concerns.
+	External     bool
+	DumpDir      string // resolved dump directory (defaults to /tmp).
+	InfoFilePath string // resolved info-file path (under DumpDir or env override).
+	tigerfsCmd   *exec.Cmd
+	sigChan      chan os.Signal
 }
 
 // RunInfo is serialized to the info file for the stop command.
+// External determines whether `stop` should also run `docker compose down`.
 type RunInfo struct {
 	TigerFSPid  int    `json:"tigerfs_pid"`
 	Mountpoint  string `json:"mountpoint"`
 	ComposePath string `json:"compose_path"`
 	RepoRoot    string `json:"repo_root"`
+	External    bool   `json:"external,omitempty"`
 }
 
 // SetupInfra builds tigerfs, starts Docker PostgreSQL, mounts the filesystem,
 // and creates the workspace.
 func SetupInfra(cfg *Config) (*Infra, error) {
+	external := cfg.ExternalConnStr != ""
+
+	// repoRoot is only required when we actually need to `go build` or
+	// `docker compose up` from the repo. In external mode (the docker-FUSE
+	// launcher path) neither happens, so a missing go.mod is not fatal --
+	// we fall back to the current working directory.
 	repoRoot, err := findRepoRoot()
 	if err != nil {
-		return nil, fmt.Errorf("find repo root: %w", err)
+		if !external && cfg.TigerFSBinary == "" {
+			return nil, fmt.Errorf("find repo root: %w", err)
+		}
+		if cwd, cwdErr := os.Getwd(); cwdErr == nil {
+			repoRoot = cwd
+		}
 	}
 
 	composePath := filepath.Join(repoRoot, "test", "stress", "docker-compose.yml")
-	mountpoint := fmt.Sprintf("/tmp/tigerfs-stress-%d", time.Now().Unix())
-	tigerBinary := filepath.Join(repoRoot, "bin", "tigerfs")
+
+	mountBase := cfg.MountpointDir
+	if mountBase == "" {
+		mountBase = defaultMountpointDir
+	}
+	mountpoint := filepath.Join(mountBase, fmt.Sprintf("tigerfs-stress-%d", time.Now().Unix()))
+
+	dumpDir := cfg.DumpDir
+	if dumpDir == "" {
+		dumpDir = defaultDumpDir
+	}
 
 	infra := &Infra{
-		Mountpoint:  mountpoint,
-		ComposePath: composePath,
-		RepoRoot:    repoRoot,
-		sigChan:     make(chan os.Signal, 1),
+		Mountpoint:   mountpoint,
+		ComposePath:  composePath,
+		RepoRoot:     repoRoot,
+		External:     external,
+		DumpDir:      dumpDir,
+		InfoFilePath: resolveInfoFilePath(dumpDir),
+		sigChan:      make(chan os.Signal, 1),
 	}
 
-	// Step 1: Build tigerfs
-	fmt.Print("Building tigerfs... ")
-	if err := runCmd(repoRoot, "go", "build", "-o", tigerBinary, "./cmd/tigerfs"); err != nil {
-		return nil, fmt.Errorf("build tigerfs: %w", err)
+	// Step 1: Build tigerfs (skipped when --tigerfs-binary is supplied).
+	var tigerBinary string
+	if cfg.TigerFSBinary != "" {
+		if _, err := os.Stat(cfg.TigerFSBinary); err != nil {
+			return nil, fmt.Errorf("--tigerfs-binary %q not found: %w", cfg.TigerFSBinary, err)
+		}
+		tigerBinary = cfg.TigerFSBinary
+		fmt.Printf("Using tigerfs binary: %s\n", tigerBinary)
+	} else {
+		tigerBinary = filepath.Join(repoRoot, "bin", "tigerfs")
+		fmt.Print("Building tigerfs... ")
+		if err := runCmd(repoRoot, "go", "build", "-o", tigerBinary, "./cmd/tigerfs"); err != nil {
+			return nil, fmt.Errorf("build tigerfs: %w", err)
+		}
+		fmt.Println("done")
 	}
-	fmt.Println("done")
 
-	// Step 2: Start Docker PostgreSQL
-	fmt.Print("Starting PostgreSQL... ")
-	if err := runCmd(repoRoot, "docker", "compose", "-f", composePath, "up", "-d"); err != nil {
-		return nil, fmt.Errorf("docker compose up: %w", err)
-	}
-	fmt.Println("done")
+	// Steps 2 & 3: Start Docker PostgreSQL and wait for it (skipped when
+	// --external-conn-str is supplied; the launcher owns postgres in that case).
+	var connStr string
+	if external {
+		connStr = cfg.ExternalConnStr
+		fmt.Printf("Using external postgres: %s\n", redactConnStr(connStr))
+		fmt.Print("Verifying postgres reachable... ")
+		if err := pingExternal(connStr); err != nil {
+			return nil, fmt.Errorf("external postgres not reachable: %w", err)
+		}
+		fmt.Println("ok")
+	} else {
+		fmt.Print("Starting PostgreSQL... ")
+		if err := runCmd(repoRoot, "docker", "compose", "-f", composePath, "up", "-d"); err != nil {
+			return nil, fmt.Errorf("docker compose up: %w", err)
+		}
+		fmt.Println("done")
 
-	// Step 3: Wait for PostgreSQL
-	fmt.Print("Waiting for PostgreSQL... ")
-	if err := waitForPostgres(); err != nil {
-		infra.teardownDocker()
-		return nil, fmt.Errorf("postgres not ready: %w", err)
+		fmt.Print("Waiting for PostgreSQL... ")
+		if err := waitForPostgres(); err != nil {
+			infra.teardownDocker()
+			return nil, fmt.Errorf("postgres not ready: %w", err)
+		}
+		fmt.Println("ready")
+
+		connStr = fmt.Sprintf("postgres://%s:%s@localhost:%s/%s", pgUser, pgPassword, pgPort, pgDatabase)
 	}
-	fmt.Println("ready")
 
 	// Step 4: Create mountpoint
 	if err := os.MkdirAll(mountpoint, 0755); err != nil {
@@ -92,7 +169,6 @@ func SetupInfra(cfg *Config) (*Infra, error) {
 
 	// Step 5: Mount TigerFS
 	fmt.Print("Mounting TigerFS... ")
-	connStr := fmt.Sprintf("postgres://%s:%s@localhost:%s/%s", pgUser, pgPassword, pgPort, pgDatabase)
 	infra.ConnStr = connStr
 
 	args := []string{"mount", "--insecure-no-ssl", "--user-id", "stress-test"}
@@ -223,7 +299,12 @@ func (infra *Infra) removeMountpoint() {
 	os.RemoveAll(infra.Mountpoint)
 }
 
+// teardownDocker stops the postgres compose stack. No-op in external mode --
+// the caller (e.g. scripts/stress-docker.sh) owns postgres lifecycle there.
 func (infra *Infra) teardownDocker() {
+	if infra.External {
+		return
+	}
 	fmt.Print("  Stopping Docker... ")
 	if err := runCmd(infra.RepoRoot, "docker", "compose", "-f", infra.ComposePath, "down", "-v"); err != nil {
 		fmt.Printf("warning: %v\n", err)
@@ -238,23 +319,27 @@ func (infra *Infra) writeInfo() error {
 		Mountpoint:  infra.Mountpoint,
 		ComposePath: infra.ComposePath,
 		RepoRoot:    infra.RepoRoot,
+		External:    infra.External,
 	}
 	data, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(infoFilePath, data, 0644)
+	return os.WriteFile(infra.InfoFilePath, data, 0644)
 }
 
 func (infra *Infra) removeInfo() {
-	os.Remove(infoFilePath)
+	os.Remove(infra.InfoFilePath)
 }
 
-// StopInfra reads the info file and tears down a running stress test.
+// StopInfra reads the info file and tears down a running stress test. The
+// info-file path follows resolveInfoFilePath: TIGERFS_STRESS_INFO_FILE env
+// var wins; otherwise the legacy /tmp/tigerfs-stress.info default is used.
 func StopInfra() error {
-	data, err := os.ReadFile(infoFilePath)
+	infoPath := resolveInfoFilePath("")
+	data, err := os.ReadFile(infoPath)
 	if err != nil {
-		return fmt.Errorf("no running test found (cannot read %s): %w", infoFilePath, err)
+		return fmt.Errorf("no running test found (cannot read %s): %w", infoPath, err)
 	}
 
 	var info RunInfo
@@ -262,7 +347,8 @@ func StopInfra() error {
 		return fmt.Errorf("parse info file: %w", err)
 	}
 
-	fmt.Printf("Found running test: pid=%d mountpoint=%s\n", info.TigerFSPid, info.Mountpoint)
+	fmt.Printf("Found running test: pid=%d mountpoint=%s external=%v\n",
+		info.TigerFSPid, info.Mountpoint, info.External)
 
 	// Kill tigerfs process
 	fmt.Printf("  Killing tigerfs (pid %d)... ", info.TigerFSPid)
@@ -288,16 +374,18 @@ func StopInfra() error {
 	// Remove mountpoint
 	os.RemoveAll(info.Mountpoint)
 
-	// Docker down
-	fmt.Print("  Stopping Docker... ")
-	if err := runCmd(info.RepoRoot, "docker", "compose", "-f", info.ComposePath, "down", "-v"); err != nil {
-		fmt.Printf("warning: %v\n", err)
-	} else {
-		fmt.Println("done")
+	// Docker down (skipped when the launcher owns postgres lifecycle).
+	if !info.External {
+		fmt.Print("  Stopping Docker... ")
+		if err := runCmd(info.RepoRoot, "docker", "compose", "-f", info.ComposePath, "down", "-v"); err != nil {
+			fmt.Printf("warning: %v\n", err)
+		} else {
+			fmt.Println("done")
+		}
 	}
 
 	// Remove info file
-	os.Remove(infoFilePath)
+	os.Remove(infoPath)
 
 	return nil
 }
@@ -328,6 +416,38 @@ func runCmd(dir string, name string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// pingExternal opens a short-lived pgxpool against the supplied connection
+// string and Pings it. Used in --external-conn-str mode so a misconfigured
+// URL fails immediately with a clear error instead of wedging tigerfs.
+func pingExternal(connStr string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, connStr)
+	if err != nil {
+		return fmt.Errorf("parse/connect: %w", err)
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("ping: %w", err)
+	}
+	return nil
+}
+
+// redactConnStr replaces the password component (if present) with "***" so
+// the startup banner doesn't echo credentials.
+func redactConnStr(s string) string {
+	at := strings.LastIndex(s, "@")
+	if at < 0 {
+		return s
+	}
+	colon := strings.LastIndex(s[:at], ":")
+	scheme := strings.Index(s, "://")
+	if colon < 0 || scheme < 0 || colon <= scheme+2 {
+		return s
+	}
+	return s[:colon+1] + "***" + s[at:]
 }
 
 func waitForPostgres() error {
