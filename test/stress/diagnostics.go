@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -130,9 +131,28 @@ func WriteDump(kind DumpKind, failureKind string, cfg *Config, infra *Infra, sta
 		return "", fmt.Errorf("create dump dir: %w", err)
 	}
 
+	// Walk-failure probe (FS visibility timeline). Run FIRST, before
+	// re-snapshotting the workspace, so the first sample is as close to the
+	// original failure moment as possible. The DB half runs later, after
+	// db_state is captured. See WalkFailureProbe doc comment for context.
+	wsPath := filepath.Join(infra.Mountpoint, cfg.Workspace)
+	var probe *WalkFailureProbe
+	if missingAbs, ok := extractMissingPath(runErr); ok {
+		// Compute relative path (relative to the workspace mount root).
+		rel, relErr := filepath.Rel(wsPath, missingAbs)
+		if relErr != nil {
+			rel = missingAbs // fall back to absolute if Rel fails
+		}
+		probe = &WalkFailureProbe{
+			MissingRelPath: rel,
+			WorkspacePath:  wsPath,
+			WalkErrorRaw:   runErr.Error(),
+			FS:             probeFSVisibility(missingAbs),
+		}
+	}
+
 	// Snapshot the live filesystem and compute the structured diff. Both
 	// feed the actual_state.json and diff.txt files.
-	wsPath := filepath.Join(infra.Mountpoint, cfg.Workspace)
 	actualFiles, actualDirs, snapErr := snapshotWorkspace(wsPath)
 	if snapErr != nil {
 		// Don't bail -- record the error and continue with the data we
@@ -190,15 +210,27 @@ func WriteDump(kind DumpKind, failureKind string, cfg *Config, infra *Infra, sta
 
 	// db_state.json -- live PostgreSQL view of the four undo-related
 	// tables. Best-effort: a DB error here doesn't fail the whole dump.
-	if dump, err := captureDBState(cfg, infra); err != nil {
-		writeText(dumpDir, "db_error.txt", err.Error())
+	dbDumpResult, dbDumpErr := captureDBState(cfg, infra)
+	if dbDumpErr != nil {
+		writeText(dumpDir, "db_error.txt", dbDumpErr.Error())
 	} else {
-		writeJSON(dumpDir, "db_state.json", dump)
+		writeJSON(dumpDir, "db_state.json", dbDumpResult)
+	}
+
+	// Walk-failure probe (DB half). Now that we have rows captured, resolve
+	// the missing path against them. Combined conclusion encoded with the
+	// FS timeline collected earlier.
+	if probe != nil {
+		if dbDumpResult != nil {
+			probe.DB = probeDBForRelPath(dbDumpResult.Rows, probe.MissingRelPath)
+		}
+		probe.Conclusion = renderProbeConclusion(probe.FS, probe.DB)
+		writeJSON(dumpDir, "walk_failure_probe.json", probe)
 	}
 
 	// analysis.txt -- pre-computed cross-reference and anomaly checks.
 	// Last so it's based on the same in-memory state captured above.
-	writeText(dumpDir, "analysis.txt", analyzeDump(state, stack, opLog, issues))
+	writeText(dumpDir, "analysis.txt", analyzeDump(state, stack, opLog, issues, probe))
 
 	return dumpDir, nil
 }
@@ -452,7 +484,7 @@ const nfsChunkBytes = 128 * 1024
 // queries: at a glance the reader sees workspace status, stack island
 // structure, log_count distribution, op counts, and any flagged
 // anomalies (false positives tolerated; false negatives are not).
-func analyzeDump(state *WorkspaceState, stack *StateStack, opLog []OpRecord, issues []ValidationIssue) string {
+func analyzeDump(state *WorkspaceState, stack *StateStack, opLog []OpRecord, issues []ValidationIssue, probe *WalkFailureProbe) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "=== Workspace ===\n")
@@ -462,6 +494,33 @@ func analyzeDump(state *WorkspaceState, stack *StateStack, opLog []OpRecord, iss
 		fmt.Fprintf(&b, "Validation: FAILED (%d issues; see diff.txt)\n", len(issues))
 	}
 	fmt.Fprintf(&b, "Files: %d  Dirs: %d\n\n", len(state.Files), len(state.Dirs))
+
+	if probe != nil {
+		fmt.Fprintf(&b, "=== Walk-failure probe ===\n")
+		fmt.Fprintf(&b, "Missing path:    %s\n", probe.MissingRelPath)
+		fmt.Fprintf(&b, "FS visibility timeline:\n")
+		for _, p := range probe.FS {
+			status := "ENOENT"
+			if p.Exists {
+				if p.IsDir {
+					status = "exists (dir)"
+				} else {
+					status = fmt.Sprintf("exists (file, %d bytes)", p.SizeBytes)
+				}
+			} else if p.ErrMessage != "" && !strings.Contains(p.ErrMessage, "no such file") {
+				status = "err: " + p.ErrMessage
+			}
+			fmt.Fprintf(&b, "  %4dms: %s\n", p.OffsetMs, status)
+		}
+		if probe.DB != nil {
+			if probe.DB.Resolved {
+				fmt.Fprintf(&b, "DB probe:        RESOLVED (%d-deep parent chain)\n", probe.DB.ParentChainLength)
+			} else {
+				fmt.Fprintf(&b, "DB probe:        UNRESOLVED at %q -- %s\n", probe.DB.UnresolvedAt, probe.DB.UnresolvedReason)
+			}
+		}
+		fmt.Fprintf(&b, "Conclusion:      %s\n\n", probe.Conclusion)
+	}
 
 	fmt.Fprintf(&b, "=== Stack islands ===\n")
 	islands := stackIslands(stack)
@@ -671,4 +730,218 @@ func parseSizeBytes(desc string) (int, bool) {
 		return 0, false
 	}
 	return int(num * float64(mult)), true
+}
+
+// === Walk-failure probes ===
+//
+// A validation walk failure of the form "open <abs-path>: no such file or
+// directory" or "readdirent <abs-path>: no such file or directory" is
+// suspicious because postgres usually still has the row -- this is the
+// FUSE-side cache window investigation. The probes below run automatically
+// when WriteDump sees such an error and produce evidence that pins which
+// layer lied:
+//
+//   * FS visibility probe: os.Stat the missing path at increasing offsets,
+//     measuring how long until it becomes visible again (or "never" within
+//     the probe window).
+//   * DB row probe: walk the captured workspace rows by parent_id chain to
+//     check whether the missing path is actually present in postgres at
+//     this moment. If yes -- userspace tigerfs lied. If no -- we have a
+//     real correctness / state-tracking issue.
+
+// FSVisibilityProbe is one os.Stat attempt at a given offset from
+// dump-start. Records whether the path was visible and any errno.
+type FSVisibilityProbe struct {
+	OffsetMs   int64  `json:"offset_ms"`
+	Exists     bool   `json:"exists"`
+	IsDir      bool   `json:"is_dir,omitempty"`
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
+	ErrMessage string `json:"err_message,omitempty"`
+}
+
+// DBProbeResult records what postgres knows about the missing relative path.
+// Resolves the path component-by-component through the parent_id chain.
+type DBProbeResult struct {
+	Resolved          bool                   `json:"resolved"`
+	UnresolvedAt      string                 `json:"unresolved_at,omitempty"`
+	UnresolvedReason  string                 `json:"unresolved_reason,omitempty"`
+	Row               map[string]interface{} `json:"row,omitempty"`
+	ParentChainLength int                    `json:"parent_chain_length,omitempty"`
+}
+
+// WalkFailureProbe is the full walk_failure_probe.json payload.
+type WalkFailureProbe struct {
+	MissingRelPath string              `json:"missing_rel_path"`
+	WorkspacePath  string              `json:"workspace_path"`
+	WalkErrorRaw   string              `json:"walk_error_raw"`
+	FS             []FSVisibilityProbe `json:"fs_visibility_timeline"`
+	DB             *DBProbeResult      `json:"db_probe,omitempty"`
+	Conclusion     string              `json:"conclusion"`
+}
+
+// walkFailurePathRe matches the absolute path embedded in a walk-failure
+// error message produced by snapshotWorkspace. Captures the path component
+// after the syscall name. Examples we want to match:
+//
+//	"... open <abs>: no such file or directory"        (ENOENT on file)
+//	"... readdirent <abs>: no such file or directory"  (ENOENT on dir)
+//	"... open <abs>: input/output error"               (EIO on file)
+//	"... read <abs>: input/output error"               (EIO during read)
+//	"... stat <abs>: <any errno>"                      (any Stat-time errno)
+//
+// We deliberately match a broad family of "this path misbehaved" errors so
+// the probe fires on any FS-side anomaly worth investigating, not just
+// ENOENT.
+var walkFailurePathRe = regexp.MustCompile(`(?:open|readdirent|read|stat|lstat|fstat)\s+(/\S+):\s+\S`)
+
+// extractMissingPath pulls the absolute path of the failing entry from a
+// walk-failure error. Returns ("", false) if the error doesn't match the
+// expected shape (e.g. it's a non-walk failure like a validation diff).
+func extractMissingPath(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	m := walkFailurePathRe.FindStringSubmatch(err.Error())
+	if len(m) != 2 {
+		return "", false
+	}
+	return m[1], true
+}
+
+// fsProbeOffsets is the schedule of os.Stat attempts in probeFSVisibility,
+// measured from probe start. Set wide enough to span the kernel FUSE entry
+// cache TTL (1s default) and tigerfs's own 2s pathCache TTL. Overridable
+// in tests so they don't sleep the full 5s on every dump.
+var fsProbeOffsets = []time.Duration{
+	0,
+	100 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+	2 * time.Second,
+	5 * time.Second,
+}
+
+// probeFSVisibility os.Stat's the absolute path at fsProbeOffsets. Total
+// wallclock is bounded by the largest offset (~5s) by default, which is
+// acceptable inside dump generation -- the bigger cost is collecting the
+// evidence.
+func probeFSVisibility(absPath string) []FSVisibilityProbe {
+	offsets := fsProbeOffsets
+	out := make([]FSVisibilityProbe, 0, len(offsets))
+	start := time.Now()
+	for _, off := range offsets {
+		// Sleep until we hit this offset from start (compensating for the
+		// time the previous Stat took).
+		elapsed := time.Since(start)
+		if off > elapsed {
+			time.Sleep(off - elapsed)
+		}
+		info, err := os.Stat(absPath)
+		probe := FSVisibilityProbe{OffsetMs: off.Milliseconds()}
+		if err != nil {
+			probe.ErrMessage = err.Error()
+		} else {
+			probe.Exists = true
+			probe.IsDir = info.IsDir()
+			if !info.IsDir() {
+				probe.SizeBytes = info.Size()
+			}
+		}
+		out = append(out, probe)
+	}
+	return out
+}
+
+// probeDBForRelPath walks the captured workspace rows by parent_id chain to
+// resolve the missing path. Returns a structured result distinguishing
+// "resolved" from "stuck at <component>" so we can tell which directory
+// segment is missing if any.
+func probeDBForRelPath(rows []map[string]interface{}, relPath string) *DBProbeResult {
+	relPath = strings.Trim(relPath, "/")
+	if relPath == "" {
+		return &DBProbeResult{
+			Resolved:          true,
+			Row:               map[string]interface{}{"workspace_root": true},
+			ParentChainLength: 0,
+		}
+	}
+	parts := strings.Split(relPath, "/")
+	var parentID interface{} // nil at root
+	var lastRow map[string]interface{}
+	for i, name := range parts {
+		match := findRowByParentAndName(rows, parentID, name)
+		if match == nil {
+			return &DBProbeResult{
+				Resolved:         false,
+				UnresolvedAt:     strings.Join(parts[:i+1], "/"),
+				UnresolvedReason: fmt.Sprintf("no row with parent_id=%v and filename=%q", parentID, name),
+			}
+		}
+		lastRow = match
+		parentID = match["id"]
+	}
+	return &DBProbeResult{
+		Resolved:          true,
+		Row:               lastRow,
+		ParentChainLength: len(parts),
+	}
+}
+
+// findRowByParentAndName scans rows for a child of the given parent. Used
+// to walk the parent_id chain when resolving a path. parentID==nil matches
+// roots (parent_id IS NULL in the DB; pgx surfaces that as a Go nil here).
+func findRowByParentAndName(rows []map[string]interface{}, parentID interface{}, name string) map[string]interface{} {
+	for _, r := range rows {
+		fname, _ := r["filename"].(string)
+		if fname != name {
+			continue
+		}
+		rowParent := r["parent_id"]
+		if parentMatches(rowParent, parentID) {
+			return r
+		}
+	}
+	return nil
+}
+
+// parentMatches handles the (nil-or-string) comparison for parent_id
+// without tripping on Go's interface-nil quirks.
+func parentMatches(rowParent, want interface{}) bool {
+	if want == nil {
+		return rowParent == nil
+	}
+	if rowParent == nil {
+		return false
+	}
+	rs, _ := rowParent.(string)
+	ws, _ := want.(string)
+	return rs == ws && rs != ""
+}
+
+// renderProbeConclusion builds a one-line summary that pins which layer is
+// at fault, derived from the FS timeline + DB result.
+func renderProbeConclusion(fs []FSVisibilityProbe, db *DBProbeResult) string {
+	// Find the first offset at which the FS started seeing the path.
+	recoverIdx := -1
+	for i, p := range fs {
+		if p.Exists {
+			recoverIdx = i
+			break
+		}
+	}
+	dbHas := db != nil && db.Resolved
+	switch {
+	case dbHas && recoverIdx == 0:
+		return "DB has row; FS visible immediately on first re-probe (race window closed before probe started)"
+	case dbHas && recoverIdx > 0:
+		return fmt.Sprintf("DB has row; FS recovered visibility at offset %dms -- userspace lied during walk, recovered within probe window", fs[recoverIdx].OffsetMs)
+	case dbHas && recoverIdx < 0:
+		return "DB has row; FS still ENOENT at probe end (>5s) -- userspace persistently lying"
+	case !dbHas && recoverIdx >= 0:
+		return "DB does NOT have row; FS sees path -- DB capture missed it (race), or stress-runner expected something the DB never had"
+	case !dbHas && recoverIdx < 0:
+		return "DB does NOT have row; FS still ENOENT -- consistent absence (stress-runner expected something not in DB)"
+	default:
+		return "inconclusive"
+	}
 }
