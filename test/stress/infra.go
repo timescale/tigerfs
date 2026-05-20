@@ -420,19 +420,33 @@ func runCmd(dir string, name string, args ...string) error {
 
 // pingExternal opens a short-lived pgxpool against the supplied connection
 // string and Pings it. Used in --external-conn-str mode so a misconfigured
-// URL fails immediately with a clear error instead of wedging tigerfs.
+// URL fails with a clear error instead of wedging tigerfs.
+//
+// Retries for up to 30s with a 1s gap. Mirrors waitForPostgres on the
+// native path: docker-compose depends_on:service_healthy still leaves a
+// narrow window where postgres reports healthy but a fresh TCP connect
+// can land before its accept loop is fully up.
 func pingExternal(connStr string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, connStr)
-	if err != nil {
-		return fmt.Errorf("parse/connect: %w", err)
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		pool, err := pgxpool.New(ctx, connStr)
+		if err == nil {
+			pingErr := pool.Ping(ctx)
+			pool.Close()
+			cancel()
+			if pingErr == nil {
+				return nil
+			}
+			lastErr = pingErr
+		} else {
+			cancel()
+			lastErr = err
+		}
+		time.Sleep(1 * time.Second)
 	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping: %w", err)
-	}
-	return nil
+	return fmt.Errorf("not reachable after 30s: %w", lastErr)
 }
 
 // redactConnStr replaces the password component (if present) with "***" so

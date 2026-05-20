@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setupTestDir(t *testing.T, files map[string]string) string {
@@ -433,8 +434,14 @@ func TestWriteDump_OperationFailureKind(t *testing.T) {
 // staged workspace, a Config, an Infra (with intentionally invalid DB
 // conn so the DB capture fails cleanly), an expected state that diverges
 // from the workspace, a stack with one entry, and an op log.
+//
+// Shortens fsProbeOffsets so dump tests with op-failure errors don't
+// trigger the full 5s walk-failure probe sleep.
 func setupDumpScenario(t *testing.T) (string, *Config, *Infra, *WorkspaceState, *StateStack, []OpRecord) {
 	t.Helper()
+	prev := fsProbeOffsets
+	fsProbeOffsets = []time.Duration{0, 1 * time.Millisecond}
+	t.Cleanup(func() { fsProbeOffsets = prev })
 	mountDir := t.TempDir()
 	wsDir := filepath.Join(mountDir, "testws")
 	if err := os.MkdirAll(wsDir, 0755); err != nil {
