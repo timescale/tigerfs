@@ -205,6 +205,32 @@ func (a *FSAdapter) EntriesToDirEntries(entries []tigerfs.Entry) []gofuse.DirEnt
 	return result
 }
 
+// decoupleFromRequestCancel returns a context that inherits values from
+// ctx but ignores its cancellation. Used at the FUSE read-path boundary
+// (Stat, ReadDir, ReadFile) so that transient FUSE_INTERRUPT signals --
+// which the Linux kernel sends when the originating userspace process
+// receives a signal (commonly Go runtime's SIGURG goroutine preemption
+// under GC pressure) -- do not propagate through Operations and into
+// pgx, where context.Canceled gets mapped to ErrIO and surfaces to the
+// user as a spurious EIO.
+//
+// FUSE_INTERRUPT is advisory ("you may stop, the requester might not
+// care"), not a hard abort. The kernel either uses our reply normally
+// or discards it; either way, propagating the cancellation produces
+// no user value and only generates spurious failures.
+//
+// Safety nets preserved: Postgres statement_timeout (cfg.QueryTimeout)
+// still bounds runaway queries, and tigerfs unmount closes the DB pool
+// which fails in-flight queries. We only lose the per-request
+// cancellation channel, which the bug shows we don't actually want.
+//
+// Write paths intentionally do NOT use this -- partial writes have
+// real consistency implications when interrupted, and the request-ctx
+// cancellation surface is the right tool there.
+func decoupleFromRequestCancel(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
 // ReadDir reads a directory and returns FUSE DirStream.
 //
 // This method delegates to fs.Operations.ReadDir and converts the result
@@ -217,6 +243,7 @@ func (a *FSAdapter) EntriesToDirEntries(entries []tigerfs.Entry) []gofuse.DirEnt
 //
 // Returns a DirStream and errno (0 on success).
 func (a *FSAdapter) ReadDir(ctx context.Context, path string) (gofs.DirStream, syscall.Errno) {
+	ctx = decoupleFromRequestCancel(ctx)
 	entries, fsErr := a.ops.ReadDir(ctx, path)
 	if fsErr != nil {
 		return nil, a.ErrorToErrno(fsErr)
@@ -237,6 +264,7 @@ func (a *FSAdapter) ReadDir(ctx context.Context, path string) (gofs.DirStream, s
 //
 // Returns errno (0 on success).
 func (a *FSAdapter) Stat(ctx context.Context, path string, out *gofuse.EntryOut) syscall.Errno {
+	ctx = decoupleFromRequestCancel(ctx)
 	entry, fsErr := a.ops.Stat(ctx, path)
 	if fsErr != nil {
 		return a.ErrorToErrno(fsErr)
@@ -257,6 +285,7 @@ func (a *FSAdapter) Stat(ctx context.Context, path string, out *gofuse.EntryOut)
 //
 // Returns the file content and errno (0 on success).
 func (a *FSAdapter) ReadFile(ctx context.Context, path string) ([]byte, syscall.Errno) {
+	ctx = decoupleFromRequestCancel(ctx)
 	content, fsErr := a.ops.ReadFile(ctx, path)
 	if fsErr != nil {
 		return nil, a.ErrorToErrno(fsErr)
