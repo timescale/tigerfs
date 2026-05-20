@@ -132,20 +132,38 @@ func (c *statCache) lookup(schema, table, filename string) (Entry, bool) {
 	defer c.mu.RUnlock()
 
 	if c.tables == nil {
+		logging.Debug("statCache.lookup miss(no-tables)",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename))
 		return Entry{}, false
 	}
 
 	key := schema + "\x00" + table
 	tc := c.tables[key]
 	if tc == nil {
+		logging.Debug("statCache.lookup miss(no-table-cache)",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename))
 		return Entry{}, false
 	}
 
 	if time.Since(tc.created) > statCacheTTL {
+		logging.Debug("statCache.lookup miss(expired)",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename),
+			zap.Duration("age", time.Since(tc.created)))
 		return Entry{}, false
 	}
 
 	entry, ok := tc.entries[filename]
+	if ok {
+		logging.Debug("statCache.lookup hit",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename),
+			zap.Duration("age", time.Since(tc.created)))
+	} else {
+		logging.Debug("statCache.lookup miss(not-in-cache)",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename),
+			zap.Int("cache_entry_count", len(tc.entries)),
+			zap.Int("cache_negative_count", len(tc.negatives)),
+			zap.Duration("age", time.Since(tc.created)))
+	}
 	return entry, ok
 }
 
@@ -202,6 +220,8 @@ func (c *statCache) setNegative(schema, table, filename string) {
 	key := schema + "\x00" + table
 	tc := c.tables[key]
 	if tc == nil || time.Since(tc.created) > statCacheTTL {
+		logging.Debug("statCache.setNegative new-table-cache",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename))
 		c.tables[key] = &tableCache{
 			entries:   make(map[string]Entry),
 			negatives: map[string]bool{filename: true},
@@ -213,6 +233,10 @@ func (c *statCache) setNegative(schema, table, filename string) {
 		tc.negatives = make(map[string]bool)
 	}
 	tc.negatives[filename] = true
+	logging.Debug("statCache.setNegative",
+		zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename),
+		zap.Int("cache_entry_count", len(tc.entries)),
+		zap.Duration("cache_age", time.Since(tc.created)))
 }
 
 // isNegative returns true if the filename is cached as not-existing.
@@ -234,7 +258,18 @@ func (c *statCache) isNegative(schema, table, filename string) bool {
 		return false
 	}
 
-	return tc.negatives[filename]
+	neg := tc.negatives[filename]
+	if neg {
+		// This is the smoking gun for the FUSE-mode "ENOENT for path that
+		// exists in DB" bug class: a negative-cache hit short-circuits the
+		// DB query. Logging it lets a future post-failure correlation
+		// pinpoint whether userspace tigerfs lied because of a stale
+		// negative entry, vs. because the DB itself returned no rows.
+		logging.Debug("statCache.isNegative hit",
+			zap.String("schema", schema), zap.String("table", table), zap.String("filename", filename),
+			zap.Duration("age", time.Since(tc.created)))
+	}
+	return neg
 }
 
 // invalidate clears cached entries for a table (called on writes).
@@ -248,15 +283,32 @@ func (c *statCache) invalidate(schema, table string) {
 	}
 
 	key := schema + "\x00" + table
+	tc, hadTable := c.tables[key]
 	delete(c.tables, key)
 
-	// Also clear row-level column caches (e.g., "schema\x00table/rowPK")
+	// Count row-level column caches cleared (for the debug log only).
+	rowLevelCleared := 0
 	prefix := key + "/"
 	for k := range c.tables {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
 			delete(c.tables, k)
+			rowLevelCleared++
 		}
 	}
+
+	// Logging the schema+table key invalidated lets us correlate against
+	// statCache.isNegative-hit records and pin schema-key mismatches: if a
+	// write-path invalidate uses the wrong schema, a stale negative will
+	// survive past where it should have been cleared.
+	negCount := 0
+	if hadTable && tc != nil {
+		negCount = len(tc.negatives)
+	}
+	logging.Debug("statCache.invalidate",
+		zap.String("schema", schema), zap.String("table", table),
+		zap.Bool("had_table", hadTable),
+		zap.Int("cleared_negatives", negCount),
+		zap.Int("cleared_row_caches", rowLevelCleared))
 }
 
 // MetaCache returns the shared metadata cache.

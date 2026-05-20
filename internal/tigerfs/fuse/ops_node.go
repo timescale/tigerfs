@@ -134,7 +134,18 @@ func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 
 	entry, fsErr := n.adapter.ops.Stat(ctx, childPath)
 	if fsErr != nil {
-		return nil, n.adapter.ErrorToErrno(fsErr)
+		errno := n.adapter.ErrorToErrno(fsErr)
+		// Logging the result of every failing Lookup -- particularly which
+		// errno -- lets a post-failure correlation join up with the cache
+		// hit/miss trace. ENOENT here matched against a statCache.isNegative
+		// hit upstream is the smoking gun for the stale-negative-cache bug.
+		logging.Debug("OpsNode.Lookup result",
+			zap.String("path", childPath),
+			zap.String("result", "error"),
+			zap.Int("errno", int(errno)),
+			zap.Int("err_code", int(fsErr.Code)),
+			zap.String("err_message", fsErr.Message))
+		return nil, errno
 	}
 
 	n.adapter.EntryToAttr(entry, &out.Attr)
