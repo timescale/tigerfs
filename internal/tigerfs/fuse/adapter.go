@@ -224,9 +224,13 @@ func (a *FSAdapter) EntriesToDirEntries(entries []tigerfs.Entry) []gofuse.DirEnt
 // which fails in-flight queries. We only lose the per-request
 // cancellation channel, which the bug shows we don't actually want.
 //
-// Write paths intentionally do NOT use this -- partial writes have
-// real consistency implications when interrupted, and the request-ctx
-// cancellation surface is the right tool there.
+// Applies to both read and write paths. Each tigerfs write op runs as a
+// single auto-committed statement (or a single transaction wrapping a
+// few atomic statements -- e.g., DeleteAndUpdate for POSIX rename-as-
+// replace). Either the whole statement/transaction commits or none of
+// it commits; there is no partial state to leak when we ignore the
+// kernel's transient cancellation. The kernel's FUSE_INTERRUPT means
+// "you may stop early if you want," not "abort, the syscall is dying."
 func decoupleFromRequestCancel(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
@@ -305,6 +309,7 @@ func (a *FSAdapter) ReadFile(ctx context.Context, path string) ([]byte, syscall.
 //
 // Returns errno (0 on success).
 func (a *FSAdapter) WriteFile(ctx context.Context, path string, data []byte) syscall.Errno {
+	ctx = decoupleFromRequestCancel(ctx)
 	fsErr := a.ops.WriteFile(ctx, path, data)
 	return a.ErrorToErrno(fsErr)
 }
@@ -319,6 +324,7 @@ func (a *FSAdapter) WriteFile(ctx context.Context, path string, data []byte) sys
 //
 // Returns errno (0 on success).
 func (a *FSAdapter) Delete(ctx context.Context, path string) syscall.Errno {
+	ctx = decoupleFromRequestCancel(ctx)
 	fsErr := a.ops.Delete(ctx, path)
 	return a.ErrorToErrno(fsErr)
 }
@@ -334,6 +340,7 @@ func (a *FSAdapter) Delete(ctx context.Context, path string) syscall.Errno {
 //
 // Returns errno (0 on success).
 func (a *FSAdapter) Mkdir(ctx context.Context, path string) syscall.Errno {
+	ctx = decoupleFromRequestCancel(ctx)
 	fsErr := a.ops.Mkdir(ctx, path)
 	return a.ErrorToErrno(fsErr)
 }
@@ -350,6 +357,7 @@ func (a *FSAdapter) Mkdir(ctx context.Context, path string) syscall.Errno {
 //
 // Returns errno (0 on success).
 func (a *FSAdapter) Rename(ctx context.Context, oldPath, newPath string) syscall.Errno {
+	ctx = decoupleFromRequestCancel(ctx)
 	fsErr := a.ops.Rename(ctx, oldPath, newPath)
 	return a.ErrorToErrno(fsErr)
 }

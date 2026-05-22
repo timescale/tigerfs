@@ -88,6 +88,87 @@ func TestFSAdapter_ReadFile_DecouplesRequestCancel(t *testing.T) {
 	}
 }
 
+// Write-path coverage. Symmetric to the read-path tests: each FSAdapter
+// write method must also decouple the request ctx so FUSE_INTERRUPT
+// (typically from Go SIGURG goroutine preemption) doesn't surface as
+// close-time EIO / rename ENOENT / delete ENOENT on otherwise valid ops.
+
+func TestFSAdapter_WriteFile_DecouplesRequestCancel(t *testing.T) {
+	capturedCtx := captureCtxViaWriteFile(t, "/public/anything")
+	if capturedCtx == nil {
+		t.Fatal("Operations was not reached; FSAdapter short-circuited (regression)")
+	}
+	if capturedCtx.Err() != nil {
+		t.Errorf("FSAdapter forwarded cancelled ctx to DB layer: %v", capturedCtx.Err())
+	}
+}
+
+func TestFSAdapter_Delete_DecouplesRequestCancel(t *testing.T) {
+	capturedCtx := captureCtxViaDelete(t, "/public/anything")
+	if capturedCtx == nil {
+		t.Fatal("Operations was not reached; FSAdapter short-circuited (regression)")
+	}
+	if capturedCtx.Err() != nil {
+		t.Errorf("FSAdapter forwarded cancelled ctx to DB layer: %v", capturedCtx.Err())
+	}
+}
+
+func TestFSAdapter_Mkdir_DecouplesRequestCancel(t *testing.T) {
+	capturedCtx := captureCtxViaMkdir(t, "/public/anything")
+	if capturedCtx == nil {
+		t.Fatal("Operations was not reached; FSAdapter short-circuited (regression)")
+	}
+	if capturedCtx.Err() != nil {
+		t.Errorf("FSAdapter forwarded cancelled ctx to DB layer: %v", capturedCtx.Err())
+	}
+}
+
+func TestFSAdapter_Rename_DecouplesRequestCancel(t *testing.T) {
+	capturedCtx := captureCtxViaRename(t, "/public/old", "/public/new")
+	if capturedCtx == nil {
+		t.Fatal("Operations was not reached; FSAdapter short-circuited (regression)")
+	}
+	if capturedCtx.Err() != nil {
+		t.Errorf("FSAdapter forwarded cancelled ctx to DB layer: %v", capturedCtx.Err())
+	}
+}
+
+func captureCtxViaWriteFile(t *testing.T, path string) context.Context {
+	t.Helper()
+	adapter, captured := newAdapterWithCtxCapture()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = adapter.WriteFile(ctx, path, []byte("data"))
+	return *captured
+}
+
+func captureCtxViaDelete(t *testing.T, path string) context.Context {
+	t.Helper()
+	adapter, captured := newAdapterWithCtxCapture()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = adapter.Delete(ctx, path)
+	return *captured
+}
+
+func captureCtxViaMkdir(t *testing.T, path string) context.Context {
+	t.Helper()
+	adapter, captured := newAdapterWithCtxCapture()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = adapter.Mkdir(ctx, path)
+	return *captured
+}
+
+func captureCtxViaRename(t *testing.T, oldPath, newPath string) context.Context {
+	t.Helper()
+	adapter, captured := newAdapterWithCtxCapture()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = adapter.Rename(ctx, oldPath, newPath)
+	return *captured
+}
+
 // captureCtxViaReadDir constructs an FSAdapter wired to a MockDBClient
 // that records the ctx given to GetCurrentSchema (the earliest DB call
 // Operations.ReadDir makes), invokes ReadDir with an already-cancelled
