@@ -1,6 +1,10 @@
 package fs
 
-import "fmt"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
 
 // ErrorCode represents filesystem error types.
 // These are backend-agnostic and map to appropriate errno values
@@ -119,4 +123,35 @@ func NewInvalidPathError(path, reason string) *FSError {
 		Message: fmt.Sprintf("invalid path %s: %s", path, reason),
 		Hint:    reason,
 	}
+}
+
+// isCancellationError reports whether an FSError plausibly originated from
+// a context cancellation (cancel or deadline) rather than a genuine
+// filesystem-level error. Used as a guard before destructive cache writes
+// (e.g. statCache.setNegative) so that a transiently-cancelled lookup
+// doesn't poison the cache with a false "not found" entry.
+//
+// Two signals are inspected and either is sufficient:
+//
+//  1. fsErr.Cause matches context.Canceled or context.DeadlineExceeded
+//     via errors.Is. This catches the path where the cancellation was
+//     preserved in the error chain.
+//  2. ctx.Err() != nil. This catches the path where the cause was lost
+//     by an intermediate layer (e.g. resolveSynthPath currently discards
+//     db.ResolvePath's error and surfaces an unparameterized ErrNotExist).
+//
+// Today this guard rarely fires in practice -- the FUSE_INTERRUPT
+// decoupling at FSAdapter and OpsNode entry points (commits 4c7b4c1,
+// b5cf146, df7616c) prevents kernel-side cancellation from reaching here.
+// It exists as a backstop so that if a future code path forgets to wrap,
+// or a different cancellation surface emerges (NFS 30s timeout firing
+// mid-query, a new internal Operations caller), the cache won't poison.
+func isCancellationError(ctx context.Context, fsErr *FSError) bool {
+	if fsErr != nil {
+		if errors.Is(fsErr.Cause, context.Canceled) ||
+			errors.Is(fsErr.Cause, context.DeadlineExceeded) {
+			return true
+		}
+	}
+	return ctx.Err() != nil
 }
