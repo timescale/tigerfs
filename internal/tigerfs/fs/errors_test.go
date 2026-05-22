@@ -2,7 +2,9 @@
 package fs
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -107,5 +109,74 @@ func TestFSErrorUnwrap(t *testing.T) {
 
 	if !errors.Is(err, cause) {
 		t.Error("errors.Is should find the cause")
+	}
+}
+
+// TestIsCancellationError covers the defensive helper used as a guard
+// before statCache.setNegative. The helper must report "looks like
+// cancellation" when either fsErr.Cause traces back to context.Canceled
+// / context.DeadlineExceeded, OR the ctx itself is cancelled. Both
+// signals are sufficient because intermediate layers (resolveSynthPath,
+// today) can drop the cause chain.
+func TestIsCancellationError(t *testing.T) {
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		fsErr  *FSError
+		expect bool
+	}{
+		{
+			name:   "nil error, live ctx",
+			ctx:    context.Background(),
+			fsErr:  nil,
+			expect: false,
+		},
+		{
+			name:   "ErrNotExist without cause, live ctx (real not-found)",
+			ctx:    context.Background(),
+			fsErr:  &FSError{Code: ErrNotExist, Message: "x"},
+			expect: false,
+		},
+		{
+			name:   "ErrNotExist caused by context.Canceled, live ctx",
+			ctx:    context.Background(),
+			fsErr:  &FSError{Code: ErrNotExist, Message: "x", Cause: context.Canceled},
+			expect: true,
+		},
+		{
+			name:   "ErrNotExist caused by context.DeadlineExceeded",
+			ctx:    context.Background(),
+			fsErr:  &FSError{Code: ErrNotExist, Message: "x", Cause: context.DeadlineExceeded},
+			expect: true,
+		},
+		{
+			name:   "ErrNotExist with wrapped context.Canceled (errors.Is unwraps)",
+			ctx:    context.Background(),
+			fsErr:  &FSError{Code: ErrNotExist, Message: "x", Cause: fmt.Errorf("query failed: %w", context.Canceled)},
+			expect: true,
+		},
+		{
+			name:   "nil error, cancelled ctx (cause was lost upstream)",
+			ctx:    canceledCtx,
+			fsErr:  nil,
+			expect: true,
+		},
+		{
+			name:   "ErrNotExist without cause, cancelled ctx",
+			ctx:    canceledCtx,
+			fsErr:  &FSError{Code: ErrNotExist, Message: "x"},
+			expect: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isCancellationError(tc.ctx, tc.fsErr)
+			if got != tc.expect {
+				t.Errorf("isCancellationError = %v, want %v", got, tc.expect)
+			}
+		})
 	}
 }

@@ -503,7 +503,14 @@ func (o *Operations) statSynthFile(ctx context.Context, parsed *ParsedPath, info
 		columns, row, fsErr = o.statSynthRowByFilename(ctx, schema, table, info, filename)
 	}
 	if fsErr != nil {
-		if fsErr.Code == ErrNotExist {
+		// Don't cache a negative entry if the ErrNotExist was caused by a
+		// transient context cancellation -- we don't actually know whether
+		// the file exists, and a false negative survives statCacheTTL (2s).
+		// All FUSE entry points currently decouple from request cancellation
+		// before reaching here, so this guard is a backstop for future
+		// regressions and for other cancellation surfaces (NFS timeout,
+		// new internal callers). See isCancellationError in errors.go.
+		if fsErr.Code == ErrNotExist && !isCancellationError(ctx, fsErr) {
 			o.statCache.setNegative(schema, table, filename)
 		}
 		return nil, fsErr
