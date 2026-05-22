@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
@@ -45,7 +44,7 @@ func (i *Index) IsComposite() bool {
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name (e.g., "public")
 //   - table: Table name
 //
@@ -53,7 +52,7 @@ func (i *Index) IsComposite() bool {
 // Returns empty slice (not error) if table has no indexes.
 //
 // Uses pg_catalog instead of parsing indexdef strings for reliability.
-func GetIndexes(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Index, error) {
+func GetIndexes(ctx context.Context, dbtx DBTX, schema, table string) ([]Index, error) {
 	logging.Debug("Querying indexes",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -83,7 +82,7 @@ func GetIndexes(ctx context.Context, pool *pgxpool.Pool, schema, table string) (
 			i.relname
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query indexes: %w", err)
 	}
@@ -126,15 +125,15 @@ func (c *Client) GetIndexes(ctx context.Context, schema, table string) ([]Index,
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //   - column: Column name to match against first index column
 //
 // Only matches indexes where the specified column is the leading (first) column,
 // since PostgreSQL can only use an index efficiently when querying by leading columns.
-func GetIndexByColumn(ctx context.Context, pool *pgxpool.Pool, schema, table, column string) (*Index, error) {
-	indexes, err := GetIndexes(ctx, pool, schema, table)
+func GetIndexByColumn(ctx context.Context, dbtx DBTX, schema, table, column string) (*Index, error) {
+	indexes, err := GetIndexes(ctx, dbtx, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -161,13 +160,13 @@ func (c *Client) GetIndexByColumn(ctx context.Context, schema, table, column str
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //
 // Excludes composite indexes. Returns empty slice if none found.
-func GetSingleColumnIndexes(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Index, error) {
-	indexes, err := GetIndexes(ctx, pool, schema, table)
+func GetSingleColumnIndexes(ctx context.Context, dbtx DBTX, schema, table string) ([]Index, error) {
+	indexes, err := GetIndexes(ctx, dbtx, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -195,13 +194,13 @@ func (c *Client) GetSingleColumnIndexes(ctx context.Context, schema, table strin
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //
 // Excludes single-column indexes. Returns empty slice if none found.
-func GetCompositeIndexes(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Index, error) {
-	indexes, err := GetIndexes(ctx, pool, schema, table)
+func GetCompositeIndexes(ctx context.Context, dbtx DBTX, schema, table string) ([]Index, error) {
+	indexes, err := GetIndexes(ctx, dbtx, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +228,7 @@ func (c *Client) GetCompositeIndexes(ctx context.Context, schema, table string) 
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //   - column: Column name to get distinct values for
@@ -237,7 +236,7 @@ func (c *Client) GetCompositeIndexes(ctx context.Context, schema, table string) 
 //
 // Returns values as strings. NULL values are excluded.
 // Values are ordered for consistent directory listings.
-func GetDistinctValues(ctx context.Context, pool *pgxpool.Pool, schema, table, column string, limit int) ([]string, error) {
+func GetDistinctValues(ctx context.Context, dbtx DBTX, schema, table, column string, limit int) ([]string, error) {
 	logging.Debug("Querying distinct values",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -250,7 +249,7 @@ func GetDistinctValues(ctx context.Context, pool *pgxpool.Pool, schema, table, c
 		qi(column), qt(schema, table), qi(column), qi(column),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
+	rows, err := dbtx.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query distinct values: %w", err)
 	}
@@ -298,7 +297,7 @@ func (c *Client) GetDistinctValues(ctx context.Context, schema, table, column st
 //
 // Parameters:
 //   - ascending: true for ASC (first N), false for DESC (last N)
-func GetDistinctValuesOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, column string, limit int, ascending bool) ([]string, error) {
+func GetDistinctValuesOrdered(ctx context.Context, dbtx DBTX, schema, table, column string, limit int, ascending bool) ([]string, error) {
 	logging.Debug("Querying ordered distinct values",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -316,7 +315,7 @@ func GetDistinctValuesOrdered(ctx context.Context, pool *pgxpool.Pool, schema, t
 		qi(column), qt(schema, table), qi(column), qi(column), order,
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
+	rows, err := dbtx.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query ordered distinct values: %w", err)
 	}
@@ -355,7 +354,7 @@ func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, co
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //   - column: Indexed column to query
@@ -364,7 +363,7 @@ func (c *Client) GetDistinctValuesOrdered(ctx context.Context, schema, table, co
 //   - limit: Maximum number of rows to return
 //
 // Returns primary key values as strings. If no rows match, returns empty slice (not error).
-func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
+func GetRowsByIndexValue(ctx context.Context, dbtx DBTX, schema, table, column, value string, pkColumns []string, limit int) ([]string, error) {
 	logging.Debug("Querying rows by index value",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -378,7 +377,7 @@ func GetRowsByIndexValue(ctx context.Context, pool *pgxpool.Pool, schema, table,
 		pkSelectList(pkColumns), qt(schema, table), qi(column), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	return scanPKRowsWithArgs(ctx, pool, query, pkColumns, value, limit)
+	return scanPKRowsWithArgs(ctx, dbtx, query, pkColumns, value, limit)
 }
 
 // GetRowsByIndexValue is a convenience wrapper for Client.
@@ -391,7 +390,7 @@ func (c *Client) GetRowsByIndexValue(ctx context.Context, schema, table, column,
 
 // GetRowsByIndexValueOrdered retrieves primary keys with explicit ordering.
 // Used for .first/N/ and .last/N/ within index value navigation.
-func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
+func GetRowsByIndexValueOrdered(ctx context.Context, dbtx DBTX, schema, table, column, value string, pkColumns []string, limit int, ascending bool) ([]string, error) {
 	logging.Debug("Querying ordered rows by index value",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -410,7 +409,7 @@ func GetRowsByIndexValueOrdered(ctx context.Context, pool *pgxpool.Pool, schema,
 		pkSelectList(pkColumns), qt(schema, table), qi(column), pkOrderByList(pkColumns, order),
 	)
 
-	return scanPKRowsWithArgs(ctx, pool, query, pkColumns, value, limit)
+	return scanPKRowsWithArgs(ctx, dbtx, query, pkColumns, value, limit)
 }
 
 // GetRowsByIndexValueOrdered is a convenience wrapper for Client.
@@ -423,8 +422,8 @@ func (c *Client) GetRowsByIndexValueOrdered(ctx context.Context, schema, table, 
 
 // scanPKRowsWithArgs executes a query with value and limit args, scans PK columns, and
 // returns encoded PK strings. Used by index query functions.
-func scanPKRowsWithArgs(ctx context.Context, pool *pgxpool.Pool, query string, pkColumns []string, args ...interface{}) ([]string, error) {
-	rows, err := pool.Query(ctx, query, args...)
+func scanPKRowsWithArgs(ctx context.Context, dbtx DBTX, query string, pkColumns []string, args ...interface{}) ([]string, error) {
+	rows, err := dbtx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query rows: %w", err)
 	}
@@ -465,7 +464,7 @@ func scanPKRowsWithArgs(ctx context.Context, pool *pgxpool.Pool, query string, p
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //   - targetColumn: Column to get distinct values for (the "next" column in navigation)
@@ -475,7 +474,7 @@ func scanPKRowsWithArgs(ctx context.Context, pool *pgxpool.Pool, query string, p
 //
 // Returns values as strings. NULL values are excluded.
 // filterColumns and filterValues must have the same length.
-func GetDistinctValuesFiltered(ctx context.Context, pool *pgxpool.Pool, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error) {
+func GetDistinctValuesFiltered(ctx context.Context, dbtx DBTX, schema, table, targetColumn string, filterColumns, filterValues []string, limit int) ([]string, error) {
 	if len(filterColumns) != len(filterValues) {
 		return nil, fmt.Errorf("filterColumns and filterValues length mismatch: %d vs %d", len(filterColumns), len(filterValues))
 	}
@@ -505,7 +504,7 @@ func GetDistinctValuesFiltered(ctx context.Context, pool *pgxpool.Pool, schema, 
 		qi(targetColumn), len(args),
 	)
 
-	rows, err := pool.Query(ctx, query, args...)
+	rows, err := dbtx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query filtered distinct values: %w", err)
 	}
@@ -558,7 +557,7 @@ func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, t
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout
-//   - pool: Database connection pool
+//   - dbtx: Database connection (pool or transaction)
 //   - schema: Schema name
 //   - table: Table name
 //   - columns: Indexed columns to query (in index order)
@@ -567,7 +566,7 @@ func (c *Client) GetDistinctValuesFiltered(ctx context.Context, schema, table, t
 //   - limit: Maximum number of rows to return
 //
 // Returns primary key values as strings. If no rows match, returns empty slice (not error).
-func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
+func GetRowsByCompositeIndex(ctx context.Context, dbtx DBTX, schema, table string, columns, values []string, pkColumns []string, limit int) ([]string, error) {
 	if len(columns) != len(values) {
 		return nil, fmt.Errorf("columns and values length mismatch: %d vs %d", len(columns), len(values))
 	}
@@ -596,7 +595,7 @@ func GetRowsByCompositeIndex(ctx context.Context, pool *pgxpool.Pool, schema, ta
 		pkOrderByList(pkColumns, "ASC"), len(args),
 	)
 
-	return scanPKRowsWithArgs(ctx, pool, query, pkColumns, args...)
+	return scanPKRowsWithArgs(ctx, dbtx, query, pkColumns, args...)
 }
 
 // GetRowsByCompositeIndex is a convenience wrapper for Client.

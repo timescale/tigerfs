@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -16,7 +15,7 @@ type PrimaryKey struct {
 
 // GetPrimaryKey discovers the primary key for a table
 // Returns error if no primary key exists or if composite key (not supported in MVP)
-func GetPrimaryKey(ctx context.Context, pool *pgxpool.Pool, schema, table string) (*PrimaryKey, error) {
+func GetPrimaryKey(ctx context.Context, dbtx DBTX, schema, table string) (*PrimaryKey, error) {
 	logging.Debug("Querying primary key",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -33,7 +32,7 @@ func GetPrimaryKey(ctx context.Context, pool *pgxpool.Pool, schema, table string
 		ORDER BY kcu.ordinal_position
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query primary key: %w", err)
 	}
@@ -69,7 +68,7 @@ func GetPrimaryKey(ctx context.Context, pool *pgxpool.Pool, schema, table string
 // ListRows returns a list of primary key values from a table.
 // Returns encoded PK strings (comma-delimited for composite PKs).
 // Limited to max_rows to prevent excessive directory listings.
-func ListRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, error) {
+func ListRows(ctx context.Context, dbtx DBTX, schema, table string, pkColumns []string, limit int) ([]string, error) {
 	logging.Debug("Listing rows",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -81,7 +80,7 @@ func ListRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkC
 		pkSelectList(pkColumns), qt(schema, table), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	return scanPKRows(ctx, pool, query, pkColumns, limit)
+	return scanPKRows(ctx, dbtx, query, pkColumns, limit)
 }
 
 // GetPrimaryKey is a convenience wrapper for Client
@@ -103,7 +102,7 @@ func (c *Client) ListRows(ctx context.Context, schema, table string, pkColumns [
 // ListAllRows returns all primary key values from a table without any limit.
 // Returns encoded PK strings (comma-delimited for composite PKs).
 // Used by .all/ paths to explicitly bypass dir_listing_limit restriction.
-func ListAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string) ([]string, error) {
+func ListAllRows(ctx context.Context, dbtx DBTX, schema, table string, pkColumns []string) ([]string, error) {
 	logging.Debug("Listing all rows (no limit)",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -114,7 +113,7 @@ func ListAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, 
 		pkSelectList(pkColumns), qt(schema, table), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	rows, err := pool.Query(ctx, query)
+	rows, err := dbtx.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list all rows: %w", err)
 	}

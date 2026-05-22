@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -23,7 +22,7 @@ import (
 //   - columns: Column names in database order
 //   - rows: Row values as [][]interface{}
 //   - error: Any database error
-func GetAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, limit int) ([]string, [][]interface{}, error) {
+func GetAllRows(ctx context.Context, dbtx DBTX, schema, table string, limit int) ([]string, [][]interface{}, error) {
 	logging.Debug("Getting all rows for export",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -34,7 +33,7 @@ func GetAllRows(ctx context.Context, pool *pgxpool.Pool, schema, table string, l
 		qt(schema, table),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
+	rows, err := dbtx.Query(ctx, query, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query rows: %w", err)
 	}
@@ -80,7 +79,7 @@ func (c *Client) GetAllRows(ctx context.Context, schema, table string, limit int
 // GetFirstNRowsWithData returns the first N rows ordered by primary key ascending.
 // Returns full row data, not just primary keys.
 // Used for bulk export with .first/N/ pagination.
-func GetFirstNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
+func GetFirstNRowsWithData(ctx context.Context, dbtx DBTX, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	logging.Debug("Getting first N rows with data",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -92,7 +91,7 @@ func GetFirstNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, tabl
 		qt(schema, table), pkOrderByList(pkColumns, "ASC"),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
+	rows, err := dbtx.Query(ctx, query, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query first N rows: %w", err)
 	}
@@ -138,7 +137,7 @@ func (c *Client) GetFirstNRowsWithData(ctx context.Context, schema, table string
 // GetLastNRowsWithData returns the last N rows ordered by primary key descending.
 // Returns full row data, not just primary keys.
 // Used for bulk export with .last/N/ pagination.
-func GetLastNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
+func GetLastNRowsWithData(ctx context.Context, dbtx DBTX, schema, table string, pkColumns []string, limit int) ([]string, [][]interface{}, error) {
 	logging.Debug("Getting last N rows with data",
 		zap.String("schema", schema),
 		zap.String("table", table),
@@ -150,7 +149,7 @@ func GetLastNRowsWithData(ctx context.Context, pool *pgxpool.Pool, schema, table
 		qt(schema, table), pkOrderByList(pkColumns, "DESC"),
 	)
 
-	rows, err := pool.Query(ctx, query, limit)
+	rows, err := dbtx.Query(ctx, query, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query last N rows: %w", err)
 	}
