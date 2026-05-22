@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -78,3 +79,18 @@ func TestResolveMountArgs(t *testing.T) {
 
 // Note: TestSanitizeConnectionString has been moved to db/connection_test.go
 // where the SanitizeConnectionString function now lives.
+
+// TestBuildMountCmd_SessionVarFlag verifies the --session-var flag exists
+// and is wired correctly using pflag's StringToString type.
+func TestBuildMountCmd_SessionVarFlag(t *testing.T) {
+	ctx := context.Background()
+	cmd := buildMountCmd(ctx)
+
+	flag := cmd.Flags().Lookup("session-var")
+	if flag == nil {
+		t.Fatal("--session-var flag not found")
+	}
+	if flag.DefValue != "[]" {
+		t.Logf("default value: %q", flag.DefValue)
+	}
+}

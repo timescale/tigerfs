@@ -68,6 +68,9 @@ type Config struct {
 	DefaultFormat  string `mapstructure:"default_format"`
 	BinaryEncoding string `mapstructure:"binary_encoding"`
 
+	// Session Variables
+	SessionVariables map[string]string `mapstructure:"session_variables"` // Applied via SET LOCAL to every query (e.g. {"app.user_id": "42"})
+
 	// Identity
 	UserID string `mapstructure:"user_id"` // Mount-level user identity for log entries (--user-id or TIGERFS_USER_ID)
 

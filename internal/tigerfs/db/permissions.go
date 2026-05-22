@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -53,12 +52,12 @@ func (p *TablePermissions) HasAnyPermission() bool {
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection or transaction
 //   - schema: PostgreSQL schema name
 //   - table: Table name to check permissions for
 //
 // Returns the permissions struct, or error on database failure.
-func GetTablePermissions(ctx context.Context, pool *pgxpool.Pool, schema, table string) (*TablePermissions, error) {
+func GetTablePermissions(ctx context.Context, dbtx DBTX, schema, table string) (*TablePermissions, error) {
 	logging.Debug("Getting table permissions",
 		zap.String("schema", schema),
 		zap.String("table", table))
@@ -77,7 +76,7 @@ func GetTablePermissions(ctx context.Context, pool *pgxpool.Pool, schema, table 
 	`
 
 	var perms TablePermissions
-	err := pool.QueryRow(ctx, query, qualifiedName).Scan(
+	err := dbtx.QueryRow(ctx, query, qualifiedName).Scan(
 		&perms.CanSelect,
 		&perms.CanInsert,
 		&perms.CanUpdate,
@@ -107,11 +106,13 @@ func GetTablePermissions(ctx context.Context, pool *pgxpool.Pool, schema, table 
 //
 // Returns the permissions struct, or error if the database connection
 // is not initialized or the query fails.
-func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) (*TablePermissions, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) (result *TablePermissions, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetTablePermissions(ctx, c.pool, schema, table)
+	defer func() { done(retErr) }()
+	return GetTablePermissions(ctx, q, schema, table)
 }
 
 // GetTablePermissionsBatch queries PostgreSQL to determine privileges
@@ -120,12 +121,12 @@ func (c *Client) GetTablePermissions(ctx context.Context, schema, table string) 
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - pool: PostgreSQL connection pool
+//   - dbtx: Database connection or transaction
 //   - schema: PostgreSQL schema name
 //   - tables: Table names to check permissions for
 //
 // Returns a map of table name to permissions, or error on database failure.
-func GetTablePermissionsBatch(ctx context.Context, pool *pgxpool.Pool, schema string, tables []string) (map[string]*TablePermissions, error) {
+func GetTablePermissionsBatch(ctx context.Context, dbtx DBTX, schema string, tables []string) (map[string]*TablePermissions, error) {
 	if len(tables) == 0 {
 		return make(map[string]*TablePermissions), nil
 	}
@@ -143,7 +144,7 @@ func GetTablePermissionsBatch(ctx context.Context, pool *pgxpool.Pool, schema st
 		FROM unnest($2::text[]) AS t(table_name)
 	`
 
-	rows, err := pool.Query(ctx, query, schema, tables)
+	rows, err := dbtx.Query(ctx, query, schema, tables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get batch table permissions: %w", err)
 	}
@@ -171,9 +172,11 @@ func GetTablePermissionsBatch(ctx context.Context, pool *pgxpool.Pool, schema st
 }
 
 // GetTablePermissionsBatch is a convenience wrapper for Client.
-func (c *Client) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (map[string]*TablePermissions, error) {
-	if c.pool == nil {
-		return nil, fmt.Errorf("database connection not initialized")
+func (c *Client) GetTablePermissionsBatch(ctx context.Context, schema string, tables []string) (result map[string]*TablePermissions, retErr error) {
+	q, done, err := c.acquireDBTX(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return GetTablePermissionsBatch(ctx, c.pool, schema, tables)
+	defer func() { done(retErr) }()
+	return GetTablePermissionsBatch(ctx, q, schema, tables)
 }

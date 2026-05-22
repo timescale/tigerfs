@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
 )
@@ -19,14 +18,14 @@ type Constraint struct {
 
 // ValidateConstraints validates column values against table constraints
 // Returns an error if any constraints would be violated
-func ValidateConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table string, values map[string]interface{}) error {
+func ValidateConstraints(ctx context.Context, dbtx DBTX, schema, table string, values map[string]interface{}) error {
 	logging.Debug("Validating constraints",
 		zap.String("schema", schema),
 		zap.String("table", table),
 		zap.Int("column_count", len(values)))
 
 	// Get all columns for the table to check NOT NULL constraints
-	columns, err := getColumnsForConstraintCheck(ctx, pool, schema, table)
+	columns, err := getColumnsForConstraintCheck(ctx, dbtx, schema, table)
 	if err != nil {
 		return fmt.Errorf("failed to get columns: %w", err)
 	}
@@ -48,7 +47,7 @@ func ValidateConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table 
 
 	// Check UNIQUE constraints
 	// For each column being updated, check if it has a unique constraint
-	uniqueConstraints, err := getUniqueConstraints(ctx, pool, schema, table)
+	uniqueConstraints, err := getUniqueConstraints(ctx, dbtx, schema, table)
 	if err != nil {
 		return fmt.Errorf("failed to get unique constraints: %w", err)
 	}
@@ -58,7 +57,7 @@ func ValidateConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table 
 		for _, colName := range constraint.Columns {
 			if value, ok := values[colName]; ok {
 				// This column is being updated, check for duplicates
-				if err := checkUniqueConstraint(ctx, pool, schema, table, colName, value); err != nil {
+				if err := checkUniqueConstraint(ctx, dbtx, schema, table, colName, value); err != nil {
 					logging.Debug("UNIQUE constraint violation",
 						zap.String("schema", schema),
 						zap.String("table", table),
@@ -81,7 +80,7 @@ func ValidateConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table 
 }
 
 // getColumnsForConstraintCheck queries column metadata for constraint checking
-func getColumnsForConstraintCheck(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Column, error) {
+func getColumnsForConstraintCheck(ctx context.Context, dbtx DBTX, schema, table string) ([]Column, error) {
 	query := `
 		SELECT
 			column_name,
@@ -93,7 +92,7 @@ func getColumnsForConstraintCheck(ctx context.Context, pool *pgxpool.Pool, schem
 		ORDER BY ordinal_position
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query columns: %w", err)
 	}
@@ -126,7 +125,7 @@ func getColumnsForConstraintCheck(ctx context.Context, pool *pgxpool.Pool, schem
 }
 
 // getUniqueConstraints retrieves UNIQUE constraints for a table
-func getUniqueConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Constraint, error) {
+func getUniqueConstraints(ctx context.Context, dbtx DBTX, schema, table string) ([]Constraint, error) {
 	query := `
 		SELECT
 			tc.constraint_name,
@@ -142,7 +141,7 @@ func getUniqueConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table
 		GROUP BY tc.constraint_name
 	`
 
-	rows, err := pool.Query(ctx, query, schema, table)
+	rows, err := dbtx.Query(ctx, query, schema, table)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unique constraints: %w", err)
 	}
@@ -169,7 +168,7 @@ func getUniqueConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table
 }
 
 // checkUniqueConstraint checks if a value violates a unique constraint
-func checkUniqueConstraint(ctx context.Context, pool *pgxpool.Pool, schema, table, column string, value interface{}) error {
+func checkUniqueConstraint(ctx context.Context, dbtx DBTX, schema, table, column string, value interface{}) error {
 	// Check if this value already exists in the table
 	query := fmt.Sprintf(`
 		SELECT EXISTS(
@@ -178,7 +177,7 @@ func checkUniqueConstraint(ctx context.Context, pool *pgxpool.Pool, schema, tabl
 	`, qt(schema, table), qi(column))
 
 	var exists bool
-	err := pool.QueryRow(ctx, query, value).Scan(&exists)
+	err := dbtx.QueryRow(ctx, query, value).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("failed to check unique constraint: %w", err)
 	}
