@@ -69,10 +69,18 @@ func (n *OpsNode) childPath(name string) string {
 	return n.path + "/" + name
 }
 
-// Getattr returns file/directory attributes by delegating to FSAdapter.Stat.
+// Getattr returns file/directory attributes by delegating to Operations.Stat.
+//
+// Bypasses FSAdapter.Stat and calls ops.Stat directly, so we apply the same
+// request-context decoupling FSAdapter.Stat does: FUSE_INTERRUPT from
+// SIGURG-driven Go goroutine preemption otherwise propagates into pgx as
+// context.Canceled, which surfaces as ENOENT via resolveSynthPath ->
+// setNegative (caching a transient cancellation as a stale negative entry
+// in statCache, blocking reads for the full 2s TTL).
 func (n *OpsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	logging.Debug("OpsNode.Getattr", zap.String("path", n.path))
 
+	ctx = decoupleFromRequestCancel(ctx)
 	entry, fsErr := n.adapter.ops.Stat(ctx, n.path)
 	if fsErr != nil {
 		return n.adapter.ErrorToErrno(fsErr)
@@ -128,10 +136,14 @@ func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 }
 
 // Lookup finds a child entry by name.
+//
+// Bypasses FSAdapter.Stat and calls ops.Stat directly, so we apply the same
+// request-context decoupling -- see Getattr for the FUSE_INTERRUPT story.
 func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	childPath := n.childPath(name)
 	logging.Debug("OpsNode.Lookup", zap.String("path", childPath))
 
+	ctx = decoupleFromRequestCancel(ctx)
 	entry, fsErr := n.adapter.ops.Stat(ctx, childPath)
 	if fsErr != nil {
 		errno := n.adapter.ErrorToErrno(fsErr)
@@ -163,8 +175,12 @@ func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 }
 
 // Readlink returns the target of a symlink.
+//
+// Bypasses FSAdapter and calls ops.Readlink directly, so we apply the same
+// request-context decoupling -- see Getattr for the FUSE_INTERRUPT story.
 func (n *OpsNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 	logging.Debug("OpsNode.Readlink", zap.String("path", n.path))
+	ctx = decoupleFromRequestCancel(ctx)
 	target, fsErr := n.adapter.ops.Readlink(ctx, n.path)
 	if fsErr != nil {
 		return nil, n.adapter.ErrorToErrno(fsErr)
