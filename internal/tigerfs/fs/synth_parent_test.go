@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -183,8 +184,14 @@ func TestSynth_ResolveSynthRow_NotFound(t *testing.T) {
 }
 
 func TestSynth_ResolveSynthRow_DBError(t *testing.T) {
+	// A real DB error from db.ResolvePath should surface as ErrIO with the
+	// cause preserved -- not as ErrNotExist (the old swallowing behavior
+	// caused setNegative to poison statCache with false-negatives on
+	// transient cancellations; see commit 1178aa4 and the resolveSynthPath
+	// error-propagation fix).
+	dbErr := fmt.Errorf("connection refused")
 	mockDB := &mockDBClient{
-		resolvePathErr: fmt.Errorf("connection refused"),
+		resolvePathErr: dbErr,
 	}
 
 	cfg := &config.Config{DirListingLimit: 1000}
@@ -197,7 +204,8 @@ func TestSynth_ResolveSynthRow_DBError(t *testing.T) {
 
 	_, _, _, fsErr := ops.resolveSynthRow(ctx, "public", "notes", info, "file.md")
 	require.NotNil(t, fsErr)
-	assert.Equal(t, ErrNotExist, fsErr.Code)
+	assert.Equal(t, ErrIO, fsErr.Code)
+	require.True(t, errors.Is(fsErr.Cause, dbErr), "Cause chain should preserve the original DB error")
 }
 
 // --- Parent-pointer write operation tests ---

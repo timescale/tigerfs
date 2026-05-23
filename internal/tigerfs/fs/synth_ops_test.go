@@ -610,13 +610,13 @@ func TestSynth_ResolvePath_FullCacheMiss(t *testing.T) {
 	ops := NewOperations(cfg, mockDB)
 	ctx := context.Background()
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-todo", id)
 	assert.Equal(t, 1, mockDB.resolvePathCalls, "should call DB once")
 
 	// Cache should now be populated -- second call should not hit DB
-	id, ok = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	id, ok, _ = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-todo", id)
 	assert.Equal(t, 1, mockDB.resolvePathCalls, "should still be 1 DB call (cache hit)")
@@ -639,7 +639,7 @@ func TestSynth_ResolvePath_PartialCacheHit(t *testing.T) {
 	ops.pathCache.put("public", "notes", "", "projects", "uuid-proj")
 	ops.pathCache.put("public", "notes", "uuid-proj", "web", "uuid-web")
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-notes", id)
 	assert.Equal(t, 1, mockDB.resolvePathCalls)
@@ -663,7 +663,7 @@ func TestSynth_ResolvePath_NonexistentPath(t *testing.T) {
 	ops := NewOperations(cfg, mockDB)
 	ctx := context.Background()
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "nonexistent", "file.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "nonexistent", "file.md"})
 	assert.False(t, ok)
 	assert.Empty(t, id)
 }
@@ -674,7 +674,7 @@ func TestSynth_ResolvePath_EmptySegments(t *testing.T) {
 	ops := NewOperations(cfg, &mockDBClient{})
 	ctx := context.Background()
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{})
 	assert.True(t, ok)
 	assert.Empty(t, id)
 }
@@ -691,7 +691,7 @@ func TestSynth_ResolvePath_SingleSegment(t *testing.T) {
 	ops := NewOperations(cfg, mockDB)
 	ctx := context.Background()
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"hello.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{"hello.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-file", id)
 	assert.Equal(t, "", mockDB.lastResolveStartParent, "root-level should pass empty start parent")
@@ -739,7 +739,7 @@ func TestSynth_ResolvePath_DeeplyNested(t *testing.T) {
 	ops := NewOperations(cfg, mockDB)
 	ctx := context.Background()
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "app", []string{"a", "b", "c", "d", "file.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "app", []string{"a", "b", "c", "d", "file.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-file", id)
 
@@ -782,7 +782,7 @@ func TestSynth_ResolvePath_SiblingAccess(t *testing.T) {
 	ctx := context.Background()
 
 	// First access: resolve full path (cold cache)
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "todo.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-todo", id)
 	assert.Equal(t, 1, mockDB.resolvePathCalls)
@@ -793,7 +793,7 @@ func TestSynth_ResolvePath_SiblingAccess(t *testing.T) {
 	}
 
 	// Second access: sibling file in same directory
-	id, ok = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
+	id, ok, _ = ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "web", "notes.md"})
 	assert.True(t, ok)
 	assert.Equal(t, "uuid-notes", id)
 	assert.Equal(t, 2, mockDB.resolvePathCalls)
@@ -816,7 +816,7 @@ func TestSynth_ResolvePath_DBError(t *testing.T) {
 	ops := NewOperations(cfg, mockDB)
 	ctx := context.Background()
 
-	id, ok := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "file.md"})
+	id, ok, _ := ops.resolveSynthPath(ctx, "public", "notes", []string{"projects", "file.md"})
 	assert.False(t, ok)
 	assert.Empty(t, id)
 }

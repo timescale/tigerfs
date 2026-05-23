@@ -100,7 +100,11 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 				// Resolve directory path in the LIVE table to get its UUID
 				segments := strings.Split(dirPrefix, "/")
 				var ok bool
-				parentID, ok = o.resolveSynthPath(ctx, cacheSchema, parsed.Context.TableName, segments)
+				var resolveErr error
+				parentID, ok, resolveErr = o.resolveSynthPath(ctx, cacheSchema, parsed.Context.TableName, segments)
+				if resolveErr != nil {
+					return nil, &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve directory: %s", dirPrefix), Cause: resolveErr}
+				}
 				if !ok {
 					return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", dirPrefix)}
 				}
