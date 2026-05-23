@@ -438,7 +438,11 @@ func (o *Operations) fetchSynthRowByPath(ctx context.Context, schema, table stri
 	var parentID string
 	if len(parentSegments) > 0 {
 		var ok bool
-		parentID, ok = o.resolveSynthPath(ctx, schema, table, parentSegments)
+		var resolveErr error
+		parentID, ok, resolveErr = o.resolveSynthPath(ctx, schema, table, parentSegments)
+		if resolveErr != nil {
+			return nil, nil, &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve directory: %s", strings.Join(parentSegments, "/")), Cause: resolveErr}
+		}
 		if !ok {
 			return nil, nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", strings.Join(parentSegments, "/"))}
 		}
@@ -460,7 +464,10 @@ func (o *Operations) fetchSynthRowByPath(ctx context.Context, schema, table stri
 // For parent-pointer model only. Returns (columns, row, pkValue, error).
 func (o *Operations) resolveSynthRow(ctx context.Context, schema, table string, info *synth.ViewInfo, fullPath string) ([]string, []interface{}, string, *FSError) {
 	parts := strings.Split(fullPath, "/")
-	fileID, ok := o.resolveSynthPath(ctx, schema, table, parts)
+	fileID, ok, err := o.resolveSynthPath(ctx, schema, table, parts)
+	if err != nil {
+		return nil, nil, "", &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve path: %s", fullPath), Cause: err}
+	}
 	if !ok {
 		return nil, nil, "", &FSError{Code: ErrNotExist, Message: fmt.Sprintf("file not found: %s", fullPath)}
 	}
@@ -723,11 +730,17 @@ func (o *Operations) now() time.Time {
 // On the first cache miss, calls resolve_path with the remaining segments
 // starting from the last cached parent. Populates the cache from the results.
 //
-// Returns the final row ID and true if the full path resolved, or empty string
-// and false if any segment didn't resolve (path doesn't exist).
-func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string, segments []string) (string, bool) {
+// Returns:
+//   - (id, true, nil) when the full path resolved.
+//   - ("", false, nil) when the path genuinely doesn't exist (DB returned
+//     fewer rows than segments).
+//   - ("", false, err) when the DB call itself failed (e.g. context
+//     cancelled, connection error). The error is wrapped so callers can
+//     surface it as ErrIO with a Cause, rather than swallowing it as
+//     ErrNotExist (which would poison statCache via setNegative).
+func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string, segments []string) (string, bool, error) {
 	if len(segments) == 0 {
-		return "", true // root level — no ID, but "exists"
+		return "", true, nil // root level — no ID, but "exists"
 	}
 
 	// Walk segments, checking cache at each level
@@ -744,7 +757,7 @@ func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string,
 
 	// All segments resolved from cache
 	if cacheHits == len(segments) {
-		return parentID, true
+		return parentID, true, nil
 	}
 
 	// Call DB for remaining segments
@@ -755,7 +768,7 @@ func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string,
 			zap.String("table", table),
 			zap.Strings("segments", remaining),
 			zap.Error(err))
-		return "", false
+		return "", false, fmt.Errorf("resolve_path: %w", err)
 	}
 
 	// Populate cache from results
@@ -767,10 +780,10 @@ func (o *Operations) resolveSynthPath(ctx context.Context, schema, table string,
 
 	// Check if all remaining segments resolved
 	if len(results) < len(remaining) {
-		return "", false
+		return "", false, nil
 	}
 
-	return results[len(results)-1].ID, true
+	return results[len(results)-1].ID, true, nil
 }
 
 // writeSynthFile handles writes to synthesized view files (create or update).
@@ -824,8 +837,14 @@ func (o *Operations) writeSynthFile(ctx context.Context, parsed *ParsedPath, inf
 		leafName := parts[len(parts)-1]
 		colValues[info.Roles.Filename] = leafName
 
-		// Check if file exists by resolving full path
-		fileID, fileExists := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, parts)
+		// Check if file exists by resolving full path. A real DB error here
+		// (e.g. context cancelled) must NOT be silently treated as "file
+		// doesn't exist" — that'd flip us into the wrong branch (insert
+		// instead of update, or vice versa) and corrupt state.
+		fileID, fileExists, resolveErr := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, parts)
+		if resolveErr != nil {
+			return &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve path: %s", filename), Cause: resolveErr}
+		}
 
 		// Build columns/values slices
 		columns := make([]string, 0, len(colValues))
@@ -1248,7 +1267,11 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 			if newParentPath != "" {
 				newParentSegs := strings.Split(newParentPath, "/")
 				var ok bool
-				newParentID, ok = o.resolveSynthPath(ctx, schema, table, newParentSegs)
+				var resolveErr error
+				newParentID, ok, resolveErr = o.resolveSynthPath(ctx, schema, table, newParentSegs)
+				if resolveErr != nil {
+					return &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve target directory: %s", newParentPath), Cause: resolveErr}
+				}
 				if !ok {
 					return &FSError{Code: ErrNotExist, Message: fmt.Sprintf("target directory not found: %s", newParentPath)}
 				}
@@ -1263,7 +1286,10 @@ func (o *Operations) renameSynthFile(ctx context.Context, schema, table string, 
 
 		// Check if target file already exists (POSIX rename-as-replace).
 		// If it does, atomically delete the target and rename the source.
-		targetFileID, targetExists := o.resolveSynthPath(ctx, schema, table, newParts)
+		targetFileID, targetExists, resolveErr := o.resolveSynthPath(ctx, schema, table, newParts)
+		if resolveErr != nil {
+			return &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve target path: %s", newFilename), Cause: resolveErr}
+		}
 		if targetExists && targetFileID != fileID {
 			err := o.db.DeleteAndUpdate(ctx, schema, table,
 				db.SinglePKMatch(info.Roles.PrimaryKey, targetFileID),
@@ -1358,7 +1384,10 @@ func (o *Operations) readDirSynthHierarchical(ctx context.Context, parsed *Parse
 	// Parent-pointer model (ADR-017): resolve directory path, then query children
 	if info.Roles.ParentID != "" {
 		segments := strings.Split(prefix, "/")
-		parentID, ok := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, segments)
+		parentID, ok, resolveErr := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, segments)
+		if resolveErr != nil {
+			return nil, &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve directory: %s", prefix), Cause: resolveErr}
+		}
 		if !ok {
 			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", prefix)}
 		}
@@ -1540,7 +1569,9 @@ func (o *Operations) mkdirSynth(ctx context.Context, parsed *ParsedPath, info *s
 		leafName := parts[len(parts)-1]
 
 		// Check if directory already exists by resolving full path
-		if _, ok := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, parts); ok {
+		if _, ok, resolveErr := o.resolveSynthPath(ctx, fsCtx.Schema, fsCtx.TableName, parts); resolveErr != nil {
+			return &FSError{Code: ErrIO, Message: fmt.Sprintf("failed to resolve directory: %s", dirPath), Cause: resolveErr}
+		} else if ok {
 			return &FSError{Code: ErrExists, Message: "directory already exists"}
 		}
 
@@ -1621,7 +1652,14 @@ func (o *Operations) resolveSynthParentID(ctx context.Context, schema, table str
 	// Parent-pointer model (ADR-017): walk segments, return last UUID.
 	if info.Roles.ParentID != "" {
 		parentSegments := parts[:len(parts)-1]
-		parentID, ok := o.resolveSynthPath(ctx, schema, table, parentSegments)
+		parentID, ok, resolveErr := o.resolveSynthPath(ctx, schema, table, parentSegments)
+		if resolveErr != nil {
+			return "", &FSError{
+				Code:    ErrIO,
+				Message: fmt.Sprintf("failed to resolve parent directory: %s", strings.Join(parentSegments, "/")),
+				Cause:   resolveErr,
+			}
+		}
 		if !ok {
 			return "", &FSError{
 				Code:    ErrNotExist,
