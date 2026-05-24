@@ -21,16 +21,21 @@ func GetPrimaryKey(ctx context.Context, pool *pgxpool.Pool, schema, table string
 		zap.String("schema", schema),
 		zap.String("table", table))
 
+	// Use pg_constraint rather than information_schema.table_constraints:
+	// the SQL spec requires the latter to filter rows to tables on which the
+	// current role holds a non-SELECT privilege, so SELECT-only roles see
+	// zero PK rows and pipeline navigation (.first/N, .last/N, .by/<pk>, etc.)
+	// silently goes empty. pg_constraint is publicly readable.
 	query := `
-		SELECT kcu.column_name
-		FROM information_schema.table_constraints tc
-		JOIN information_schema.key_column_usage kcu
-		  ON tc.constraint_name = kcu.constraint_name
-		  AND tc.table_schema = kcu.table_schema
-		WHERE tc.table_schema = $1
-		  AND tc.table_name = $2
-		  AND tc.constraint_type = 'PRIMARY KEY'
-		ORDER BY kcu.ordinal_position
+		SELECT a.attname
+		FROM pg_constraint c
+		JOIN pg_class cls       ON cls.oid = c.conrelid
+		JOIN pg_namespace nsp   ON nsp.oid = cls.relnamespace
+		JOIN pg_attribute a     ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+		WHERE nsp.nspname = $1
+		  AND cls.relname = $2
+		  AND c.contype   = 'p'
+		ORDER BY array_position(c.conkey, a.attnum)
 	`
 
 	rows, err := pool.Query(ctx, query, schema, table)

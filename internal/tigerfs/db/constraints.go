@@ -127,19 +127,21 @@ func getColumnsForConstraintCheck(ctx context.Context, pool *pgxpool.Pool, schem
 
 // getUniqueConstraints retrieves UNIQUE constraints for a table
 func getUniqueConstraints(ctx context.Context, pool *pgxpool.Pool, schema, table string) ([]Constraint, error) {
+	// Use pg_constraint rather than information_schema.table_constraints: see
+	// GetPrimaryKey in keys.go for rationale (SELECT-only roles see zero rows
+	// in the SQL-standard view).
 	query := `
 		SELECT
-			tc.constraint_name,
-			array_agg(kcu.column_name ORDER BY kcu.ordinal_position) as columns
-		FROM information_schema.table_constraints tc
-		JOIN information_schema.key_column_usage kcu
-			ON tc.constraint_name = kcu.constraint_name
-			AND tc.table_schema = kcu.table_schema
-			AND tc.table_name = kcu.table_name
-		WHERE tc.constraint_type IN ('UNIQUE', 'PRIMARY KEY')
-			AND tc.table_schema = $1
-			AND tc.table_name = $2
-		GROUP BY tc.constraint_name
+			c.conname,
+			array_agg(a.attname ORDER BY array_position(c.conkey, a.attnum)) AS columns
+		FROM pg_constraint c
+		JOIN pg_class cls       ON cls.oid = c.conrelid
+		JOIN pg_namespace nsp   ON nsp.oid = cls.relnamespace
+		JOIN pg_attribute a     ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+		WHERE nsp.nspname = $1
+		  AND cls.relname = $2
+		  AND c.contype   IN ('p', 'u')
+		GROUP BY c.conname
 	`
 
 	rows, err := pool.Query(ctx, query, schema, table)
