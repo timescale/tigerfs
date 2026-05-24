@@ -14,6 +14,22 @@ func resetViper() {
 	viper.Reset()
 }
 
+// unsetPostgreSQLEnvVars unsets PGHOST/PGPORT/PGUSER/PGDATABASE/PGPASSWORD for
+// the duration of the test and restores their original values on test cleanup.
+// Use in tests that assert behavior under the default (unset) configuration:
+// viper.BindEnv binds these to the corresponding config keys, so a developer
+// with them exported in their shell sees spurious failures otherwise.
+func unsetPostgreSQLEnvVars(t *testing.T) {
+	t.Helper()
+	vars := []string{"PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD"}
+	for _, v := range vars {
+		if orig, present := os.LookupEnv(v); present {
+			t.Cleanup(func() { _ = os.Setenv(v, orig) })
+		}
+		_ = os.Unsetenv(v)
+	}
+}
+
 // TestGetDefaultConfigDir_XDGConfigHome tests XDG_CONFIG_HOME takes precedence
 func TestGetDefaultConfigDir_XDGConfigHome(t *testing.T) {
 	// Save original env
@@ -91,6 +107,7 @@ func TestGetDefaultConfigDir_HomeDir(t *testing.T) {
 
 // TestInit_SetsDefaults tests that Init sets all default values
 func TestInit_SetsDefaults(t *testing.T) {
+	unsetPostgreSQLEnvVars(t)
 	resetViper()
 
 	err := Init()
@@ -489,6 +506,7 @@ func TestConfig_EmptyEnvVars(t *testing.T) {
 
 // TestConfig_ConnectionFields tests all connection-related fields
 func TestConfig_ConnectionFields(t *testing.T) {
+	unsetPostgreSQLEnvVars(t)
 	resetViper()
 
 	err := Init()
