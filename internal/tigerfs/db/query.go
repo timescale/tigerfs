@@ -1237,6 +1237,27 @@ func (c *Client) HasExtension(ctx context.Context, extName string) (bool, error)
 	return exists, nil
 }
 
+// WarnIfTimescaleDBMissing logs a warning when the TimescaleDB extension is
+// absent. Called once at mount-time so users get a heads-up that history
+// features will be unavailable before they discover this by trying to
+// `.build/<app>` with `,history` (which would return a clean errno but be
+// surprising on first use).
+//
+// Non-blocking: vanilla PostgreSQL is supported for non-history workspaces.
+// Probe errors (transient DB failure) are logged at Debug -- callers should
+// not gate startup on this check.
+func (c *Client) WarnIfTimescaleDBMissing(ctx context.Context) {
+	hasTS, err := c.HasExtension(ctx, "timescaledb")
+	if err != nil {
+		// Don't fail mount over a transient probe error; just log.
+		return
+	}
+	if !hasTS {
+		logging.Warn("TimescaleDB extension not detected; history features unavailable",
+			zap.String("hint", "history (.history/, .log/, .savepoint/, .undo/) requires TimescaleDB. Run `CREATE EXTENSION timescaledb;` or use a TimescaleDB-enabled PostgreSQL image."))
+	}
+}
+
 // TableExists checks if a table exists in the given schema.
 func (c *Client) TableExists(ctx context.Context, schema, table string) (bool, error) {
 	var exists bool

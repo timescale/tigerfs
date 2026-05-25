@@ -1114,6 +1114,9 @@ type mockDBClient struct {
 	metadataCalls   int                // count of QueryMetadata invocations
 	metadataInserts []db.MetadataEntry // recorded for verification
 
+	// Extension probe tracking
+	hasExtensions map[string]bool // extName -> exists; nil = HasExtension always returns false
+
 	// ResolvePath tracking
 	resolvePathResults     []db.PathSegment
 	resolvePathErr         error
@@ -1708,6 +1711,9 @@ func (m *mockDBClient) InsertIfNotExists(ctx context.Context, schema, table stri
 // Implement db.HistoryReader
 
 func (m *mockDBClient) HasExtension(ctx context.Context, extName string) (bool, error) {
+	if m.hasExtensions != nil {
+		return m.hasExtensions[extName], nil
+	}
 	return false, nil
 }
 
