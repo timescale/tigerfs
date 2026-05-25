@@ -40,6 +40,7 @@ func MountOps(ctx context.Context, cfg *config.Config, connStr, mountpoint strin
 	}
 
 	logging.Info("Database connection established")
+	dbClient.WarnIfTimescaleDBMissing(ctx)
 
 	// 2. Create shared Operations core (same as NFS uses)
 	ops := tigerfs.NewOperations(cfg, dbClient)

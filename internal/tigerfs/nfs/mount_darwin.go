@@ -49,6 +49,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	}
 
 	logging.Info("Database connection established")
+	dbClient.WarnIfTimescaleDBMissing(ctx)
 
 	// Create NFS server
 	server, err := NewServer(ctx, cfg, dbClient, absMountpoint)

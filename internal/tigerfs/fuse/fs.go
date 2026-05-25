@@ -40,6 +40,7 @@ func Mount(ctx context.Context, cfg *config.Config, connStr, mountpoint string) 
 	}
 
 	logging.Info("Database connection established")
+	dbClient.WarnIfTimescaleDBMissing(ctx)
 
 	// 2. Create partial row tracker
 	partialRows := NewPartialRowTracker(dbClient)
