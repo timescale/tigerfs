@@ -58,4 +58,4 @@ jobs:
         uses: codecov/codecov-action@v6
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         with:
-          file: ./coverage.txt
+          files: ./coverage.txt
