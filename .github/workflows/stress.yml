@@ -1,0 +1,74 @@
+name: Stress (FUSE 200 iter)
+
+# Why this exists: catches regressions in the FUSE / fs / db / migration
+# surfaces that unit and integration tests don't exercise as end-to-end
+# sequences of operations. See test/stress/README.md for details.
+#
+# Triggers:
+#   - pull_request (path-filtered): PRs touching relevant code paths.
+#     Docs-only / unrelated PRs skip the workflow entirely.
+#   - schedule (weekly): catches anything that slipped through the
+#     path filter (e.g. an indirect change in a non-listed package).
+#   - workflow_dispatch: manual ad-hoc runs, configurable iteration count.
+
+on:
+  pull_request:
+    paths:
+      - 'internal/tigerfs/fs/**'
+      - 'internal/tigerfs/db/**'
+      - 'internal/tigerfs/fuse/**'
+      - 'internal/tigerfs/cmd/migrate.go'
+      - 'test/stress/**'
+      - 'scripts/stress-docker.sh'
+      - '.github/workflows/stress.yml'
+  schedule:
+    - cron: '17 6 * * 1'  # Mondays at 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Stress iterations'
+        required: false
+        default: '200'
+        type: string
+
+# Cancel in-flight PR runs on a new commit. Schedule and manual runs
+# are never cancelled.
+concurrency:
+  group: stress-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  stress-fuse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run FUSE stress
+        # PR-triggered runs use 200 iterations (~3-5 min) to keep PR latency
+        # low. The weekly scheduled run bumps to 1000 (~5-10 min) for broader
+        # coverage of long-sequence regressions. Manual workflow_dispatch
+        # accepts an explicit override.
+        run: |
+          ITERATIONS="${{ inputs.iterations || (github.event_name == 'schedule' && '1000') || '200' }}"
+          ./scripts/stress-docker.sh \
+            --iterations "$ITERATIONS" \
+            --validate-every 1 \
+            --large-files \
+            --many-files
+
+      - name: Upload failure dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-dumps-${{ github.run_id }}
+          path: test/stress/docker/host-out/
+          if-no-files-found: ignore
+          retention-days: 7
