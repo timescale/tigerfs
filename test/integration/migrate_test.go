@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/timescale/tigerfs/internal/tigerfs/cmd"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
 // TestSynth_MigrateDetectAndExecute tests the full tigerfs migrate command flow:
@@ -365,7 +367,11 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 		`INSERT INTO tigerfs."mig_pp" (filename, filetype, title, body) VALUES ('docs/install.md', 'file', 'Install Guide', '# Install')`,
 		`INSERT INTO tigerfs."mig_pp" (filename, filetype, title, body) VALUES ('docs/guides/quickstart.md', 'file', 'Quickstart', '# Quick')`,
 
-		// History table: old column names (id, _history_id, _operation)
+		// History table: old column names (id, _history_id, _operation).
+		// _history_id defaults to uuidv7() to match real 0.6 (see commit
+		// d3d77be / Task 12.3 -- the log/history hypertable schema has used
+		// uuidv7() defaults from day one). encoding column carries 'utf8'
+		// to match what the trigger would have captured from the source.
 		`CREATE TABLE tigerfs."mig_pp_history" (
 			id UUID,
 			filename TEXT NOT NULL,
@@ -377,21 +383,22 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 			encoding TEXT,
 			created_at TIMESTAMPTZ,
 			modified_at TIMESTAMPTZ,
-			_history_id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+			_history_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
 			_operation TEXT NOT NULL
 		)`,
 
 		// Insert some history entries (simulating past edits)
-		`INSERT INTO tigerfs."mig_pp_history" (id, filename, filetype, title, body, _operation)
-		 SELECT id, filename, filetype, 'Old Title', '# Old', 'UPDATE'
+		`INSERT INTO tigerfs."mig_pp_history" (id, filename, filetype, title, body, encoding, _operation)
+		 SELECT id, filename, filetype, 'Old Title', '# Old', 'utf8', 'UPDATE'
 		 FROM tigerfs."mig_pp" WHERE filename = 'readme.md' AND filetype = 'file'`,
-		`INSERT INTO tigerfs."mig_pp_history" (id, filename, filetype, title, body, _operation)
-		 SELECT id, filename, filetype, 'Old Install', '# Old Install', 'UPDATE'
+		`INSERT INTO tigerfs."mig_pp_history" (id, filename, filetype, title, body, encoding, _operation)
+		 SELECT id, filename, filetype, 'Old Install', '# Old Install', 'utf8', 'UPDATE'
 		 FROM tigerfs."mig_pp" WHERE filename = 'docs/install.md' AND filetype = 'file'`,
 
-		// Log table: old column names (history_id) and old type values (insert, update)
+		// Log table: old column names (history_id) and old type values
+		// (insert, update). log_id defaults to uuidv7() to match real 0.6.
 		fmt.Sprintf(`CREATE TABLE tigerfs."mig_pp_log" (
-			log_id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+			log_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
 			user_id TEXT,
 			type TEXT NOT NULL CHECK (type IN ('insert', 'update', 'delete', 'undo')),
 			file_id UUID NOT NULL,
@@ -399,6 +406,15 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 			history_id UUID,
 			description TEXT
 		)`),
+
+		// Savepoint table sits alongside log and history in a
+		// history-enabled workspace.
+		`CREATE TABLE tigerfs."mig_pp_savepoint" (
+			name TEXT NOT NULL PRIMARY KEY,
+			savepoint_id UUID NOT NULL DEFAULT uuidv7() UNIQUE,
+			user_id TEXT,
+			description TEXT
+		)`,
 
 		// Insert log entries with old type names
 		`INSERT INTO tigerfs."mig_pp_log" (file_id, type, filename)
@@ -557,6 +573,9 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 	require.Nil(t, fsErr)
 	assert.Contains(t, fsEntryNames(entries), "new-file.md")
 
+	// --- Step 7.5: Undo boundary (metadata row + block/allow semantics) ---
+	verifyMigrationUndoBoundary(t, ctx, pool, result.ConnStr, schema, "mig_pp")
+
 	// --- Step 8: Idempotency ---
 	idempCmd := cmd.BuildMigrateCmd()
 	var idempBuf bytes.Buffer
@@ -566,6 +585,20 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 	err = idempCmd.Execute()
 	require.NoError(t, err)
 	assert.Contains(t, idempBuf.String(), "No pending migrations", "should be idempotent")
+
+	// Re-running the migrate command must not duplicate the metadata row.
+	reRunCmd := cmd.BuildMigrateCmd()
+	var reRunBuf bytes.Buffer
+	reRunCmd.SetOut(&reRunBuf)
+	reRunCmd.SetErr(&reRunBuf)
+	reRunCmd.SetArgs([]string{result.ConnStr, "--insecure-no-ssl"})
+	_ = reRunCmd.Execute()
+	var markerCount int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM tigerfs."mig_pp_metadata" WHERE subject = $1`,
+		synth.SubjectHistoryFormatMigration).Scan(&markerCount)
+	require.NoError(t, err)
+	assert.Equal(t, 1, markerCount, "re-running migration must not duplicate the boundary marker")
 
 	// Cleanup
 	t.Cleanup(func() {
@@ -579,8 +612,217 @@ func TestSynth_MigrateAddParentPointer(t *testing.T) {
 		cp.Exec(cleanupCtx, `DROP TABLE IF EXISTS tigerfs."mig_pp" CASCADE`)
 		cp.Exec(cleanupCtx, `DROP TABLE IF EXISTS tigerfs."mig_pp_history" CASCADE`)
 		cp.Exec(cleanupCtx, `DROP TABLE IF EXISTS tigerfs."mig_pp_log" CASCADE`)
+		cp.Exec(cleanupCtx, `DROP TABLE IF EXISTS tigerfs."mig_pp_savepoint" CASCADE`)
+		cp.Exec(cleanupCtx, `DROP TABLE IF EXISTS tigerfs."mig_pp_metadata" CASCADE`)
 		cp.Exec(cleanupCtx, `DROP VIEW IF EXISTS "mig_pp" CASCADE`)
 	})
+}
+
+// verifyMigrationUndoBoundary covers both block and allow paths:
+//
+//   - One metadata row with subject SubjectHistoryFormatMigration exists.
+//   - Single-entry undo of a pre-migration log_id is refused with EPERM
+//     and the boundary marker's description as the FSError Hint.
+//   - Range undo (to-log-id) targeting pre-migration is refused at the
+//     entry point (no DB transaction begun).
+//   - A post-migration edit is undoable normally.
+//   - Re-applying the migration does not duplicate the boundary marker.
+func verifyMigrationUndoBoundary(t *testing.T, ctx context.Context, pool *pgxpool.Pool, connStr, schema, appName string) {
+	t.Helper()
+
+	metadataTable := appName + synth.MetadataTableSuffix
+	logTable := appName + "_log"
+
+	// 1. Marker row present (exactly one).
+	var markerRows int
+	err := pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM tigerfs.%q WHERE subject = $1`, metadataTable),
+		synth.SubjectHistoryFormatMigration).Scan(&markerRows)
+	require.NoError(t, err)
+	assert.Equal(t, 1, markerRows, "expected exactly one history-format-migration marker")
+
+	var markerDescription string
+	var markerEntryID string
+	err = pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT entry_id::text, description FROM tigerfs.%q WHERE subject = $1`, metadataTable),
+		synth.SubjectHistoryFormatMigration).Scan(&markerEntryID, &markerDescription)
+	require.NoError(t, err)
+	require.NotEmpty(t, markerDescription, "boundary marker must have non-empty description")
+	require.NotEmpty(t, markerEntryID, "boundary marker must have an entry_id")
+
+	// 2. Pre-migration log_id (one of the entries inserted in test setup).
+	// log_ids are UUIDv7 in real 0.6 (and in our corrected fixture), so
+	// lexical compare against the marker entry_id is meaningful.
+	var preMigrationLogID string
+	err = pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT log_id::text FROM tigerfs.%q ORDER BY log_id ASC LIMIT 1`, logTable),
+	).Scan(&preMigrationLogID)
+	require.NoError(t, err, "expected at least one pre-migration log entry from test setup")
+
+	require.True(t, preMigrationLogID < markerEntryID,
+		"pre-migration log_id (%s) should sort before marker entry_id (%s)",
+		preMigrationLogID, markerEntryID)
+
+	// 3. Block: ExecuteUndoSingle on the pre-migration log_id.
+	ops := setupFSOperations(t, connStr)
+	_, undoErr := ops.ExecuteUndoSingle(ctx, schema, appName, preMigrationLogID)
+	require.Error(t, undoErr, "undo of pre-migration log entry must be refused")
+	fsErr, ok := undoErr.(*fs.FSError)
+	require.True(t, ok, "expected *fs.FSError, got %T: %v", undoErr, undoErr)
+	assert.Equal(t, fs.ErrPermission, fsErr.Code)
+	assert.Equal(t, markerDescription, fsErr.Hint,
+		"FSError.Hint must surface the boundary entry's description verbatim")
+
+	// 4. Block: ExecuteUndoToLogID targeting a log_id older than the marker.
+	_, rangeErr := ops.ExecuteUndoToLogID(ctx, schema, appName, preMigrationLogID, nil)
+	require.Error(t, rangeErr, "undo-to-log-id crossing the boundary must be refused")
+	rangeFsErr, ok := rangeErr.(*fs.FSError)
+	require.True(t, ok, "expected *fs.FSError, got %T: %v", rangeErr, rangeErr)
+	assert.Equal(t, fs.ErrPermission, rangeFsErr.Code)
+
+	// 5. Allow: post-migration edit + undo of the edit. Exercises the
+	// full restore-from-history path through the boundary check.
+	editContent := "---\ntitle: Edited Post Migration\n---\n# Edited\n"
+	wErr := ops.WriteFile(ctx, "/"+appName+"/readme.md", []byte(editContent))
+	require.Nil(t, wErr, "WriteFile (edit) should succeed post-migration")
+
+	var postLogID string
+	err = pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT log_id::text FROM tigerfs.%q ORDER BY log_id DESC LIMIT 1`, logTable),
+	).Scan(&postLogID)
+	require.NoError(t, err)
+	require.True(t, postLogID > markerEntryID,
+		"post-migration log_id (%s) should sort after marker entry_id (%s)",
+		postLogID, markerEntryID)
+
+	undoResult, undoErr := ops.ExecuteUndoSingle(ctx, schema, appName, postLogID)
+	require.Nil(t, undoErr, "post-migration undo must succeed (boundary did not block)")
+	require.NotNil(t, undoResult)
+	assert.GreaterOrEqual(t, undoResult.FilesRestored+undoResult.FilesDeleted, 1,
+		"post-migration undo should restore or delete at least one row")
+
+	// 6. Allow: undo-to-savepoint created post-migration. Savepoint sits
+	// strictly after the marker, so the boundary check passes and the
+	// multi-file restore runs through ExecuteUndo.
+	spName := "post-mig-checkpoint"
+	wErr = ops.WriteFile(ctx, "/"+appName+"/.savepoint/"+spName+".json",
+		[]byte(`{"description":"post-migration checkpoint"}`))
+	require.Nil(t, wErr, "savepoint creation should succeed")
+
+	wErr = ops.WriteFile(ctx, "/"+appName+"/readme.md",
+		[]byte("---\ntitle: Edited A\n---\n# A\n"))
+	require.Nil(t, wErr)
+	wErr = ops.WriteFile(ctx, "/"+appName+"/docs/install.md",
+		[]byte("---\ntitle: Edited B\n---\n# B\n"))
+	require.Nil(t, wErr)
+
+	spResult, spErr := ops.ExecuteUndoToSavepoint(ctx, schema, appName, spName, nil)
+	require.Nil(t, spErr, "undo-to-savepoint past-marker target must succeed")
+	require.NotNil(t, spResult)
+	assert.GreaterOrEqual(t, spResult.FilesRestored, 2,
+		"undo-to-savepoint should restore both edited files")
+
+	// 7. Allow: undo-to-log-id between marker and current. Edit A, edit B,
+	// undo to A's log_id; B's edit should be reverted, A's preserved.
+	contentA := "---\ntitle: First Edit\n---\n# First\n"
+	wErr = ops.WriteFile(ctx, "/"+appName+"/readme.md", []byte(contentA))
+	require.Nil(t, wErr)
+
+	var firstEditLogID string
+	err = pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT log_id::text FROM tigerfs.%q ORDER BY log_id DESC LIMIT 1`, logTable),
+	).Scan(&firstEditLogID)
+	require.NoError(t, err)
+	require.True(t, firstEditLogID > markerEntryID,
+		"first edit's log_id must be post-marker")
+
+	contentB := "---\ntitle: Second Edit\n---\n# Second\n"
+	wErr = ops.WriteFile(ctx, "/"+appName+"/docs/install.md", []byte(contentB))
+	require.Nil(t, wErr)
+
+	idResult, idErr := ops.ExecuteUndoToLogID(ctx, schema, appName, firstEditLogID, nil)
+	require.Nil(t, idErr, "undo-to-log-id past-marker target must succeed")
+	require.NotNil(t, idResult)
+	assert.GreaterOrEqual(t, idResult.FilesRestored+idResult.FilesDeleted, 1,
+		"undo-to-log-id should restore the second edit")
+
+	// readme.md is the file we edited *at* firstEditLogID -- it should
+	// remain at contentA (undo target is exclusive of the target itself).
+	readmeBody, rfErr := ops.ReadFile(ctx, "/"+appName+"/readme.md")
+	require.Nil(t, rfErr)
+	assert.Contains(t, string(readmeBody.Data), "First",
+		"readme.md should still hold the first-edit content (target is exclusive)")
+}
+
+// TestSynth_FreshInstall_MetadataFastPath verifies that a fresh 0.7
+// workspace (one that was never migrated from 0.6) has the metadata table
+// present and empty, and that undo operations work normally without ever
+// hitting a boundary block. This is the fast-path scenario: most users
+// will never have a history-format-migration marker because they started
+// on 0.7 or later.
+func TestSynth_FreshInstall_MetadataFastPath(t *testing.T) {
+	require.NoError(t, config.Init(), "config.Init should succeed")
+
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "freshapp")
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, result.ConnStr)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	_, _ = pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS timescaledb")
+
+	ops := setupFSOperations(t, result.ConnStr)
+
+	// Build a fresh history-enabled markdown app.
+	wErr := ops.WriteFile(ctx, "/.build/freshapp", []byte("markdown,history\n"))
+	require.Nil(t, wErr, "build should succeed")
+
+	// Verify the metadata table exists (created by GenerateHistorySQL)
+	// and is empty: a fresh install has no migrations to mark.
+	var tableExists bool
+	err = pool.QueryRow(ctx, `SELECT EXISTS(
+		SELECT 1 FROM pg_tables
+		WHERE schemaname = 'tigerfs' AND tablename = 'freshapp' || $1
+	)`, synth.MetadataTableSuffix).Scan(&tableExists)
+	require.NoError(t, err)
+	assert.True(t, tableExists, "fresh-install metadata table should exist after build")
+
+	var rowCount int
+	err = pool.QueryRow(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM tigerfs.%q`,
+			"freshapp"+synth.MetadataTableSuffix),
+	).Scan(&rowCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, rowCount, "fresh-install metadata table should be empty (no boundary markers)")
+
+	// Create + edit a file so we have something to undo.
+	wErr = ops.WriteFile(ctx, "/freshapp/hello.md",
+		[]byte("---\ntitle: Hello\n---\n# Hello\n"))
+	require.Nil(t, wErr)
+
+	wErr = ops.WriteFile(ctx, "/freshapp/hello.md",
+		[]byte("---\ntitle: Hello\n---\n# Hello edited\n"))
+	require.Nil(t, wErr)
+
+	var editLogID string
+	err = pool.QueryRow(ctx,
+		`SELECT log_id::text FROM tigerfs."freshapp_log" WHERE type = 'edit' ORDER BY log_id DESC LIMIT 1`,
+	).Scan(&editLogID)
+	require.NoError(t, err, "expected an edit log entry")
+
+	// Undo on a fresh-install workspace must succeed: no boundary entries
+	// exist, so checkBoundary returns nil immediately.
+	undoResult, undoErr := ops.ExecuteUndoSingle(ctx, "public", "freshapp", editLogID)
+	require.Nil(t, undoErr, "fresh-install undo should not be blocked by boundary check")
+	require.NotNil(t, undoResult)
+	assert.GreaterOrEqual(t, undoResult.FilesRestored, 1,
+		"undo of edit should restore one row")
 }
 
 // TestSynth_MigrateAddParentDirMtimeTrigger tests migration for workspaces that have

@@ -23,6 +23,51 @@ type UndoResult struct {
 	FilesSkipped  int // no-op (e.g., created then already deleted)
 }
 
+// blockingSubjects enumerates the metadata-entry subjects whose presence
+// refuses undo across them. An entry whose subject is in this set acts as
+// a boundary: any target log_id strictly less than the entry's entry_id
+// (UUIDv7-encoded timestamp) cannot be safely undone and must be refused
+// with a clear errno.
+//
+// Subjects are version-agnostic by design: a future history-format
+// migration writes another row with SubjectHistoryFormatMigration and
+// pushes the boundary forward without any engine change.
+//
+// The set is hard-coded here (not stored on the row) so the *consumer* of
+// the metadata table decides what affects its behavior. Adding a new
+// blocking category is a deliberate code change reviewed in a PR.
+var blockingSubjects = map[string]struct{}{
+	synth.SubjectHistoryFormatMigration: {},
+}
+
+// checkBoundary refuses if targetLogID precedes any metadata entry whose
+// subject is in blockingSubjects. Returns nil for fresh-install workspaces
+// (no metadata) -- this is the hot-path fast return.
+//
+// The check uses string compare on UUIDv7 values (entry_id and log_id are
+// both UUIDv7 in the same clock domain, so lexical compare == time order).
+// Equality is treated as "not before" -- the boundary entry itself is not
+// blocked.
+func (o *Operations) checkBoundary(ctx context.Context, schema, tableName, targetLogID string) *FSError {
+	info := o.getSynthViewInfo(ctx, schema, tableName)
+	if info == nil || len(info.Metadata) == 0 {
+		return nil
+	}
+	for _, m := range info.Metadata {
+		if _, isBlocker := blockingSubjects[m.Subject]; !isBlocker {
+			continue
+		}
+		if targetLogID < m.EntryID {
+			return &FSError{
+				Code:    ErrPermission,
+				Message: fmt.Sprintf("undo refused: target precedes %s boundary", m.Subject),
+				Hint:    m.Description,
+			}
+		}
+	}
+	return nil
+}
+
 // ExecuteUndoToSavepoint undoes all operations after a named savepoint.
 // Looks up savepoint_id by name, then delegates to ExecuteUndo.
 func (o *Operations) ExecuteUndoToSavepoint(ctx context.Context, schema, tableName, savepointName string, filters []db.UndoFilter) (*UndoResult, error) {
@@ -70,6 +115,15 @@ func (o *Operations) ExecuteUndoToLogID(ctx context.Context, schema, tableName, 
 func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID, description string, filters []db.UndoFilter) (*UndoResult, error) {
 	logTable := tableName + "_log"
 	historyTable := tableName + "_history"
+
+	// Refuse if the target precedes a recorded boundary (e.g. the v0.7
+	// history-format migration). Checked at the top so no transaction is
+	// begun and no partial work happens when the window crosses the
+	// boundary. Applies to both ExecuteUndoToLogID and
+	// ExecuteUndoToSavepoint via this shared core.
+	if fsErr := o.checkBoundary(ctx, schema, tableName, afterID); fsErr != nil {
+		return nil, fsErr
+	}
 
 	// Extract optional user_id filter for the query
 	var userID string
@@ -195,6 +249,13 @@ func (o *Operations) ExecuteUndoSingle(ctx context.Context, schema, tableName, l
 	historyTable := tableName + "_history"
 
 	logID = resolveLogID(logID)
+
+	// Refuse if the target precedes a recorded boundary (e.g. the v0.7
+	// history-format migration). Pre-boundary entries are readable in
+	// .log/ and .history/ but cannot be safely undone.
+	if fsErr := o.checkBoundary(ctx, schema, tableName, logID); fsErr != nil {
+		return nil, fsErr
+	}
 
 	// Fetch the log entry
 	entry, err := o.db.QueryLogEntry(ctx, synth.TigerFSSchema, logTable, logID)

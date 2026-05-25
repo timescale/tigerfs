@@ -438,6 +438,44 @@ END $migrate$`, qt, qt, qt, qt))
 						`ALTER TABLE %s ADD CONSTRAINT %s CHECK (type IN ('create', 'edit', 'rename', 'delete', 'undo'))`,
 						logQt, db.QuoteIdent(appName+"_log_type_check")))
 				}
+
+				// --- Metadata table + boundary marker ---
+				// 0.6 workspaces don't have a metadata table; create it on
+				// migration. Then insert the history-format-migration row at
+				// the *end* of the migration (its UUIDv7 entry_id is therefore
+				// strictly newer than every pre-migration log_id, which is
+				// what makes "target < entry_id" the boundary check). The
+				// INSERT is guarded by WHERE NOT EXISTS so re-running the
+				// migration leaves exactly one marker row.
+				metadataTableName := appName + synth.MetadataTableSuffix
+				metadataQt := fmt.Sprintf("%s.%s",
+					db.QuoteIdent(synth.TigerFSSchema), db.QuoteIdent(metadataTableName))
+				metadataIndexName := db.QuoteIdent("idx_" + metadataTableName + "_subject")
+
+				stmts = append(stmts, fmt.Sprintf(
+					`CREATE TABLE IF NOT EXISTS %s (
+    entry_id    UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    subject     TEXT NOT NULL,
+    user_id     TEXT,
+    description TEXT,
+    payload     JSONB NOT NULL DEFAULT '{}'::jsonb
+)`, metadataQt))
+
+				stmts = append(stmts, fmt.Sprintf(
+					`CREATE INDEX IF NOT EXISTS %s ON %s (subject, entry_id)`,
+					metadataIndexName, metadataQt))
+
+				const boundaryDescription = "Pre-0.7 history is read-only after the v0.7 format upgrade. " +
+					"Use .log/<id>/before to view content or .history/ to browse old versions."
+				const boundaryPayload = `{"from":"0.6","to":"0.7","reason":"parent-pointer model"}`
+
+				stmts = append(stmts, fmt.Sprintf(
+					`INSERT INTO %s (subject, description, payload)
+SELECT '%s', '%s', '%s'::jsonb
+WHERE NOT EXISTS (SELECT 1 FROM %s WHERE subject = '%s')`,
+					metadataQt,
+					synth.SubjectHistoryFormatMigration, boundaryDescription, boundaryPayload,
+					metadataQt, synth.SubjectHistoryFormatMigration))
 			}
 			return stmts, nil
 		},

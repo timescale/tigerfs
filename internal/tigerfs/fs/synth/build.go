@@ -427,6 +427,28 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
     description TEXT
 )`, qualifiedSavepoint)
 
+	// --- Metadata table ---
+	// Per-app metadata about the workspace itself (format migrations, future
+	// system markers). Distinct from operational log entries. The undo engine
+	// consults this table to refuse undo across format boundaries.
+	// Regular table (not a hypertable) -- O(10) rows per database lifetime.
+	metadataTable := appName + MetadataTableSuffix
+	qualifiedMetadata := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent(metadataTable))
+
+	createMetadataTable := fmt.Sprintf(`CREATE TABLE %s (
+    entry_id    UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    subject     TEXT NOT NULL,
+    user_id     TEXT,
+    description TEXT,
+    payload     JSONB NOT NULL DEFAULT '{}'::jsonb
+)`, qualifiedMetadata)
+
+	createMetadataIndex := fmt.Sprintf(
+		`CREATE INDEX %s ON %s (subject, entry_id)`,
+		db.QuoteIdent("idx_"+metadataTable+"_subject"),
+		qualifiedMetadata,
+	)
+
 	return []string{
 		// History infrastructure (table is hypertable via WITH clause)
 		createTable,
@@ -439,6 +461,9 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 		createLogIndex,
 		// Savepoint infrastructure
 		createSavepointTable,
+		// Metadata infrastructure
+		createMetadataTable,
+		createMetadataIndex,
 	}
 }
 

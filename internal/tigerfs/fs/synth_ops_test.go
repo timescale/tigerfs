@@ -820,3 +820,85 @@ func TestSynth_ResolvePath_DBError(t *testing.T) {
 	assert.False(t, ok)
 	assert.Empty(t, id)
 }
+
+// --- Cache-load: ViewInfo.Metadata population ---
+//
+// The undo boundary check reads ViewInfo.Metadata, which is populated by
+// loadSynthCache when HasHistory is true. These tests verify that:
+//   1. populates when a history-enabled app has metadata entries
+//   2. soft-fails to nil on QueryMetadata error (treats as fresh install)
+//   3. skips entirely for non-history apps (zero QueryMetadata calls)
+
+func newSynthCacheMock(viewName, comment string) *mockDBClient {
+	return &mockDBClient{
+		views:        map[string][]string{"public": {viewName}},
+		viewComments: map[string]map[string]string{"public": {viewName: comment}},
+		columns: map[string][]mockColumn{
+			"public." + viewName: {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "title", dataType: "text"},
+				{name: "body", dataType: "text"},
+				{name: "encoding", dataType: "text"},
+				{name: "created_at", dataType: "timestamptz"},
+				{name: "modified_at", dataType: "timestamptz"},
+			},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public." + viewName:                 {column: "id"},
+			synth.TigerFSSchema + "." + viewName: {column: "id"},
+		},
+	}
+}
+
+func TestSynth_LoadSynthCache_PopulatesMetadata(t *testing.T) {
+	mockDB := newSynthCacheMock("notes", "tigerfs:md,history")
+	mockDB.metadataEntries = []db.MetadataEntry{
+		{
+			EntryID:     "019e0000-0000-7000-8000-000000000001",
+			Subject:     synth.SubjectHistoryFormatMigration,
+			Description: "boundary hint",
+			Payload:     []byte(`{"from":"0.6","to":"0.7"}`),
+		},
+	}
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	info := ops.getSynthViewInfo(context.Background(), "public", "notes")
+	require.NotNil(t, info, "ViewInfo for history-enabled app must be cached")
+	require.True(t, info.HasHistory)
+	require.Len(t, info.Metadata, 1)
+	assert.Equal(t, synth.SubjectHistoryFormatMigration, info.Metadata[0].Subject)
+	assert.Equal(t, "boundary hint", info.Metadata[0].Description)
+	assert.Equal(t, 1, mockDB.metadataCalls, "exactly one QueryMetadata call expected")
+}
+
+func TestSynth_LoadSynthCache_SoftFailsOnMetadataError(t *testing.T) {
+	mockDB := newSynthCacheMock("notes", "tigerfs:md,history")
+	mockDB.metadataErr = fmt.Errorf("simulated transient query failure")
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	info := ops.getSynthViewInfo(context.Background(), "public", "notes")
+	require.NotNil(t, info, "cache load must succeed even when metadata query errors")
+	assert.True(t, info.HasHistory, "HasHistory detection still succeeds")
+	assert.Nil(t, info.Metadata, "Metadata stays nil on soft-fail (treated as no boundary)")
+	assert.Equal(t, 1, mockDB.metadataCalls, "QueryMetadata was attempted once")
+}
+
+func TestSynth_LoadSynthCache_SkipsMetadataForNonHistory(t *testing.T) {
+	// View comment is "tigerfs:md" (no ",history") and there is no _history
+	// companion table, so HasHistory=false. QueryMetadata must not be called.
+	mockDB := newSynthCacheMock("notes", "tigerfs:md")
+
+	cfg := &config.Config{DirListingLimit: 1000}
+	ops := NewOperations(cfg, mockDB)
+
+	info := ops.getSynthViewInfo(context.Background(), "public", "notes")
+	require.NotNil(t, info)
+	assert.False(t, info.HasHistory)
+	assert.Nil(t, info.Metadata)
+	assert.Equal(t, 0, mockDB.metadataCalls, "QueryMetadata must not be called for non-history apps")
+}

@@ -1108,6 +1108,12 @@ type mockDBClient struct {
 	lastUndoParams       *db.UndoTransactionParams
 	fileExistsMap        map[string]bool // fileID -> exists (overrides fileExistsResult)
 
+	// Metadata test tracking
+	metadataEntries []db.MetadataEntry // returned by QueryMetadata
+	metadataErr     error              // when non-nil, QueryMetadata returns this error
+	metadataCalls   int                // count of QueryMetadata invocations
+	metadataInserts []db.MetadataEntry // recorded for verification
+
 	// ResolvePath tracking
 	resolvePathResults     []db.PathSegment
 	resolvePathErr         error
@@ -1776,6 +1782,21 @@ func (m *mockDBClient) QueryLogEntry(ctx context.Context, schema, logTable, logI
 func (m *mockDBClient) ExecuteUndoTransaction(ctx context.Context, params *db.UndoTransactionParams) error {
 	m.undoTransactionCalls++
 	m.lastUndoParams = params
+	return nil
+}
+
+func (m *mockDBClient) QueryMetadata(ctx context.Context, schema, metadataTable string) ([]db.MetadataEntry, error) {
+	m.metadataCalls++
+	if m.metadataErr != nil {
+		return nil, m.metadataErr
+	}
+	return m.metadataEntries, nil
+}
+
+func (m *mockDBClient) InsertMetadata(ctx context.Context, schema, metadataTable, subject, description string, payload json.RawMessage, userID string) error {
+	m.metadataInserts = append(m.metadataInserts, db.MetadataEntry{
+		Subject: subject, UserID: userID, Description: description, Payload: payload,
+	})
 	return nil
 }
 

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -749,8 +750,10 @@ func NewMockDBClient() *MockDBClient {
 
 // MockLogWriter implements LogWriter for testing.
 type MockLogWriter struct {
-	LogEntries []MockLogEntry    // Recorded log entries for verification
-	VersionIDs map[string]string // fileID -> latest versionID
+	LogEntries      []MockLogEntry    // Recorded log entries for verification
+	VersionIDs      map[string]string // fileID -> latest versionID
+	MetadataEntries []MetadataEntry   // Returned by QueryMetadata
+	MetadataInserts []MetadataEntry   // Recorded for verification
 }
 
 // MockLogEntry records a single log entry for test verification.
@@ -792,5 +795,16 @@ func (m *MockLogWriter) QueryLogEntry(ctx context.Context, schema, logTable, log
 }
 
 func (m *MockLogWriter) ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error {
+	return nil
+}
+
+func (m *MockLogWriter) QueryMetadata(ctx context.Context, schema, metadataTable string) ([]MetadataEntry, error) {
+	return m.MetadataEntries, nil
+}
+
+func (m *MockLogWriter) InsertMetadata(ctx context.Context, schema, metadataTable, subject, description string, payload json.RawMessage, userID string) error {
+	m.MetadataInserts = append(m.MetadataInserts, MetadataEntry{
+		Subject: subject, UserID: userID, Description: description, Payload: payload,
+	})
 	return nil
 }

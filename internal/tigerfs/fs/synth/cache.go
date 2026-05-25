@@ -3,6 +3,8 @@ package synth
 import (
 	"strings"
 	"time"
+
+	"github.com/timescale/tigerfs/internal/tigerfs/db"
 )
 
 // ViewInfo holds the synthesized format configuration for a view.
@@ -26,6 +28,12 @@ type ViewInfo struct {
 	// HasHistory is true when this view has versioned history enabled.
 	// Detected from view comment (tigerfs:md,history) or companion _<name>_history table.
 	HasHistory bool
+
+	// Metadata holds rows from the per-app metadata table sorted by entry_id ASC.
+	// Loaded at mount time alongside HasHistory detection; nil/empty for views
+	// without history or for fresh installs (no metadata yet). The undo engine
+	// consults this slice via checkBoundary to refuse undo across format boundaries.
+	Metadata []db.MetadataEntry
 }
 
 // StripExtension removes the synthesized format extension from a filename.
