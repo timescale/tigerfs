@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 )
 
 // DDLExecutor provides DDL execution capabilities.
@@ -362,6 +363,28 @@ type LogWriter interface {
 	// Deletes rows that were created after the target, upserts rows from history
 	// for edits/renames/deletes, and inserts undo log entries -- all atomically.
 	ExecuteUndoTransaction(ctx context.Context, params *UndoTransactionParams) error
+
+	// QueryMetadata returns all rows from the per-app metadata table, sorted
+	// by entry_id ASC. Soft-fails to (nil, nil) when the table does not
+	// exist (SQLSTATE 42P01) -- treated as "no metadata" so callers don't
+	// have to special-case fresh installs or pre-0.7 workspaces.
+	QueryMetadata(ctx context.Context, schema, metadataTable string) ([]MetadataEntry, error)
+
+	// InsertMetadata appends one row to the per-app metadata table.
+	// payload is raw JSON; callers are responsible for valid JSON.
+	// userID may be empty (stored as NULL).
+	InsertMetadata(ctx context.Context, schema, metadataTable, subject, description string, payload json.RawMessage, userID string) error
+}
+
+// MetadataEntry represents a row in the per-app metadata table.
+// See internal/tigerfs/fs/synth/metadata.go for the table schema and
+// subject conventions.
+type MetadataEntry struct {
+	EntryID     string          // UUIDv7, encodes the entry's timestamp
+	Subject     string          // category discriminator (see synth.Subject* constants)
+	UserID      string          // empty when stored as NULL
+	Description string          // human-readable text; empty when stored as NULL
+	Payload     json.RawMessage // raw JSONB; callers parse if needed
 }
 
 // UndoAffectedFile represents a file affected by operations after the undo target.

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -1387,6 +1388,66 @@ func (c *Client) InsertLogEntry(ctx context.Context, schema, logTable, userID, o
 	_, err := c.pool.Exec(ctx, query, userIDVal, opType, fileID, filename, versionIDVal, descVal)
 	if err != nil {
 		return fmt.Errorf("failed to insert log entry: %w", err)
+	}
+	return nil
+}
+
+// QueryMetadata returns all rows from the per-app metadata table, sorted
+// by entry_id ASC. Soft-fails to (nil, nil) when the table does not exist
+// (SQLSTATE 42P01) so callers don't have to special-case fresh installs
+// or pre-0.7 workspaces.
+func (c *Client) QueryMetadata(ctx context.Context, schema, metadataTable string) ([]MetadataEntry, error) {
+	query := fmt.Sprintf(
+		`SELECT entry_id::text, subject, COALESCE(user_id, ''), COALESCE(description, ''), payload
+		 FROM %s ORDER BY entry_id ASC`,
+		qt(schema, metadataTable),
+	)
+	rows, err := c.pool.Query(ctx, query)
+	if err != nil {
+		if pgErr := asPgError(err); pgErr != nil && pgErr.Code == "42P01" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query metadata: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []MetadataEntry
+	for rows.Next() {
+		var e MetadataEntry
+		var payload []byte
+		if err := rows.Scan(&e.EntryID, &e.Subject, &e.UserID, &e.Description, &payload); err != nil {
+			return nil, fmt.Errorf("failed to scan metadata row: %w", err)
+		}
+		e.Payload = json.RawMessage(payload)
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate metadata rows: %w", err)
+	}
+	return entries, nil
+}
+
+// InsertMetadata appends one row to the per-app metadata table. payload
+// is raw JSON; callers are responsible for valid JSON. userID may be empty
+// (stored as NULL).
+func (c *Client) InsertMetadata(ctx context.Context, schema, metadataTable, subject, description string, payload json.RawMessage, userID string) error {
+	query := fmt.Sprintf(
+		`INSERT INTO %s (subject, user_id, description, payload) VALUES ($1, $2, $3, $4)`,
+		qt(schema, metadataTable),
+	)
+	var userIDVal, descVal interface{}
+	if userID != "" {
+		userIDVal = userID
+	}
+	if description != "" {
+		descVal = description
+	}
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+	_, err := c.pool.Exec(ctx, query, subject, userIDVal, descVal, []byte(payload))
+	if err != nil {
+		return fmt.Errorf("failed to insert metadata entry: %w", err)
 	}
 	return nil
 }

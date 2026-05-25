@@ -247,11 +247,12 @@ touch /mnt/db/notes/.undo/to-savepoint/before-investigation/.apply
 - **Requires TimescaleDB:** history, log, and savepoint tables use TimescaleDB hypertables for compressed storage. Will not work on vanilla PostgreSQL.
 - **File-first only:** data-first tables don't get history. Writing directly to the backing table via `.tables/` bypasses the history trigger.
 - **Per-user undo caveat:** if two users interleave edits on the same file, undoing one user's changes also reverts the other user's interleaved edits on that file.
+- **Post-migration undo boundary:** workspaces upgraded from v0.6 cannot undo entries created before `tigerfs migrate` ran. Pre-migration history rows have lossy `parent_id` information after the migration, so undo of an old edit could leave the file in the wrong directory with no signal. Pre-migration entries remain readable in `.log/` and `.history/`; only `.undo/` refuses (with `EPERM` and a hint). Fresh v0.7 installs are unaffected.
 - **Storage cost:** every edit creates a history row. TimescaleDB compression mitigates this (7-day chunks, automatic compression).
 
 ## How It Works
 
-Each history-enabled workspace is backed by three companion tables in the `tigerfs` schema, alongside the main backing table.
+Each history-enabled workspace is backed by four companion tables in the `tigerfs` schema, alongside the main backing table.
 
 The **history table** stores a snapshot of every file version. A PostgreSQL BEFORE trigger fires on every update and delete, copying the old row into history with a UUIDv7 version_id. The trigger detects whether the operation was an edit, rename, or delete by comparing the old and new rows.
 
@@ -259,7 +260,9 @@ The **log table** records each operation (create, edit, rename, delete, undo) wi
 
 The **savepoint table** stores named bookmarks. Each savepoint's UUIDv7 timestamp enables efficient "find all operations after this point" queries.
 
-All three tables use TimescaleDB hypertables for time-partitioned storage and automatic compression. The log table is indexed on (file_id, log_id) for SkipScan-optimized undo queries.
+The **metadata table** records non-operational events about the workspace itself -- format-migration markers and future system events. The undo engine consults it to refuse undo across format boundaries (see Limitations).
+
+History, log, and savepoint use TimescaleDB hypertables for time-partitioned storage and automatic compression. The metadata table is a regular table (O(10) rows per database lifetime). The log table is indexed on `(file_id, log_id)` for SkipScan-optimized undo queries.
 
 TigerFS detects history via the view comment (`tigerfs:md,history`) or by checking for a companion history table.
 

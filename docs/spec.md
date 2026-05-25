@@ -1607,6 +1607,38 @@ Undo operates on data (DML) only. If a column was added or removed after the sav
 | Flag: `--undo-list-limit` | | Override at mount time |
 | Env: `TIGERFS_UNDO_LIST_LIMIT` | | Override via environment |
 
+#### Migration Boundaries
+
+History-enabled apps have a sibling metadata table that records non-operational events about the workspace -- format migrations and future system markers. Currently the undo engine consults it to refuse undo across a 0.7 format-migration boundary; the table is otherwise inert.
+
+| Path | Description |
+|------|-------------|
+| (no filesystem surface) | The table is SQL-only in this release. |
+
+Schema:
+
+```sql
+CREATE TABLE tigerfs.<app>_metadata (
+    entry_id    UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+    subject     TEXT NOT NULL,
+    user_id     TEXT,
+    description TEXT,
+    payload     JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX idx_<app>_metadata_subject ON tigerfs.<app>_metadata (subject, entry_id);
+```
+
+- `entry_id` is UUIDv7, in the same clock domain as `log_id` and `version_id`. Lexical UUID compare across tables is meaningful.
+- `subject` is the discriminator. Open vocabulary; not CHECK-constrained. Built-in subjects use kebab-case; future external uses should namespace (e.g., `<vendor>.<event>`).
+- `description` is the user-facing hint surfaced by the undo engine when an entry blocks an operation.
+- `payload` is structured machine-readable JSON. For format-migration entries: `{"from":"<v>","to":"<v>","reason":"..."}`.
+
+**`history-format-migration` boundary.** The 0.6→0.7 migration inserts one entry with `subject = 'history-format-migration'`. The undo engine refuses any `.undo/id/<log_id>/.apply`, `.undo/to-id/<log_id>/.apply`, or `.undo/to-savepoint/<name>/.apply` whose target precedes this entry's `entry_id`. The kernel returns `EPERM`; the `description` from the metadata row is surfaced via tigerfs logging.
+
+This boundary exists because the migration rewrites history rows' `parent_id` from the *current* source state, not their historical state. Pre-migration log entries are structurally valid but semantically unsafe to undo -- restoring an old edit could leave the row at its current directory location instead of its historical one, with no signal to the user. `.log/` and `.history/` remain readable for pre-migration entries; only `.undo/` refuses.
+
+**Adding a new boundary.** A new blocking subject requires (a) inserting an entry with the chosen subject and (b) recognizing it in the undo engine's blocking set (`blockingSubjects` in `internal/tigerfs/fs/undo.go`). Future format migrations of the same category reuse `history-format-migration` and require no engine change.
+
 ---
 
 ## Configuration System

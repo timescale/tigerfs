@@ -145,6 +145,22 @@ func (o *Operations) loadSynthCache(ctx context.Context, schema string) (map[str
 			SupportsHierarchy: roles.Filetype != "",
 			HasHistory:        hasHistory,
 		}
+
+		// Load per-app metadata rows for history-enabled views. Soft-fails to
+		// nil on missing table or transient errors: the boundary check in
+		// undo.go treats nil/empty Metadata as "no boundary, proceed normally"
+		// so a transient query failure won't refuse all undo operations.
+		if hasHistory {
+			metadataTable := viewName + synth.MetadataTableSuffix
+			if entries, mdErr := o.db.QueryMetadata(ctx, synth.TigerFSSchema, metadataTable); mdErr == nil {
+				info.Metadata = entries
+			} else {
+				logging.Debug("loadSynthCache: metadata query failed; treating as no boundary",
+					zap.String("table", metadataTable),
+					zap.Error(mdErr))
+			}
+		}
+
 		cache[viewName] = info
 
 		// Warn if this view uses the legacy directory model (has filetype but no parent_id).

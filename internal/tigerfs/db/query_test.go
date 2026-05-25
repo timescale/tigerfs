@@ -2502,3 +2502,135 @@ func TestExecuteUndoTransaction_FailsAtCommitOnUnrestorableFK(t *testing.T) {
 		t.Errorf("expected source to be empty after rolled-back undo, got %d row(s)", count)
 	}
 }
+
+// --- Metadata table tests ---
+
+func TestQueryMetadata_MissingTable(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cfg := &config.Config{PoolSize: 2, PoolMaxIdle: 1}
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	entries, err := client.QueryMetadata(ctx, "public", "no_such_table_metadata")
+	if err != nil {
+		t.Fatalf("QueryMetadata on missing table should soft-fail to nil, got error: %v", err)
+	}
+	if entries != nil {
+		t.Errorf("expected nil entries, got %v", entries)
+	}
+}
+
+func TestQueryMetadata_EmptyAndRoundTrip(t *testing.T) {
+	connStr := getTestConnectionString(t)
+	if connStr == "" {
+		t.Skip("No PostgreSQL connection available")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cfg := &config.Config{PoolSize: 2, PoolMaxIdle: 1}
+	client, err := NewClient(ctx, cfg, connStr)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	table := "tmeta_" + suffix
+	schema := "public"
+	qt := QuoteTable(schema, table)
+
+	_, err = client.pool.Exec(ctx, fmt.Sprintf(`CREATE TABLE %s (
+		entry_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
+		subject TEXT NOT NULL,
+		user_id TEXT,
+		description TEXT,
+		payload JSONB NOT NULL DEFAULT '{}'::jsonb
+	)`, qt))
+	if err != nil {
+		t.Fatalf("CREATE TABLE: %v", err)
+	}
+	defer func() {
+		_, _ = client.pool.Exec(context.Background(), fmt.Sprintf(`DROP TABLE IF EXISTS %s`, qt))
+	}()
+
+	// Empty table
+	entries, err := client.QueryMetadata(ctx, schema, table)
+	if err != nil {
+		t.Fatalf("QueryMetadata empty: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected 0 entries from empty table, got %d", len(entries))
+	}
+
+	// Round-trip: insert, query
+	payload1 := []byte(`{"v":1,"key":"value-a"}`)
+	if err := client.InsertMetadata(ctx, schema, table, "first-subject", "first description", payload1, "user-a"); err != nil {
+		t.Fatalf("InsertMetadata 1: %v", err)
+	}
+	payload2 := []byte(`{"v":1,"key":"value-b"}`)
+	if err := client.InsertMetadata(ctx, schema, table, "second-subject", "", payload2, ""); err != nil {
+		t.Fatalf("InsertMetadata 2 (empty userID, empty desc): %v", err)
+	}
+
+	entries, err = client.QueryMetadata(ctx, schema, table)
+	if err != nil {
+		t.Fatalf("QueryMetadata after insert: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+
+	// ASC order: UUIDv7 default means inserted-order
+	if entries[0].Subject != "first-subject" {
+		t.Errorf("expected first-subject at index 0, got %s", entries[0].Subject)
+	}
+	if entries[1].Subject != "second-subject" {
+		t.Errorf("expected second-subject at index 1, got %s", entries[1].Subject)
+	}
+
+	// Fields preserved
+	if entries[0].UserID != "user-a" {
+		t.Errorf("first entry UserID = %q, want %q", entries[0].UserID, "user-a")
+	}
+	if entries[0].Description != "first description" {
+		t.Errorf("first entry Description = %q, want %q", entries[0].Description, "first description")
+	}
+	if string(entries[0].Payload) == "" || !bytesContains(entries[0].Payload, []byte("value-a")) {
+		t.Errorf("first entry Payload missing value-a: %s", entries[0].Payload)
+	}
+
+	// Empty userID stored as NULL → round-trips as ""
+	if entries[1].UserID != "" {
+		t.Errorf("second entry UserID = %q, want empty (NULL roundtrip)", entries[1].UserID)
+	}
+	if entries[1].Description != "" {
+		t.Errorf("second entry Description = %q, want empty (NULL roundtrip)", entries[1].Description)
+	}
+}
+
+func bytesContains(haystack, needle []byte) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
