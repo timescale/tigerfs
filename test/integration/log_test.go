@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs"
 )
 
 // TestSynth_LogEntries_Integration verifies that write operations on a
@@ -445,11 +447,16 @@ func TestSynth_LogInterface_DiffSymlinks(t *testing.T) {
 	require.Nil(t, fsErr, "Readlink before on create should succeed")
 	assert.Equal(t, "/dev/null", beforeTarget, "create's before should be /dev/null")
 
-	// Edit entry: before should point to .history/ (has version_id)
+	// Edit entry: before should point into .history/.by/<file_id>/<version>.
+	// We use the file_id-keyed path so the symlink stays valid across any
+	// future rename of the file or its ancestor directories.
 	beforeTarget, fsErr = ops.Readlink(ctx, "/logdiff/.log/"+editEntry+"/before")
 	require.Nil(t, fsErr, "Readlink before on edit should succeed")
-	assert.Contains(t, beforeTarget, ".history/", "edit's before should point to .history/")
-	assert.Contains(t, beforeTarget, "hello.md", "edit's before should reference hello.md")
+	assert.Contains(t, beforeTarget, ".history/.by/", "edit's before should use the file_id-keyed history path")
+	assert.NotEqual(t, "/dev/null", beforeTarget)
+	// Verify the symlink actually resolves by reading through it.
+	beforeContent := readThroughSymlink(t, ops, "/logdiff/.log/"+editEntry+"/before")
+	assert.Contains(t, string(beforeContent), "V1", "edit's before should hold the pre-edit content")
 
 	// Current on edit: file still exists
 	currentTarget, fsErr := ops.Readlink(ctx, "/logdiff/.log/"+editEntry+"/current")
@@ -485,6 +492,189 @@ func TestSynth_LogInterface_DiffSymlinks(t *testing.T) {
 	afterTarget, fsErr := ops.Readlink(ctx, "/logdiff/.log/"+deleteEntry+"/after")
 	require.Nil(t, fsErr, "Readlink after on delete should succeed")
 	assert.Equal(t, "/dev/null", afterTarget, "delete's after should be /dev/null")
+}
+
+// readThroughSymlink reads a symlink target and follows it to read the
+// underlying file content. Mirrors what the kernel does for cat <symlink>.
+// Symlink targets are relative to the symlink's parent directory.
+func readThroughSymlink(t *testing.T, ops *fs.Operations, symlinkPath string) []byte {
+	t.Helper()
+	ctx := context.Background()
+	target, fsErr := ops.Readlink(ctx, symlinkPath)
+	require.Nil(t, fsErr, "Readlink %s should succeed", symlinkPath)
+	resolved := path.Join(path.Dir(symlinkPath), target)
+	content, fsErr := ops.ReadFile(ctx, resolved)
+	require.Nil(t, fsErr, "ReadFile %s (resolved from %s -> %s) should succeed", resolved, symlinkPath, target)
+	return content.Data
+}
+
+// findLogEntryByType scans the log directory and returns the most recent
+// entry of the given type. Returns "" if no such entry exists.
+func findLogEntryByType(t *testing.T, ops *fs.Operations, logDir, opType string) string {
+	t.Helper()
+	ctx := context.Background()
+	entries, fsErr := ops.ReadDir(ctx, logDir)
+	require.Nil(t, fsErr)
+	var found string
+	for _, e := range entries {
+		content, err := ops.ReadFile(ctx, logDir+"/"+e.Name+"/type")
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(content.Data)) == opType {
+			// Keep the latest (entries returned in ascending log_id order).
+			found = e.Name
+		}
+	}
+	return found
+}
+
+// TestSynth_LogSymlinks_RenameInvariant covers the rename-aware behavior of
+// the before/after/current diff symlinks. The symlinks must remain valid
+// across renames and moves of the file or any ancestor directory; see
+// keen-tumbling-dewdrop.md Bug A.
+func TestSynth_LogSymlinks_RenameInvariant(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "ren")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/ren", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	t.Run("A.1_before_on_rename_entry", func(t *testing.T) {
+		// create a.md, edit, rename a.md -> b.md.
+		// Reading .log/<rename-id>/before must resolve to a real history
+		// entry whose contents match the pre-rename body.
+		require.Nil(t, ops.WriteFile(ctx, "/ren/a1.md", []byte("---\ntitle: a1v1\n---\n# a1v1\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.WriteFile(ctx, "/ren/a1.md", []byte("---\ntitle: a1v2\n---\n# a1v2\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.Rename(ctx, "/ren/a1.md", "/ren/b1.md"))
+
+		renameEntry := findLogEntryByType(t, ops, "/ren/.log", "rename")
+		require.NotEmpty(t, renameEntry, "must find a rename log entry")
+
+		target, fsErr := ops.Readlink(ctx, "/ren/.log/"+renameEntry+"/before")
+		require.Nil(t, fsErr)
+		assert.Contains(t, target, ".history/.by/", "rename's before must use file_id path, not the new filename")
+		// Must resolve through the symlink to actual content.
+		content := readThroughSymlink(t, ops, "/ren/.log/"+renameEntry+"/before")
+		assert.Contains(t, string(content), "a1v2", "rename's before should hold the pre-rename body")
+	})
+
+	t.Run("A.2_after_when_next_is_rename", func(t *testing.T) {
+		// create a2.md, edit, rename a2.md -> b2.md.
+		// Reading .log/<edit-id>/after must resolve to a real history entry
+		// matching the post-edit/pre-rename body.
+		require.Nil(t, ops.WriteFile(ctx, "/ren/a2.md", []byte("---\ntitle: a2v1\n---\n# a2v1\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.WriteFile(ctx, "/ren/a2.md", []byte("---\ntitle: a2v2\n---\n# a2v2\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.Rename(ctx, "/ren/a2.md", "/ren/b2.md"))
+
+		// Find the edit for a2 specifically (multiple edits in the workspace).
+		// Read the log and pick the one whose file_id matches the surviving file.
+		var editEntry string
+		entries, fsErr := ops.ReadDir(ctx, "/ren/.log")
+		require.Nil(t, fsErr)
+		for _, e := range entries {
+			tp, err := ops.ReadFile(ctx, "/ren/.log/"+e.Name+"/type")
+			if err != nil || strings.TrimSpace(string(tp.Data)) != "edit" {
+				continue
+			}
+			fn, err := ops.ReadFile(ctx, "/ren/.log/"+e.Name+"/filename")
+			if err != nil {
+				continue
+			}
+			if strings.TrimSpace(string(fn.Data)) == "a2.md" {
+				editEntry = e.Name
+			}
+		}
+		require.NotEmpty(t, editEntry, "must find an edit log entry for a2.md")
+
+		target, fsErr := ops.Readlink(ctx, "/ren/.log/"+editEntry+"/after")
+		require.Nil(t, fsErr)
+		assert.Contains(t, target, ".history/.by/", "after-with-next-rename must use file_id path")
+		content := readThroughSymlink(t, ops, "/ren/.log/"+editEntry+"/after")
+		assert.Contains(t, string(content), "a2v2", "edit's after should hold the post-edit body")
+	})
+
+	t.Run("A.4_current_after_a_rename", func(t *testing.T) {
+		// create a4.md, then rename a4.md -> b4.md.
+		// Reading .log/<create-id>/current must resolve to the live file at
+		// its new name (b4.md), not the stale stored name (a4.md).
+		require.Nil(t, ops.WriteFile(ctx, "/ren/a4.md", []byte("# a4\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.Rename(ctx, "/ren/a4.md", "/ren/b4.md"))
+
+		// Find the create log entry for a4.md (filename column matches at log-write time).
+		var createEntry string
+		entries, fsErr := ops.ReadDir(ctx, "/ren/.log")
+		require.Nil(t, fsErr)
+		for _, e := range entries {
+			tp, err := ops.ReadFile(ctx, "/ren/.log/"+e.Name+"/type")
+			if err != nil || strings.TrimSpace(string(tp.Data)) != "create" {
+				continue
+			}
+			fn, err := ops.ReadFile(ctx, "/ren/.log/"+e.Name+"/filename")
+			if err != nil {
+				continue
+			}
+			if strings.TrimSpace(string(fn.Data)) == "a4.md" {
+				createEntry = e.Name
+			}
+		}
+		require.NotEmpty(t, createEntry, "must find a create log entry for a4.md")
+
+		target, fsErr := ops.Readlink(ctx, "/ren/.log/"+createEntry+"/current")
+		require.Nil(t, fsErr)
+		assert.Equal(t, "../../b4.md", target, "current must reflect the file's current path, not the log row's stored filename")
+	})
+
+	t.Run("A.5_directory_rename_invalidates_ancestor_path", func(t *testing.T) {
+		// create tutorials/a5.md, edit, then rename directory tutorials -> archive.
+		// Reading .log/<edit-id>/current must resolve to archive/a5.md (the
+		// file's current path) and the before symlink must still resolve.
+		require.Nil(t, ops.WriteFileEnsureDirs(ctx, "/ren/tutorials/a5.md", []byte("---\ntitle: a5v1\n---\n# a5v1\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.WriteFile(ctx, "/ren/tutorials/a5.md", []byte("---\ntitle: a5v2\n---\n# a5v2\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.Rename(ctx, "/ren/tutorials", "/ren/archive"))
+
+		// Find the most recent edit of tutorials/a5.md.
+		var editEntry string
+		entries, fsErr := ops.ReadDir(ctx, "/ren/.log")
+		require.Nil(t, fsErr)
+		for _, e := range entries {
+			tp, err := ops.ReadFile(ctx, "/ren/.log/"+e.Name+"/type")
+			if err != nil || strings.TrimSpace(string(tp.Data)) != "edit" {
+				continue
+			}
+			fn, err := ops.ReadFile(ctx, "/ren/.log/"+e.Name+"/filename")
+			if err != nil {
+				continue
+			}
+			if strings.TrimSpace(string(fn.Data)) == "tutorials/a5.md" {
+				editEntry = e.Name
+			}
+		}
+		require.NotEmpty(t, editEntry, "must find an edit log entry under tutorials/a5.md")
+
+		currentTarget, fsErr := ops.Readlink(ctx, "/ren/.log/"+editEntry+"/current")
+		require.Nil(t, fsErr)
+		assert.Equal(t, "../../archive/a5.md", currentTarget, "current must follow the directory rename")
+
+		// before must still resolve through the file_id-keyed history path.
+		content := readThroughSymlink(t, ops, "/ren/.log/"+editEntry+"/before")
+		assert.Contains(t, string(content), "a5v1", "before should hold the pre-edit body")
+	})
 }
 
 // TestSynth_LogInterface_AfterChain verifies the "after" symlink points to

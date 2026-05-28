@@ -1182,6 +1182,10 @@ type mockDBClient struct {
 	nextLogFilename  string
 	fileExistsResult bool
 
+	// QueryCurrentPath return values (for diff symlink tests)
+	currentPath    string
+	currentPathMap map[string]string // fileID -> current path
+
 	// Undo test tracking
 	undoAffectedFiles    []db.UndoAffectedFile
 	undoLogEntry         *db.UndoAffectedFile
@@ -1844,6 +1848,13 @@ func (m *mockDBClient) QueryFileExists(ctx context.Context, schema, table, fileI
 		}
 	}
 	return m.fileExistsResult, nil
+}
+
+func (m *mockDBClient) QueryCurrentPath(ctx context.Context, schema, table, fileID string) (string, error) {
+	if m.currentPathMap != nil {
+		return m.currentPathMap[fileID], nil
+	}
+	return m.currentPath, nil
 }
 
 func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
