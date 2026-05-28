@@ -150,7 +150,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 
 	entries := make([]Entry, 0, len(rows)+1)
 	// Add .id virtual file
-	entries = append(entries, Entry{Name: ".id", IsDir: false, Mode: 0444, Size: 36, ModTime: now})
+	entries = append(entries, Entry{Name: FileID, IsDir: false, Mode: 0444, Size: 36, ModTime: now})
 
 	historyIDIdx := columnIndex(columns, "version_id")
 	for _, row := range rows {
@@ -267,8 +267,8 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 	}
 
 	// .history/foo.md/.id — virtual file returning the row UUID
-	if parsed.HistoryFile != "" && parsed.HistoryVersionID == ".id" {
-		return &Entry{Name: ".id", IsDir: false, Mode: 0444, Size: 36, ModTime: now}, nil
+	if parsed.HistoryFile != "" && parsed.HistoryVersionID == FileID {
+		return &Entry{Name: FileID, IsDir: false, Mode: 0444, Size: 36, ModTime: now}, nil
 	}
 
 	// .history/foo.md/<versionID> — version file by filename
@@ -308,7 +308,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 	historyTable := parsed.Context.TableName + "_history"
 
 	// .id file: return the row UUID for this filename
-	if parsed.HistoryFile != "" && parsed.HistoryVersionID == ".id" {
+	if parsed.HistoryFile != "" && parsed.HistoryVersionID == FileID {
 		rawFilename := historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
 		columns, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
 		if err != nil {

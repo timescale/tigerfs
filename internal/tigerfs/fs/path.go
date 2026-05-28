@@ -1108,7 +1108,19 @@ func processHistory(result *ParsedPath, remaining []string) (int, *FSError) {
 	consumed := 1 // .history itself
 	for i := 1; i < len(remaining); i++ {
 		seg := remaining[i]
-		if seg == ".id" || isVersionID(seg) {
+		if seg == FileID || isVersionID(seg) {
+			if len(filenameParts) == 0 {
+				// .history/.id and .history/<bare-version> are not meaningful:
+				// .id returns a file's UUID by filename (needs the filename),
+				// and version IDs are scoped to a specific file's history.
+				// Without a filename or .by/<uuid>/ prefix this silently
+				// folded into the .history/ root listing -- reject explicitly.
+				return 0, &FSError{
+					Code:    ErrInvalidPath,
+					Message: fmt.Sprintf(".history/%s requires a filename prefix", seg),
+					Hint:    "use .history/<filename>/.id or .history/<filename>/<versionID>; for UUID browsing use .history/.by/<file_id>/",
+				}
+			}
 			result.HistoryVersionID = seg
 			consumed = i + 1
 			break

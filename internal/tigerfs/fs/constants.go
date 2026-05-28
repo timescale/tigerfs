@@ -86,6 +86,14 @@ const (
 	FileSummary = "summary" // TSV listing of affected files with actions
 )
 
+// Virtual files under .history/
+const (
+	// FileID is the virtual file under .history/<filename>/ that returns the
+	// file's stable UUID. Used as a path terminator by the .history/ parser
+	// and as the entry name returned in directory listings.
+	FileID = ".id"
+)
+
 // Control files (DDL staging)
 // Content files are visible (no dot prefix), trigger files are hidden (dot prefix).
 const (
