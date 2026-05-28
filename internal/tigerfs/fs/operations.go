@@ -1740,7 +1740,21 @@ func (o *Operations) statWithParsed(ctx context.Context, parsed *ParsedPath, ori
 		if parsed.CapabilityArg != "" && parsed.CapabilityDir == DirIndexes {
 			return o.statIndexEntry(ctx, parsed)
 		}
-		return &Entry{Name: parsed.CapabilityDir, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
+		name := parsed.CapabilityDir
+		// When CapabilityArg is set, stat is on .by/<col>/, .filter/<col>/, etc.
+		// NFS requires the response Name to match the leaf segment of the
+		// request path, not the parent capability dir. Without this correction,
+		// macOS NFS rejects the GETATTR response as "RPC struct is bad"
+		// (SYSTEM_ERR -> EBADRPC) because Name="by" doesn't match its LOOKUP
+		// for "<col>". The PathTable case above applies the same correction
+		// for paths like .by/<col>/<value>.
+		if parsed.CapabilityArg != "" && originalPath != "" {
+			baseName := path.Base(originalPath)
+			if baseName != "" && baseName != "." && baseName != "/" {
+				name = baseName
+			}
+		}
+		return &Entry{Name: name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}, nil
 
 	case PathExport:
 		return o.statExport(ctx, parsed, originalPath)
