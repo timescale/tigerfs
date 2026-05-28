@@ -404,10 +404,10 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 		t.Errorf("archive function should be in tigerfs schema, got:\n%s", allSQL)
 	}
 
-	// Should be 10 statements: history (table with WITH, 2 indexes, func, trigger)
-	// + log (table, index) + savepoint (table) + metadata (table, index)
-	if len(stmts) != 10 {
-		t.Errorf("expected 10 statements, got %d", len(stmts))
+	// Should be 12 statements: history (table with WITH, 2 indexes, func, trigger)
+	// + log (table, 3 indexes: by_file, by_user, by_type) + savepoint (table) + metadata (table, index)
+	if len(stmts) != 12 {
+		t.Errorf("expected 12 statements, got %d", len(stmts))
 	}
 
 	// --- Log table ---
@@ -434,6 +434,12 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	}
 	if !strings.Contains(allSQL, `"idx_memory_log_by_file"`) {
 		t.Errorf("log table should have (file_id, log_id) index, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, `"idx_memory_log_by_user" ON "tigerfs"."memory_log" (user_id, log_id ASC)`) {
+		t.Errorf("log table should have (user_id, log_id) index backing .log/.by/user_id/, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, `"idx_memory_log_by_type" ON "tigerfs"."memory_log" (type, log_id ASC)`) {
+		t.Errorf("log table should have (type, log_id) index backing .log/.by/type/, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, "tsdb.orderby = 'log_id ASC'") {
 		t.Errorf("log columnstore should order by log_id ASC, got:\n%s", allSQL)
@@ -499,9 +505,9 @@ func TestSynth_GenerateHistorySQL_PlainText(t *testing.T) {
 		t.Errorf("trigger should reference OLD.encoding, got:\n%s", allSQL)
 	}
 
-	// Should be 10 statements (same as markdown -- log/savepoint/metadata are format-independent)
-	if len(stmts) != 10 {
-		t.Errorf("expected 10 statements, got %d", len(stmts))
+	// Should be 12 statements (same as markdown -- log/savepoint/metadata are format-independent)
+	if len(stmts) != 12 {
+		t.Errorf("expected 12 statements, got %d", len(stmts))
 	}
 
 	// Log and savepoint tables should exist for plain text too
@@ -523,9 +529,9 @@ func TestSynth_GenerateBuildSQLWithFeatures_History(t *testing.T) {
 	allSQL := strings.Join(stmts, "\n")
 
 	// Should have base (10: schema+resolve_path+table+parent_idx+view+comment+func+trigger+parent_mtime_func+parent_mtime_trigger)
-	// + history (10: table+2idx+func+trigger+log+logidx+savepoint+metadata+metadataidx) = 20 statements
-	if len(stmts) != 20 {
-		t.Errorf("expected 20 statements, got %d", len(stmts))
+	// + history (12: table+2idx+func+trigger+log+3logidx+savepoint+metadata+metadataidx) = 22 statements
+	if len(stmts) != 22 {
+		t.Errorf("expected 22 statements, got %d", len(stmts))
 	}
 
 	// First statement should create tigerfs schema
@@ -569,9 +575,9 @@ func TestSynth_GenerateHistoryOnlySQL(t *testing.T) {
 		t.Errorf("comment should include history, got: %s", stmts[0])
 	}
 
-	// Should have 1 (comment) + 10 (history + log + savepoint + metadata) = 11 statements
-	if len(stmts) != 11 {
-		t.Errorf("expected 11 statements, got %d", len(stmts))
+	// Should have 1 (comment) + 12 (history + log + 3 logidx + savepoint + metadata) = 13 statements
+	if len(stmts) != 13 {
+		t.Errorf("expected 13 statements, got %d", len(stmts))
 	}
 
 	// History infrastructure in tigerfs schema
