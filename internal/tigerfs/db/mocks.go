@@ -777,6 +777,10 @@ func (m *MockLogWriter) QueryFileExists(ctx context.Context, schema, table, file
 	return false, nil
 }
 
+func (m *MockLogWriter) QueryCurrentPath(ctx context.Context, schema, table, fileID string) (string, error) {
+	return "", nil
+}
+
 func (m *MockLogWriter) QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error) {
 	if m.VersionIDs != nil {
 		if id, ok := m.VersionIDs[fileID]; ok {

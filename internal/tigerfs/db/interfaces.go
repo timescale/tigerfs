@@ -345,6 +345,11 @@ type LogWriter interface {
 	// QueryFileExists checks if a row with the given id exists in the source table.
 	QueryFileExists(ctx context.Context, schema, table, fileID string) (bool, error)
 
+	// QueryCurrentPath returns the file's current full path by walking the
+	// parent_id chain. Returns "" if the file no longer exists. Used by diff
+	// symlink resolution to produce rename-invariant pointers to live files.
+	QueryCurrentPath(ctx context.Context, schema, table, fileID string) (string, error)
+
 	// QueryLatestVersionID returns the most recent version_id for a given
 	// file_id from the history table. Used to capture the before-state pointer
 	// after an UPDATE/DELETE fires the BEFORE trigger.
