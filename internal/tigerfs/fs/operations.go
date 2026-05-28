@@ -1219,9 +1219,16 @@ func (o *Operations) readDirFilterCapability(ctx context.Context, parsed *Parsed
 			}
 		}
 
-		entries := make([]Entry, len(columns))
-		for i, col := range columns {
-			entries[i] = Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
+		// Hide `filename` on log tables: the column stores `/`-bearing full
+		// paths, which cannot be expressed as a single FUSE/NFS path segment.
+		// Path-level blockLogFilenameQuery also rejects direct access; this
+		// removes the entry from listings so agents don't see it as an option.
+		entries := make([]Entry, 0, len(columns))
+		for _, col := range columns {
+			if blockLogFilenameQuery(fsCtx, col.Name) != nil {
+				continue
+			}
+			entries = append(entries, Entry{Name: col.Name, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now})
 		}
 		return entries, nil
 	}

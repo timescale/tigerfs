@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
 // PathType indicates what kind of filesystem path was parsed.
@@ -620,6 +621,36 @@ func processInfo(result *ParsedPath, remaining []string) (int, *FSError) {
 	return 1, nil
 }
 
+// blockLogFilenameQuery returns ErrInvalidPath if the FSContext targets a
+// `<workspace>_log` table in the tigerfs schema and the capability column is
+// `filename`. The log's `filename` column stores denormalized full paths
+// (ADR-017 § log schema); a single FUSE/NFS path segment cannot contain `/`,
+// so `.by/filename/<val>/` or `.filter/filename/<val>/` would silently match
+// only root-level files and miss any nested ones. Direct callers to the
+// indexed file_id route instead.
+//
+// Returns nil if the column is not `filename` or the context does not target
+// a log table.
+func blockLogFilenameQuery(fsCtx *FSContext, column string) *FSError {
+	if column != "filename" {
+		return nil
+	}
+	if fsCtx == nil {
+		return nil
+	}
+	if fsCtx.Schema != synth.TigerFSSchema {
+		return nil
+	}
+	if !strings.HasSuffix(fsCtx.TableName, "_log") {
+		return nil
+	}
+	return &FSError{
+		Code:    ErrInvalidPath,
+		Message: ".by/filename/ and .filter/filename/ are not supported on the log table",
+		Hint:    "the log stores full paths with /; look up the file's UUID via `Read <dir>/.history/<file>/.id` and use `.log/.by/file_id/<uuid>/`",
+	}
+}
+
 // processBy handles .by/ paths.
 func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 	// Check if filtering is allowed (filters are disallowed after .order/)
@@ -640,6 +671,9 @@ func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 
 	if len(remaining) == 2 {
 		// .by/<column> - list values for column
+		if err := blockLogFilenameQuery(result.Context, remaining[1]); err != nil {
+			return 0, err
+		}
 		result.Type = PathCapability
 		result.CapabilityDir = DirBy
 		result.CapabilityArg = remaining[1]
@@ -649,6 +683,9 @@ func processBy(result *ParsedPath, remaining []string) (int, *FSError) {
 	// .by/<column>/<value> - add filter
 	column := remaining[1]
 	value := remaining[2]
+	if err := blockLogFilenameQuery(result.Context, column); err != nil {
+		return 0, err
+	}
 	result.Context = result.Context.WithFilter(column, value, true)
 	if result.Type == PathTable || result.Type == PathCapability {
 		result.Type = PathTable
@@ -716,6 +753,9 @@ func processFilter(result *ParsedPath, remaining []string) (int, *FSError) {
 	}
 
 	if len(remaining) == 2 {
+		if err := blockLogFilenameQuery(result.Context, remaining[1]); err != nil {
+			return 0, err
+		}
 		result.Type = PathCapability
 		result.CapabilityDir = DirFilter
 		result.CapabilityArg = remaining[1]
@@ -725,6 +765,9 @@ func processFilter(result *ParsedPath, remaining []string) (int, *FSError) {
 	// .filter/<column>/<value>
 	column := remaining[1]
 	value := remaining[2]
+	if err := blockLogFilenameQuery(result.Context, column); err != nil {
+		return 0, err
+	}
 	result.Context = result.Context.WithFilter(column, value, false)
 	if result.Type == PathTable || result.Type == PathCapability {
 		result.Type = PathTable

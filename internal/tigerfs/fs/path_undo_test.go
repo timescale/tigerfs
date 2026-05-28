@@ -67,6 +67,107 @@ func TestParsePath_Log_ByUserExport(t *testing.T) {
 	assert.Equal(t, PathExport, result.Type)
 }
 
+// --- .by/.filter/ filename block on the log table ---
+//
+// The log's `filename` column stores denormalized full paths (ADR-017 § log
+// schema); a single FUSE/NFS path segment cannot contain `/`, so
+// .{by,filter}/filename/<val>/ would silently match only root-level files.
+// Path parsing rejects both forms with a hint pointing at .by/file_id/.
+
+func TestParsePath_Log_ByFilename_Rejected(t *testing.T) {
+	// Listing form: .log/.by/filename
+	_, err := ParsePath("/notes/.log/.by/filename")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidPath, err.Code)
+	assert.Contains(t, err.Hint, "file_id")
+}
+
+func TestParsePath_Log_ByFilenameValue_Rejected(t *testing.T) {
+	// Filter form: .log/.by/filename/<val>
+	_, err := ParsePath("/notes/.log/.by/filename/hello.md")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidPath, err.Code)
+	assert.Contains(t, err.Hint, "file_id")
+}
+
+func TestParsePath_Log_FilterFilename_Rejected(t *testing.T) {
+	// Listing form: .log/.filter/filename
+	_, err := ParsePath("/notes/.log/.filter/filename")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidPath, err.Code)
+	assert.Contains(t, err.Hint, "file_id")
+}
+
+func TestParsePath_Log_FilterFilenameValue_Rejected(t *testing.T) {
+	// Filter form: .log/.filter/filename/<val>
+	_, err := ParsePath("/notes/.log/.filter/filename/hello.md")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidPath, err.Code)
+	assert.Contains(t, err.Hint, "file_id")
+}
+
+func TestParsePath_Log_ByFileID_StillWorks(t *testing.T) {
+	// .by/file_id/<uuid>/ is the documented alternative; must continue to work.
+	result, err := ParsePath("/notes/.log/.by/file_id/019e6ab6-ed60-7a46-90bf-ce17fa441cf8/.last/5")
+	require.Nil(t, err)
+	assert.Equal(t, "notes_log", result.Context.TableName)
+	require.Len(t, result.Context.Filters, 1)
+	assert.Equal(t, "file_id", result.Context.Filters[0].Column)
+	assert.Equal(t, "019e6ab6-ed60-7a46-90bf-ce17fa441cf8", result.Context.Filters[0].Value)
+	assert.Equal(t, LimitLast, result.Context.LimitType)
+	assert.Equal(t, 5, result.Context.Limit)
+}
+
+func TestParsePath_NonLog_ByFilename_NotAffected(t *testing.T) {
+	// On a non-log table (e.g., the workspace backing table), .by/filename/
+	// must still be accepted by the path parser. The backing table's
+	// `filename` is leaf-only (ADR-017:43); no slash hazard.
+	result, err := ParsePath("/notes/.by/filename/hello.md")
+	require.Nil(t, err)
+	require.Len(t, result.Context.Filters, 1)
+	assert.Equal(t, "filename", result.Context.Filters[0].Column)
+	assert.Equal(t, "hello.md", result.Context.Filters[0].Value)
+}
+
+func TestParsePath_History_ByUUID_NotAffected(t *testing.T) {
+	// .history/.by/<uuid>/ is special-cased in processHistory and takes a UUID,
+	// not a column name. Confirm it isn't accidentally caught by the log block.
+	result, err := ParsePath("/notes/.history/.by/019e6ab6-ed60-7a46-90bf-ce17fa441cf8")
+	require.Nil(t, err)
+	assert.Equal(t, PathHistory, result.Type)
+	assert.True(t, result.HistoryByID)
+	assert.Equal(t, "019e6ab6-ed60-7a46-90bf-ce17fa441cf8", result.HistoryRowID)
+}
+
+func TestBlockLogFilenameQuery_PredicateMatrix(t *testing.T) {
+	cases := []struct {
+		name      string
+		ctx       *FSContext
+		column    string
+		wantBlock bool
+	}{
+		{"log table + filename", &FSContext{Schema: "tigerfs", TableName: "notes_log"}, "filename", true},
+		{"log table + other col", &FSContext{Schema: "tigerfs", TableName: "notes_log"}, "user_id", false},
+		{"history table + filename", &FSContext{Schema: "tigerfs", TableName: "notes_history"}, "filename", false},
+		{"savepoint + filename", &FSContext{Schema: "tigerfs", TableName: "notes_savepoint"}, "filename", false},
+		{"public schema + filename", &FSContext{Schema: "public", TableName: "notes_log"}, "filename", false},
+		{"workspace backing + filename", &FSContext{Schema: "public", TableName: "notes"}, "filename", false},
+		{"nil context", nil, "filename", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := blockLogFilenameQuery(tc.ctx, tc.column)
+			if tc.wantBlock {
+				require.NotNil(t, err, "expected block")
+				assert.Equal(t, ErrInvalidPath, err.Code)
+				assert.Contains(t, err.Hint, "file_id")
+			} else {
+				require.Nil(t, err, "expected pass-through")
+			}
+		})
+	}
+}
+
 // --- .savepoint/ path parsing ---
 
 func TestParsePath_Savepoint_Listing(t *testing.T) {
