@@ -852,6 +852,72 @@ func TestSynth_LogInterface_UserIdentity(t *testing.T) {
 		"log entry should include the user identity")
 }
 
+// TestSynth_LogBy_ColumnListing verifies that Stat and ReadDir on
+// .log/.by/<col>/ return correct responses. macOS NFS validates that the
+// GETATTR/LOOKUP response Name matches the leaf segment of the request
+// path; returning Name=".by" for a path ending in /<col> fails as
+// "RPC struct is bad" (SYSTEM_ERR -> EBADRPC). Stat must return the
+// leaf segment, and ReadDir on an all-NULL column must succeed cleanly
+// with an empty listing rather than erroring.
+func TestSynth_LogBy_ColumnListing(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "logbycol")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/logbycol", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Produce log entries. The setup has no --user-id, so every user_id is NULL.
+	require.Nil(t, ops.WriteFile(ctx, "/logbycol/hello.md", []byte("# v1\n")))
+	time.Sleep(1100 * time.Millisecond)
+	require.Nil(t, ops.WriteFile(ctx, "/logbycol/hello.md", []byte("# v2\n")))
+
+	t.Run("Stat returns leaf name for .by/<col>", func(t *testing.T) {
+		entry, fsErr := ops.Stat(ctx, "/logbycol/.log/.by/user_id")
+		require.Nil(t, fsErr)
+		require.NotNil(t, entry)
+		assert.Equal(t, "user_id", entry.Name)
+		assert.True(t, entry.IsDir)
+	})
+
+	t.Run("ReadDir on all-NULL column returns empty listing", func(t *testing.T) {
+		// GetDistinctValues filters NULL via WHERE col IS NOT NULL, so an
+		// all-NULL column yields zero rows and the listing is empty. This
+		// should succeed cleanly, not error.
+		entries, fsErr := ops.ReadDir(ctx, "/logbycol/.log/.by/user_id")
+		require.Nil(t, fsErr)
+		assert.Empty(t, entries, "all-NULL user_id should produce no distinct values")
+	})
+
+	t.Run("ReadDir on .by/type lists the populated types", func(t *testing.T) {
+		// `type` is NOT NULL (CHECK constraint); the listing should include
+		// the types that actually appeared in this workspace's log.
+		entries, fsErr := ops.ReadDir(ctx, "/logbycol/.log/.by/type")
+		require.Nil(t, fsErr)
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name)
+		}
+		assert.Contains(t, names, "create", ".by/type/ should list create operations")
+		assert.Contains(t, names, "edit", ".by/type/ should list edit operations")
+	})
+
+	t.Run("Stat on .by/type returns leaf name", func(t *testing.T) {
+		entry, fsErr := ops.Stat(ctx, "/logbycol/.log/.by/type")
+		require.Nil(t, fsErr)
+		require.NotNil(t, entry)
+		assert.Equal(t, "type", entry.Name)
+		assert.True(t, entry.IsDir)
+	})
+}
+
 // cleanupTigerFSTablesWithLog extends cleanup to also drop _log and _savepoint tables.
 func cleanupLogTables(t *testing.T, connStr string, tableNames ...string) {
 	t.Helper()

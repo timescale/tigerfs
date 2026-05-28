@@ -308,6 +308,51 @@ func TestReadFile_InfoCount(t *testing.T) {
 	assert.Equal(t, "42\n", string(content.Data))
 }
 
+// TestStat_PathCapability_ReturnsLeafName verifies that Stat on a path like
+// /<table>/.by/<col> returns Entry.Name = "<col>", not the capability dir.
+// macOS NFS requires GETATTR/LOOKUP responses to have a Name that matches
+// the leaf segment of the request path; returning Name=".by" for a path
+// ending in /user_id triggers SYSTEM_ERR -> EBADRPC ("RPC struct is bad").
+func TestStat_PathCapability_ReturnsLeafName(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public": {"users"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.users": {column: "id"},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+
+	t.Run(".by/<col> returns column name", func(t *testing.T) {
+		entry, err := ops.Stat(context.Background(), "/users/.by/email")
+		require.Nil(t, err)
+		require.NotNil(t, entry)
+		assert.True(t, entry.IsDir)
+		assert.Equal(t, "email", entry.Name)
+	})
+
+	t.Run(".filter/<col> returns column name", func(t *testing.T) {
+		entry, err := ops.Stat(context.Background(), "/users/.filter/email")
+		require.Nil(t, err)
+		require.NotNil(t, entry)
+		assert.True(t, entry.IsDir)
+		assert.Equal(t, "email", entry.Name)
+	})
+
+	t.Run(".by/ root still returns .by", func(t *testing.T) {
+		// CapabilityArg is empty for the bare .by/ -- the capability dir
+		// name is the correct response since that's the leaf in the path.
+		entry, err := ops.Stat(context.Background(), "/users/.by")
+		require.Nil(t, err)
+		require.NotNil(t, entry)
+		assert.True(t, entry.IsDir)
+		assert.Equal(t, ".by", entry.Name)
+	})
+}
+
 // TestStat_Column tests Stat on a column file.
 func TestStat_Column(t *testing.T) {
 	cfg := &config.Config{}
