@@ -139,6 +139,51 @@ func TestParsePath_History_ByUUID_NotAffected(t *testing.T) {
 	assert.Equal(t, "019e6ab6-ed60-7a46-90bf-ce17fa441cf8", result.HistoryRowID)
 }
 
+// --- .history/.id and bare-version rejection (Bug C) ---
+//
+// Without a preceding filename, .id and version IDs aren't meaningful. The
+// parser used to silently set HistoryVersionID with HistoryFile = "", which
+// the readdir dispatcher then ignored, making the paths act as undocumented
+// aliases for .history/. Reject them explicitly with a hint pointing at the
+// supported forms.
+
+func TestParsePath_History_BareDotID_Rejected(t *testing.T) {
+	_, err := ParsePath("/notes/.history/.id")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidPath, err.Code)
+	assert.Contains(t, err.Message, ".id")
+	assert.Contains(t, err.Hint, "<filename>")
+	assert.Contains(t, err.Hint, ".by/")
+}
+
+func TestParsePath_History_BareVersionID_Rejected(t *testing.T) {
+	// A version-shaped string with no filename prefix is the same parser
+	// quirk: the greedy filename loop ate it as a HistoryVersionID and left
+	// HistoryFile empty. Reject for the same reason as .history/.id.
+	_, err := ParsePath("/notes/.history/2026-04-08T143012.001Z-g7h8i9j0k1l2a")
+	require.NotNil(t, err)
+	assert.Equal(t, ErrInvalidPath, err.Code)
+	assert.Contains(t, err.Hint, "<filename>")
+}
+
+func TestParsePath_History_FilenameDotID_StillWorks(t *testing.T) {
+	// .history/<filename>/.id is the legitimate UUID lookup -- must still parse.
+	result, err := ParsePath("/notes/.history/foo.md/.id")
+	require.Nil(t, err)
+	assert.Equal(t, PathHistory, result.Type)
+	assert.Equal(t, "foo.md", result.HistoryFile)
+	assert.Equal(t, FileID, result.HistoryVersionID)
+}
+
+func TestParsePath_History_FilenameVersion_StillWorks(t *testing.T) {
+	// .history/<filename>/<version> is the legitimate version read -- must still parse.
+	result, err := ParsePath("/notes/.history/foo.md/2026-04-08T143012.001Z-g7h8i9j0k1l2a")
+	require.Nil(t, err)
+	assert.Equal(t, PathHistory, result.Type)
+	assert.Equal(t, "foo.md", result.HistoryFile)
+	assert.Equal(t, "2026-04-08T143012.001Z-g7h8i9j0k1l2a", result.HistoryVersionID)
+}
+
 func TestBlockLogFilenameQuery_PredicateMatrix(t *testing.T) {
 	cases := []struct {
 		name      string
