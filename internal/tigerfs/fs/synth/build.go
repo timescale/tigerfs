@@ -414,6 +414,21 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 		qualifiedLog,
 	)
 
+	// Composite indexes backing the documented .log/.by/user_id/ and .log/.by/type/
+	// workflows (recipes.md Recipe 3, files.md Operation Log). Same (col, log_id ASC)
+	// shape as createLogIndex so SkipScan + chunk pruning + segmentby-on-file_id
+	// stay coherent.
+	createLogIndexUser := fmt.Sprintf(
+		`CREATE INDEX %s ON %s (user_id, log_id ASC)`,
+		db.QuoteIdent("idx_"+logTable+"_by_user"),
+		qualifiedLog,
+	)
+	createLogIndexType := fmt.Sprintf(
+		`CREATE INDEX %s ON %s (type, log_id ASC)`,
+		db.QuoteIdent("idx_"+logTable+"_by_type"),
+		qualifiedLog,
+	)
+
 	// --- Savepoint table (ADR-016 Section 2) ---
 	// Named bookmarks for undo-to-savepoint operations. Regular table (not a
 	// hypertable) -- savepoints are small and don't need time-series features.
@@ -459,6 +474,8 @@ $$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
 		// Undo log infrastructure
 		createLogTable,
 		createLogIndex,
+		createLogIndexUser,
+		createLogIndexType,
 		// Savepoint infrastructure
 		createSavepointTable,
 		// Metadata infrastructure
