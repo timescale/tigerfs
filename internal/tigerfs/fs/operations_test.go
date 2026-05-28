@@ -498,6 +498,87 @@ func TestReadDir_ByCapability(t *testing.T) {
 	assert.Contains(t, names, "email")
 }
 
+// TestReadDir_FilterCapability_HidesFilenameOnLog verifies that .log/.filter/
+// listings exclude the `filename` column. The log's filename stores `/`-bearing
+// full paths that cannot be passed as a single FUSE path segment; surfacing the
+// column in the listing would invite agents to navigate a broken path.
+func TestReadDir_FilterCapability_HidesFilenameOnLog(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		columns: map[string][]mockColumn{
+			"tigerfs.notes_log": {
+				{name: "log_id", dataType: "uuid"},
+				{name: "file_id", dataType: "uuid"},
+				{name: "type", dataType: "text"},
+				{name: "user_id", dataType: "text"},
+				{name: "filename", dataType: "text"},
+				{name: "version_id", dataType: "uuid"},
+				{name: "description", dataType: "text"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	parsed := &ParsedPath{
+		Type:          PathCapability,
+		CapabilityDir: DirFilter,
+		Context: &FSContext{
+			Schema:    "tigerfs",
+			TableName: "notes_log",
+		},
+	}
+	entries, err := ops.readDirFilterCapability(context.Background(), parsed)
+	require.Nil(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	assert.NotContains(t, names, "filename", "filename must be hidden from .log/.filter/ listing")
+	// All other columns should still appear.
+	assert.Contains(t, names, "log_id")
+	assert.Contains(t, names, "file_id")
+	assert.Contains(t, names, "type")
+	assert.Contains(t, names, "user_id")
+	assert.Contains(t, names, "version_id")
+	assert.Contains(t, names, "description")
+}
+
+// TestReadDir_FilterCapability_KeepsFilenameOnNonLog verifies that .filter/ on
+// a non-log table (e.g., the workspace backing table) still lists `filename`.
+// The backing table's `filename` is leaf-only (ADR-017:43); no slash hazard.
+func TestReadDir_FilterCapability_KeepsFilenameOnNonLog(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		columns: map[string][]mockColumn{
+			"tigerfs.notes": {
+				{name: "id", dataType: "uuid"},
+				{name: "parent_id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+				{name: "body", dataType: "text"},
+			},
+		},
+	}
+
+	ops := NewOperations(cfg, mockDB)
+	parsed := &ParsedPath{
+		Type:          PathCapability,
+		CapabilityDir: DirFilter,
+		Context: &FSContext{
+			Schema:    "tigerfs",
+			TableName: "notes",
+		},
+	}
+	entries, err := ops.readDirFilterCapability(context.Background(), parsed)
+	require.Nil(t, err)
+
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name
+	}
+	assert.Contains(t, names, "filename", "filename must still appear on non-log table .filter/")
+}
+
 // TestReadDir_FilterCapability tests listing columns in .filter/.
 func TestReadDir_FilterCapability(t *testing.T) {
 	cfg := &config.Config{}
