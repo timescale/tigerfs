@@ -913,6 +913,42 @@ func (c *Client) QueryFileExists(ctx context.Context, schema, table, fileID stri
 	return exists, nil
 }
 
+// QueryCurrentPath returns the file's current full path by walking the parent_id
+// chain in the source table. Returns "" if the file no longer exists (e.g.,
+// deleted). The walk is one round-trip via WITH RECURSIVE, leveraging the
+// (parent_id, filename) index for the upward joins.
+//
+// Used by diff symlink resolution to compute "where the file lives now",
+// independent of what filename the log entry recorded at log-write time. The
+// resulting path is rename-invariant (the file's own and any ancestor's).
+func (c *Client) QueryCurrentPath(ctx context.Context, schema, table, fileID string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+
+	query := fmt.Sprintf(
+		`WITH RECURSIVE p(id, filename, parent_id, depth) AS (
+			SELECT "id", "filename", "parent_id", 0 FROM %s WHERE "id" = $1
+			UNION ALL
+			SELECT t."id", t."filename", t."parent_id", p.depth + 1
+			FROM %s t JOIN p ON t."id" = p.parent_id
+		)
+		SELECT string_agg("filename", '/' ORDER BY depth DESC) FROM p`,
+		qt(schema, table), qt(schema, table),
+	)
+
+	var path *string
+	err := c.pool.QueryRow(ctx, query, fileID).Scan(&path)
+	if err != nil {
+		return "", fmt.Errorf("failed to query current path: %w", err)
+	}
+	if path == nil {
+		// No rows matched — file no longer exists.
+		return "", nil
+	}
+	return *path, nil
+}
+
 // QueryUndoAffectedFiles returns the first log entry per file after a target point.
 // Uses DISTINCT ON to find one entry per file_id, ordered by log_id ASC (oldest first).
 // TimescaleDB's SkipScan optimizes this on the (file_id, log_id ASC) index.
