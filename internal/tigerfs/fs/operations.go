@@ -898,49 +898,57 @@ func (o *Operations) resolveLogDiffSymlink(ctx context.Context, parsed *ParsedPa
 
 	versionID, _ := format.ConvertValueToText(rowMap["version_id"])
 	fileID, _ := format.ConvertValueToText(rowMap["file_id"])
-	filename, _ := format.ConvertValueToText(rowMap["filename"])
 	logID, _ := format.ConvertValueToText(rowMap["log_id"])
+	// Note: rowMap["filename"] is no longer used to construct symlink targets.
+	// Symlinks use file_id-keyed paths (.history/.by/<file_id>/ for history
+	// references; QueryCurrentPath for live-file references) so they remain
+	// valid across renames of the file or any ancestor directory. The
+	// `filename` column is still surfaced via .log/<id>/filename for callers
+	// that want the snapshot path at log-write time.
 
 	switch parsed.Column {
 	case "before":
 		if versionID == "" {
 			return "/dev/null", nil
 		}
-		// Convert version_id UUID to display name for .history/ path.
-		// .history/ is per-directory: tutorials/foo.md → ../../tutorials/.history/foo.md/<version>
+		// Use file_id-keyed history path so the symlink resolves correctly even
+		// when this log entry is a rename (the history row's filename is the
+		// OLD name, while the log row stores the NEW name) or when the file or
+		// any ancestor directory has since been renamed/moved. .history/.by/
+		// lives at the workspace root and is rename-invariant.
 		displayName := o.uuidToDisplayName(versionID)
-		return "../../" + historySymlinkPath(filename, displayName), nil
+		return "../../" + historyByFileIDSymlinkPath(fileID, displayName), nil
 
 	case "after":
-		// Find next log entry for this file
-		nextVersionID, nextFilename, err := o.db.QueryNextLogEntry(ctx, synth.TigerFSSchema, logTable, fileID, logID)
+		// Find next log entry for this file. We only need its version_id;
+		// its filename is the snapshot at the next op's log-write time and
+		// would be subject to the same staleness as the current row's filename.
+		nextVersionID, _, err := o.db.QueryNextLogEntry(ctx, synth.TigerFSSchema, logTable, fileID, logID)
 		if err != nil {
 			return "", &FSError{Code: ErrIO, Message: "failed to query next log entry", Cause: err}
 		}
 		if nextVersionID != "" {
-			// Next entry has a version_id → point to that history version
+			// Next entry has a version_id → point to that history version via
+			// the rename-invariant file_id path.
 			displayName := o.uuidToDisplayName(nextVersionID)
-			fn := nextFilename
-			if fn == "" {
-				fn = filename
-			}
-			return "../../" + historySymlinkPath(fn, displayName), nil
+			return "../../" + historyByFileIDSymlinkPath(fileID, displayName), nil
 		}
-		if nextFilename != "" {
-			// Next entry exists but version_id is NULL (was a create) → current file
-			return "../../" + nextFilename, nil
-		}
-		// No next entry → file is either current or deleted
-		exists, _ := o.db.QueryFileExists(ctx, synth.TigerFSSchema, appName, fileID)
-		if exists {
-			return "../../" + filename, nil
+		// No next-entry history row → either the file exists at its current
+		// location, or it's been deleted. Look up the live path by file_id;
+		// nextFilename / log-row filename may be stale across renames.
+		currentPath, _ := o.db.QueryCurrentPath(ctx, synth.TigerFSSchema, appName, fileID)
+		if currentPath != "" {
+			return "../../" + currentPath, nil
 		}
 		return "/dev/null", nil
 
 	case "current":
-		exists, _ := o.db.QueryFileExists(ctx, synth.TigerFSSchema, appName, fileID)
-		if exists {
-			return "../../" + filename, nil
+		// Look up the file's path as of now via file_id; the log row's stored
+		// filename is a snapshot from log-write time and goes stale after any
+		// rename of the file or an ancestor directory.
+		currentPath, _ := o.db.QueryCurrentPath(ctx, synth.TigerFSSchema, appName, fileID)
+		if currentPath != "" {
+			return "../../" + currentPath, nil
 		}
 		return "/dev/null", nil
 	}
@@ -996,6 +1004,18 @@ func historySymlinkPath(filename, version string) string {
 		return dir + "/.history/" + leaf + "/" + version
 	}
 	return ".history/" + filename + "/" + version
+}
+
+// historyByFileIDSymlinkPath constructs the rename-invariant .history/ path
+// keyed on the file's stable UUID rather than its (possibly stale) filename.
+// `.history/.by/<file_id>/` lives at the workspace root and resolves
+// correctly regardless of how many times the file or any ancestor directory
+// has been renamed or moved since the log entry was written.
+//
+// Used by .log/<id>/{before,after} diff symlinks. The caller prepends the
+// "../../" depth to escape the log entry's directory.
+func historyByFileIDSymlinkPath(fileID, version string) string {
+	return ".history/.by/" + fileID + "/" + version
 }
 
 // writeSavepoint injects user_id from mount identity then delegates to writeRowFile.

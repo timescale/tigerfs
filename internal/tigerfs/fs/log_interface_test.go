@@ -135,7 +135,9 @@ func TestResolveLogDiffSymlink_Before_WithVersionID(t *testing.T) {
 
 	target, fsErr := ops.resolveLogDiffSymlink(context.Background(), parsed)
 	require.Nil(t, fsErr)
-	assert.Contains(t, target, "../../.history/hello.md/")
+	// file_id-keyed history path: rename-invariant, doesn't depend on the
+	// log row's filename column.
+	assert.Contains(t, target, "../../.history/.by/file-1/")
 	assert.NotEqual(t, "/dev/null", target)
 }
 
@@ -156,13 +158,14 @@ func TestResolveLogDiffSymlink_After_NextEntryWithVersionID(t *testing.T) {
 
 	target, fsErr := ops.resolveLogDiffSymlink(context.Background(), parsed)
 	require.Nil(t, fsErr)
-	assert.Contains(t, target, "../../.history/hello.md/")
+	assert.Contains(t, target, "../../.history/.by/file-1/")
 }
 
 func TestResolveLogDiffSymlink_After_NextEntryNullVersionID(t *testing.T) {
 	mock := setupLogDiffMock("v-1", "file-1", "hello.md", "log-1")
 	mock.nextLogVersionID = "" // NULL -- next op was a create
 	mock.nextLogFilename = "hello.md"
+	mock.currentPath = "hello.md" // next-create's file lives at this path now
 	cfg := &config.Config{}
 	ops := NewOperations(cfg, mock)
 
@@ -181,8 +184,8 @@ func TestResolveLogDiffSymlink_After_NextEntryNullVersionID(t *testing.T) {
 
 func TestResolveLogDiffSymlink_After_NoNextEntry_FileExists(t *testing.T) {
 	mock := setupLogDiffMock("v-1", "file-1", "hello.md", "log-1")
-	// No next entry (defaults empty)
-	mock.fileExistsResult = true
+	// No next entry (defaults empty); file lives at its current path.
+	mock.currentPath = "hello.md"
 	cfg := &config.Config{}
 	ops := NewOperations(cfg, mock)
 
@@ -201,7 +204,7 @@ func TestResolveLogDiffSymlink_After_NoNextEntry_FileExists(t *testing.T) {
 
 func TestResolveLogDiffSymlink_After_NoNextEntry_FileDeleted(t *testing.T) {
 	mock := setupLogDiffMock("v-1", "file-1", "hello.md", "log-1")
-	mock.fileExistsResult = false
+	// currentPath defaults to "" -> file no longer exists.
 	cfg := &config.Config{}
 	ops := NewOperations(cfg, mock)
 
@@ -220,7 +223,7 @@ func TestResolveLogDiffSymlink_After_NoNextEntry_FileDeleted(t *testing.T) {
 
 func TestResolveLogDiffSymlink_Current_FileExists(t *testing.T) {
 	mock := setupLogDiffMock("v-1", "file-1", "hello.md", "log-1")
-	mock.fileExistsResult = true
+	mock.currentPath = "hello.md"
 	cfg := &config.Config{}
 	ops := NewOperations(cfg, mock)
 
@@ -239,7 +242,7 @@ func TestResolveLogDiffSymlink_Current_FileExists(t *testing.T) {
 
 func TestResolveLogDiffSymlink_Current_FileDeleted(t *testing.T) {
 	mock := setupLogDiffMock("v-1", "file-1", "hello.md", "log-1")
-	mock.fileExistsResult = false
+	// currentPath defaults to "" -> file no longer exists.
 	cfg := &config.Config{}
 	ops := NewOperations(cfg, mock)
 
@@ -254,4 +257,50 @@ func TestResolveLogDiffSymlink_Current_FileDeleted(t *testing.T) {
 	target, fsErr := ops.resolveLogDiffSymlink(context.Background(), parsed)
 	require.Nil(t, fsErr)
 	assert.Equal(t, "/dev/null", target)
+}
+
+func TestResolveLogDiffSymlink_Current_RenameInvariant(t *testing.T) {
+	// Log entry recorded "old-name.md" at log-write time; file has since been
+	// renamed/moved. The symlink should point at the file's current path,
+	// not the stale stored filename.
+	mock := setupLogDiffMock("v-1", "file-1", "old-name.md", "log-1")
+	mock.currentPath = "archive/new-name.md"
+	cfg := &config.Config{}
+	ops := NewOperations(cfg, mock)
+
+	parsed := &ParsedPath{
+		Type:          PathColumn,
+		Context:       &FSContext{Schema: "tigerfs", TableName: "test_log"},
+		PrimaryKey:    "log-1",
+		Column:        "current",
+		OrigTableName: "test",
+	}
+
+	target, fsErr := ops.resolveLogDiffSymlink(context.Background(), parsed)
+	require.Nil(t, fsErr)
+	assert.Equal(t, "../../archive/new-name.md", target)
+}
+
+func TestResolveLogDiffSymlink_Before_RenameLogEntry_UsesFileID(t *testing.T) {
+	// A rename log entry stores the NEW filename; the history row's filename
+	// is the OLD name. The file_id-keyed history path sidesteps the namespace
+	// mismatch -- doesn't depend on either filename.
+	mock := setupLogDiffMock("019d7db2-237b-77ab-949a-afe464991e0e", "file-1", "new-name.md", "log-rename")
+	cfg := &config.Config{}
+	ops := NewOperations(cfg, mock)
+
+	parsed := &ParsedPath{
+		Type:          PathColumn,
+		Context:       &FSContext{Schema: "tigerfs", TableName: "test_log"},
+		PrimaryKey:    "log-rename",
+		Column:        "before",
+		OrigTableName: "test",
+	}
+
+	target, fsErr := ops.resolveLogDiffSymlink(context.Background(), parsed)
+	require.Nil(t, fsErr)
+	// Must use file_id (file-1), not the stored filename (new-name.md or old).
+	assert.Contains(t, target, "../../.history/.by/file-1/")
+	assert.NotContains(t, target, "new-name.md")
+	assert.NotContains(t, target, "old-name.md")
 }
