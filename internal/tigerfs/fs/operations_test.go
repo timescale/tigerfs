@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/timescale/tigerfs/internal/tigerfs/config"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 )
 
 // TestNewOperations tests the Operations constructor.
@@ -351,6 +352,162 @@ func TestStat_PathCapability_ReturnsLeafName(t *testing.T) {
 		assert.True(t, entry.IsDir)
 		assert.Equal(t, ".by", entry.Name)
 	})
+}
+
+// primeSynthViewCache installs a stub ViewInfo into the operations' synth cache
+// so the data-first-cap gate can identify the named table as a synth view.
+// Avoids needing real DB metadata for unit tests.
+func primeSynthViewCache(o *Operations, schema, viewName string) {
+	o.synthState.mu.Lock()
+	defer o.synthState.mu.Unlock()
+	if o.synthState.cache == nil {
+		o.synthState.cache = make(map[string]map[string]*synth.ViewInfo)
+	}
+	if o.synthState.cache[schema] == nil {
+		o.synthState.cache[schema] = make(map[string]*synth.ViewInfo)
+	}
+	o.synthState.cache[schema][viewName] = &synth.ViewInfo{
+		Format:     synth.FormatMarkdown,
+		HasHistory: true,
+	}
+}
+
+// TestRejectDataFirstCap_BlockedOnSynthWorkspace covers the gate at the
+// parser layer (o.parsePath). For each blocked path shape, Stat/ReadDir
+// on a synth-view workspace must return ErrInvalidPath with the .tables/
+// hint. Equivalent paths under .tables/ continue to work.
+func TestRejectDataFirstCap_BlockedOnSynthWorkspace(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables: map[string][]string{
+			"public":  {"blog"},
+			"tigerfs": {"blog"},
+		},
+		primaryKeys: map[string]*mockPK{
+			"public.blog":  {column: "id"},
+			"tigerfs.blog": {column: "id"},
+		},
+		columns: map[string][]mockColumn{
+			"public.blog":  {{name: "id", dataType: "uuid"}},
+			"tigerfs.blog": {{name: "id", dataType: "uuid"}},
+		},
+	}
+	ops := NewOperations(cfg, mockDB)
+	primeSynthViewCache(ops, "public", "blog")
+
+	blocked := []string{
+		"/blog/.by",                 // PathCapability + DirBy
+		"/blog/.filter",             // PathCapability + DirFilter
+		"/blog/.order",              // PathCapability + DirOrder
+		"/blog/.columns",            // PathCapability + DirColumns
+		"/blog/.first",              // PathCapability + DirFirst
+		"/blog/.last",               // PathCapability + DirLast
+		"/blog/.sample",             // PathCapability + DirSample
+		"/blog/.indexes",            // PathCapability + DirIndexes
+		"/blog/.export/json",        // PathExport
+		"/blog/.import/json",        // PathImport (PathImport via processImport)
+		"/blog/.modify/foo",         // PathDDL, op=modify
+		"/blog/.delete/foo",         // PathDDL, op=delete
+		"/blog/.by/author/alice",    // PathTable with HasPipelineOperations()
+		"/blog/.filter/title/howdy", // PathTable with HasPipelineOperations()
+		"/blog/.first/10",           // PathTable with limit set
+	}
+	for _, p := range blocked {
+		t.Run("Stat "+p, func(t *testing.T) {
+			_, err := ops.Stat(context.Background(), p)
+			require.NotNil(t, err, "expected reject")
+			assert.Equal(t, ErrInvalidPath, err.Code)
+			assert.Contains(t, err.Hint, ".tables/")
+		})
+		t.Run("ReadDir "+p, func(t *testing.T) {
+			_, err := ops.ReadDir(context.Background(), p)
+			require.NotNil(t, err, "expected reject")
+			assert.Equal(t, ErrInvalidPath, err.Code)
+		})
+	}
+}
+
+// TestRejectDataFirstCap_AllowedOnSynthWorkspace confirms that the file-first
+// control surfaces and file/dir reads still work on a synth workspace.
+func TestRejectDataFirstCap_AllowedOnSynthWorkspace(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables:      map[string][]string{"public": {"blog"}},
+		primaryKeys: map[string]*mockPK{"public.blog": {column: "id"}},
+		columns:     map[string][]mockColumn{"public.blog": {{name: "id", dataType: "uuid"}}},
+	}
+	ops := NewOperations(cfg, mockDB)
+	primeSynthViewCache(ops, "public", "blog")
+
+	allowed := []string{
+		"/blog/.info",            // PathInfo
+		"/blog/.history",         // PathHistory
+		"/blog/.log",             // PathLog (redirects Schema to tigerfs)
+		"/blog/.savepoint",       // PathSavepoint
+		"/blog/.undo",            // PathUndo
+		"/blog/.format/markdown", // PathFormat
+	}
+	for _, p := range allowed {
+		t.Run(p, func(t *testing.T) {
+			_, err := ops.Stat(context.Background(), p)
+			// Stat may succeed or fail for reasons unrelated to the gate
+			// (e.g., no log entries in this mock); the critical check is
+			// that the gate does NOT reject with ErrInvalidPath + .tables/
+			// hint. Other errors are fine for this test's purpose.
+			if err != nil {
+				assert.NotContains(t, err.Hint, ".tables/",
+					"path was rejected by the data-first gate but should be allowed")
+			}
+		})
+	}
+}
+
+// TestRejectDataFirstCap_DataFirstRouteAllowed confirms that the .tables/
+// route (Schema=tigerfs) is exempt from the gate.
+func TestRejectDataFirstCap_DataFirstRouteAllowed(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables:      map[string][]string{"tigerfs": {"blog"}},
+		primaryKeys: map[string]*mockPK{"tigerfs.blog": {column: "id"}},
+		columns: map[string][]mockColumn{
+			"tigerfs.blog": {
+				{name: "id", dataType: "uuid"},
+				{name: "filename", dataType: "text"},
+			},
+		},
+	}
+	ops := NewOperations(cfg, mockDB)
+	primeSynthViewCache(ops, "public", "blog")
+
+	// /.tables/blog/.by/ — Schema=tigerfs, gate must bypass.
+	entry, err := ops.Stat(context.Background(), "/.tables/blog/.by")
+	require.Nil(t, err)
+	require.NotNil(t, entry)
+	assert.True(t, entry.IsDir)
+}
+
+// TestRejectDataFirstCap_NonSynthTablesUnaffected confirms that regular
+// data-first tables in the user schema still accept all capabilities.
+// Only synth views in the user schema are gated.
+func TestRejectDataFirstCap_NonSynthTablesUnaffected(t *testing.T) {
+	cfg := &config.Config{}
+	mockDB := &mockDBClient{
+		tables:      map[string][]string{"public": {"users"}},
+		primaryKeys: map[string]*mockPK{"public.users": {column: "id"}},
+		columns: map[string][]mockColumn{
+			"public.users": {
+				{name: "id", dataType: "integer"},
+				{name: "email", dataType: "text"},
+			},
+		},
+	}
+	ops := NewOperations(cfg, mockDB)
+	// No synth view registered for "users" -- it's a regular table.
+
+	entry, err := ops.Stat(context.Background(), "/users/.by")
+	require.Nil(t, err)
+	require.NotNil(t, entry)
+	assert.True(t, entry.IsDir)
 }
 
 // TestStat_Column tests Stat on a column file.

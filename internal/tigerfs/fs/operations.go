@@ -323,12 +323,17 @@ func (o *Operations) GetDDLManager() *DDLManager {
 	return o.ddl
 }
 
-// parsePath parses a filesystem path and resolves the default schema.
+// parsePath parses a filesystem path, resolves the default schema, and
+// enforces policy gates that need DB context (e.g., synth-view detection).
 //
 // Unlike ParsePath (a pure function), this method uses the database connection
 // to resolve the default schema. Paths like /users parse with an empty schema,
 // which this method fills in from the connection's current_schema().
 // Explicit schema paths (/.schemas/myschema/table) are left unchanged.
+//
+// Production callers should always use this method rather than ParsePath
+// directly. Policy gates that depend on table-shape (e.g., file-first vs.
+// data-first surface) live here.
 func (o *Operations) parsePath(ctx context.Context, path string) (*ParsedPath, *FSError) {
 	parsed, err := ParsePath(path)
 	if err != nil {
@@ -337,7 +342,82 @@ func (o *Operations) parsePath(ctx context.Context, path string) (*ParsedPath, *
 	if err := o.resolveSchema(ctx, parsed); err != nil {
 		return nil, err
 	}
+	if err := o.rejectDataFirstCapOnSynthWorkspace(ctx, parsed); err != nil {
+		return nil, err
+	}
 	return parsed, nil
+}
+
+// rejectDataFirstCapOnSynthWorkspace blocks data-first capability paths on
+// file-first workspaces (synth views accessed via /<view>/...). Data-first
+// access to a synth view's backing table remains available through the
+// explicit /.tables/<view>/... route, which uses Schema=tigerfs and is
+// unaffected by this gate.
+//
+// File-first workspaces present markdown/plaintext files. Exposing .by/,
+// .filter/, .export/, etc. at workspace root or in subdirs leaks the
+// backing-table row/column abstraction (including internal columns like
+// parent_id, filetype, encoding) into a surface that is conceptually a
+// directory of files. The data-first machinery is reused for synth views
+// to implement the file surface, but the pipeline capabilities themselves
+// are not part of the file-first contract.
+//
+// The allowlist of capabilities that remain accessible on file-first
+// workspaces is: .info/, .history/, .log/, .savepoint/, .undo/, .format/
+// (the workspace-control surfaces). Everything else returns ErrInvalidPath
+// with a hint pointing at the .tables/ route.
+func (o *Operations) rejectDataFirstCapOnSynthWorkspace(ctx context.Context, parsed *ParsedPath) *FSError {
+	if parsed.Context == nil {
+		return nil
+	}
+	// /.tables/<view>/... routes here with Schema=tigerfs and is the
+	// explicit data-first surface; never gate.
+	if parsed.Context.Schema == synth.TigerFSSchema {
+		return nil
+	}
+
+	shouldBlock := false
+	switch parsed.Type {
+	case PathCapability:
+		// Listing form: .by/, .filter/, etc. Only the data-first capabilities
+		// are blocked; .info/ is in the allowlist and never reaches here as
+		// a blocked case.
+		switch parsed.CapabilityDir {
+		case DirBy, DirFilter, DirOrder, DirColumns,
+			DirFirst, DirLast, DirSample, DirIndexes:
+			shouldBlock = true
+		}
+	case PathExport, PathImport:
+		shouldBlock = true
+	case PathDDL:
+		// Workspace-level DDL on the backing table or its indexes
+		// (.modify/, .delete/, .indexes/.create/, .indexes/<name>/.delete/).
+		// Mount-root DDL (/.create/<name>/) has no Context and was bypassed
+		// at the top of this function.
+		shouldBlock = true
+	case PathTable:
+		// A pipeline cap collapsed into a filtered PathTable
+		// (e.g., .by/<col>/<val>/ or .filter/<col>/<val>/).
+		if parsed.Context.HasPipelineOperations() {
+			shouldBlock = true
+		}
+	}
+	if !shouldBlock {
+		return nil
+	}
+
+	// Confirm we're on a synth view. Regular data-first tables in the user
+	// schema (e.g., /users/) keep full capability access.
+	info := o.getSynthViewInfo(ctx, parsed.Context.Schema, parsed.Context.TableName)
+	if info == nil {
+		return nil
+	}
+
+	return &FSError{
+		Code:    ErrInvalidPath,
+		Message: "data-first capabilities are not supported on file-first workspaces",
+		Hint:    fmt.Sprintf("use mount/.tables/%s/... for data-first access to the backing table", parsed.Context.TableName),
+	}
 }
 
 // resolveSchema fills in empty schema fields with the database connection's
