@@ -13,7 +13,6 @@ Each directory in a TigerFS mount is either file-first or data-first:
 
 - **File-first:** Contains `.md` or `.txt` files. Read and write files normally. See [files.md](files.md).
 - **Data-first:** Contains `.info/` directory. Access rows as files or directories. See [data.md](data.md).
-- **`.tables/` directory** (e.g., `.tables/notes/`): Data-first access to backing tables in the `tigerfs` schema. **Use `mount/.tables/<workspace>/` when you need data-first access (indexed lookups, bulk export/import, DDL) on a file-first workspace's backing table -- the workspace path itself rejects data-first capability dirs with a hint pointing here.**
 
 ## Directory Structure
 
@@ -52,23 +51,15 @@ See [files.md](files.md) for full details on schemas, column roles, directories,
 
 ### What you can build
 
-Because the filesystem is transactional and shared, it can implement collaborative workflows:
+Because the filesystem is transactional and shared, it can implement collaborative workflows. Follow the recipe exactly:
 
-When asked to create a **task list, kanban board, todo, or project tracker**:
-> Read [recipes.md](recipes.md) Recipe 4 and follow it exactly.
-  Core principle: **directories = states** (`todo/`, `doing/`, `done/`), **`mv` = transitions**. Do NOT use `status` frontmatter fields.
-
-When asked to create a **knowledge base, wiki, or documentation store**:
-> Read [recipes.md](recipes.md) Recipe 5 and follow it exactly.
-
-When asked to **save or resume session context**:
-> Read [recipes.md](recipes.md) Recipe 6 and follow it exactly.
-
-When asked to **keep a log of what you do**:
-> Read [recipes.md](recipes.md) Recipe 7 and follow it exactly.
-
-When asked to **revert, roll back, or undo changes**:
-> Use savepoints and `.undo/`. See the Safe Editing section below and [files.md](files.md) for full details.
+| If asked to... | Follow |
+|---|---|
+| Create a task list, kanban, todo, or project tracker | [recipes.md](recipes.md) Recipe 4. **Core rule: directories = states (`todo/`, `doing/`, `done/`); `mv` = transitions; do NOT use `status` frontmatter.** |
+| Create a knowledge base, wiki, or documentation store | [recipes.md](recipes.md) Recipe 5 |
+| Save or resume session context | [recipes.md](recipes.md) Recipe 6 |
+| Keep a log of what you do | [recipes.md](recipes.md) Recipe 7 |
+| Revert, roll back, or undo changes | See Safe Editing below and [files.md](files.md) |
 
 ## Safe Editing with Savepoints
 
@@ -102,7 +93,7 @@ Bash "echo '{\"description\":\"<why>\"}' > mount/workspace/.savepoint/<name>.jso
 **"What changed in this file?"**
 1. Get the file's stable UUID: `Read "mount/workspace/<dir>/.history/<file>/.id"` (for a root-level file: `Read "mount/workspace/.history/<file>/.id"`)
 2. Find recent edits: `Read "mount/workspace/.log/.by/file_id/<uuid>/.last/5/.export/json"`
-3. For each entry, read before and after, compare them, summarize in English (e.g., "Added 'Recent Updates' section with 3 new bullet points")
+3. For each entry, read before and after, compare them, summarize in English.
 4. Present with log_ids so the user can pick one to undo. Note: a single logical edit by an agent may produce multiple log entries (see [How agent writes appear in the log](#how-agent-writes-appear-in-the-log)).
 
 **"Show me the diff"**
@@ -134,8 +125,6 @@ To revert a logical operation, identify the full group of entries:
 1. Read the recent log: `Read "mount/workspace/.log/.last/N/.export/json"` (N large enough to span the operation).
 2. Group entries by adjacent timestamps and the `<basename>.tmp.<pid>.<hash>` -> `<basename>` filename pattern. Adjacent create+rename entries with matching `file_id` mark the temp; an interleaved `delete` of the same `<basename>` belongs to the same logical operation even though its `file_id` differs.
 3. Undo each entry in the group via `touch .undo/id/<log_id>/.apply`, applying the newest entry first so each step lands on the state the next step expects.
-
-Each undo is itself logged with `type=undo` and is itself undoable.
 
 For advanced cases (filtered undo, per-user undo, pipeline queries), construct paths directly from [files.md](files.md). See [recipes.md](recipes.md) Recipes 1-3 for complete workflow patterns.
 
@@ -178,8 +167,6 @@ See [data.md](data.md) for the full reference.
 | **Savepoints & Undo** | |
 | Create savepoint | `Bash "echo '{\"description\":\"Before refactoring\"}' > mount/workspace/.savepoint/name.json"` |
 | Diff all changes since savepoint | `Bash "cd mount/workspace && diff -ru .undo/to-savepoint/name . -x '.*'"` |
-| Undo to savepoint | Preview first -- see "Undo to the savepoint" in Common Workflows above |
-| Undo one change | Preview first -- see "Undo this one change" in Common Workflows above |
 | File drift since a change | `Bash "diff -u --color mount/workspace/.log/<id>/before mount/workspace/.log/<id>/current"` |
 | View recent log | `Read "mount/workspace/.log/.last/10/.export/json"` |
 | **Data-First** | |
