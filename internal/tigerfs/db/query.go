@@ -1167,17 +1167,37 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 
 	// Step 3: Insert undo log entries for each affected file.
 	// DELETE targets get a log entry too (we're undoing the creation).
+	// Capture version_id from the history row that the BEFORE-DELETE trigger
+	// just wrote -- this is what makes undo-of-undo of a DELETE entry able
+	// to dispatch correctly (the version_id points to a row with
+	// operation='delete', and the undo-of-undo handler restores from it).
 	for i, fileID := range params.DeleteFileIDs {
 		filename := ""
 		if i < len(params.DeleteFilenames) {
 			filename = params.DeleteFilenames[i]
 		}
-		_, err := tx.Exec(ctx,
+		var latestVersionID *string
+		err := tx.QueryRow(ctx,
 			fmt.Sprintf(
-				`INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4)`,
-				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("filename"), qi("description"),
+				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
+				qi("version_id"), qt(params.Schema, params.HistoryTable),
+				qi("file_id"), qi("version_id"),
 			),
-			fileID, params.UserID, filename, params.Description,
+			fileID,
+		).Scan(&latestVersionID)
+		if err != nil {
+			latestVersionID = nil
+		}
+		versionIDVal := ""
+		if latestVersionID != nil {
+			versionIDVal = *latestVersionID
+		}
+		_, err = tx.Exec(ctx,
+			fmt.Sprintf(
+				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
+				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("filename"), qi("version_id"), qi("description"),
+			),
+			fileID, params.UserID, filename, versionIDVal, params.Description,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert undo log entry for delete: %w", err)
@@ -1328,6 +1348,29 @@ func (c *Client) QueryHistoryByID(ctx context.Context, schema, historyTable, row
 		qt(schema, historyTable), limit,
 	)
 	return c.queryRows(ctx, query, rowID)
+}
+
+// QueryHistoryOperation returns the operation column of a single history row
+// identified by its version_id. Used by undo-of-undo dispatch: the operation
+// value ('create'/'edit'/'rename'/'delete') tells the handler whether the undo
+// entry should be reversed by re-deleting the row (operation='create') or by
+// restoring from the row's snapshot (operation in 'edit','rename','delete').
+//
+// Returns the empty string and a non-nil error if no row matches. The lookup
+// is by the primary key (version_id), so it's O(1) on the hypertable.
+func (c *Client) QueryHistoryOperation(ctx context.Context, schema, historyTable, versionID string) (string, error) {
+	if c.pool == nil {
+		return "", fmt.Errorf("database connection not initialized")
+	}
+	query := fmt.Sprintf(
+		`SELECT "operation" FROM %s WHERE "version_id" = $1`,
+		qt(schema, historyTable),
+	)
+	var op string
+	if err := c.pool.QueryRow(ctx, query, versionID).Scan(&op); err != nil {
+		return "", fmt.Errorf("failed to query history operation for version %s: %w", versionID, err)
+	}
+	return op, nil
 }
 
 // QueryHistoryDistinctFilenames returns distinct filenames from the history table.

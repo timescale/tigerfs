@@ -750,10 +750,11 @@ func NewMockDBClient() *MockDBClient {
 
 // MockLogWriter implements LogWriter for testing.
 type MockLogWriter struct {
-	LogEntries      []MockLogEntry    // Recorded log entries for verification
-	VersionIDs      map[string]string // fileID -> latest versionID
-	MetadataEntries []MetadataEntry   // Returned by QueryMetadata
-	MetadataInserts []MetadataEntry   // Recorded for verification
+	LogEntries        []MockLogEntry    // Recorded log entries for verification
+	VersionIDs        map[string]string // fileID -> latest versionID
+	HistoryOperations map[string]string // versionID -> operation marker
+	MetadataEntries   []MetadataEntry   // Returned by QueryMetadata
+	MetadataInserts   []MetadataEntry   // Recorded for verification
 }
 
 // MockLogEntry records a single log entry for test verification.
@@ -788,6 +789,15 @@ func (m *MockLogWriter) QueryLatestVersionID(ctx context.Context, schema, histor
 		}
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *MockLogWriter) QueryHistoryOperation(ctx context.Context, schema, historyTable, versionID string) (string, error) {
+	if m.HistoryOperations != nil {
+		if op, ok := m.HistoryOperations[versionID]; ok {
+			return op, nil
+		}
+	}
+	return "", fmt.Errorf("no history row for version %s", versionID)
 }
 
 func (m *MockLogWriter) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
