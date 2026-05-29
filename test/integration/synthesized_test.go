@@ -1746,6 +1746,83 @@ func TestSynth_RootFilesAndDirsCoexist(t *testing.T) {
 	}
 }
 
+// TestSynth_DataFirstCapsBlockedOnWorkspace verifies that data-first
+// capability paths return ErrInvalidPath on a file-first workspace. The
+// explicit data-first surface (.tables/<workspace>/) keeps full access.
+//
+// File-first workspaces present files; exposing the backing table's row/
+// column abstraction at workspace level leaks internal columns (parent_id,
+// filetype, encoding) into a surface that should look like a directory of
+// markdown files.
+func TestSynth_DataFirstCapsBlockedOnWorkspace(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "datafirstgate")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	fsErr := ops.WriteFile(ctx, "/.build/datafirstgate", []byte("markdown,history\n"))
+	require.Nil(t, fsErr)
+	time.Sleep(100 * time.Millisecond)
+
+	// Add a file so the workspace isn't empty.
+	require.Nil(t, ops.WriteFile(ctx, "/datafirstgate/hello.md", []byte("# hi\n")))
+
+	t.Run("blocked: workspace-level .filter rejects", func(t *testing.T) {
+		_, fsErr := ops.Stat(ctx, "/datafirstgate/.filter")
+		require.NotNil(t, fsErr)
+		assert.Equal(t, fs.ErrInvalidPath, fsErr.Code)
+		assert.Contains(t, fsErr.Hint, ".tables/")
+	})
+
+	t.Run("blocked: workspace-level .by rejects", func(t *testing.T) {
+		_, fsErr := ops.Stat(ctx, "/datafirstgate/.by")
+		require.NotNil(t, fsErr)
+		assert.Equal(t, fs.ErrInvalidPath, fsErr.Code)
+	})
+
+	t.Run("blocked: workspace-level .export rejects", func(t *testing.T) {
+		_, fsErr := ops.Stat(ctx, "/datafirstgate/.export/json")
+		require.NotNil(t, fsErr)
+		assert.Equal(t, fs.ErrInvalidPath, fsErr.Code)
+	})
+
+	t.Run("allowed: .history still works", func(t *testing.T) {
+		entries, fsErr := ops.ReadDir(ctx, "/datafirstgate/.history")
+		require.Nil(t, fsErr)
+		assert.NotEmpty(t, entries, ".history/ at workspace root must keep listing entries")
+	})
+
+	t.Run("allowed: .log still works", func(t *testing.T) {
+		entries, fsErr := ops.ReadDir(ctx, "/datafirstgate/.log")
+		require.Nil(t, fsErr)
+		// Should contain at least the create + edit log entries from setup.
+		assert.NotEmpty(t, entries)
+	})
+
+	t.Run("allowed: .log/.by/type/ still works (different schema)", func(t *testing.T) {
+		// Inside .log/, FSContext.Schema is redirected to tigerfs.
+		// The gate must NOT fire here -- this is data-first by design.
+		_, fsErr := ops.ReadDir(ctx, "/datafirstgate/.log/.by/type")
+		require.Nil(t, fsErr)
+	})
+
+	t.Run("allowed: .tables/<workspace>/.filter route stays intact", func(t *testing.T) {
+		// The .tables/ route is the documented data-first surface.
+		_, fsErr := ops.Stat(ctx, "/.tables/datafirstgate/.filter")
+		require.Nil(t, fsErr)
+		// Also confirm the listing works.
+		entries, fsErr := ops.ReadDir(ctx, "/.tables/datafirstgate/.filter")
+		require.Nil(t, fsErr)
+		names := fsEntryNames(entries)
+		assert.Contains(t, names, "filename", ".tables/ route should list backing columns")
+	})
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================

@@ -199,7 +199,11 @@ func IsRowFormatFile(filename string) bool {
 	return false
 }
 
-// ParsePath converts a filesystem path to a ParsedPath.
+// ParsePath converts a filesystem path to a ParsedPath. This is a pure
+// function with no DB or context access; it performs syntactic parsing
+// only. Production callers should use (*Operations).parsePath, which wraps
+// this function with schema resolution and policy gates that depend on
+// table-shape information from the database.
 //
 // Examples:
 //
