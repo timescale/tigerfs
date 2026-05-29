@@ -116,7 +116,7 @@ ls /mnt/db/notes/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890/
 cat /mnt/db/notes/.history/.by/a1b2c3d4-e5f6-7890-abcd-ef1234567890/2026-02-12T013000.789Z-jkl012mno
 ```
 
-`.by/` is only available at the root `.history/` level, not in subdirectory `.history/` directories.
+UUID browsing (`.by/<file_id>/`) is addressable from `.history/` at every level (root and subdirectories), and always returns the same rows -- the lookup is keyed only on `file_id`, so the surrounding directory does not scope the result.
 
 ## Subdirectory History
 
@@ -127,7 +127,7 @@ ls /mnt/db/notes/tutorials/.history/
 ls /mnt/db/notes/tutorials/.history/intro.md/
 ```
 
-Subdirectory `.history/` does not include `.by/` (UUID browsing is root-level only).
+Subdirectory `.history/` includes `.by/<file_id>/`; the lookup is keyed only on `file_id` and returns the same rows regardless of which directory's `.history/.by/` it's accessed from.
 
 ## Operation Log (.log/)
 

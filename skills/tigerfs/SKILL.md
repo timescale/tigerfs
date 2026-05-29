@@ -13,7 +13,7 @@ Each directory in a TigerFS mount is either file-first or data-first:
 
 - **File-first:** Contains `.md` or `.txt` files. Read and write files normally. See [files.md](files.md).
 - **Data-first:** Contains `.info/` directory. Access rows as files or directories. See [data.md](data.md).
-- **`.tables/` directory** (e.g., `.tables/notes/`): Data-first access to backing tables in the `tigerfs` schema.
+- **`.tables/` directory** (e.g., `.tables/notes/`): Data-first access to backing tables in the `tigerfs` schema. **Use `mount/.tables/<workspace>/` when you need data-first access (indexed lookups, bulk export/import, DDL) on a file-first workspace's backing table -- the workspace path itself rejects data-first capability dirs with a hint pointing here.**
 
 ## Directory Structure
 
@@ -21,7 +21,7 @@ Each directory in a TigerFS mount is either file-first or data-first:
 mount/
 ├── notes/                  # File-first (markdown workspace)
 │   ├── hello.md
-│   ├── tutorials/          # Subdirectories: only real files, no virtual dirs
+│   ├── tutorials/          # Subdirectories: ls shows only real files; .history/<file>/ remains path-accessible
 │   ├── .history/           # Versioned history (root level only)
 │   ├── .log/               # Operation log (root level only; pipeline hidden from ls)
 │   ├── .savepoint/         # Named bookmarks for undo (root level only)
@@ -100,9 +100,10 @@ Bash "echo '{\"description\":\"<why>\"}' > mount/workspace/.savepoint/<name>.jso
 4. If user wants raw diffs: `Bash "cd mount/workspace && diff -ru .undo/to-savepoint/<name> . -x '.*'"`
 
 **"What changed in this file?"**
-1. Find recent edits: `Read "mount/workspace/.log/.by/filename/<file>/.last/5/.export/json"`
-2. For each edit, read before and after, compare them, summarize in English (e.g., "Added 'Recent Updates' section with 3 new bullet points")
-3. Present with log_ids so the user can pick one to undo
+1. Get the file's stable UUID: `Read "mount/workspace/<dir>/.history/<file>/.id"` (for a root-level file: `Read "mount/workspace/.history/<file>/.id"`)
+2. Find recent edits: `Read "mount/workspace/.log/.by/file_id/<uuid>/.last/5/.export/json"`
+3. For each entry, read before and after, compare them, summarize in English (e.g., "Added 'Recent Updates' section with 3 new bullet points")
+4. Present with log_ids so the user can pick one to undo. Note: a single logical edit by an agent may produce multiple log entries (see [How agent writes appear in the log](#how-agent-writes-appear-in-the-log)).
 
 **"Show me the diff"**
 - Savepoint: `Bash "cd mount/workspace && diff -ru .undo/to-savepoint/<name> . -x '.*'"`
@@ -115,10 +116,26 @@ Bash "echo '{\"description\":\"<why>\"}' > mount/workspace/.savepoint/<name>.jso
 4. Only if confirmed: `Bash "touch mount/workspace/.undo/to-savepoint/<name>/.apply"`
 
 **"Undo this one change"**
-1. Read the log entry summary: `Read "mount/workspace/.undo/id/<log_id>/.info/summary"`
-2. Show the diff: `Bash "diff -u --color mount/workspace/.log/<id>/before mount/workspace/.log/<id>/after"`
-3. Present to user: "This will revert [description]. Go ahead?"
-4. Only if confirmed: `Bash "touch mount/workspace/.undo/id/<log_id>/.apply"`
+1. Read the log entries around the change. If multiple entries belong to the same logical write (same `file_id`, adjacent timestamps), each must be undone — see [How agent writes appear in the log](#how-agent-writes-appear-in-the-log).
+2. Read the log entry summary: `Read "mount/workspace/.undo/id/<log_id>/.info/summary"`
+3. Show the diff: `Bash "diff -u --color mount/workspace/.log/<id>/before mount/workspace/.log/<id>/after"`
+4. Present to user: "This will revert [description]. Go ahead?"
+5. Only if confirmed: `Bash "touch mount/workspace/.undo/id/<log_id>/.apply"`. For a multi-entry group, apply each entry's undo (newest log_id first).
+
+### How agent writes appear in the log
+
+Different write methods produce different numbers of log entries:
+
+- **Atomic-rename writes** (Claude's `Write`/`Edit`, many editors): the operation produces multiple adjacent log entries. Typically: a `create` of a temp file like `<file>.tmp.<pid>.<hash>`, then for an overwrite a `delete` of the existing target, then a `rename` of the temp to the final name. That's **2 entries for a new file, 3 for an overwrite**. The create and rename share the temp file's `file_id`; the delete (when present) carries the original target's `file_id`.
+- **Direct writes** (shell redirects like `echo "..." > file`, in-place editors): a single `create` (new file) or `edit` (existing file) log entry. No temp file, no rename.
+
+To revert a logical operation, identify the full group of entries:
+
+1. Read the recent log: `Read "mount/workspace/.log/.last/N/.export/json"` (N large enough to span the operation).
+2. Group entries by adjacent timestamps and the `<basename>.tmp.<pid>.<hash>` -> `<basename>` filename pattern. Adjacent create+rename entries with matching `file_id` mark the temp; an interleaved `delete` of the same `<basename>` belongs to the same logical operation even though its `file_id` differs.
+3. Undo each entry in the group via `touch .undo/id/<log_id>/.apply`, applying the newest entry first so each step lands on the state the next step expects.
+
+Each undo is itself logged with `type=undo` and is itself undoable.
 
 For advanced cases (filtered undo, per-user undo, pipeline queries), construct paths directly from [files.md](files.md). See [recipes.md](recipes.md) Recipes 1-3 for complete workflow patterns.
 
@@ -180,7 +197,12 @@ See [data.md](data.md) for the full reference.
 
 ## Directory Scanning Safety
 
-**Virtual directory layout:** `.history/`, `.log/`, `.savepoint/`, `.undo/` only appear at the **workspace root** level, not inside subdirectories. Subdirectories contain only real files and folders. Pipeline capabilities (`.by/`, `.filter/`, `.order/`, `.export/`) inside `.log/` and `.savepoint/` are accessible by explicit path but hidden from `ls` to prevent recursive scanner blowup.
+**Virtual directory layout:** `.history/`, `.log/`, `.savepoint/`, `.undo/` only appear in `ls` at the **workspace root** level, not inside subdirectories. Subdirectories' `ls` shows only real files; `.history/<file>/` and `.history/<file>/.id` remain path-accessible from subdirectories.
+
+**Pipeline capabilities (`.by/`, `.filter/`, `.order/`, `.export/`, etc.) behave differently depending on where they appear:**
+- **Inside `.log/` or `.savepoint/`**: accessible by explicit path but hidden from `ls` (prevents recursive scanner blowup on exponential pipeline branching).
+- **At a file-first workspace root or in a workspace subdirectory**: rejected with `ErrInvalidPath` and a hint pointing at `mount/.tables/<workspace>/` — that's the entry point for data-first access to a workspace's backing table.
+- **On a standalone data-first table** (e.g., `mount/users/`) or under `mount/.tables/<workspace>/`: fully accessible.
 
 **Never recursively scan these directories** -- always use targeted access patterns from the Quick Reference above:
 - `.log/` -- pipeline capabilities hidden from listing, use `.log/.last/10/.export/json`
@@ -202,7 +224,7 @@ See [data.md](data.md) for the full reference.
 |-------|------------|
 | **File-First** | |
 | Put `status:` in frontmatter to track state | Use directories as states (`todo/`, `doing/`, `done/`), `mv` to transition |
-| Manually reverse edits across files to "undo" | Create savepoints, use `.undo/` to revert atomically |
+| Use `Write` or `Edit` to restore prior file content -- even for a single file. The tool's write-temp-then-rename pattern creates 2-3 new log entries instead of reverting the originals. | Use TigerFS's undo machinery: `.undo/to-savepoint/<name>/.apply` for groups of changes, `.undo/id/<log_id>/.apply` for one operation. See [How agent writes appear in the log](#how-agent-writes-appear-in-the-log) for grouping multi-entry writes. |
 | Undo without previewing first | Always read `.info/summary` and get user confirmation before applying |
 | **Data-First** | |
 | Read individual rows in a loop for large tables | Use `.export/json` or `.export/csv` for bulk access |

@@ -87,13 +87,14 @@ Writing `mount/notes/a/b/file.md` auto-creates `a/` and `a/b/`. No need to `mkdi
 
 ## Backing Table
 
-Every workspace has a backing table in the `tigerfs` schema, accessible via the `.tables/` directory.
+Every workspace has a backing table in the `tigerfs` schema. For data-first access -- indexed lookups, bulk export/import, DDL on the backing table, full row-as-directory navigation -- use `mount/.tables/<workspace>/`. The file-first workspace path (`mount/<workspace>/`) presents files; data-first capability dirs (`.by/`, `.filter/`, `.order/`, `.columns/`, `.first/`, `.last/`, `.sample/`, `.export/`, `.import/`, `.indexes/`, `.modify/`, `.delete/`) at the workspace path return `ErrInvalidPath` with a hint pointing at the `.tables/` route.
 
 ```
-Read "mount/.tables/notes/.info/schema"       # Table schema
-Read "mount/.tables/notes/.info/count"        # Row count
-Read "mount/.tables/notes/.info/columns"      # Column names
-Glob "mount/.tables/notes/.by/author/alice/*" # Index lookup
+Read "mount/.tables/notes/.info/schema"             # Table schema
+Read "mount/.tables/notes/.info/count"              # Row count
+Read "mount/.tables/notes/.info/columns"            # Column names
+Glob "mount/.tables/notes/.by/author/alice/*"       # Index lookup
+Read "mount/.tables/notes/.export/json"             # Bulk export
 ```
 
 See [data.md](data.md) for the full data-first reference.
@@ -122,7 +123,7 @@ Read "mount/notes/archive/.history/intro.md/.id"   # Get the file's UUID (after 
 Glob "mount/notes/.history/.by/<uuid>/*"           # All versions by UUID, including before rename
 ```
 
-UUID browsing (`.by/`) is available at the root `.history/` level only, not in subdirectory `.history/` directories.
+UUID browsing (`.history/.by/<file_id>/`) is addressable from `.history/` at every level (root and subdirectories), and always returns the same rows -- the lookup is keyed only on `file_id`, so the surrounding directory does not scope the result.
 
 ### Comparing and Recovering
 
@@ -131,14 +132,14 @@ UUID browsing (`.by/`) is available at the root `.history/` level only, not in s
 3. Read the current file: `Read "mount/notes/hello.md"`
 4. Compare and report differences.
 
-For single-file recovery, find recent edits via `.log/.by/filename/hello.md/.last/5/.export/json`, then undo a specific one with `touch .undo/id/<log_id>/.apply`. For multi-file rollback to a known state, use `touch .undo/to-savepoint/<name>/.apply` which handles all affected files atomically. `.history/` is best for reading and comparing old versions; use `.undo/` for restoring. See SKILL.md "Common Workflows" for the full multi-step agent behavior.
+For single-file recovery, look up the file's stable UUID via `Read "<dir>/.history/<file>/.id"`, then find recent edits with `Read ".log/.by/file_id/<uuid>/.last/5/.export/json"` and undo a specific entry via `touch .undo/id/<log_id>/.apply`. The `file_id` route is rename-invariant and indexed; it works for nested files where filename-based lookup cannot (the log's `filename` column stores `/`-bearing full paths, and `/` is the path separator -- a value containing it can't be expressed as a single directory entry). For multi-file rollback to a known state, use `touch .undo/to-savepoint/<name>/.apply` which handles all affected files atomically. `.history/` is best for reading and comparing old versions; use `.undo/` for restoring. See SKILL.md "Common Workflows" for the full multi-step agent behavior.
 
 ## User Identity
 
-Each mount has an optional user identity used for log entries, savepoint auto-injection, and per-user undo filtering.
+Each mount has an optional user identity used for log entries, savepoint auto-injection, and per-user undo filtering. The identity lives at the **mount root** `.info/` (not the workspace-level `.info/`, which holds backing-table metadata like `count`/`schema`):
 
 ```
-Read "mount/.info/user"                        # Read current identity
+Read "mount/.info/user"                        # Read current identity (empty when --user-id not set)
 Bash "echo 'agent-7' > mount/.info/user"       # Set identity at runtime
 ```
 
@@ -151,9 +152,12 @@ Every create, edit, rename, and delete on a history-enabled workspace is recorde
 ```
 Glob "mount/notes/.log/.last/10/*"                          # Recent entries
 Read "mount/notes/.log/.last/10/.export/json"               # Recent entries as JSON
-Glob "mount/notes/.log/.by/user_id/agent-7/.last/5/*"      # By user
-Glob "mount/notes/.log/.by/type/edit/.last/10/*"            # By type
+Glob "mount/notes/.log/.by/user_id/agent-7/.last/5/*"       # By user (indexed)
+Glob "mount/notes/.log/.by/type/edit/.last/10/*"            # By type (indexed)
+Read "mount/notes/.log/.by/file_id/<uuid>/.last/5/.export/json"  # By file (indexed)
 ```
+
+The indexed columns for `.log/.by/<col>/<val>/` queries are `file_id`, `user_id`, and `type` (composite indexes paired with `log_id ASC`). Use these for fast lookups. The `filename` column is explicitly blocked because it stores `/`-bearing full paths, and `/` is the path separator -- such values can't be expressed as a single directory entry. Use the `file_id` route after `Read "<dir>/.history/<file>/.id"` for filename-based queries. Other log columns are technically path-addressable but unindexed; prefer the indexed columns above.
 
 ### Diff Symlinks
 
