@@ -230,7 +230,10 @@ func TestSynth_HistoryMultipleVersions(t *testing.T) {
 		require.Nil(t, fsErr, "WriteFile v%d should succeed", i)
 	}
 
-	// Should have 3 history entries (v1, v2, v3 — v4 is current)
+	// Should have 4 history entries: the create tombstone (capturing v1 at
+	// INSERT) plus the BEFORE-UPDATE captures of v1, v2, v3 from each of the
+	// three subsequent writes. v4 is current (lives in the source table, not
+	// in history).
 	entries, fsErr := ops.ReadDir(ctx, "/hist_list/.history/evolving.md")
 	require.Nil(t, fsErr, "ReadDir .history/evolving.md should succeed")
 
@@ -241,7 +244,7 @@ func TestSynth_HistoryMultipleVersions(t *testing.T) {
 			versionCount++
 		}
 	}
-	assert.Equal(t, 3, versionCount, "should have 3 history versions (v1, v2, v3)")
+	assert.Equal(t, 4, versionCount, "should have 4 history versions (create tombstone of v1, plus pre-update captures of v1, v2, v3)")
 }
 
 // TestSynth_HistoryReadOnly tests that writes to .history/ are rejected.
