@@ -355,6 +355,13 @@ type LogWriter interface {
 	// after an UPDATE/DELETE fires the BEFORE trigger.
 	QueryLatestVersionID(ctx context.Context, schema, historyTable, fileID string) (string, error)
 
+	// QueryHistoryOperation returns the operation marker ('create', 'edit',
+	// 'rename', 'delete') for a single history row identified by version_id.
+	// Used by undo-of-undo dispatch to determine whether reversing an undo
+	// entry means deleting the row (operation='create' tombstone) or restoring
+	// from the snapshot (operation in 'edit','rename','delete').
+	QueryHistoryOperation(ctx context.Context, schema, historyTable, versionID string) (string, error)
+
 	// QueryUndoAffectedFiles returns the first log entry per file after a target point.
 	// Uses DISTINCT ON with SkipScan on the (file_id, log_id ASC) index.
 	// The version_id on each entry is the before-state at the target point.

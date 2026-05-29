@@ -169,7 +169,7 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 				skipped++ // Created then already deleted -- no-op
 			}
 
-		case "edit", "rename", "delete", "undo":
+		case "edit", "rename", "delete":
 			if f.VersionID == "" {
 				logging.Warn("undo: missing version_id for non-create operation",
 					zap.String("file_id", f.FileID), zap.String("type", f.Type))
@@ -179,6 +179,45 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 			restoreVersionIDs = append(restoreVersionIDs, f.VersionID)
 			restoreFileIDs = append(restoreFileIDs, f.FileID)
 			restoreFilenames = append(restoreFilenames, f.Filename)
+
+		case "undo":
+			// Undo-of-undo: dispatch by the history row's operation column.
+			// 'create' tombstone => the original entry restored a row, so
+			// reversing it means re-deleting. Other ops => the standard
+			// "restore from version_id" path produces the right state.
+			if f.VersionID == "" {
+				logging.Warn("undo: missing version_id for undo entry",
+					zap.String("file_id", f.FileID))
+				skipped++
+				continue
+			}
+			histOp, err := o.db.QueryHistoryOperation(ctx, synth.TigerFSSchema, historyTable, f.VersionID)
+			if err != nil {
+				logging.Warn("undo: failed to query history operation for undo entry; falling back to restore-from-version_id",
+					zap.String("file_id", f.FileID), zap.String("version_id", f.VersionID), zap.Error(err))
+				restoreVersionIDs = append(restoreVersionIDs, f.VersionID)
+				restoreFileIDs = append(restoreFileIDs, f.FileID)
+				restoreFilenames = append(restoreFilenames, f.Filename)
+				continue
+			}
+			switch histOp {
+			case "create":
+				exists, err := o.db.QueryFileExists(ctx, synth.TigerFSSchema, tableName, f.FileID)
+				if err != nil || !exists {
+					skipped++
+					continue
+				}
+				deleteFileIDs = append(deleteFileIDs, f.FileID)
+				deleteFilenames = append(deleteFilenames, f.Filename)
+			case "edit", "rename", "delete":
+				restoreVersionIDs = append(restoreVersionIDs, f.VersionID)
+				restoreFileIDs = append(restoreFileIDs, f.FileID)
+				restoreFilenames = append(restoreFilenames, f.Filename)
+			default:
+				logging.Warn("undo: unexpected history operation",
+					zap.String("op", histOp), zap.String("file_id", f.FileID))
+				skipped++
+			}
 
 		default:
 			logging.Warn("undo: unknown operation type",
@@ -279,13 +318,49 @@ func (o *Operations) ExecuteUndoSingle(ctx context.Context, schema, tableName, l
 			deleteFilenames = append(deleteFilenames, entry.Filename)
 		}
 
-	case "edit", "rename", "delete", "undo":
+	case "edit", "rename", "delete":
 		if entry.VersionID == "" {
 			return nil, fmt.Errorf("cannot undo %s operation: no version_id (before-state not captured)", entry.Type)
 		}
 		restoreVersionIDs = append(restoreVersionIDs, entry.VersionID)
 		restoreFileIDs = append(restoreFileIDs, entry.FileID)
 		restoreFilenames = append(restoreFilenames, entry.Filename)
+
+	case "undo":
+		// Undo-of-undo: dispatch by the history row's operation column to
+		// distinguish the cases that need DELETE (operation='create' tombstone)
+		// from those that need restore (operation in 'edit','rename','delete').
+		if entry.VersionID == "" {
+			return nil, fmt.Errorf("cannot undo undo operation: no version_id (before-state not captured)")
+		}
+		histOp, err := o.db.QueryHistoryOperation(ctx, synth.TigerFSSchema, historyTable, entry.VersionID)
+		if err != nil {
+			// Legacy undo entry from before the tombstone trigger landed (or a
+			// transient DB error). Fall back to restore-from-version_id, which
+			// matches pre-fix behavior for backwards compatibility.
+			logging.Warn("undo-of-undo: failed to query history operation; falling back to restore-from-version_id",
+				zap.String("version_id", entry.VersionID), zap.Error(err))
+			restoreVersionIDs = append(restoreVersionIDs, entry.VersionID)
+			restoreFileIDs = append(restoreFileIDs, entry.FileID)
+			restoreFilenames = append(restoreFilenames, entry.Filename)
+			break
+		}
+		switch histOp {
+		case "create":
+			exists, err := o.db.QueryFileExists(ctx, synth.TigerFSSchema, tableName, entry.FileID)
+			if err != nil || !exists {
+				skipped = 1
+			} else {
+				deleteFileIDs = append(deleteFileIDs, entry.FileID)
+				deleteFilenames = append(deleteFilenames, entry.Filename)
+			}
+		case "edit", "rename", "delete":
+			restoreVersionIDs = append(restoreVersionIDs, entry.VersionID)
+			restoreFileIDs = append(restoreFileIDs, entry.FileID)
+			restoreFilenames = append(restoreFilenames, entry.Filename)
+		default:
+			return nil, fmt.Errorf("unexpected history operation for undo entry: %s", histOp)
+		}
 
 	default:
 		return nil, fmt.Errorf("unknown operation type: %s", entry.Type)

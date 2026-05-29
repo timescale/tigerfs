@@ -1376,6 +1376,9 @@ type mockDBClient struct {
 	// Version ID return value for QueryLatestVersionID
 	latestVersionIDs map[string]string // fileID -> versionID
 
+	// History operation values for QueryHistoryOperation (versionID -> operation)
+	historyOperations map[string]string
+
 	// Row-by-columns lookup data (for savepoint name-based tests)
 	rowByColumnsData map[string]*mockRowByColumns
 
@@ -2066,6 +2069,15 @@ func (m *mockDBClient) QueryLatestVersionID(ctx context.Context, schema, history
 		}
 	}
 	return "", fmt.Errorf("no history entry for %s", fileID)
+}
+
+func (m *mockDBClient) QueryHistoryOperation(ctx context.Context, schema, historyTable, versionID string) (string, error) {
+	if m.historyOperations != nil {
+		if op, ok := m.historyOperations[versionID]; ok {
+			return op, nil
+		}
+	}
+	return "", fmt.Errorf("no history row for version %s", versionID)
 }
 
 func (m *mockDBClient) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []db.UndoFilter) ([]db.UndoAffectedFile, error) {
