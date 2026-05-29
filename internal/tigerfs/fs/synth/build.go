@@ -306,6 +306,11 @@ func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
 	// This replaces the old create_hypertable() + ALTER TABLE SET + add_compression_policy() calls.
 	// Column renames from ADR-017: id->file_id, _history_id->version_id, _operation->operation.
 	// Added: parent_id, CHECK constraints on filetype/encoding/operation.
+	// `operation` values: 'create' captures the BEFORE-INSERT state (tombstone --
+	// makes undo-of-undo for DELETE operations work, since the original delete's
+	// undo INSERT now has a fresh history row of its own); 'edit'/'rename'/'delete'
+	// capture the BEFORE-UPDATE/DELETE state. No 'undo' value: undo is realized as
+	// one of these four physical ops, not a distinct kind of history row.
 	createTable := fmt.Sprintf(`CREATE TABLE %s (
     file_id UUID,
     parent_id UUID,
@@ -316,7 +321,7 @@ func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
+    operation TEXT NOT NULL CHECK (operation IN ('create', 'edit', 'rename', 'delete'))
 ) WITH (
     tsdb.hypertable,
     tsdb.partition_column = 'version_id',
@@ -337,21 +342,43 @@ func GenerateHistorySQL(schema, appName string, format SynthFormat) []string {
 		qualifiedHistory,
 	)
 
-	// Archive trigger function -- copies OLD row (including parent_id) to history
-	// table on UPDATE or DELETE. Column list must match the source table's columns.
+	// Archive trigger function -- captures every row state change in the history
+	// table. The INSERT branch writes the NEW row with operation='create'
+	// (tombstone), so undo-of-undo for DELETE operations finds a fresh, self-
+	// describing history row to dispatch on. The UPDATE/DELETE branch writes the
+	// OLD row with operation='rename'/'edit'/'delete'. Column lists must match the
+	// source table's columns.
 	funcName := fmt.Sprintf("%s.%s", db.QuoteIdent(TigerFSSchema), db.QuoteIdent("archive_"+historyTable))
 
-	var insertColumns, insertValues string
+	// Markdown format adds title/author/headers columns; plain text does not.
+	var formatNewValues string
+	if format == FormatMarkdown {
+		formatNewValues = "NEW.title, NEW.author, NEW.headers, "
+	}
+
+	var insertColumns, oldInsertValues, newInsertValues string
 	if format == FormatMarkdown {
 		insertColumns = "file_id, parent_id, filename, filetype, title, author, headers, body, encoding, created_at, modified_at"
-		insertValues = fmt.Sprintf("OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, %sOLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at", formatOldValues)
+		oldInsertValues = fmt.Sprintf("OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, %sOLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at", formatOldValues)
+		newInsertValues = fmt.Sprintf("NEW.id, NEW.parent_id, NEW.filename, NEW.filetype, %sNEW.body,\n         NEW.encoding, NEW.created_at, NEW.modified_at", formatNewValues)
 	} else {
 		insertColumns = "file_id, parent_id, filename, filetype, body, encoding, created_at, modified_at"
-		insertValues = "OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, OLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at"
+		oldInsertValues = "OLD.id, OLD.parent_id, OLD.filename, OLD.filetype, OLD.body,\n         OLD.encoding, OLD.created_at, OLD.modified_at"
+		newInsertValues = "NEW.id, NEW.parent_id, NEW.filename, NEW.filetype, NEW.body,\n         NEW.encoding, NEW.created_at, NEW.modified_at"
 	}
 
 	createFunc := fmt.Sprintf(`CREATE OR REPLACE FUNCTION %s() RETURNS TRIGGER AS $$
 BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO %s
+            (%s,
+             version_id, operation)
+        VALUES
+            (%s,
+             uuidv7(),
+             'create');
+        RETURN NEW;
+    END IF;
     INSERT INTO %s
         (%s,
          version_id, operation)
@@ -372,11 +399,11 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, insertValues)
+$$ LANGUAGE plpgsql`, funcName, qualifiedHistory, insertColumns, newInsertValues, qualifiedHistory, insertColumns, oldInsertValues)
 
 	triggerName := db.QuoteIdent("trg_" + historyTable + "_archive")
 	createTrigger := fmt.Sprintf(`CREATE TRIGGER %s
-    BEFORE UPDATE OR DELETE ON %s
+    BEFORE INSERT OR UPDATE OR DELETE ON %s
     FOR EACH ROW EXECUTE FUNCTION %s()`,
 		triggerName, qualifiedTable, funcName)
 

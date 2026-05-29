@@ -328,8 +328,8 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 	if !strings.Contains(allSQL, "encoding TEXT CHECK (encoding IN ('utf8', 'base64'))") {
 		t.Errorf("history should have encoding CHECK constraint, got:\n%s", allSQL)
 	}
-	if !strings.Contains(allSQL, "CHECK (operation IN ('edit', 'rename', 'delete'))") {
-		t.Errorf("history should have operation CHECK constraint, got:\n%s", allSQL)
+	if !strings.Contains(allSQL, "CHECK (operation IN ('create', 'edit', 'rename', 'delete'))") {
+		t.Errorf("history should have operation CHECK constraint including 'create' tombstone, got:\n%s", allSQL)
 	}
 
 	// History table uses modern CREATE TABLE WITH syntax for hypertable + columnstore
@@ -376,9 +376,20 @@ func TestSynth_GenerateHistorySQL_Markdown(t *testing.T) {
 		t.Errorf("markdown trigger should copy title, got:\n%s", allSQL)
 	}
 
-	// Trigger copies parent_id and uses new column names
-	if !strings.Contains(allSQL, "BEFORE UPDATE OR DELETE") {
-		t.Errorf("should create BEFORE UPDATE OR DELETE trigger, got:\n%s", allSQL)
+	// Trigger copies parent_id and uses new column names. After tombstone, the
+	// trigger fires on INSERT too, capturing operation='create'.
+	if !strings.Contains(allSQL, "BEFORE INSERT OR UPDATE OR DELETE") {
+		t.Errorf("should create BEFORE INSERT OR UPDATE OR DELETE trigger (tombstone), got:\n%s", allSQL)
+	}
+	// Confirm the INSERT branch is wired in the trigger function.
+	if !strings.Contains(allSQL, "IF TG_OP = 'INSERT' THEN") {
+		t.Errorf("trigger function should branch on INSERT for tombstone capture, got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "'create'") {
+		t.Errorf("trigger function should label INSERT history rows as 'create', got:\n%s", allSQL)
+	}
+	if !strings.Contains(allSQL, "NEW.id, NEW.parent_id, NEW.filename") {
+		t.Errorf("trigger function INSERT branch should reference NEW.*, got:\n%s", allSQL)
 	}
 	if !strings.Contains(allSQL, `ON "tigerfs"."memory"`) {
 		t.Errorf("trigger should be on tigerfs.memory, got:\n%s", allSQL)
