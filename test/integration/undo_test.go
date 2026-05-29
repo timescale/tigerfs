@@ -1746,3 +1746,171 @@ func mostRecentLogIDRaw(t *testing.T, ops *fs.Operations, ctx context.Context, a
 	require.NotEmpty(t, entries[0].LogID, "log_id must not be empty")
 	return entries[0].LogID
 }
+
+// TestSynth_UndoOfUndo_DeleteRestores covers the polarity fix: an undo of a
+// DELETE is reversed by re-deleting (not by no-op-restoring). Without the
+// tombstone trigger + history.operation dispatch, this would leave the file
+// alive when the user expected it gone.
+func TestSynth_UndoOfUndo_DeleteRestores(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "undoofundo")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/undoofundo", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Forward: create + delete.
+	require.Nil(t, ops.WriteFile(ctx, "/undoofundo/f.md", []byte("# X\n")))
+	time.Sleep(1100 * time.Millisecond)
+	require.Nil(t, ops.Delete(ctx, "/undoofundo/f.md"))
+
+	// Undo the delete (newest entry). File comes back.
+	deleteLogID := mostRecentLogIDRaw(t, ops, ctx, "/undoofundo")
+	require.Nil(t, ops.WriteFile(ctx, "/undoofundo/.undo/id/"+deleteLogID+"/.apply", nil))
+
+	// File should exist again.
+	fc, fsErr := ops.ReadFile(ctx, "/undoofundo/f.md")
+	require.Nil(t, fsErr, "after undo of delete, file should exist")
+	assert.Contains(t, string(fc.Data), "X")
+
+	// Now undo the undo (newest entry is the type=undo). File should be gone.
+	undoLogID := mostRecentLogIDRaw(t, ops, ctx, "/undoofundo")
+	require.Nil(t, ops.WriteFile(ctx, "/undoofundo/.undo/id/"+undoLogID+"/.apply", nil))
+
+	// File must be deleted again -- this is the polarity fix.
+	_, fsErr = ops.ReadFile(ctx, "/undoofundo/f.md")
+	require.NotNil(t, fsErr, "after undo-of-undo of delete, file should be gone")
+	assert.Equal(t, fs.ErrNotExist, fsErr.Code, "file should be NotExist after undo-of-undo of delete")
+}
+
+// TestSynth_UndoOfUndo_AllOpTypes covers the polarity round-trip for each
+// op type: forward op -> undo -> undo-of-undo lands at the expected state.
+//
+// - CREATE: forward creates; undo deletes; undo-of-undo recreates.
+// - EDIT: forward edits to Y; undo restores to X; undo-of-undo restores Y.
+// - RENAME: forward renames a -> b; undo restores a; undo-of-undo restores b.
+// - DELETE: see TestSynth_UndoOfUndo_DeleteRestores above (the previously-broken case).
+func TestSynth_UndoOfUndo_AllOpTypes(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "polarity")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/polarity", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	t.Run("create", func(t *testing.T) {
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/c.md", []byte("# create body\n")))
+		time.Sleep(1100 * time.Millisecond)
+		createID := mostRecentLogIDRaw(t, ops, ctx, "/polarity")
+
+		// Undo the create -> file gone.
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/.undo/id/"+createID+"/.apply", nil))
+		_, fsErr := ops.ReadFile(ctx, "/polarity/c.md")
+		require.NotNil(t, fsErr, "after undo of create, file should be gone")
+
+		// Undo-of-undo -> file recreated.
+		undoID := mostRecentLogIDRaw(t, ops, ctx, "/polarity")
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/.undo/id/"+undoID+"/.apply", nil))
+		fc, fsErr := ops.ReadFile(ctx, "/polarity/c.md")
+		require.Nil(t, fsErr, "after undo-of-undo of create, file should exist")
+		assert.Contains(t, string(fc.Data), "create body")
+	})
+
+	t.Run("edit", func(t *testing.T) {
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/e.md", []byte("# v1\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/e.md", []byte("# v2\n")))
+		time.Sleep(1100 * time.Millisecond)
+		editID := mostRecentLogIDRaw(t, ops, ctx, "/polarity")
+
+		// Undo the edit -> back to v1.
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/.undo/id/"+editID+"/.apply", nil))
+		fc, fsErr := ops.ReadFile(ctx, "/polarity/e.md")
+		require.Nil(t, fsErr)
+		assert.Contains(t, string(fc.Data), "v1")
+
+		// Undo-of-undo -> back to v2.
+		undoID := mostRecentLogIDRaw(t, ops, ctx, "/polarity")
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/.undo/id/"+undoID+"/.apply", nil))
+		fc, fsErr = ops.ReadFile(ctx, "/polarity/e.md")
+		require.Nil(t, fsErr)
+		assert.Contains(t, string(fc.Data), "v2", "after undo-of-undo of edit, content should be v2")
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/r1.md", []byte("# rename body\n")))
+		time.Sleep(1100 * time.Millisecond)
+		require.Nil(t, ops.Rename(ctx, "/polarity/r1.md", "/polarity/r2.md"))
+		time.Sleep(1100 * time.Millisecond)
+		renameID := mostRecentLogIDRaw(t, ops, ctx, "/polarity")
+
+		// Undo the rename -> back to r1.md.
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/.undo/id/"+renameID+"/.apply", nil))
+		_, fsErr := ops.ReadFile(ctx, "/polarity/r1.md")
+		require.Nil(t, fsErr, "after undo of rename, r1.md should exist")
+		_, fsErr = ops.ReadFile(ctx, "/polarity/r2.md")
+		require.NotNil(t, fsErr, "after undo of rename, r2.md should not exist")
+
+		// Undo-of-undo -> back to r2.md.
+		undoID := mostRecentLogIDRaw(t, ops, ctx, "/polarity")
+		require.Nil(t, ops.WriteFile(ctx, "/polarity/.undo/id/"+undoID+"/.apply", nil))
+		_, fsErr = ops.ReadFile(ctx, "/polarity/r2.md")
+		require.Nil(t, fsErr, "after undo-of-undo of rename, r2.md should exist")
+		_, fsErr = ops.ReadFile(ctx, "/polarity/r1.md")
+		require.NotNil(t, fsErr, "after undo-of-undo of rename, r1.md should not exist")
+	})
+}
+
+// TestSynth_History_IncludesCreateEvent confirms the tombstone trigger adds
+// a 'create' history row whenever a row is INSERTed into the source table.
+func TestSynth_History_IncludesCreateEvent(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "tomb")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/tomb", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Fresh create -> 1 history version (the create tombstone).
+	require.Nil(t, ops.WriteFile(ctx, "/tomb/hello.md", []byte("# X\n")))
+	entries, fsErr := ops.ReadDir(ctx, "/tomb/.history/hello.md")
+	require.Nil(t, fsErr)
+	versionCount := 0
+	for _, e := range entries {
+		if e.Name != ".id" {
+			versionCount++
+		}
+	}
+	assert.Equal(t, 1, versionCount, "create alone should yield exactly one history version (the tombstone)")
+
+	// One edit -> 2 history versions (create tombstone + pre-edit snapshot).
+	time.Sleep(1100 * time.Millisecond)
+	require.Nil(t, ops.WriteFile(ctx, "/tomb/hello.md", []byte("# Y\n")))
+	entries, fsErr = ops.ReadDir(ctx, "/tomb/.history/hello.md")
+	require.Nil(t, fsErr)
+	versionCount = 0
+	for _, e := range entries {
+		if e.Name != ".id" {
+			versionCount++
+		}
+	}
+	assert.Equal(t, 2, versionCount, "create + 1 edit should yield 2 history versions")
+}
