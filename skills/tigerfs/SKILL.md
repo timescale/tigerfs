@@ -111,7 +111,7 @@ Bash "echo '{\"description\":\"<why>\"}' > mount/workspace/.savepoint/<name>.jso
 2. Read the log entry summary: `Read "mount/workspace/.undo/id/<log_id>/.info/summary"`
 3. Show the diff: `Bash "diff -u --color mount/workspace/.log/<id>/before mount/workspace/.log/<id>/after"`
 4. Present to user: "This will revert [description]. Go ahead?"
-5. Only if confirmed: `Bash "touch mount/workspace/.undo/id/<log_id>/.apply"`. For a multi-entry group, apply each entry's undo (newest log_id first).
+5. Only if confirmed: `Bash "touch mount/workspace/.undo/id/<log_id>/.apply"`. For a multi-entry group, apply each entry's undo (newest log_id first) (or `touch .undo/to-id/<id-before-the-group>/.apply` to reverse the whole group atomically).
 
 ### How agent writes appear in the log
 
@@ -120,11 +120,13 @@ Different write methods produce different numbers of log entries:
 - **Atomic-rename writes** (Claude's `Write`/`Edit`, many editors): the operation produces multiple adjacent log entries. Typically: a `create` of a temp file like `<file>.tmp.<pid>.<hash>`, then for an overwrite a `delete` of the existing target, then a `rename` of the temp to the final name. That's **2 entries for a new file, 3 for an overwrite**. The create and rename share the temp file's `file_id`; the delete (when present) carries the original target's `file_id`.
 - **Direct writes** (shell redirects like `echo "..." > file`, in-place editors): a single `create` (new file) or `edit` (existing file) log entry. No temp file, no rename.
 
-To revert a logical operation, identify the full group of entries:
+To revert a logical operation, find its group of entries, then undo them:
 
-1. Read the recent log: `Read "mount/workspace/.log/.last/N/.export/json"` (N large enough to span the operation).
-2. Group entries by adjacent timestamps and the `<basename>.tmp.<pid>.<hash>` -> `<basename>` filename pattern. Adjacent create+rename entries with matching `file_id` mark the temp; an interleaved `delete` of the same `<basename>` belongs to the same logical operation even though its `file_id` differs.
-3. Undo each entry in the group via `touch .undo/id/<log_id>/.apply`, applying the newest entry first so each step lands on the state the next step expects.
+1. Read the log newest-first: `Read "mount/workspace/.log/.last/8/.export/json"`.
+2. Anchor on the `rename` to your target filename -- its `file_id` is the new file. The paired `create` shares that **same `file_id`** (filename `<basename>.tmp.<pid>.<hash>`); the `delete` (overwrites only) is the adjacent entry with the target filename but a *different* `file_id`. Checks: create+rename share a `file_id`; count is 2 (new file) or 3 (overwrite). `filename` is not a `.by/`-indexed column, so don't filter by it -- to get the id without scanning, read `.history/<file>/.id`, then query `.log/.by/file_id/<id>/`.
+3. Undo each entry `touch .undo/id/<log_id>/.apply`, **newest first** -- order is mandatory; each step sets up the next. **Out of order is destructive**: `RPC struct is bad` on the stale `.tmp.*`, or silent deletion of the live file.
+
+Shortcut: when the group is the latest change, `touch .undo/to-id/<id-just-before-it>/.apply` reverses it atomically in order. Never revert by re-typing content with `Write`/`Edit` -- that adds another rename group and loses the audit trail.
 
 For advanced cases (filtered undo, per-user undo, pipeline queries), construct paths directly from [files.md](files.md). See [recipes.md](recipes.md) Recipes 1-3 for complete workflow patterns.
 
