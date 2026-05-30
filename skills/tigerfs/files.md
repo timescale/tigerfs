@@ -234,3 +234,13 @@ Bash "touch mount/notes/.undo/to-savepoint/before-investigation/.by/user_id/agen
 ### Undo of Undo
 
 Undo operations are logged. You can undo an undo by targeting its log entry. Create a savepoint before a major undo for extra safety.
+
+### Timestamps After Undo
+
+When undo restores a row (whether undoing an edit, rename, or delete), the file's `modified_at` is reset to the **restore time**, not the original write time. This is intentional: NFS and FUSE clients use mtime to invalidate readdir and getattr caches, so a fresh mtime is what causes restored entries to reappear correctly in `ls` output. Build tools (`make`, file watchers) also expect mtime to advance when content changes.
+
+The original timestamp is still recoverable:
+- Each write is logged with its real time in `.log/<id>` (read `.log/<id>/.info/summary` or pull the JSON from `.log/.by/file_id/<uuid>/`).
+- Each pre-change snapshot in `.history/<file>/` carries the source row's `modified_at` at capture time.
+
+If you need to answer "when was this content originally written," use the log or history -- not `stat`.

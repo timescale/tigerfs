@@ -1595,6 +1595,10 @@ Undo executes in a single PostgreSQL transaction:
 
 Undo is idempotent: undoing to the same savepoint twice produces the same data state (with additional log/history entries). Undo operations are themselves logged, so you can undo an undo.
 
+#### Timestamps After Restore
+
+Undo deliberately sets `modified_at = now()` on every restored row and its parent directory, overriding the historical `modified_at` carried by the UPSERT from the history table. This is required for NFS `noac` clients to invalidate readdir caches and see restored entries; without it, restored files appear stale or missing in `ls` output until the cache TTL expires. The original `modified_at` of the restored content is preserved on the source history row and on the originating `.log/<id>` entry.
+
 #### DDL Limitations
 
 Undo operates on data (DML) only. If a column was added or removed after the savepoint, the UPSERT may fail. TigerFS detects PostgreSQL error codes 42703 (undefined column) and 42P01 (undefined table) and returns a descriptive error instead of a raw SQL message.
