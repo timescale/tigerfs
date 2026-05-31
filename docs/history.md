@@ -133,6 +133,8 @@ Subdirectory `.history/` includes `.by/<file_id>/`; the lookup is keyed only on 
 
 Every create, edit, rename, and delete is recorded in the `.log/` directory. Each entry has a log_id (UUIDv7), the operation type, affected file, and the user who performed it.
 
+**A note on edit counts.** Editors that write atomically -- Claude's Write/Edit, vim, VS Code, most modern tools -- create a temp file, delete the original, and rename temp into place. Each logical "save" therefore shows as 2-3 log entries in `.log/` (create temp + optionally delete + rename). To undo a logical edit, reverse all entries in the group; the `.undo/to-id/<log_id>/` mode handles this in one call when you anchor at the log entry just before the group.
+
 ```bash
 # Recent operations
 ls /mnt/db/notes/.log/.last/10/
@@ -229,10 +231,14 @@ Undo operations are themselves logged (with type='undo'). You can undo an undo. 
 
 ## Recovering Past Versions
 
-**Single file via undo (preferred):** Find the change in the log, then undo it:
+**Single file via undo (preferred):** Find the change in the log, then undo it. `filename` isn't a `.log/.by/` index column (filenames aren't stable -- a file can be renamed), so look the file up by its stable id instead:
 
 ```bash
-cat /mnt/db/notes/.log/.by/filename/hello.md/.last/5/.export/json
+# Get the file's stable id, then read its recent log entries.
+file_id=$(cat /mnt/db/notes/.history/hello.md/.id)
+cat /mnt/db/notes/.log/.by/file_id/$file_id/.last/5/.export/json
+
+# Pick the log_id you want to revert and apply.
 touch /mnt/db/notes/.undo/id/<log_id>/.apply
 ```
 
@@ -254,7 +260,7 @@ touch /mnt/db/notes/.undo/to-savepoint/before-investigation/.apply
 
 Each history-enabled workspace is backed by four companion tables in the `tigerfs` schema, alongside the main backing table.
 
-The **history table** stores a snapshot of every file version. A PostgreSQL BEFORE trigger fires on every update and delete, copying the old row into history with a UUIDv7 version_id. The trigger detects whether the operation was an edit, rename, or delete by comparing the old and new rows.
+The **history table** stores a snapshot of every file version. A PostgreSQL BEFORE trigger fires on every insert, update, and delete, capturing the row state in history with a UUIDv7 version_id. INSERT records the new row as a `create` tombstone; UPDATE records the OLD row as either an `edit` (body change only) or `rename` (filename or parent_id change); DELETE records the OLD row as a `delete` snapshot.
 
 The **log table** records each operation (create, edit, rename, delete, undo) with who did it and when. Log entries reference history entries via version_id, connecting "what happened" to "what it looked like."
 
@@ -282,5 +288,6 @@ TigerFS detects history via the view comment (`tigerfs:md,history`) or by checki
 | Preview undo to savepoint | `cat workspace/.undo/to-savepoint/name/.info/summary` |
 | Diff all since savepoint | `diff -ru workspace/.undo/to-savepoint/name workspace/ -x '.*'` |
 | Undo to savepoint | `touch workspace/.undo/to-savepoint/name/.apply` |
+| Undo to a log entry | `touch workspace/.undo/to-id/<log_id>/.apply` |
 | Undo single change | `touch workspace/.undo/id/<log_id>/.apply` |
 | Per-user undo | `touch workspace/.undo/to-savepoint/name/.by/user_id/X/.apply` |

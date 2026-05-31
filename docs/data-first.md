@@ -458,6 +458,17 @@ mkdir /mnt/db/.views/.create/active_users && echo "CREATE VIEW active_users AS S
 touch /mnt/db/.views/.create/active_users/.commit
 ```
 
+## Accessing File-First Backing Tables
+
+File-first workspaces (markdown or plaintext, created via `.build/`) store their data in tables under the `tigerfs` schema. To data-first-access those tables, use `/mnt/db/.tables/<workspace>/`:
+
+```bash
+ls /mnt/db/.tables/notes/                  # Browse the workspace's backing table rows
+cat /mnt/db/.tables/notes/.info/columns    # Inspect the schema
+```
+
+**Important:** Writes via `.tables/<workspace>/` bypass the history trigger. They mutate the database directly without producing entries in the workspace's `.log/`, `.history/`, or undo machinery. Use the file-first interface (`/mnt/db/<workspace>/`) for normal day-to-day work; reserve `.tables/` for diagnostic queries or one-off fixes that you don't want appearing in the audit trail.
+
 ## Configuration
 
 ```yaml
@@ -480,5 +491,7 @@ export TIGERFS_NO_FILENAME_EXTENSIONS=true
 
 ## See Also
 
+- [File-First Mode](file-first.md) — markdown/plaintext workspaces with frontmatter and atomic dir renames
+- [History, Savepoints, and Undo](history.md) — versioned snapshots and atomic rollback (file-first only)
 - [Pipeline Query Architecture (ADR-007)](adr/007-pipeline-query-architecture.md) — technical design document
 - [spec.md](spec.md) — complete TigerFS specification

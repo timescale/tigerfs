@@ -244,7 +244,116 @@ Dot-directories are hidden by default with `ls` but visible with `ls -a` or `ls 
 
 ---
 
-## Example 4: Reading Data in Different Formats
+## Example 4: Building a File-First Workspace
+
+**Scenario:** You want a versioned, shareable place to write markdown files. Multiple agents and humans can read and write the same workspace concurrently, with every change tracked.
+
+### Commands
+
+```bash
+# Create a workspace with markdown formatting + history enabled
+echo "markdown,history" > /mnt/db/.build/notes
+
+# Write a file with YAML frontmatter
+cat > /mnt/db/notes/getting-started.md << 'EOF'
+---
+title: Getting Started
+author: alice
+tags: [intro]
+---
+
+Welcome to my notes workspace.
+EOF
+
+# List and read like any directory
+ls /mnt/db/notes/
+cat /mnt/db/notes/getting-started.md
+```
+
+### Expected Output
+
+```bash
+$ ls /mnt/db/notes/
+getting-started.md
+
+$ cat /mnt/db/notes/getting-started.md
+---
+title: Getting Started
+author: alice
+tags: [intro]
+---
+
+Welcome to my notes workspace.
+```
+
+### Explanation
+
+`.build/<name>` declares a new workspace. The body is a comma-separated feature list:
+
+- **`markdown`** -- present the table as a directory of `.md` files. YAML frontmatter becomes columns; the body becomes the row's text content.
+- **`history`** -- track every write for savepoints and undo (Example 5).
+- **`plaintext`** -- alternative to markdown: body-only, no frontmatter.
+
+Writes are atomic database transactions, so concurrent writers see immediate consistency.
+
+---
+
+## Example 5: Savepoints and Undo
+
+**Scenario:** You're about to make risky edits to a workspace. Bookmark the current state, try the changes, and atomically roll back if they don't work out. Requires a workspace with `history` enabled (Example 4).
+
+### Commands
+
+```bash
+# Bookmark the current state
+echo '{"description":"Before reorganizing intro"}' > /mnt/db/notes/.savepoint/before-reorg.json
+
+# Make some edits
+cat > /mnt/db/notes/getting-started.md << 'EOF'
+---
+title: Getting Started (revised)
+tags: [draft]
+---
+
+A complete rewrite.
+EOF
+
+# Preview what an undo would restore
+diff -ru /mnt/db/notes/.undo/to-savepoint/before-reorg /mnt/db/notes/ -x '.*'
+
+# Apply the undo (atomic; all files since the savepoint restored in one transaction)
+touch /mnt/db/notes/.undo/to-savepoint/before-reorg/.apply
+
+# Confirm the rewrite is gone
+cat /mnt/db/notes/getting-started.md
+```
+
+### Expected Output
+
+```bash
+$ cat /mnt/db/notes/getting-started.md
+---
+title: Getting Started
+author: alice
+tags: [intro]
+---
+
+Welcome to my notes workspace.
+```
+
+### Explanation
+
+Three capabilities make this workflow safe:
+
+- **`.savepoint/`** -- named bookmarks. Write JSON with a `description`; survives across sessions. Auto-savepoints also fire at inactivity gaps.
+- **`.undo/to-savepoint/<name>/`** -- a virtual directory tree showing the post-undo state. Diff it, then `touch .apply` to execute.
+- **`.undo/id/<log_id>/.apply`** and **`.undo/to-id/<log_id>/.apply`** -- single-operation undo and undo-to-a-log-entry variants for finer control.
+
+Undo operations are themselves logged and reversible -- changing your mind about an undo is just one more `.apply`. For per-user undo, the full operation log, and more, see [docs/history.md](history.md).
+
+---
+
+## Example 6: Reading Data in Different Formats
 
 **Scenario:** You need to read row data and want to choose the most convenient format for your use case.
 
@@ -309,7 +418,7 @@ Both representations exist simultaneously for every row.
 
 ---
 
-## Example 5: Basic Data Modification
+## Example 7: Basic Data Modification
 
 **Scenario:** You need to update a user's email address and insert a new product.
 
@@ -365,11 +474,11 @@ TigerFS translates filesystem operations to SQL:
 - Updates respect database constraints (NOT NULL, UNIQUE, foreign keys)
 - Writes fail with appropriate errors if constraints are violated
 - TSV/CSV writes require a header row specifying column names
-- Delete operations are permanent (no trash/undo)
+- Data-first deletes are permanent. For reversible writes, use a file-first workspace with the `history` feature -- it logs every change and supports atomic undo via `.undo/`. See [history.md](history.md) for the savepoint and undo workflows.
 
 ---
 
-## Example 6: Using grep and awk to Query Data
+## Example 8: Using grep and awk to Query Data
 
 **Scenario:** You want to find specific records and analyze data using familiar Unix tools.
 
@@ -445,7 +554,7 @@ TigerFS enables database queries using standard Unix tools:
 
 ---
 
-## Example 7: Cloud Backends (Tiger Cloud and Ghost)
+## Example 9: Cloud Backends (Tiger Cloud and Ghost)
 
 **Scenario:** You have a database on Tiger Cloud or Ghost and want to mount, create, or fork it using TigerFS.
 
