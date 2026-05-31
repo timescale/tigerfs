@@ -68,7 +68,7 @@ CREATE TABLE tigerfs.<app>_history (
     created_at TIMESTAMPTZ,
     modified_at TIMESTAMPTZ,
     version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
+    operation TEXT NOT NULL CHECK (operation IN ('create', 'edit', 'rename', 'delete'))
 ) WITH (
     tsdb.hypertable,
     tsdb.partition_column = 'version_id',
@@ -296,6 +296,8 @@ The trigger fires BEFORE UPDATE OR DELETE, capturing the complete row state incl
 
 **Note:** The trigger SQL above shows markdown-specific columns (title, author, headers). Plain text tables omit these columns. The DDL generator in `build.go` produces format-specific triggers, same as the current implementation.
 
+**0.7 update:** The trigger was subsequently extended to fire on `BEFORE INSERT OR UPDATE OR DELETE`. INSERT writes a tombstone row to history with `operation = 'create'` capturing the NEW row state -- the same shape as the UPDATE/DELETE branches but anchored to insertion. This lets undo-of-undo distinguish a row that was created by a prior undo (re-delete on reverse) from one that was edited (restore from snapshot on reverse). The `operation` CHECK constraint was extended to include `'create'` accordingly. The point-in-time decision recorded above (UPDATE/DELETE only) was correct at the time of writing; the tombstone extension is a refinement, not a redesign.
+
 ### Impact on undo
 
 With the relational model, every operation (including directory rename and move) is a single-row change:
@@ -366,7 +368,7 @@ The `relational-directories` migration in `cmd/migrate.go` performs these steps 
 9. **Migrate log table** (if exists): rename `history_id` -> `version_id`, rename type values (`insert` -> `create`, `update` -> `edit`), update CHECK constraint. Order matters: drop old CHECK, rename values, then add new CHECK
 10. **Create resolve_path function** (idempotent, shared across all apps)
 
-**Note:** The history parent_id migration uses the source table's CURRENT parent_id for each file_id. This is correct for files that haven't moved, but for files that were moved, earlier history entries will have the current parent_id rather than the historical one. This is an acceptable trade-off since the full path was also not preserved in the old history model.
+**Note:** The history parent_id migration uses the source table's CURRENT parent_id for each file_id. This is correct for files that haven't moved, but for files that were moved, earlier history entries will have the current parent_id rather than the historical one. This is an acceptable trade-off since the full path was also not preserved in the old history model. This lossy behavior is the reason for the post-migration undo boundary documented in [ADR-019](019-undo-boundary-via-metadata-table.md): pre-migration log entries remain readable but are not undoable.
 
 ## Sequencing
 

@@ -8,7 +8,7 @@
 
 TigerFS users and agents make changes to files backed by PostgreSQL. When mistakes happen -- a user edits the wrong file, or an agent makes a series of exploratory changes during debugging -- there's no way to revert. Today, recovery depends on either the agent manually undoing its changes or having a clean git commit to fall back on.
 
-TigerFS already has a **history** system for synth apps: a PostgreSQL BEFORE trigger captures the old row state into a companion hypertable on every UPDATE/DELETE. This design builds on that foundation to add structured undo operations, savepoints, and an operation log -- all exposed through the filesystem.
+TigerFS already has a **history** system for synth apps: a PostgreSQL BEFORE trigger captures row state into a companion hypertable on every change -- the OLD row for UPDATE/DELETE (as `'edit'`/`'rename'`/`'delete'`), and the NEW row for INSERT (as a `'create'` tombstone). This design builds on that foundation to add structured undo operations, savepoints, and an operation log -- all exposed through the filesystem.
 
 **Scope:** This feature applies only to synth app tables with history enabled. Native/data-first tables and synth apps without history are not affected.
 
@@ -1155,6 +1155,16 @@ Thin CLI wrappers around the filesystem operations for human ergonomics (`tigerf
 ### 13.6 Bulk Operations in the Log
 
 Should `.import/` operations create one log entry per row, or one log entry for the entire import? Per-row is correct but could create thousands of log entries. Deferred to implementation.
+
+---
+
+## See Also
+
+- [ADR-012: Versioned History](012-versioned-history.md) (superseded -- original history-feature ADR)
+- [ADR-017: Relational Directory Structure](017-relational-directory-structure.md) (parent-pointer model; schema changes to log and history; `'rename'` type semantics)
+- [ADR-019: Undo Boundary via Metadata Table](019-undo-boundary-via-metadata-table.md) (post-v0.6 → v0.7 migration undo enforcement via `<app>_metadata`)
+- `docs/spec.md` § Operation Log, Savepoints, and Undo
+- `docs/history.md` (user guide)
 
 ---
 

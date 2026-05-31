@@ -50,7 +50,8 @@
 - Multiple data formats (TSV, CSV, JSON, YAML)
 - Index-based navigation for fast lookups
 - Full CRUD operations (create, read, update, delete)
-- Synthesized apps present rows as domain-specific files (e.g., markdown with YAML frontmatter) with automatic versioning
+- Synthesized apps present rows as domain-specific files (e.g., markdown with YAML frontmatter)
+- Automatic versioning with operation log, named savepoints, and atomic undo (per-user, per-operation, or per-savepoint) for history-enabled apps
 - Cloud backend integration (Tiger Cloud, Ghost) with prefix scheme
 - Respects database constraints and permissions
 - Cross-platform support (Linux, macOS, Windows)
@@ -1380,7 +1381,7 @@ CREATE TABLE tigerfs.notes_history (
     modified_at TIMESTAMPTZ,
     -- History metadata --
     version_id UUID NOT NULL DEFAULT uuidv7() PRIMARY KEY,
-    operation TEXT NOT NULL CHECK (operation IN ('edit', 'rename', 'delete'))
+    operation TEXT NOT NULL CHECK (operation IN ('create', 'edit', 'rename', 'delete'))
 ) WITH (
     tsdb.hypertable,
     tsdb.partition_column = 'version_id',
@@ -1394,7 +1395,7 @@ Indexes are created on `(filename, version_id DESC)` and `(file_id, version_id D
 
 ### Trigger Mechanism
 
-A `BEFORE UPDATE OR DELETE` trigger on the source table copies the `OLD` row (including `parent_id`) into the history table with a UUIDv7 `version_id` (encoding the current timestamp) and the operation type (`UPDATE` or `DELETE`).
+A `BEFORE INSERT OR UPDATE OR DELETE` trigger on the source table writes a row to the history table on every change. INSERT records the new row as a `'create'` tombstone (the row that was just inserted); UPDATE records the OLD row as either an `'edit'` (body change only) or `'rename'` (filename or parent_id change); DELETE records the OLD row as a `'delete'` snapshot. All variants use a UUIDv7 `version_id` encoding the current timestamp.
 
 ### TimescaleDB Integration
 
@@ -1587,11 +1588,13 @@ Pipeline capabilities filter which operations are undone: `.by/user_id/`, `.filt
 
 #### Execution
 
-Undo executes in a single PostgreSQL transaction:
-1. Query affected files using DISTINCT ON with SkipScan on the `(file_id, log_id ASC)` index
-2. DELETE rows created after the target point
-3. UPSERT rows from history for edits, renames, and deletes (restores before-state including `parent_id`)
-4. INSERT `type='undo'` log entries for each affected file
+Undo executes in a single PostgreSQL transaction with `SET CONSTRAINTS ALL DEFERRED` (FK and `(parent_id, filename, filetype)` UNIQUE checked at COMMIT, allowing free intra-transaction ordering):
+
+1. **Query affected files** (`QueryUndoAffectedFiles`): DISTINCT ON `(file_id)` over the log table for each file's oldest entry in the window (SkipScan-optimized on the `(file_id, log_id ASC)` index), wrapped in a recursive CTE that walks each affected file's parent_id chain to sort the result child-first (deepest first, file_id ASC tiebreaker). The walk consults the snapshot `parent_id` (via `affected.version_id` -> history) when an ancestor is in the affected set, otherwise the current `source.parent_id` -- so child-first ordering still holds when all rows in a subtree were deleted.
+2. **DELETE rows created after the target point.** Capture the BEFORE-DELETE trigger's archive `version_id` inline (within the same iteration), stashing it for step 4.
+3. **UPSERT rows from history** for edits, renames, and deletes (restores before-state including `parent_id`). Capture the BEFORE-trigger archive `version_id` inline and stash it.
+4. **INSERT `type='undo'` log entries** using the inline-captured `version_id`s from steps 2-3. The capture must be inline -- a post-hoc "newest history row" query would resolve to no-semantic-content edit rows that trigger B (`bump_parent_mtime`) cascades onto parent rows during each child UPSERT, silently corrupting undo-of-undo dispatch for directory renames. Empty captures (no archive row written, e.g., from a missing archive trigger on a malformed workspace) are recorded as SQL NULL with a warning rather than failing the transaction.
+5. **Bump `modified_at = now()`** on restored rows and their parent directories (see "Timestamps After Restore" below for the rationale).
 
 Undo is idempotent: undoing to the same savepoint twice produces the same data state (with additional log/history entries). Undo operations are themselves logged, so you can undo an undo.
 
@@ -4529,6 +4532,7 @@ SELECT id FROM users TABLESAMPLE BERNOULLI(1.0) LIMIT 100;
 | 1.1     | 2026-01-23 | Added Tiger Cloud integration (--tiger-service-id); clarified JOINs via views; DDL scope defined |
 | 1.2     | 2026-02-25 | Added Synthesized Apps and History sections; updated filesystem structure with new dotfiles; updated implementation priorities and documentation plan |
 | 1.3     | 2026-02-27 | Added `.columns/` pipeline capability for column projection |
+| 1.4     | 2026-XX-XX | v0.7 release: added Operation Log, Savepoints, and Undo section; expanded History (operation column adds `'create'`; BEFORE-INSERT trigger writes tombstones for inserts); added Migration Boundaries (`history-format-migration`); updated filesystem structure with `.log/`, `.savepoint/`, `.undo/`; relational directory structure with `parent_id`/`filetype`/`filename` columns |
 
 ---
 

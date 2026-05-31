@@ -193,10 +193,10 @@ Workspaces created with `history` get automatic versioning, an operation log, sa
 
 ```bash
 # Create savepoint, work, review, undo if needed
-echo '{"description":"Before refactoring"}' > /mnt/db/notes/.savepoint/checkpoint.json
+echo '{"description":"Before refactoring"}' > /mnt/db/notes/.savepoint/before-refactor.json
 # ... make changes ...
-diff -ru /mnt/db/notes/.undo/to-savepoint/checkpoint /mnt/db/notes/ -x '.*'
-touch /mnt/db/notes/.undo/to-savepoint/checkpoint/.apply
+diff -ru /mnt/db/notes/.undo/to-savepoint/before-refactor /mnt/db/notes/ -x '.*'
+touch /mnt/db/notes/.undo/to-savepoint/before-refactor/.apply
 ```
 
 See [History](history.md) for the full guide on version browsing, savepoints, undo, and recovery.

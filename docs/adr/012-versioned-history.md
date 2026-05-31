@@ -1,6 +1,6 @@
 # ADR-012: Versioned History
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-016](016-undo-and-recovery.md) (operation log, savepoints, undo) and [ADR-017](017-relational-directory-structure.md) (schema changes including `parent_id`, renamed columns, `'create'` operation tombstone, BEFORE INSERT trigger)
 **Date:** 2026-02-12
 **Author:** Mike Freedman
 
