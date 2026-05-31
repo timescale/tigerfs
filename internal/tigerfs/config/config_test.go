@@ -168,6 +168,7 @@ func TestInit_ConfigFileNotFound(t *testing.T) {
 
 // TestLoad_UnmarshalConfig tests that Load correctly unmarshals to Config struct
 func TestLoad_UnmarshalConfig(t *testing.T) {
+	unsetPostgreSQLEnvVars(t)
 	resetViper()
 
 	err := Init()
@@ -665,6 +666,7 @@ func TestLoad_CalledBeforeInit(t *testing.T) {
 
 // TestMultipleInitCalls tests that Init can be called multiple times safely
 func TestMultipleInitCalls(t *testing.T) {
+	unsetPostgreSQLEnvVars(t)
 	resetViper()
 
 	err := Init()
