@@ -1191,6 +1191,37 @@ func (c *Client) QueryLogEntry(ctx context.Context, schema, logTable, logID stri
 	return &f, nil
 }
 
+// emptyVersionIDToNull converts an empty version_id captured during
+// ExecuteUndoTransaction Step 1/2 into a SQL NULL (returned as nil
+// interface{}) for the Step 3 INSERT, while logging a warning so the
+// underlying workspace inconsistency is surfaced to operators.
+//
+// The inline captures in Steps 1 and 2 only fail to populate the
+// captured map when the BEFORE archive trigger didn't write a history
+// row for the mutation -- typically because the trigger is missing or
+// disabled on a malformed workspace. Recording NULL on the resulting
+// undo log row keeps the transaction from failing with a confusing
+// "invalid input syntax for type uuid" PG error (the version_id column
+// can't accept the empty string literal). NULL is already a legitimate
+// value for the column (create-type log entries store NULL too), and
+// downstream undo-of-undo dispatch handles empty/NULL version_id
+// cleanly by returning a clear "no version_id" error.
+//
+// branch is "delete" or "restore" -- it labels which Step 3 loop hit
+// the empty capture, helping correlate the warning to the affected
+// path. fileID is the source row that triggered the empty capture.
+func emptyVersionIDToNull(versionID, fileID, branch string) interface{} {
+	if versionID != "" {
+		return versionID
+	}
+	logging.Warn("undo log entry has no version_id; archive trigger may not be firing",
+		zap.String("file_id", fileID),
+		zap.String("branch", branch),
+		zap.String("hint", "verify the archive BEFORE trigger exists on the source table; "+
+			"this undo log entry's version_id was recorded as NULL and the entry will not be reversible"))
+	return nil
+}
+
 // ExecuteUndoTransaction executes a batch of undo operations atomically.
 // Within a single transaction: deletes created rows, upserts from history,
 // and inserts undo log entries. BEFORE triggers fire on each restore,
@@ -1390,19 +1421,29 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 		if i < len(params.DeleteFilenames) {
 			filename = params.DeleteFilenames[i]
 		}
-		versionIDVal := capturedDeleteVIDs[fileID]
+		// Pass nil (-> SQL NULL) when the inline capture in Step 1 produced no
+		// version_id. The Step 1 capture only fails to populate the map when
+		// the BEFORE-DELETE archive trigger didn't write a history row -- an
+		// invariant violation in a properly-configured workspace, but possible
+		// if the trigger is missing or disabled. Recording NULL instead of an
+		// empty string keeps the transaction from failing with a cryptic
+		// "invalid input syntax for type uuid" and lets the undo complete;
+		// the warning below surfaces the underlying workspace inconsistency.
+		// See ExecuteUndoTransaction's Step 1 comment for the capture invariant.
+		versionIDArg := emptyVersionIDToNull(capturedDeleteVIDs[fileID], fileID, "delete")
 		if _, err := tx.Exec(ctx,
 			fmt.Sprintf(
 				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
 				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("filename"), qi("version_id"), qi("description"),
 			),
-			fileID, params.UserID, filename, versionIDVal, params.Description,
+			fileID, params.UserID, filename, versionIDArg, params.Description,
 		); err != nil {
 			return fmt.Errorf("failed to insert undo log entry for delete: %w", err)
 		}
 	}
 	for i, fileID := range params.RestoreFileIDs {
-		versionIDVal := capturedRestoreVIDs[fileID]
+		// Same nil-conversion + warning as the DELETE branch above.
+		versionIDArg := emptyVersionIDToNull(capturedRestoreVIDs[fileID], fileID, "restore")
 		if _, err := tx.Exec(ctx,
 			fmt.Sprintf(
 				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
@@ -1410,7 +1451,7 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 				qi("log_id"), qi("file_id"), qi("type"), qi("user_id"),
 				qi("filename"), qi("version_id"), qi("description"),
 			),
-			fileID, params.UserID, params.RestoreFilenames[i], versionIDVal, params.Description,
+			fileID, params.UserID, params.RestoreFilenames[i], versionIDArg, params.Description,
 		); err != nil {
 			return fmt.Errorf("failed to insert undo log entry for restore: %w", err)
 		}
