@@ -1914,3 +1914,101 @@ func TestSynth_History_IncludesCreateEvent(t *testing.T) {
 	}
 	assert.Equal(t, 2, versionCount, "create + 1 edit should yield 2 history versions")
 }
+
+// TestSynth_UndoOfUndo_DirRenameWithChild reproduces a user-reported bug
+// where a batch undo-to-savepoint that restored both a directory rename
+// and a child file's rename was followed by an undo-the-undo (roll-
+// forward) that silently dropped the directory rename. The child's
+// rename rolled forward correctly; the directory stayed at its pre-
+// undo name.
+//
+// Mechanism: ExecuteUndoTransaction's Step 3 read each affected file's
+// "newest history row" after all Step 2 UPSERTs were done. The
+// bump_parent_mtime AFTER trigger cascaded when the child's restore
+// fired, writing a no-semantic-content edit row on the already-restored
+// directory. That edit row became "newest" -- so the directory's
+// recorded undo-log version_id pointed at a snapshot whose filename was
+// the reverted name (d), not the post-demo name (e). The undo-of-undo
+// then restored from a snapshot that already matched current state, a
+// no-op.
+//
+// Fix (PR fix/undo-version-id-cascade): capture each file's version_id
+// inline, immediately after its own UPSERT, before any other iteration
+// can cascade. This test fails pre-fix and passes post-fix.
+func TestSynth_UndoOfUndo_DirRenameWithChild(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "dirbug")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/dirbug", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// 1. Pre-savepoint state: directory d/ containing d/a.md.
+	require.Nil(t, ops.Mkdir(ctx, "/dirbug/d"))
+	require.Nil(t, ops.WriteFile(ctx, "/dirbug/d/a.md",
+		[]byte("---\ntitle: A\n---\nbody a\n")))
+
+	// 2. Savepoint captures "d/ with d/a.md".
+	require.Nil(t, ops.WriteFile(ctx, "/dirbug/.savepoint/before-demo.json",
+		[]byte(`{"description":"d/ with a.md"}`)))
+
+	// 3. Demo edits (both inside the savepoint window):
+	//    - rename child  d/a.md -> d/b.md
+	//    - rename dir    d      -> e   (now contains e/b.md)
+	require.Nil(t, ops.Rename(ctx, "/dirbug/d/a.md", "/dirbug/d/b.md"))
+	require.Nil(t, ops.Rename(ctx, "/dirbug/d", "/dirbug/e"))
+
+	// Sanity: post-demo state is e/b.md.
+	_, fsErr := ops.ReadFile(ctx, "/dirbug/e/b.md")
+	require.Nil(t, fsErr, "e/b.md should exist after the demo renames")
+
+	// 4. Capture the log_id of the most recent forward op (rename d->e).
+	// Used below as the undo-to-id target for the roll-forward step:
+	// .undo/to-id/<X>/.apply undoes all log entries with log_id > X, which
+	// after the savepoint-undo runs will be exactly the two type='undo'
+	// log entries the savepoint-undo emitted -- i.e., reverses the
+	// savepoint-undo and re-applies the demo.
+	fc, fsErr := ops.ReadFile(ctx, "/dirbug/.log/.last/1/.export/json")
+	require.Nil(t, fsErr, "should be able to read newest log entry")
+	var lastForward []map[string]any
+	require.NoError(t, json.Unmarshal(fc.Data, &lastForward))
+	require.Len(t, lastForward, 1, "expected one most-recent log entry")
+	lastForwardLogID, ok := lastForward[0]["log_id"].(string)
+	require.True(t, ok && lastForwardLogID != "", "log_id should be a non-empty string")
+
+	// 5. Undo to savepoint: rolls both renames back. State should be d/a.md.
+	require.Nil(t, ops.WriteFile(ctx, "/dirbug/.undo/to-savepoint/before-demo/.apply",
+		[]byte("")))
+
+	_, fsErr = ops.ReadFile(ctx, "/dirbug/d/a.md")
+	require.Nil(t, fsErr, "d/a.md should be restored after savepoint-undo")
+	_, fsErr = ops.Stat(ctx, "/dirbug/e")
+	assert.NotNil(t, fsErr, "e/ should be gone after savepoint-undo")
+
+	// 6. Roll forward via undo-to-id targeting the last forward log entry.
+	// This undoes the two type='undo' entries the savepoint-undo wrote,
+	// re-applying both renames.
+	applyPath := fmt.Sprintf("/dirbug/.undo/to-id/%s/.apply", lastForwardLogID)
+	require.Nil(t, ops.WriteFile(ctx, applyPath, []byte("")))
+
+	// 7. Final state MUST match post-demo: dir is e/, file is e/b.md.
+	//
+	// Pre-fix this assertion fails: the dir's undo-log version_id (from
+	// step 5) pointed at a cascade artifact with filename=d, so the
+	// roll-forward restored from {filename=d} -- a no-op since the dir
+	// was already at d after the savepoint-undo. The child correctly
+	// rolled forward to b.md, leaving the broken state d/b.md.
+	_, fsErr = ops.ReadFile(ctx, "/dirbug/e/b.md")
+	assert.Nil(t, fsErr,
+		"e/b.md must exist after roll-forward; pre-fix the dir rename was silently dropped, leaving d/b.md")
+
+	_, fsErr = ops.Stat(ctx, "/dirbug/d")
+	assert.NotNil(t, fsErr,
+		"d/ must be gone after roll-forward; pre-fix it persisted because the dir's undo entry pointed at a cascade artifact")
+}
