@@ -399,11 +399,21 @@ tigerfs info --json /mnt/db           # JSON output for scripting
 
 ## Try the Demo
 
+The **demo** is a ready-to-run TigerFS environment seeded with sample data so you can poke around with `ls`, `cat`, and friends -- see [scripts/demo/README.md](scripts/demo/README.md).
+
 ```bash
 cd scripts/demo
 ./demo.sh start     # auto-detects platform (--docker or --mac)
 ./demo.sh shell     # explore: ls, cat users/1.json, etc.
 ./demo.sh stop
+```
+
+The **stress tester** (`tigerfs-stress`) is a self-contained correctness exerciser that runs long, randomized sequences of file operations and undo rollbacks against a mounted workspace, validating filesystem state against an in-memory model after every operation -- see [test/stress/README.md](test/stress/README.md).
+
+```bash
+go build -o bin/tigerfs-stress ./test/stress
+bin/tigerfs-stress start    # randomized op + undo loop with default iterations/seed
+bin/tigerfs-stress stop
 ```
 
 ## Configuration
@@ -425,7 +435,18 @@ Config file: `~/.config/tigerfs/config.yaml`. Run `tigerfs config show` to see a
 git clone https://github.com/timescale/tigerfs.git
 cd tigerfs
 go build -o bin/tigerfs ./cmd/tigerfs
-go test ./...
+
+# Local unit tests (no cache)
+go test -count=1 ./internal/tigerfs/...
+
+# Local integration tests (no cache; spins up its own Postgres via testcontainers)
+go test -count=1 -timeout 600s ./test/integration/...
+
+# Trigger unit tests on CI for the current branch
+gh workflow run test.yml --ref "$(git branch --show-current)"
+
+# Trigger unit + integration tests on CI for the current branch
+gh workflow run test.yml --ref "$(git branch --show-current)" -f run_integration=true
 ```
 
 For development guidelines, architecture details, and the full specification, see [CLAUDE.md](CLAUDE.md) and [docs/spec.md](docs/spec.md).
