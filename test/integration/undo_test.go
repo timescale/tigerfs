@@ -2012,3 +2012,214 @@ func TestSynth_UndoOfUndo_DirRenameWithChild(t *testing.T) {
 	assert.NotNil(t, fsErr,
 		"d/ must be gone after roll-forward; pre-fix it persisted because the dir's undo entry pointed at a cascade artifact")
 }
+
+// TestSynth_UndoIterationOrder_ChildBeforeParent verifies that
+// QueryUndoAffectedFiles returns affected rows sorted child-first
+// (topological by source.parent_id depth, deepest first, with file_id
+// ASC as the same-depth tiebreaker). This is what reduces cascade-noise
+// in the history table during undo: leaves restored first cascade onto
+// parents that haven't been restored yet, so the parents' own UPSERTs
+// supersede the cascade row as newest (or the cascade is a no-op when
+// the parent is missing from source).
+//
+// Build a tree under workspace topo/:
+//
+//	topo/
+//	└── a/                        (depth 0, dir)
+//	    ├── b/                    (depth 1, dir)
+//	    │   ├── c/                (depth 2, dir)
+//	    │   │   └── leaf.md       (depth 3, file)
+//	    │   └── midfile.md        (depth 2, file)
+//	    ├── topfile.md            (depth 1, file)
+//	    └── secondtop.md          (depth 1, file)
+//
+// Edit leaf, midfile, topfile, secondtop, and rename b. Affected =
+// {leaf, midfile, topfile, secondtop, b}.
+//
+// Expected order from QueryUndoAffectedFiles:
+//  1. leaf      (depth 3)
+//  2. midfile   (depth 2)
+//  3. b         (depth 1) -- oldest depth-1 file_id (Mkdir'd before topfile)
+//  4. topfile   (depth 1)
+//  5. secondtop (depth 1) -- newest depth-1 file_id
+func TestSynth_UndoIterationOrder_ChildBeforeParent(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "topo")
+
+	cfg := &config.Config{
+		DirListingLimit: 10000,
+		QueryTimeout:    30,
+		PoolSize:        5,
+		PoolMaxIdle:     2,
+		InsecureNoSSL:   true,
+	}
+	ctx := context.Background()
+	dbClient, err := db.NewClient(ctx, cfg, result.ConnStr)
+	require.NoError(t, err)
+	t.Cleanup(func() { dbClient.Close() })
+	ops := fs.NewOperations(cfg, dbClient)
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/topo", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Build the tree in a deliberate creation order so file_id (UUIDv7)
+	// reflects it. Reasoning about the depth-1 tiebreaker as "older
+	// file_id first" only works if creation order is what we expect.
+	require.Nil(t, ops.Mkdir(ctx, "/topo/a"))
+	require.Nil(t, ops.Mkdir(ctx, "/topo/a/b"))
+	require.Nil(t, ops.Mkdir(ctx, "/topo/a/b/c"))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/topfile.md", []byte("---\ntitle: T\n---\nt\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/b/midfile.md", []byte("---\ntitle: M\n---\nm\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/b/c/leaf.md", []byte("---\ntitle: L\n---\nl\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/secondtop.md", []byte("---\ntitle: S\n---\ns\n")))
+
+	// Capture file_ids for assertions.
+	getFileID := func(path string) string {
+		fc, fsErr := ops.ReadFile(ctx, path)
+		require.Nil(t, fsErr, "ReadFile(%s)", path)
+		return strings.TrimSpace(string(fc.Data))
+	}
+	leafID := getFileID("/topo/.history/a/b/c/leaf.md/.id")
+	midfileID := getFileID("/topo/.history/a/b/midfile.md/.id")
+	topfileID := getFileID("/topo/.history/a/topfile.md/.id")
+	secondtopID := getFileID("/topo/.history/a/secondtop.md/.id")
+	bID := getFileID("/topo/.history/a/b/.id")
+
+	// Savepoint -- the undo target.
+	require.Nil(t, ops.WriteFile(ctx, "/topo/.savepoint/sp.json", []byte(`{}`)))
+	time.Sleep(50 * time.Millisecond)
+
+	// Modify each file (writes a log entry per WriteFile) and rename b
+	// (another log entry). All five end up in the savepoint's undo window.
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/b/c/leaf.md", []byte("---\ntitle: L\n---\nleaf-edited\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/b/midfile.md", []byte("---\ntitle: M\n---\nmid-edited\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/topfile.md", []byte("---\ntitle: T\n---\ntop-edited\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/topo/a/secondtop.md", []byte("---\ntitle: S\n---\nsecond-edited\n")))
+	require.Nil(t, ops.Rename(ctx, "/topo/a/b", "/topo/a/B"))
+
+	// Resolve the savepoint's savepoint_id via .tables so we can pass it
+	// to QueryUndoAffectedFiles as afterID.
+	fc, fsErr := ops.ReadFile(ctx, "/.tables/topo_savepoint/sp/savepoint_id")
+	require.Nil(t, fsErr, "should resolve sp's savepoint_id from .tables")
+	savepointID := strings.TrimSpace(string(fc.Data))
+
+	// Call QueryUndoAffectedFiles directly. The returned order drives
+	// Step 2's iteration order in ExecuteUndoTransaction.
+	affected, err := dbClient.QueryUndoAffectedFiles(ctx, "tigerfs",
+		"topo_log", "topo", "topo_history", savepointID, "", nil)
+	require.NoError(t, err)
+	require.Len(t, affected, 5,
+		"expected 5 affected files (leaf, midfile, topfile, secondtop, b)")
+
+	// Expected: leaf (depth 3), midfile (depth 2), then [b, topfile,
+	// secondtop] sorted by file_id ASC = creation order.
+	expectedOrder := []string{leafID, midfileID, bID, topfileID, secondtopID}
+	actualOrder := make([]string, len(affected))
+	for i, a := range affected {
+		actualOrder[i] = a.FileID
+	}
+
+	for i := range expectedOrder {
+		if actualOrder[i] != expectedOrder[i] {
+			t.Errorf("affected[%d]: got file_id=%s, want %s (full got=%v, want=%v)",
+				i, actualOrder[i], expectedOrder[i], actualOrder, expectedOrder)
+		}
+	}
+}
+
+// TestSynth_UndoChildFirst_MinimizesCascadeArtifacts verifies that
+// child-first iteration during ExecuteUndoTransaction skips writing
+// cascade-artifact history rows when the parent of a restored file
+// hasn't been (re)created yet. The bump_parent_mtime AFTER trigger
+// runs UPDATE source SET modified_at=now() WHERE id=NEW.parent_id; if
+// no row matches (parent doesn't exist), the UPDATE writes nothing, so
+// the cascade archive row is never produced.
+//
+// Scenario: dir d/ with 3 child files. Take savepoint, delete files
+// and dir, undo to savepoint. With child-first iteration the file
+// restores run before d's restore; their trigger-B cascades target a
+// non-existent d row and produce no history.
+//
+// Counts d's history rows between setup and post-undo:
+//
+// With PR2 (child-first):
+//   - destructive: 3 cascade rows from each file's BEFORE-DELETE + 1
+//     BEFORE-DELETE for d itself = 4 new rows on d.
+//   - undo Step 2: 0 cascades (parent missing) + 1 d-tombstone = 1 row.
+//   - undo Step 4: 1 mtime-bump 'edit' row on d.
+//   - total delta = 4 + 1 + 1 = 6 new rows on d.
+//
+// Pre-PR2 (file_id ASC, parent-first):
+//   - destructive: 4 new rows on d (same).
+//   - undo Step 2: 1 d-tombstone + 3 cascade rows from each child's
+//     BEFORE-INSERT (parent now exists) = 4 rows on d.
+//   - undo Step 4: 1 edit row on d.
+//   - total delta = 4 + 4 + 1 = 9 new rows on d.
+//
+// Asserts delta == 6 (child-first). Pre-PR2 the same scenario yields 9.
+func TestSynth_UndoChildFirst_MinimizesCascadeArtifacts(t *testing.T) {
+	result := GetTestDBEmpty(t)
+	if result == nil {
+		return
+	}
+	defer result.Cleanup()
+	cleanupTigerFSTables(t, result.ConnStr, "cascade")
+
+	ops := setupFSOperations(t, result.ConnStr)
+	ctx := context.Background()
+
+	require.Nil(t, ops.WriteFile(ctx, "/.build/cascade", []byte("markdown,history\n")))
+	time.Sleep(100 * time.Millisecond)
+
+	// Setup: dir d/ at workspace root with three child files.
+	require.Nil(t, ops.Mkdir(ctx, "/cascade/d"))
+	require.Nil(t, ops.WriteFile(ctx, "/cascade/d/a.md", []byte("---\ntitle: A\n---\na\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/cascade/d/b.md", []byte("---\ntitle: B\n---\nb\n")))
+	require.Nil(t, ops.WriteFile(ctx, "/cascade/d/c.md", []byte("---\ntitle: C\n---\nc\n")))
+
+	// Snapshot d's history-row count NOW. Setup contributes 1 'create'
+	// row for d + 3 cascade 'edit' rows on d (one per child WriteFile
+	// firing bump_parent_mtime) = 4. We only care about the delta after
+	// savepoint+destructive+undo, so don't assert the absolute number.
+	preCount := countHistoryEntries(t, ctx, ops, "/cascade/.history/d")
+
+	// Savepoint -- the undo target.
+	require.Nil(t, ops.WriteFile(ctx, "/cascade/.savepoint/sp.json", []byte(`{}`)))
+	time.Sleep(50 * time.Millisecond)
+
+	// Destructive: rm -rf d. POSIX userspace walks leaves-first.
+	require.Nil(t, ops.Delete(ctx, "/cascade/d/a.md"))
+	require.Nil(t, ops.Delete(ctx, "/cascade/d/b.md"))
+	require.Nil(t, ops.Delete(ctx, "/cascade/d/c.md"))
+	require.Nil(t, ops.Delete(ctx, "/cascade/d"))
+
+	// Undo to savepoint -- restores d and its children.
+	require.Nil(t, ops.WriteFile(ctx, "/cascade/.undo/to-savepoint/sp/.apply", []byte("")))
+
+	// d exists again post-undo; .history/d/ is path-accessible.
+	postCount := countHistoryEntries(t, ctx, ops, "/cascade/.history/d")
+
+	delta := postCount - preCount
+	assert.Equal(t, 6, delta,
+		"child-first undo should add 6 history rows to d (4 destructive + 1 tombstone + 1 Step-4 edit); pre-PR2 would add 9 (3 extra Step-2 cascade rows). pre=%d post=%d delta=%d",
+		preCount, postCount, delta)
+}
+
+// countHistoryEntries returns the number of versioned history entries
+// visible under .history/<file>/, excluding dotfiles (.id, .info, ...).
+func countHistoryEntries(t *testing.T, ctx context.Context, ops *fs.Operations, historyPath string) int {
+	t.Helper()
+	entries, fsErr := ops.ReadDir(ctx, historyPath)
+	require.Nil(t, fsErr, "ReadDir(%s)", historyPath)
+	n := 0
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name, ".") {
+			n++
+		}
+	}
+	return n
+}

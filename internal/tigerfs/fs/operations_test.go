@@ -2080,7 +2080,7 @@ func (m *mockDBClient) QueryHistoryOperation(ctx context.Context, schema, histor
 	return "", fmt.Errorf("no history row for version %s", versionID)
 }
 
-func (m *mockDBClient) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []db.UndoFilter) ([]db.UndoAffectedFile, error) {
+func (m *mockDBClient) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, sourceTable, historyTable, afterID, userID string, filters []db.UndoFilter) ([]db.UndoAffectedFile, error) {
 	return m.undoAffectedFiles, nil
 }
 

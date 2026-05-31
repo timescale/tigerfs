@@ -949,15 +949,133 @@ func (c *Client) QueryCurrentPath(ctx context.Context, schema, table, fileID str
 	return *path, nil
 }
 
-// QueryUndoAffectedFiles returns the first log entry per file after a target point.
-// Uses DISTINCT ON to find one entry per file_id, ordered by log_id ASC (oldest first).
-// TimescaleDB's SkipScan optimizes this on the (file_id, log_id ASC) index.
-func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
+// QueryUndoAffectedFiles returns the first log entry per file after a target
+// point, ordered child-first (topological by parent_id depth, deepest first,
+// with file_id ASC as the same-depth tiebreaker).
+//
+// Why ordering matters at all
+// ===========================
+//
+// ExecuteUndoTransaction processes one UPSERT per affected file. The
+// bump_parent_mtime AFTER trigger cascades on every child UPSERT: it runs
+// UPDATE source SET modified_at=now() WHERE id=<child's parent_id>, which
+// re-fires the archive trigger on the parent dir and writes an extra history
+// row (no-semantic-content "edit" -- only modified_at changed). The cascade
+// row's relationship to the parent's OWN restore row depends on iteration
+// order:
+//
+//   - Parent-first iteration: the parent's own restore runs first and writes
+//     a history row. Then each child UPSERT cascades onto the now-existing
+//     parent, writing a fresh cascade row with a NEWER UUIDv7 than the
+//     parent's own row. The cascade row ends up "newest" for the parent's
+//     file_id.
+//
+//   - Child-first iteration: each child UPSERT cascades onto a parent that
+//     either (a) doesn't exist in source yet -- the cascade UPDATE matches
+//     zero rows, no row is written -- or (b) exists in its pre-restore
+//     state, in which case the cascade row IS written but is then superseded
+//     by the parent's own subsequent UPSERT writing an even newer row.
+//
+// Under child-first iteration, the parent's own restore row is always
+// "newest" for the parent's file_id at end-of-transaction.
+//
+// Why this is defense in depth, not correctness
+// =============================================
+//
+// ExecuteUndoTransaction captures each affected file's new undo-log
+// version_id INLINE -- right after that file's own UPSERT/DELETE returns,
+// before any other iteration runs. That capture is guaranteed to be the row
+// the archive trigger wrote for THIS file's mutation, because no other SQL
+// runs between the mutation and the inline SELECT and PG18's per-session
+// monotonic uuidv7() makes our own write the largest version_id for this
+// file at that instant. So undo-of-undo correctness does NOT depend on this
+// query's iteration order.
+//
+// Earlier, version_id was captured POST-HOC at the end of the transaction
+// by re-querying "newest history row for file_id." Under parent-first
+// iteration, that re-query returned a cascade artifact instead of the
+// parent's own restore snapshot, so a subsequent undo-of-undo silently
+// restored from a snapshot with the WRONG filename (a no-op for the
+// directory rename case). Moving the capture inline removed the
+// iteration-order dependency.
+//
+// With the inline capture in place, this query could in principle be
+// simplified back to a flat DISTINCT ON without the walk -- the cascade
+// rows still exist in history, but they no longer corrupt the undo-log's
+// version_id pointers, so correctness holds under any order. For reference,
+// the simpler form looks like:
+//
+//	SELECT DISTINCT ON ("file_id")
+//	    "file_id", "type", "version_id", "filename", "log_id", "user_id"
+//	FROM <log_table>
+//	WHERE <conditions>
+//	ORDER BY "file_id", "log_id" ASC
+//
+// That single statement returns one row per affected file, ordered by
+// file_id ASC (i.e., creation order, which is approximately parent-first
+// because dirs are created before their contents). It would be correct
+// today thanks to the inline capture, and is what this function looked
+// like before the recursive-CTE rewrite below.
+//
+// The child-first ordering here is intentional DEFENSE IN DEPTH. If the
+// inline capture is ever refactored away, bypassed, replaced with a wrapper
+// that defers the lookup, or otherwise regresses, the child-first iteration
+// preserves the original correctness invariant: cascades onto absent or
+// pre-restore parents leave the parent's own restore row as the newest
+// history row, which is the correct version_id pointer for undo-of-undo
+// regardless of when it's captured. Iteration order also reduces cascade-
+// noise rows in history for the common rm-rf-then-undo pattern, where
+// cascade UPDATEs target not-yet-restored parents and write nothing.
+//
+// Algorithm
+// =========
+//
+//  1. `affected` CTE: DISTINCT ON (file_id) over the log table, picking the
+//     oldest log_id per file_id in the undo window. TimescaleDB SkipScan on
+//     the (file_id, log_id ASC) index makes this O(distinct_affected_files).
+//     This is the same inner query as the flat form above.
+//
+//  2. `walk` recursive CTE: starting from each affected file at distance 0,
+//     walk UP the parent_id chain one step per iteration. For each step, the
+//     ancestor's parent_id is looked up via one of two sources, in priority:
+//
+//     (a) If the ancestor is itself in the affected set AND has a non-null
+//     version_id, use the parent_id from THAT entry's snapshot (via
+//     affected.version_id -> history row). This is the topology the
+//     undo will restore the ancestor to, and -- crucially for the
+//     rm-rf-then-undo case -- it works even when the ancestor's source
+//     row is currently gone.
+//
+//     (b) Otherwise (ancestor not affected, or affected with NULL
+//     version_id which means a forward-create entry), use the current
+//     source.parent_id. The ancestor wasn't modified in this window,
+//     so source is the topology truth.
+//
+//     Recursion terminates when the next-step parent_id is NULL (the
+//     workspace root, or the lookup yielded no row). A safety bound of
+//     distance < 100 prevents runaway recursion in the theoretical case of
+//     a cycle in history (history's parent_id has no FK constraint;
+//     source's does, so cycles can only appear via append-only history).
+//
+//  3. Final SELECT: join `affected` with MAX(distance) per file_id (via a
+//     grouped subquery), sort by depth DESC (deepest first) with file_id
+//     ASC as a stable tiebreaker among same-depth entries.
+//
+// Performance for typical workloads
+// =================================
+//
+// Every JOIN in the walk's recursive step is a PRIMARY KEY lookup (affected
+// is a small in-memory CTE; history.version_id is the PK; source.id is the
+// PK). For an undo with M affected files and tree depth D, the walk
+// produces ~M*D rows with 3 PK probes per row -- single-digit milliseconds
+// for M=10, D=3 in a workspace with O(1k) source rows and O(10k) history
+// rows. Scales linearly with M*D thereafter.
+func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, sourceTable, historyTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
 	if c.pool == nil {
 		return nil, fmt.Errorf("database connection not initialized")
 	}
 
-	// Build WHERE clause
+	// Build WHERE clause for the inner DISTINCT ON.
 	conditions := []string{fmt.Sprintf("%s > $1", qi("log_id"))}
 	args := []interface{}{afterID}
 	argIdx := 2
@@ -976,13 +1094,48 @@ func (c *Client) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, a
 
 	where := strings.Join(conditions, " AND ")
 
+	// Recursive-CTE form. See the function comment for the full design.
+	// The duplicated CASE in SELECT and WHERE intentionally evaluates
+	// twice rather than introducing a LATERAL subquery -- it's easier to
+	// read and PG's planner handles the duplication fine.
 	query := fmt.Sprintf(
-		`SELECT DISTINCT ON (%s) %s, %s, %s, %s, %s, %s FROM %s WHERE %s ORDER BY %s, %s ASC`,
-		qi("file_id"),
-		qi("file_id"), qi("type"), qi("version_id"), qi("filename"), qi("log_id"), qi("user_id"),
+		`WITH RECURSIVE
+affected AS (
+    SELECT DISTINCT ON ("file_id") "file_id", "type", "version_id", "filename", "log_id", "user_id"
+    FROM %s
+    WHERE %s
+    ORDER BY "file_id", "log_id" ASC
+),
+walk("file_id", ancestor_id, distance) AS (
+    SELECT "file_id", "file_id", 0 FROM affected
+    UNION ALL
+    SELECT w."file_id",
+           CASE
+               WHEN a."version_id" IS NOT NULL THEN h_snap."parent_id"
+               ELSE s."parent_id"
+           END,
+           w.distance + 1
+    FROM walk w
+    LEFT JOIN affected a ON a."file_id" = w.ancestor_id
+    LEFT JOIN %s h_snap ON h_snap."version_id" = a."version_id"
+    LEFT JOIN %s s ON s."id" = w.ancestor_id
+    WHERE w.distance < 100
+      AND CASE
+              WHEN a."version_id" IS NOT NULL THEN h_snap."parent_id"
+              ELSE s."parent_id"
+          END IS NOT NULL
+),
+depths AS (
+    SELECT "file_id", MAX(distance) AS depth FROM walk GROUP BY "file_id"
+)
+SELECT a."file_id", a."type", a."version_id", a."filename", a."log_id", a."user_id"
+FROM affected a
+LEFT JOIN depths d USING ("file_id")
+ORDER BY COALESCE(d.depth, 0) DESC, a."file_id" ASC`,
 		qt(schema, logTable),
 		where,
-		qi("file_id"), qi("log_id"),
+		qt(schema, historyTable),
+		qt(schema, sourceTable),
 	)
 
 	rows, err := c.pool.Query(ctx, query, args...)
