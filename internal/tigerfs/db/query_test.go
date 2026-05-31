@@ -2859,3 +2859,134 @@ func TestExecuteUndoTransaction_CapturesVersionIDInline_NotPostHoc(t *testing.T)
 			childOp, childFilename)
 	}
 }
+
+// TestQueryUndoAffectedFiles_TopologicalOrder verifies that the affected-files
+// query returns rows sorted child-first: deepest by source.parent_id chain
+// comes first, with file_id ASC as a stable tiebreaker among rows at the
+// same depth. Files whose source row doesn't exist (deleted from source --
+// would be recreated by undo) default to depth 0 via the COALESCE and sort
+// to the end among the depth-0 group.
+//
+// Scenario: workspace with a 4-deep dir tree A->B->C->leaf.md, a sibling
+// S.md at root, and a "ghost" file whose log entry exists but whose source
+// row was deleted (simulating an affected file that the undo will INSERT
+// back from history). Total 6 affected files, expected order:
+//  1. leaf.md   (depth 3)
+//  2. C         (depth 2)
+//  3. B         (depth 1)
+//     4-6. [A, S.md, ghost] sorted by file_id ASC (all depth 0)
+func TestQueryUndoAffectedFiles_TopologicalOrder(t *testing.T) {
+	env, cleanup := setupUndoTestEnv(t)
+	defer cleanup()
+
+	ids := env.genUUIDs(t, 6)
+	aID := ids[0]     // depth 0 dir
+	bID := ids[1]     // depth 1 (in A)
+	cID := ids[2]     // depth 2 (in B)
+	leafID := ids[3]  // depth 3 (in C)
+	sID := ids[4]     // depth 0 sibling
+	ghostID := ids[5] // depth 0 default (no source row)
+
+	// Seed source in dependency order (parent before child) to satisfy the
+	// self-FK at insertion time. The "ghost" file_id is intentionally NOT
+	// inserted into source -- the affected-files query should still include
+	// it (it has a log entry) and sort it to the end with depth=0.
+	if _, err := env.client.pool.Exec(env.ctx, fmt.Sprintf(
+		`INSERT INTO %s (id, parent_id, filename, filetype, body, modified_at) VALUES
+		 ($1, NULL, 'A',       'directory', '', now()),
+		 ($2, NULL, 'S.md',    'file',      '', now()),
+		 ($3, $1,   'B',       'directory', '', now()),
+		 ($4, $3,   'C',       'directory', '', now()),
+		 ($5, $4,   'leaf.md', 'file',      '', now())`, env.srcQT),
+		aID, sID, bID, cID, leafID); err != nil {
+		t.Fatalf("seed source: %v", err)
+	}
+
+	// Seed log: one 'edit' entry per file (including the ghost). log_id
+	// auto-generated via DEFAULT uuidv7(), so all are > afterID below.
+	seedLog := func(fileID, filename string) {
+		if _, err := env.client.pool.Exec(env.ctx, fmt.Sprintf(
+			`INSERT INTO %s (file_id, type, user_id, filename, version_id)
+			 VALUES ($1, 'edit', 'u', $2, NULL)`, env.logQT),
+			fileID, filename); err != nil {
+			t.Fatalf("seed log (%s): %v", filename, err)
+		}
+	}
+	seedLog(aID, "A")
+	seedLog(bID, "B")
+	seedLog(cID, "C")
+	seedLog(leafID, "leaf.md")
+	seedLog(sID, "S.md")
+	seedLog(ghostID, "ghost.md")
+
+	// afterID is the all-zeros UUID -- smaller than any UUIDv7 the log
+	// inserts above generated, so the WHERE log_id > afterID picks them all.
+	afterID := "00000000-0000-0000-0000-000000000000"
+
+	result, err := env.client.QueryUndoAffectedFiles(env.ctx,
+		env.schema, env.logTable, env.sourceTable, env.historyTable, afterID, "", nil)
+	if err != nil {
+		t.Fatalf("QueryUndoAffectedFiles: %v", err)
+	}
+
+	if len(result) != 6 {
+		t.Fatalf("expected 6 affected files, got %d: %+v", len(result), result)
+	}
+
+	// Expected per-file depths.
+	depthOf := map[string]int{
+		aID:     0,
+		sID:     0,
+		ghostID: 0,
+		bID:     1,
+		cID:     2,
+		leafID:  3,
+	}
+
+	// 1. Result must be monotonically non-increasing in depth.
+	for i := 0; i < len(result)-1; i++ {
+		curDepth := depthOf[result[i].FileID]
+		nextDepth := depthOf[result[i+1].FileID]
+		if curDepth < nextDepth {
+			t.Errorf("result[%d] (file=%s, depth=%d) sorts before result[%d] (file=%s, depth=%d) -- depth must be DESC",
+				i, result[i].FileID, curDepth, i+1, result[i+1].FileID, nextDepth)
+		}
+	}
+
+	// 2. The deepest single file (leaf.md, depth 3) must be first.
+	if result[0].FileID != leafID {
+		t.Errorf("result[0] should be leaf.md (depth 3), got file_id=%s", result[0].FileID)
+	}
+
+	// 3. C (depth 2) must be second; B (depth 1) third.
+	if result[1].FileID != cID {
+		t.Errorf("result[1] should be C (depth 2), got file_id=%s", result[1].FileID)
+	}
+	if result[2].FileID != bID {
+		t.Errorf("result[2] should be B (depth 1), got file_id=%s", result[2].FileID)
+	}
+
+	// 4. The last three (depth 0) must be the depth-0 file_ids sorted ASC
+	//    by the file_id tiebreaker.
+	depth0Want := []string{aID, sID, ghostID}
+	sortStringsAsc(depth0Want)
+	depth0Got := []string{result[3].FileID, result[4].FileID, result[5].FileID}
+	for i := 0; i < 3; i++ {
+		if depth0Got[i] != depth0Want[i] {
+			t.Errorf("depth-0 tiebreaker order[%d]: got %s, want %s (full got=%v, want=%v)",
+				i, depth0Got[i], depth0Want[i], depth0Got, depth0Want)
+		}
+	}
+}
+
+// sortStringsAsc sorts a slice of strings in ascending order in place.
+// Helper for TestQueryUndoAffectedFiles_TopologicalOrder tiebreaker check.
+func sortStringsAsc(s []string) {
+	for i := 0; i < len(s); i++ {
+		for j := i + 1; j < len(s); j++ {
+			if s[j] < s[i] {
+				s[i], s[j] = s[j], s[i]
+			}
+		}
+	}
+}

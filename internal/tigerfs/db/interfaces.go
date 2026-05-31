@@ -362,11 +362,17 @@ type LogWriter interface {
 	// from the snapshot (operation in 'edit','rename','delete').
 	QueryHistoryOperation(ctx context.Context, schema, historyTable, versionID string) (string, error)
 
-	// QueryUndoAffectedFiles returns the first log entry per file after a target point.
-	// Uses DISTINCT ON with SkipScan on the (file_id, log_id ASC) index.
-	// The version_id on each entry is the before-state at the target point.
-	// Optional userID filter limits to operations by a specific user.
-	QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error)
+	// QueryUndoAffectedFiles returns the first log entry per file after a
+	// target point, ordered child-first (topological by parent_id depth,
+	// deepest first). The inner DISTINCT ON picks each file's oldest log
+	// entry in the window (SkipScan on (file_id, log_id ASC)); the outer
+	// recursive CTE walks each affected file's snapshot parent_id (from
+	// history when the file is in the affected set, otherwise current
+	// source.parent_id) to compute depth and sort. The version_id on each
+	// entry is the before-state at the target point. Optional userID filter
+	// limits to operations by a specific user. See QueryUndoAffectedFiles in
+	// query.go for the full design rationale.
+	QueryUndoAffectedFiles(ctx context.Context, schema, logTable, sourceTable, historyTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error)
 
 	// QueryLogEntry fetches a single log entry by log_id.
 	QueryLogEntry(ctx context.Context, schema, logTable, logID string) (*UndoAffectedFile, error)

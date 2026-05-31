@@ -136,8 +136,9 @@ func (o *Operations) ExecuteUndo(ctx context.Context, schema, tableName, afterID
 		}
 	}
 
-	// Find all affected files
-	affected, err := o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, afterID, userID, queryFilters)
+	// Find all affected files, ordered child-first (see QueryUndoAffectedFiles
+	// for the topological-sort rationale).
+	affected, err := o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, tableName, historyTable, afterID, userID, queryFilters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query affected files: %w", err)
 	}
@@ -573,6 +574,7 @@ func (o *Operations) readDirUndoSubdir(ctx context.Context, parsed *ParsedPath) 
 func (o *Operations) queryUndoAffected(ctx context.Context, parsed *ParsedPath) ([]db.UndoAffectedFile, error) {
 	tableName := parsed.OrigTableName
 	logTable := tableName + "_log"
+	historyTable := tableName + "_history"
 
 	// Build filters from pipeline context
 	var filters []db.UndoFilter
@@ -609,7 +611,7 @@ func (o *Operations) queryUndoAffected(ctx context.Context, parsed *ParsedPath) 
 
 	case "to-id":
 		afterID := resolveLogID(parsed.UndoTarget)
-		result, err = o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, afterID, userID, filters)
+		result, err = o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, tableName, historyTable, afterID, userID, filters)
 
 	case "to-savepoint":
 		// Look up savepoint_id by name (uses savepoint cache)
@@ -617,7 +619,7 @@ func (o *Operations) queryUndoAffected(ctx context.Context, parsed *ParsedPath) 
 		if spErr != nil {
 			return nil, spErr
 		}
-		result, err = o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, savepointID, userID, filters)
+		result, err = o.db.QueryUndoAffectedFiles(ctx, synth.TigerFSSchema, logTable, tableName, historyTable, savepointID, userID, filters)
 
 	default:
 		return nil, fmt.Errorf("unknown undo mode: %s", parsed.UndoMode)

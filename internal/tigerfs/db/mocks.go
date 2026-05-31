@@ -800,7 +800,7 @@ func (m *MockLogWriter) QueryHistoryOperation(ctx context.Context, schema, histo
 	return "", fmt.Errorf("no history row for version %s", versionID)
 }
 
-func (m *MockLogWriter) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
+func (m *MockLogWriter) QueryUndoAffectedFiles(ctx context.Context, schema, logTable, sourceTable, historyTable, afterID, userID string, filters []UndoFilter) ([]UndoAffectedFile, error) {
 	return nil, nil
 }
 
