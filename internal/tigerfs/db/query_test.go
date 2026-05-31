@@ -2383,11 +2383,26 @@ func TestExecuteUndoTransaction_DefersFKMultiLevel(t *testing.T) {
 	}
 }
 
-// TestExecuteUndoTransaction_DeleteOnlyUndo guards the empty-RestoreFileIDs
-// branch of the post-undo modified_at bump. When a user undoes a single
-// 'create' op, the only work is to DELETE the created row from source -- no
-// rows are restored. The mtime-bump SQL uses ANY($1::uuid[]) and would
-// error on an empty array if the branch wasn't gated.
+// TestExecuteUndoTransaction_DeleteOnlyUndo guards two distinct edge cases
+// of a DELETE-only undo (single 'create' op being reversed):
+//
+//  1. The empty-RestoreFileIDs branch of the post-undo modified_at bump.
+//     That SQL uses ANY($1::uuid[]) and would error on an empty array if
+//     the branch wasn't gated.
+//
+//  2. The defensive NULL-version_id path in Step 3. The fixture deliberately
+//     doesn't install the archive BEFORE-DELETE trigger (setupUndoTestEnv
+//     keeps the schema trigger-free so other tests can seed history rows
+//     directly without interference), which means Step 1's DELETE fires no
+//     trigger and writes no history row. The inline version_id capture
+//     finds nothing. Step 3 must record the resulting undo log entry with
+//     version_id = NULL rather than failing with PG's "invalid input
+//     syntax for type uuid" on the empty string. In a properly-configured
+//     production workspace the archive trigger always fires and this
+//     defensive path is dead code; the test holds it down regardless so a
+//     future regression doesn't reintroduce the cryptic-error failure
+//     mode. emptyVersionIDToNull (in query.go) handles the conversion and
+//     emits a warning identifying the file_id and the branch.
 func TestExecuteUndoTransaction_DeleteOnlyUndo(t *testing.T) {
 	env, cleanup := setupUndoTestEnv(t)
 	defer cleanup()
