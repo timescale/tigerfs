@@ -5,6 +5,24 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - YYYY-MM-DD
+
+**Operation logs, savepoints, and atomic undo -- safe exploration on a transactional filesystem.**
+
+- **Operation log** (`.log/`) -- every write produces a log entry capturing user, timestamp, before/after content, and operation type; browse via `.log/.last/N/.export/json` or index queries `.log/.by/file_id/`, `.log/.by/user_id/`, `.log/.by/type/`
+- **Diff symlinks** -- each log entry exposes `before`, `current`, and `after` virtual files so `diff -u .log/<id>/before .log/<id>/current` works directly
+- **Savepoints** (`.savepoint/`) -- named bookmarks created by writing JSON to `.savepoint/<name>.json`; survive across sessions and users
+- **Auto-savepoints** -- configurable per-mount inactivity gap (`--auto-savepoint-interval`, default 30 minutes) records bookmarks automatically at session boundaries
+- **Undo** (`.undo/`) -- three modes: `.undo/id/<log_id>/.apply` (single op), `.undo/to-id/<log_id>/.apply` (multi-file rollback to a log entry), `.undo/to-savepoint/<name>/.apply` (multi-file rollback to a savepoint); preview affected files via `.undo/<mode>/<target>/.info/summary` before applying
+- **Per-user undo** -- filter any undo by user via `.by/user_id/<user>/.apply`; agents only roll back their own changes in collaborative workspaces
+- **Undo of undo** -- undo operations are themselves logged, so you can reverse an undo by undoing its log entry; directory renames round-trip correctly even when batched with child file renames
+- **Relational directory structure** -- file/directory rows now reference their parent by `id` (UUID) rather than path string, so a directory rename is a single-row UPDATE that all children inherit (ADR-017)
+- **`tigerfs migrate` updates** -- new migrations move history triggers and add parent-pointer columns; idempotent and dry-run-safe
+
+### Breaking Changes
+
+- **0.6 -> 0.7 history format migration.** Run `tigerfs migrate` on workspaces upgraded from 0.6 -- it adds `parent_id`/`filetype`/`filename` columns to backing tables and rebuilds history triggers. The migration is idempotent. Undo of log entries created before the migration is blocked (`EPERM`) because pre-migration history has lossy `parent_id` information; `.log/` and `.history/` remain readable for those entries. Fresh 0.7 installs are unaffected.
+
 ## [0.6.0] - 2026-03-26
 
 **Dedicated tigerfs schema, security hardening, and unified demo.**
