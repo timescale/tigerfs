@@ -1,29 +1,31 @@
 # TigerFS
 
-A filesystem backed by PostgreSQL, and a filesystem interface to PostgreSQL.
+A versioned filesystem backed by PostgreSQL, and a filesystem interface to PostgreSQL. Built for agents.
 
-Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. Every change is versioned and reversible (file-first with history). No sync protocols. No coordination layer.  **The filesystem is the API.**
+Every file is a real PostgreSQL row. Directories are tables. File contents are columns. Multiple agents and humans can read and write the same files concurrently with full ACID guarantees. Every change is versioned and fully reversible. No sync protocols. No coordination layer.  **The filesystem is the API.**
 
 You can use TigerFS in two ways:
 
-* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, changes are versioned, and everything is reversible.  Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight workspaces via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
+* **File-first**: Write markdown with frontmatter or other file types, organize into directories. Writes are atomic, changes are versioned, and everything is reversible: optionally take a savepoint, try changes, roll back individual or all changes if they don't work out. Any tool that works with files -- Claude Code, Cursor, grep, vim -- just works.  Build lightweight workspaces via the filesystem: multi-agent task coordination is just `mv`'ing files between todo/doing/done directories.
 
 * **Data-first**: Mount any Postgres database and explore it with `ls`, `cat`, `grep`, and other unix tools. For
-large databases, chain filters into paths that push down to SQL:
-`.by/customer_id/123/.order/created_at/.last/10/.export/json`. No database client or SQL needed, and ships with agent skills.
+large databases, chain filters into paths that push down to SQL (e.g., the last 10 orders by customer 123 can be found at directory path
+`.by/customer_id/123/.order/created_at/.last/10/.export/json`). No database client or SQL needed.
 
 Both modes are backed by the same transactional database. You get real transactions, true concurrent access, and a SQL escape hatch when you need it. TigerFS mounts via FUSE on Linux and NFS on macOS, no extra dependencies needed.
 
 ### Agent Skills
 
-TigerFS ships with agent skills for Claude Code, Gemini CLI, Codex, and others, automatically installed at mount time. You don't need to learn the filesystem interface. Just ask:
+TigerFS ships with agent skills for Claude Code, Gemini CLI, Codex, and others, automatically installed at mount time. The skills teach your agent to read, write, search, and -- new in 0.7 -- safely roll back any change. You don't need to learn the filesystem interface. Just ask:
 
-- "Create a workspace for my notes"
-- "What changed since the savepoint?"
-- "Undo agent-7's changes"
-- "Show me the last 10 orders by customer 123"
+- "Create a new workspace for my notes"
+- "Set up a kanban board for our sprint with todo/doing/done columns" (file-first)
+- "Set a savepoint before refactoring the code, then revert if the tests fail" (file-first)
+- "What did agent-7 change in the last hour? Undo just those edits" (file-first, multi-agent)
+- "Find customer alice@example.com and bump their tier to premium" (data-first)
+- "Show me the last 10 orders by customer 123" (data-first)
 
-The skills teach your agent the filesystem paths, diff commands, and undo workflows. For details on what's underneath, read on.
+The skills teach both modes -- **file-first** (file and markdown workspaces, directory-as-state recipes like kanban, history with savepoints and atomic undo) and **data-first** (index lookups, pipeline filters with SQL pushdown, PATCH updates, DDL via `.create/`/`.delete/`) -- all through the shared dot-directory control surface that turns every capability into a filesystem path. For details on what's underneath, read on.
 
 ### Install
 
@@ -103,17 +105,71 @@ See [docs/file-first.md](docs/file-first.md) for column mapping, frontmatter han
 
 ### History, Savepoints, and Undo
 
-Any workspace can opt into automatic versioning. Every edit and delete is captured as a timestamped snapshot. Create savepoints before risky work, preview what changed, and undo if needed.
+Workspaces opt into automatic versioning by declaring the `history` feature at creation:
 
 ```bash
-echo '{"description":"Before refactoring"}' > /mnt/db/notes/.savepoint/checkpoint.json
-# ... Perform refactoring ...
-diff -u /mnt/db/notes/.log/<id>/before /mnt/db/notes/.log/<id>/current      # Compare changes to single file
-diff -ru /mnt/db/notes/.undo/to-savepoint/checkpoint /mnt/db/notes/ -x '.*' # Review all changes
-touch /mnt/db/notes/.undo/to-savepoint/checkpoint/.apply                    # Undo all changes since savepoint
+echo "markdown,history" > /mnt/db/.build/notes
 ```
 
-Per-user undo, single-file undo, and full version history are also available. See [docs/history.md](docs/history.md) for the full guide.
+Every write -- create, edit, rename, delete -- is captured in the operation log with timestamp and user identity. From there, four capabilities follow:
+
+**Browse past versions.** `.history/<file>/` lists every snapshot of a file; read one to see what it looked like at that point. Useful for "what did this look like last week?" without invoking undo.
+
+```bash
+ls /mnt/db/notes/.history/plan.md/                          # all snapshots
+cat /mnt/db/notes/.history/plan.md/2026-04-12T14:23:00Z     # one specific version
+```
+
+**Browse what happened.** The operation log records who changed what, when. Filter by recency, user, or operation type, and diff any individual edit:
+
+```bash
+cat /mnt/db/notes/.log/.last/10/.export/json                      # 10 most recent operations
+cat /mnt/db/notes/.log/.by/user_id/agent-7/.last/5/.export/json   # filtered by user
+diff -u /mnt/db/notes/.log/<id>/before /mnt/db/notes/.log/<id>/current  # diff a specific edit
+```
+
+**Savepoints for sandboxed exploration.** Create a named bookmark, try changes, preview what an undo would touch, roll back if it doesn't pan out:
+
+```bash
+echo '{"description":"Before refactoring"}' > /mnt/db/notes/.savepoint/before-refactor.json
+# ... edit multiple files ...
+diff -ru /mnt/db/notes/.undo/to-savepoint/before-refactor /mnt/db/notes/ -x '.*'  # review
+touch /mnt/db/notes/.undo/to-savepoint/before-refactor/.apply                     # apply
+```
+
+Auto-savepoints (`--auto-savepoint-interval`, default 30m) record bookmarks at session-boundary inactivity gaps, so there's always a recent checkpoint available.
+
+**Granular undo.** Reverse one operation by log id, everything since a log id, or everything since a savepoint:
+
+```bash
+touch /mnt/db/notes/.undo/id/<log_id>/.apply                                # one operation
+touch /mnt/db/notes/.undo/to-id/<log_id>/.apply                             # everything since that log entry
+touch /mnt/db/notes/.undo/to-savepoint/before-refactor/.apply               # everything since savepoint
+touch /mnt/db/notes/.undo/to-savepoint/before-refactor/.by/user_id/agent-7/.apply  # only agent-7's changes since savepoint
+```
+
+Per-user filtering makes agents reversible independently in collaborative workspaces. Undo operations are themselves logged and reversible: changing your mind about an undo is just one more `.apply`.
+
+See [docs/history.md](docs/history.md) for the full guide.
+
+### With an agent
+
+You don't have to run any of the commands above yourself. Once TigerFS is mounted, just talk to your agent:
+
+> **You:** "Undo the recent changes to why-postgres.md"
+> 
+> **Agent:** Reads the recent log... Each edit via Claude's Write/Edit becomes 3 log entries (create temp, delete target, rename), so the two edits I see produce 6 entries. I'll apply them newest-first to roll back to the saved state.
+>
+> 1. `019e73d9-33c0-...` (rename)
+> 2. `019e73d9-33bf-...` (delete)
+> 3. `019e73d9-33b5-...` (create temp)
+> 4. `019e73d9-2b1f-...` (rename)
+> 5. `019e73d9-2b1e-...` (delete)
+> 6. `019e73d9-2b11-...` (create temp)
+>
+> Apply all 6?
+
+Because the operation log is structured and queryable through the filesystem, the agent reasons about composite operations on its own. The skills teach the patterns; you stay in natural language.
 
 ### Use Cases
 
@@ -213,6 +269,34 @@ mkdir /mnt/db/users/456                                         # Create row
 rm -r /mnt/db/users/456/                                        # Delete row
 ```
 
+### With an agent
+
+Same model on the data side. You ask, the agent navigates the schema and pipeline paths. Two examples.
+
+**Exploration** -- agent reads the schema as files:
+
+> **You:** "I'm new to this database. What's in the orders table?"
+>
+> **Agent:** Reads `/mnt/db/orders/.info/columns`, `/mnt/db/orders/.info/count`, and a sample of 5 rows...
+>
+> **Shape:** 47,283 rows, 8 columns. Indexed on `customer_id`, `status`, `created_at`.
+>
+> **Columns:** `id` (uuid PK), `customer_id` (uuid), `status` (pending/shipped/delivered/cancelled), `total` (numeric), `created_at`/`shipped_at` (timestamptz, shipped_at nullable), `payment_method`, `currency`.
+>
+> **Recent activity:** mostly status=shipped, payment_method=card, totals under $200. Want me to drill into a customer, date range, or status?
+
+**Modification with confirmation** -- agent navigates to a row, plans the change, asks first:
+
+> **You:** "Find customer alice@example.com and bump her tier to premium"
+>
+> **Agent:** Reads `/mnt/db/customers/.by/email/alice@example.com.json`...
+>
+> **Found:** customer `4172` -- Alice Chen, signed up 2025-11-04, current tier: **standard**.
+>
+> **Planned update:** write `premium` to `/mnt/db/customers/4172/tier`. Other fields untouched (PATCH-style).
+>
+> Apply?
+
 ### Pipeline Queries
 
 Chain filters, ordering, and pagination in a single path. The database executes it as one query:
@@ -250,9 +334,9 @@ See [docs/data-first.md](docs/data-first.md) for the full reference: row formats
 
 ### If you're building on files (file-first)
 
-- **vs. local files:** Instead of a single-writer assumption, TigerFS supports real concurrent access with isolation guarantees.
+- **vs. local files:** Instead of a single-writer assumption, TigerFS supports real concurrent access with isolation guarantees, versioning, and undo.
 
-- **vs. git:** Instead of asynchronous collaboration and merges, TigerFS provides immediate visibility with automatic version history.
+- **vs. git:** No branches, no merges, no conflicts. Every write is immediately visible to everyone, and any change is atomically reversible, including selective per-user undo.
 
 - **vs. object storage (S3):** Instead of blobs, you get structured rows, ACID transactions, and query pushdown.
 
@@ -352,23 +436,22 @@ TigerFS is early, but the core idea is stable: transactional, concurrent files a
 
 **v0.7.0.** Undo and recovery: savepoints, operation log, and atomic undo for safe exploration.
 
-**v0.6.0.** Dedicated tigerfs schema, security hardening, and unified demo.
-
 **Highlights:**
-- Markdown and plaintext workspaces with YAML frontmatter, directory hierarchies, and version history
-- Savepoints, undo, and operation log: create checkpoints, preview changes, roll back atomically
-- Per-user undo: multiple agents with separate identities, selectively undo one agent's work
-- Auto-savepoints: detect session boundaries on inactivity gaps
-- Relational directory model with parent-pointer hierarchy and UUIDv7 identifiers
-- Dedicated tigerfs schema with migration framework (`tigerfs migrate`)
-- TLS enforcement, SQL injection hardening, and credential sanitization
-- Agent skill auto-install for Claude Code, Gemini CLI, and Codex
-- Cloud backends: mount, create, and fork Tiger Cloud and Ghost databases by service ID
-- Pipeline queries with full database pushdown (`.by/`, `.filter/`, `.order/`, `.columns/`, chained pagination, `.export/`)
-- DDL staging for tables, indexes, views, and schemas (`.create/`, `.modify/`, `.delete/`)
-- Full CRUD with multiple formats (TSV, CSV, JSON, YAML), index navigation, and PATCH semantics
-- Binary distribution via GoReleaser with install script
-- Multi-tier stat caching and query reduction for fast operations over remote databases
+- **Markdown and plaintext workspaces** with YAML frontmatter, directory hierarchies, and per-file version browsing via `.history/<file>/`
+- **Savepoints, undo, and operation log** with `before`/`current`/`after` diff symlinks on every log entry: bookmark a state, preview changes, roll back atomically, and undo the undo if you change your mind
+- **ACID concurrent writes**: multiple agents and humans operate on the same workspace without merge conflicts or sync coordination
+- **Per-user undo**: multiple agents with separate identities, selectively undo one agent's work
+- **Auto-savepoints:** detect session boundaries on inactivity gaps
+- **Agent skills** for Claude Code, Gemini CLI, and Codex (auto-installed at mount time) that teach savepoint/undo workflows, dot-directory navigation, and data-first exploration.
+- **Cloud backends**: mount, create, and fork Tiger Cloud and Ghost databases by service ID
+- **Pipeline queries:** Navigate complex queries with `ls` and `cat` -- chain filters, sort, pagination, and column projection into one path that pushes down to a single optimized SQL query, so huge tables stay fast without writing SQL
+- **Multi-tier stat caching and query reduction**:  Snappy `ls`, `cat`, and `find` over remote databases -- TigerFS coalesces what would be many catalog queries into one so filesystem operations feel local even across high latency
+- **Schema management:** Manage schemas by writing files -- `mkdir` to create a table, edit a `.modify/` draft to alter it, review the diff, and `touch .commit` to apply
+- **Format agnostic**: Read and write rows in whatever format fits the task. JSON for `jq`, YAML for hand editing, CSV for spreadsheets, single columns for shell scripts; look up by any indexed column (not just primary key); updates touch only the fields you specify
+- **Security conscious**: Safe to point at production databases: TLS required for non-localhost connections, SQL injection blocked in synthesized paths, credentials scrubbed from logs and error messages
+- **`tigerfs migrate`** framework for in-place updates across releases: applies schema, trigger, and index changes incrementally to bring existing workspaces forward without rebuilding (idempotent, `--dry-run` and `--describe` flags)
+- **Binary distribution** via GoReleaser with install script
+
 
 **Planned:**
 - Tables without primary keys (read-only via ctid)
