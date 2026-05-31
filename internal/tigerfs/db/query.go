@@ -1068,6 +1068,13 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 	historyTable := qt(params.Schema, params.HistoryTable)
 	logTable := qt(params.Schema, params.LogTable)
 
+	// Captured version_ids from inline SELECTs in Steps 1 and 2, keyed by
+	// file_id. Step 3 reads from these maps instead of re-querying history
+	// for "newest row per file_id." See the inline-capture rationale at the
+	// Step 1 DELETE loop below for why post-hoc lookups are wrong.
+	capturedDeleteVIDs := make(map[string]string)
+	capturedRestoreVIDs := make(map[string]string)
+
 	// Step 1: DELETE rows that were created after the target point.
 	for _, fileID := range params.DeleteFileIDs {
 		_, err := tx.Exec(ctx,
@@ -1076,6 +1083,34 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 		)
 		if err != nil {
 			return fmt.Errorf("failed to delete created row %s: %w", fileID, err)
+		}
+
+		// Capture the version_id of the history row that the BEFORE-DELETE
+		// trigger just wrote for this file_id, NOW, before any later iteration
+		// in Step 2 can fire trigger B (bump_parent_mtime) and cascade an
+		// extra archive write onto this file_id's history.
+		//
+		// Correctness rests on: trigger A is row-level BEFORE on the source
+		// table; one row per UPSERT/DELETE => one trigger invocation; no
+		// other SQL runs between the mutation and this SELECT. Combined with
+		// PG18's per-session monotonic uuidv7(), our row is guaranteed-newest
+		// at this instant. If we deferred this capture to Step 3 (as before),
+		// a later child-restore's cascade onto this row would overwrite the
+		// "newest" entry with a no-semantic-content edit row, silently
+		// breaking undo-of-undo for the dir-rename case.
+		//
+		// See test/integration/undo_test.go::TestSynth_UndoOfUndo_DirRenameWithChild
+		// for the regression scenario.
+		var capturedVID *string
+		if err := tx.QueryRow(ctx,
+			fmt.Sprintf(
+				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
+				qi("version_id"), historyTable,
+				qi("file_id"), qi("version_id"),
+			),
+			fileID,
+		).Scan(&capturedVID); err == nil && capturedVID != nil {
+			capturedDeleteVIDs[fileID] = *capturedVID
 		}
 	}
 
@@ -1163,67 +1198,59 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 			}
 			return fmt.Errorf("failed to restore file %s from history: %w", fileID, err)
 		}
+
+		// Capture the version_id of the history row that the BEFORE trigger
+		// just wrote for this file_id's restore. Same invariant as Step 1's
+		// inline capture: our row is guaranteed-newest right now; deferring
+		// to Step 3 would let a later iteration's trigger B cascade pollute
+		// this file_id's "newest" entry. See the Step 1 comment for the full
+		// rationale.
+		var capturedVID *string
+		if err := tx.QueryRow(ctx,
+			fmt.Sprintf(
+				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
+				qi("version_id"), historyTable,
+				qi("file_id"), qi("version_id"),
+			),
+			fileID,
+		).Scan(&capturedVID); err == nil && capturedVID != nil {
+			capturedRestoreVIDs[fileID] = *capturedVID
+		}
 	}
 
 	// Step 3: Insert undo log entries for each affected file.
-	// DELETE targets get a log entry too (we're undoing the creation).
-	// Capture version_id from the history row that the BEFORE-DELETE trigger
-	// just wrote -- this is what makes undo-of-undo of a DELETE entry able
-	// to dispatch correctly (the version_id points to a row with
-	// operation='delete', and the undo-of-undo handler restores from it).
+	//
+	// Read version_ids from the captures stashed inline during Step 1
+	// (deletes) and Step 2 (restores). We deliberately do NOT re-query
+	// "newest history row for file_id" here: Step 2 iterations cascade onto
+	// each other's history via trigger B (bump_parent_mtime), so a post-hoc
+	// "newest" lookup can resolve to a cascade artifact rather than the
+	// file's own restore snapshot.
+	//
+	// The version_id stored on a type='undo' log row is what
+	// QueryHistoryOperation later dispatches on for undo-of-undo, so it
+	// must point at the row written by the actual mutation -- a tombstone
+	// for a recreate, or a rename/edit/delete OLD-state row for the others
+	// -- not at a cascade artifact from a sibling iteration.
 	for i, fileID := range params.DeleteFileIDs {
 		filename := ""
 		if i < len(params.DeleteFilenames) {
 			filename = params.DeleteFilenames[i]
 		}
-		var latestVersionID *string
-		err := tx.QueryRow(ctx,
-			fmt.Sprintf(
-				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
-				qi("version_id"), qt(params.Schema, params.HistoryTable),
-				qi("file_id"), qi("version_id"),
-			),
-			fileID,
-		).Scan(&latestVersionID)
-		if err != nil {
-			latestVersionID = nil
-		}
-		versionIDVal := ""
-		if latestVersionID != nil {
-			versionIDVal = *latestVersionID
-		}
-		_, err = tx.Exec(ctx,
+		versionIDVal := capturedDeleteVIDs[fileID]
+		if _, err := tx.Exec(ctx,
 			fmt.Sprintf(
 				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
 				logTable, qi("log_id"), qi("file_id"), qi("type"), qi("user_id"), qi("filename"), qi("version_id"), qi("description"),
 			),
 			fileID, params.UserID, filename, versionIDVal, params.Description,
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("failed to insert undo log entry for delete: %w", err)
 		}
 	}
 	for i, fileID := range params.RestoreFileIDs {
-		// Capture version_id of the state just before our restore (the BEFORE trigger has fired)
-		var latestVersionID *string
-		err := tx.QueryRow(ctx,
-			fmt.Sprintf(
-				`SELECT %s FROM %s WHERE %s = $1 ORDER BY %s DESC LIMIT 1`,
-				qi("version_id"), qt(params.Schema, params.HistoryTable),
-				qi("file_id"), qi("version_id"),
-			),
-			fileID,
-		).Scan(&latestVersionID)
-		if err != nil {
-			latestVersionID = nil
-		}
-
-		versionIDVal := ""
-		if latestVersionID != nil {
-			versionIDVal = *latestVersionID
-		}
-
-		_, err = tx.Exec(ctx,
+		versionIDVal := capturedRestoreVIDs[fileID]
+		if _, err := tx.Exec(ctx,
 			fmt.Sprintf(
 				`INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (uuidv7(), $1, 'undo', $2, $3, $4, $5)`,
 				logTable,
@@ -1231,8 +1258,7 @@ func (c *Client) ExecuteUndoTransaction(ctx context.Context, params *UndoTransac
 				qi("filename"), qi("version_id"), qi("description"),
 			),
 			fileID, params.UserID, params.RestoreFilenames[i], versionIDVal, params.Description,
-		)
-		if err != nil {
+		); err != nil {
 			return fmt.Errorf("failed to insert undo log entry for restore: %w", err)
 		}
 	}
