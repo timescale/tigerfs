@@ -42,31 +42,92 @@ var _ fs.NodeReadlinker = (*OpsNode)(nil)
 
 // OpsNode is a single generic FUSE node type that delegates all operations
 // to FSAdapter. Every directory and file in the tree is represented by an
-// OpsNode carrying its full path (e.g., "/public/users/1/name.txt").
+// OpsNode. Its path is computed on-demand from the inode's position in the
+// FUSE tree (see currentPath), so that go-fuse's MvChild after a successful
+// rename automatically moves the node's path with it.
 type OpsNode struct {
 	fs.Inode
 
 	// adapter is the bridge to fs.Operations
 	adapter *FSAdapter
-
-	// path is the full filesystem path from root (e.g., "/", "/public/users")
-	path string
 }
 
-// newOpsNode creates a new OpsNode with the given adapter and path.
-func newOpsNode(adapter *FSAdapter, nodePath string) *OpsNode {
+// newOpsNode creates a new OpsNode bound to the given adapter. The inode's
+// path is derived from its eventual position in the FUSE inode tree.
+func newOpsNode(adapter *FSAdapter) *OpsNode {
 	return &OpsNode{
 		adapter: adapter,
-		path:    nodePath,
 	}
 }
 
-// childPath returns the full path for a child with the given name.
+// currentPath returns the inode's path in the FUSE tree, computed on-demand.
+//
+// Returns "/" for the root inode, "/<segments>" for a normal inode, and the
+// empty string for an orphan -- a non-root inode that has been detached from
+// the FUSE tree (e.g., parent was removed but a kernel reference still holds
+// the inode alive). Callers MUST treat the empty string as ENOENT; see
+// requirePath.
+//
+// We do not cache the path on OpsNode: go-fuse's bridge calls MvChild after
+// a successful NodeRenamer.Rename, which rewires the inode under the new
+// parent/name without touching the embedder. A cached path would go stale,
+// causing subsequent Lookup/Getattr on the renamed inode to resolve against
+// the old database row -- the classic "rename succeeded, but reads of the
+// new path return ENOENT" symptom.
+func (n *OpsNode) currentPath() string {
+	embed := n.EmbeddedInode()
+	p := embed.Path(nil)
+	if p == "" {
+		if embed.IsRoot() {
+			return "/"
+		}
+		// Orphan: non-root inode with no parents.
+		return ""
+	}
+	return "/" + p
+}
+
+// requirePath returns the inode's current path along with errno 0 on
+// success. If the inode has been detached from the FUSE tree (currentPath
+// is empty), logs and returns ("", ENOENT). Operations must not dispatch
+// against an empty path -- the underlying fs.Operations would either error
+// confusingly or silently misroute to the root.
+func (n *OpsNode) requirePath(op string) (string, syscall.Errno) {
+	p := n.currentPath()
+	if p == "" {
+		logging.Warn("OpsNode operation on orphan inode",
+			zap.String("op", op),
+			zap.String("hint", "inode is detached from the FUSE tree; returning ENOENT"))
+		return "", syscall.ENOENT
+	}
+	return p, 0
+}
+
+// childPath returns the full path for a child with the given name. Returns
+// the empty string if the parent inode is orphan; callers must check.
 func (n *OpsNode) childPath(name string) string {
-	if n.path == "/" {
+	cur := n.currentPath()
+	if cur == "" {
+		return ""
+	}
+	if cur == "/" {
 		return "/" + name
 	}
-	return n.path + "/" + name
+	return cur + "/" + name
+}
+
+// requireChildPath builds the child path under this inode, returning errno
+// ENOENT (after logging) if the parent is orphan.
+func (n *OpsNode) requireChildPath(op, name string) (string, syscall.Errno) {
+	cp := n.childPath(name)
+	if cp == "" {
+		logging.Warn("OpsNode child operation on orphan parent inode",
+			zap.String("op", op),
+			zap.String("name", name),
+			zap.String("hint", "parent inode is detached from the FUSE tree; returning ENOENT"))
+		return "", syscall.ENOENT
+	}
+	return cp, 0
 }
 
 // Getattr returns file/directory attributes by delegating to Operations.Stat.
@@ -78,10 +139,14 @@ func (n *OpsNode) childPath(name string) string {
 // setNegative (caching a transient cancellation as a stale negative entry
 // in statCache, blocking reads for the full 2s TTL).
 func (n *OpsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	logging.Debug("OpsNode.Getattr", zap.String("path", n.path))
+	p, errno := n.requirePath("Getattr")
+	if errno != 0 {
+		return errno
+	}
+	logging.Debug("OpsNode.Getattr", zap.String("path", p))
 
 	ctx = decoupleFromRequestCancel(ctx)
-	entry, fsErr := n.adapter.ops.Stat(ctx, n.path)
+	entry, fsErr := n.adapter.ops.Stat(ctx, p)
 	if fsErr != nil {
 		return n.adapter.ErrorToErrno(fsErr)
 	}
@@ -95,7 +160,11 @@ func (n *OpsNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrO
 // For DDL trigger files (.test, .commit, .abort), a timestamp update (touch)
 // fires the DDL operation — FUSE `touch` uses utimensat → SETATTR, not Open.
 func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	logging.Debug("OpsNode.Setattr", zap.String("path", n.path))
+	p, errno := n.requirePath("Setattr")
+	if errno != 0 {
+		return errno
+	}
+	logging.Debug("OpsNode.Setattr", zap.String("path", p))
 
 	// If this is a truncation via file handle, delegate to the handle
 	if fh != nil {
@@ -118,13 +187,13 @@ func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 	// FUSE `touch` uses utimensat which sends SETATTR with ATIME/MTIME, not OPEN.
 	if fh == nil {
 		if _, ok := in.GetMTime(); ok {
-			baseName := path.Base(n.path)
-			isTrigger := (baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort) && isDDLOpsPath(n.path)
-			isUndoApply := baseName == fsops.FileApply && strings.Contains(n.path, "/"+fsops.DirUndo+"/")
+			baseName := path.Base(p)
+			isTrigger := (baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort) && isDDLOpsPath(p)
+			isUndoApply := baseName == fsops.FileApply && strings.Contains(p, "/"+fsops.DirUndo+"/")
 			if isTrigger || isUndoApply {
 				logging.Debug("OpsNode.Setattr: triggering operation via touch",
-					zap.String("path", n.path))
-				if errno := n.adapter.WriteFile(ctx, n.path, []byte{}); errno != 0 {
+					zap.String("path", p))
+				if errno := n.adapter.WriteFile(ctx, p, []byte{}); errno != 0 {
 					return errno
 				}
 			}
@@ -140,7 +209,10 @@ func (n *OpsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 // Bypasses FSAdapter.Stat and calls ops.Stat directly, so we apply the same
 // request-context decoupling -- see Getattr for the FUSE_INTERRUPT story.
 func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	childPath := n.childPath(name)
+	childPath, errno := n.requireChildPath("Lookup", name)
+	if errno != 0 {
+		return nil, errno
+	}
 	logging.Debug("OpsNode.Lookup", zap.String("path", childPath))
 
 	ctx = decoupleFromRequestCancel(ctx)
@@ -170,7 +242,7 @@ func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 		mode = uint32(syscall.S_IFLNK)
 	}
 
-	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter, childPath), fs.StableAttr{Mode: mode})
+	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter), fs.StableAttr{Mode: mode})
 	return child, 0
 }
 
@@ -179,9 +251,13 @@ func (n *OpsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 // Bypasses FSAdapter and calls ops.Readlink directly, so we apply the same
 // request-context decoupling -- see Getattr for the FUSE_INTERRUPT story.
 func (n *OpsNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	logging.Debug("OpsNode.Readlink", zap.String("path", n.path))
+	p, errno := n.requirePath("Readlink")
+	if errno != 0 {
+		return nil, errno
+	}
+	logging.Debug("OpsNode.Readlink", zap.String("path", p))
 	ctx = decoupleFromRequestCancel(ctx)
-	target, fsErr := n.adapter.ops.Readlink(ctx, n.path)
+	target, fsErr := n.adapter.ops.Readlink(ctx, p)
 	if fsErr != nil {
 		return nil, n.adapter.ErrorToErrno(fsErr)
 	}
@@ -190,20 +266,27 @@ func (n *OpsNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 
 // Readdir lists directory contents.
 func (n *OpsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	logging.Debug("OpsNode.Readdir", zap.String("path", n.path))
-	return n.adapter.ReadDir(ctx, n.path)
+	p, errno := n.requirePath("Readdir")
+	if errno != 0 {
+		return nil, errno
+	}
+	logging.Debug("OpsNode.Readdir", zap.String("path", p))
+	return n.adapter.ReadDir(ctx, p)
 }
 
 // Create creates a new file and returns a file handle for writing.
 func (n *OpsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
-	childPath := n.childPath(name)
+	childPath, e := n.requireChildPath("Create", name)
+	if e != 0 {
+		return nil, nil, 0, e
+	}
 	logging.Debug("OpsNode.Create", zap.String("path", childPath))
 
 	// Set up the entry out for the new file
 	out.Mode = syscall.S_IFREG | 0644
 	out.Nlink = 1
 
-	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter, childPath), fs.StableAttr{Mode: syscall.S_IFREG})
+	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter), fs.StableAttr{Mode: syscall.S_IFREG})
 
 	// Detect trigger and DDL sql files (same logic as Open)
 	isTrigger := name == fsops.FileTest || name == fsops.FileCommit || name == fsops.FileAbort
@@ -223,10 +306,13 @@ func (n *OpsNode) Create(ctx context.Context, name string, flags uint32, mode ui
 
 // Mkdir creates a new directory.
 func (n *OpsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	childPath := n.childPath(name)
+	childPath, errno := n.requireChildPath("Mkdir", name)
+	if errno != 0 {
+		return nil, errno
+	}
 	logging.Debug("OpsNode.Mkdir", zap.String("path", childPath))
 
-	errno := n.adapter.Mkdir(ctx, childPath)
+	errno = n.adapter.Mkdir(ctx, childPath)
 	if errno != 0 {
 		return nil, errno
 	}
@@ -235,33 +321,45 @@ func (n *OpsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 	out.Mode = syscall.S_IFDIR | 0755
 	out.Nlink = 2
 
-	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter, childPath), fs.StableAttr{Mode: syscall.S_IFDIR})
+	child := n.NewPersistentInode(ctx, newOpsNode(n.adapter), fs.StableAttr{Mode: syscall.S_IFDIR})
 	return child, 0
 }
 
 // Unlink removes a file.
 func (n *OpsNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	childPath := n.childPath(name)
+	childPath, errno := n.requireChildPath("Unlink", name)
+	if errno != 0 {
+		return errno
+	}
 	logging.Debug("OpsNode.Unlink", zap.String("path", childPath))
 	return n.adapter.Delete(ctx, childPath)
 }
 
 // Rmdir removes a directory.
 func (n *OpsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
-	childPath := n.childPath(name)
+	childPath, errno := n.requireChildPath("Rmdir", name)
+	if errno != 0 {
+		return errno
+	}
 	logging.Debug("OpsNode.Rmdir", zap.String("path", childPath))
 	return n.adapter.Delete(ctx, childPath)
 }
 
 // Rename moves or renames a child entry to a new parent directory.
 func (n *OpsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
-	oldPath := n.childPath(name)
-
 	newDir, ok := newParent.(*OpsNode)
 	if !ok {
 		return syscall.EINVAL
 	}
-	newPath := newDir.childPath(newName)
+
+	oldPath, errno := n.requireChildPath("Rename:source", name)
+	if errno != 0 {
+		return errno
+	}
+	newPath, errno := newDir.requireChildPath("Rename:target", newName)
+	if errno != 0 {
+		return errno
+	}
 
 	logging.Debug("OpsNode.Rename", zap.String("oldPath", oldPath), zap.String("newPath", newPath))
 	return n.adapter.Rename(ctx, oldPath, newPath)
@@ -269,15 +367,19 @@ func (n *OpsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 
 // Open opens a file and returns a file handle.
 func (n *OpsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	logging.Debug("OpsNode.Open", zap.String("path", n.path), zap.Uint32("flags", flags))
+	p, errno := n.requirePath("Open")
+	if errno != 0 {
+		return nil, 0, errno
+	}
+	logging.Debug("OpsNode.Open", zap.String("path", p), zap.Uint32("flags", flags))
 
 	accessMode := flags & syscall.O_ACCMODE
 	isWrite := accessMode == syscall.O_WRONLY || accessMode == syscall.O_RDWR
 
 	// DDL trigger files (.test, .commit, .abort) should fire on close
-	baseName := path.Base(n.path)
+	baseName := path.Base(p)
 	isTrigger := baseName == fsops.FileTest || baseName == fsops.FileCommit || baseName == fsops.FileAbort
-	isDDLSQL := baseName == "sql" && isDDLOpsPath(n.path)
+	isDDLSQL := baseName == "sql" && isDDLOpsPath(p)
 
 	if isWrite || isTrigger {
 		// Write mode or trigger: create a handle with an empty buffer.
@@ -285,7 +387,7 @@ func (n *OpsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32
 		// content is never needed — starting empty avoids stale data.
 		handle := &OpsFileHandle{
 			adapter:   n.adapter,
-			path:      n.path,
+			path:      p,
 			buf:       []byte{},
 			dirty:     false,
 			isTrigger: isTrigger,
@@ -296,14 +398,14 @@ func (n *OpsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32
 	}
 
 	// Read-only: load content eagerly
-	content, errno := n.adapter.ReadFile(ctx, n.path)
+	content, errno := n.adapter.ReadFile(ctx, p)
 	if errno != 0 {
 		return nil, 0, errno
 	}
 
 	handle := &OpsFileHandle{
 		adapter:  n.adapter,
-		path:     n.path,
+		path:     p,
 		buf:      content,
 		dirty:    false,
 		readOnly: true,
