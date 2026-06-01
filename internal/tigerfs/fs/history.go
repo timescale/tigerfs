@@ -91,6 +91,12 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 		dirPrefix := parsed.PrimaryKey
 
 		var filenames []string
+		// lastChanges parallels filenames; each element is the MAX(version_id)
+		// (UUIDv7) for that filename. Used to populate per-file ModTime so
+		// "ls -l .history/" reflects when each file last changed. Stays nil
+		// in the legacy non-parent-pointer code path -- ModTime falls back
+		// to `now` for those entries.
+		var lastChanges []string
 		var err error
 
 		// Parent-pointer model (ADR-017): query history by parent_id
@@ -109,7 +115,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 					return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("directory not found: %s", dirPrefix)}
 				}
 			}
-			filenames, err = o.db.QueryHistoryDistinctFilenamesByParent(ctx, schema, historyTable, parentID, limit)
+			filenames, lastChanges, err = o.db.QueryHistoryFilenamesByParentWithLastChange(ctx, schema, historyTable, parentID, limit)
 		} else {
 			// Old model: get all filenames and filter by prefix
 			filenames, err = o.db.QueryHistoryDistinctFilenames(ctx, schema, historyTable, limit)
@@ -120,11 +126,19 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 
 		var filtered []Entry
 		if info.Roles.ParentID != "" {
-			// Parent-pointer: filenames are already scoped to the directory
-			for _, fn := range filenames {
+			// Parent-pointer: filenames are already scoped to the directory.
+			// ModTime is the file's most-recent history version, decoded from
+			// the UUIDv7 last_change column.
+			for i, fn := range filenames {
+				mt := now
+				if i < len(lastChanges) {
+					if t := uuidv7ModTime(lastChanges[i]); !t.IsZero() {
+						mt = t
+					}
+				}
 				filtered = append(filtered, Entry{
 					Name: fn, IsDir: true,
-					Mode: os.ModeDir | 0555, ModTime: now,
+					Mode: os.ModeDir | 0555, ModTime: mt,
 				})
 			}
 		} else {
@@ -152,7 +166,7 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 	// Add .id virtual file
 	entries = append(entries, Entry{Name: FileID, IsDir: false, Mode: 0444, Size: 36, ModTime: now})
 
-	historyIDIdx := columnIndex(columns, "version_id")
+	historyIDIdx := columnIndex(columns, synth.ColVersionID)
 	for _, row := range rows {
 		if historyIDIdx < 0 {
 			continue
@@ -161,12 +175,16 @@ func (o *Operations) readDirHistoryByFilename(ctx context.Context, schema, cache
 		if versionID == "" {
 			continue
 		}
+		mt := historyIDToModTime(row[historyIDIdx])
+		if mt.IsZero() {
+			mt = now
+		}
 		entries = append(entries, Entry{
 			Name:    versionID,
 			IsDir:   false,
 			Mode:    0444,
 			Size:    0, // Size unknown without synthesizing content
-			ModTime: now,
+			ModTime: mt,
 		})
 	}
 	return entries, nil
@@ -200,7 +218,7 @@ func (o *Operations) readDirHistoryByID(ctx context.Context, schema, historyTabl
 	}
 
 	entries := make([]Entry, 0, len(rows))
-	historyIDIdx := columnIndex(columns, "version_id")
+	historyIDIdx := columnIndex(columns, synth.ColVersionID)
 	for _, row := range rows {
 		if historyIDIdx < 0 {
 			continue
@@ -209,12 +227,16 @@ func (o *Operations) readDirHistoryByID(ctx context.Context, schema, historyTabl
 		if versionID == "" {
 			continue
 		}
+		mt := historyIDToModTime(row[historyIDIdx])
+		if mt.IsZero() {
+			mt = now
+		}
 		entries = append(entries, Entry{
 			Name:    versionID,
 			IsDir:   false,
 			Mode:    0444,
 			Size:    0,
-			ModTime: now,
+			ModTime: mt,
 		})
 	}
 	return entries, nil
@@ -236,34 +258,51 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 		return &Entry{Name: ".by", IsDir: true, Mode: os.ModeDir | 0555, ModTime: now}, nil
 	}
 
-	// .history/.by/<uuid>/ — check UUID has history
+	// .history/.by/<uuid>/ — check UUID has history. ModTime is the
+	// most-recent version_id for that file_id ("when did this row last
+	// change?"). QueryHistoryByID orders DESC, so rows[0] is the latest.
 	if parsed.HistoryByID && parsed.HistoryRowID != "" && parsed.HistoryVersionID == "" {
-		_, rows, err := o.db.QueryHistoryByID(ctx, schema, historyTable, parsed.HistoryRowID, 1)
+		columns, rows, err := o.db.QueryHistoryByID(ctx, schema, historyTable, parsed.HistoryRowID, 1)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to check history by ID", Cause: err}
 		}
 		if len(rows) == 0 {
 			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("no history for row ID %s", parsed.HistoryRowID)}
 		}
-		return &Entry{Name: parsed.HistoryRowID, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now}, nil
+		mt := now
+		if idx := columnIndex(columns, synth.ColVersionID); idx >= 0 {
+			if t := historyIDToModTime(rows[0][idx]); !t.IsZero() {
+				mt = t
+			}
+		}
+		return &Entry{Name: parsed.HistoryRowID, IsDir: true, Mode: os.ModeDir | 0555, ModTime: mt}, nil
 	}
 
-	// .history/.by/<uuid>/<versionID> — version file by UUID
+	// .history/.by/<uuid>/<versionID> — version file by UUID. ModTime
+	// comes from the version_id (UUIDv7) -- the version itself is an
+	// immutable snapshot, so create time == mtime.
 	if parsed.HistoryByID && parsed.HistoryVersionID != "" {
 		return o.statHistoryVersion(ctx, schema, historyTable, "file_id", parsed.HistoryRowID, parsed.HistoryVersionID, info, now)
 	}
 
-	// .history/foo.md/ — filename directory
+	// .history/foo.md/ — filename directory. ModTime is the most-recent
+	// version_id for that filename ("when did this file last change?").
 	if parsed.HistoryFile != "" && parsed.HistoryVersionID == "" {
 		rawFilename := historyDBFilename(info, parsed.PrimaryKey, parsed.HistoryFile)
-		_, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
+		columns, rows, err := o.db.QueryHistoryByFilename(ctx, schema, historyTable, rawFilename, 1)
 		if err != nil {
 			return nil, &FSError{Code: ErrIO, Message: "failed to check history by filename", Cause: err}
 		}
 		if len(rows) == 0 {
 			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("no history for %s", parsed.HistoryFile)}
 		}
-		return &Entry{Name: parsed.HistoryFile, IsDir: true, Mode: os.ModeDir | 0555, ModTime: now}, nil
+		mt := now
+		if idx := columnIndex(columns, synth.ColVersionID); idx >= 0 {
+			if t := historyIDToModTime(rows[0][idx]); !t.IsZero() {
+				mt = t
+			}
+		}
+		return &Entry{Name: parsed.HistoryFile, IsDir: true, Mode: os.ModeDir | 0555, ModTime: mt}, nil
 	}
 
 	// .history/foo.md/.id — virtual file returning the row UUID
@@ -281,6 +320,10 @@ func (o *Operations) statHistory(ctx context.Context, parsed *ParsedPath, info *
 }
 
 // statHistoryVersion returns metadata for a specific version file in .history/.
+//
+// ModTime is the UUIDv7-embedded creation time of the version: history rows
+// are immutable snapshots, so the row's create time IS its mtime. Falling
+// back to now only if the versionID can't be parsed.
 func (o *Operations) statHistoryVersion(ctx context.Context, schema, historyTable, filterColumn, filterValue, versionID string, info *synth.ViewInfo, now time.Time) (*Entry, *FSError) {
 	columns, rows, err := o.db.QueryHistoryVersionByTime(ctx, schema, historyTable, filterColumn, filterValue, versionID, 1000)
 	if err != nil {
@@ -299,7 +342,12 @@ func (o *Operations) statHistoryVersion(ctx context.Context, schema, historyTabl
 		size = int64(len(content))
 	}
 
-	return &Entry{Name: versionID, IsDir: false, Mode: 0444, Size: size, ModTime: now}, nil
+	mt := uuidv7ModTime(versionID)
+	if mt.IsZero() {
+		mt = now
+	}
+
+	return &Entry{Name: versionID, IsDir: false, Mode: 0444, Size: size, ModTime: mt}, nil
 }
 
 // readHistoryFile reads a file within .history/.
@@ -317,7 +365,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 		if len(rows) == 0 {
 			return nil, &FSError{Code: ErrNotExist, Message: fmt.Sprintf("no history for %s", parsed.HistoryFile)}
 		}
-		idIdx := columnIndex(columns, "file_id")
+		idIdx := columnIndex(columns, synth.ColFileID)
 		if idIdx < 0 {
 			return nil, &FSError{Code: ErrIO, Message: "file_id column not found in history table"}
 		}
@@ -355,7 +403,7 @@ func (o *Operations) readHistoryFile(ctx context.Context, parsed *ParsedPath, in
 
 // findVersionRow scans rows for one whose version_id matches the given versionID.
 func findVersionRow(columns []string, rows [][]interface{}, versionID string) []interface{} {
-	historyIDIdx := columnIndex(columns, "version_id")
+	historyIDIdx := columnIndex(columns, synth.ColVersionID)
 	if historyIDIdx < 0 {
 		return nil
 	}
@@ -376,6 +424,18 @@ func columnIndex(columns []string, name string) int {
 		}
 	}
 	return -1
+}
+
+// historyIDToModTime returns the creation time embedded in a version_id
+// (UUIDv7) value, accepting the same heterogeneous inputs as
+// historyIDToVersionID. Returns the zero time on a parse failure so callers
+// can substitute a fallback.
+func historyIDToModTime(val interface{}) time.Time {
+	versionID := historyIDToVersionID(val)
+	if versionID == "" {
+		return time.Time{}
+	}
+	return uuidv7ModTime(versionID)
 }
 
 // historyIDToVersionID converts a version_id value (UUIDv7) to a display version ID string.

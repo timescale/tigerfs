@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
+	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
 	"github.com/timescale/tigerfs/internal/tigerfs/logging"
 	"go.uber.org/zap"
@@ -206,6 +208,81 @@ func (o *Operations) resolveSynthHierarchy(ctx context.Context, parsed *ParsedPa
 	parsed.PrimaryKey = strings.Join(parsed.RawSubPath, "/")
 	parsed.Column = ""
 	parsed.Format = ""
+}
+
+// uuidv7ModTime returns the creation time embedded in a UUIDv7. Accepts a
+// raw UUID string ("01927cab-..."), a display name
+// ("2026-05-31T042445.537Z-..."), a uuid.UUID, or a [16]byte. Returns the
+// zero time.Time on a parse failure (or non-v7 UUID) so callers can
+// substitute a fallback.
+//
+// We use the UUIDv7's create time as the ModTime for historical-record
+// directory listings: .log/, .savepoint/, and .history/. The semantic
+// question is "when did this entry come into existence?" For log and
+// history rows this is also the modification time -- those rows are
+// immutable. Savepoints can have their description edited later via a
+// re-write of .savepoint/<name>.json; we intentionally keep the listing's
+// ModTime as the savepoint's *creation* time, because a user scanning
+// .savepoint/ wants to know when each savepoint was *taken*, not when its
+// label was tweaked. If true mtime semantics are ever required, add an
+// updated_at column on the relevant table (driven by an UPDATE trigger)
+// and prefer it here when present.
+func uuidv7ModTime(val interface{}) time.Time {
+	switch v := val.(type) {
+	case string:
+		if parsed, err := uuid.Parse(v); err == nil && format.IsUUIDv7(parsed) {
+			return format.ExtractUUIDv7Time(parsed).UTC()
+		}
+		if id, err := format.DisplayNameToUUIDv7(v); err == nil {
+			return format.ExtractUUIDv7Time(id).UTC()
+		}
+	case [16]byte:
+		if format.IsUUIDv7(v) {
+			return format.ExtractUUIDv7Time(v).UTC()
+		}
+	case uuid.UUID:
+		if format.IsUUIDv7(v) {
+			return format.ExtractUUIDv7Time(v).UTC()
+		}
+	}
+	return time.Time{}
+}
+
+// rowModTimeFromID returns the per-row ModTime for rows in the auxiliary
+// backing tables (.log/, .savepoint/) by decoding their UUIDv7 identity
+// column. Returns fallback when the row's table isn't one we recognize, or
+// when the identity column is missing/unparseable.
+//
+// This centralizes the "rows whose identity is a UUIDv7" policy so statRow
+// doesn't carry per-table knowledge. PathHistory has its own dedicated
+// stat handler (statHistory) and doesn't pass through here.
+func rowModTimeFromID(parsed *ParsedPath, row *db.Row, fallback time.Time) time.Time {
+	if parsed == nil || parsed.OrigTableName == "" || parsed.Context == nil {
+		return fallback
+	}
+	switch {
+	case strings.HasSuffix(parsed.Context.TableName, synth.LogTableSuffix):
+		// .log/<id>: PrimaryKey is the row's log_id, rendered as a UUIDv7
+		// display name. No DB columns needed.
+		if t := uuidv7ModTime(parsed.PrimaryKey); !t.IsZero() {
+			return t
+		}
+	case strings.HasSuffix(parsed.Context.TableName, synth.SavepointTableSuffix):
+		// .savepoint/<name>: PK is a user-chosen name, so we read the
+		// savepoint_id column from the already-fetched row.
+		if row == nil {
+			return fallback
+		}
+		for i, col := range row.Columns {
+			if col == synth.ColSavepointID {
+				if t := uuidv7ModTime(row.Values[i]); !t.IsZero() {
+					return t
+				}
+				break
+			}
+		}
+	}
+	return fallback
 }
 
 // extractModTime returns the best available modification time for a synth row.

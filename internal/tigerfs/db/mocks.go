@@ -629,14 +629,17 @@ func (m *MockHierarchyWriter) GetRowsByParent(ctx context.Context, schema, table
 
 // MockHistoryReader is a mock for HistoryReader.
 type MockHistoryReader struct {
-	HasExtensionFn                          func(ctx context.Context, extName string) (bool, error)
-	TableExistsFn                           func(ctx context.Context, schema, table string) (bool, error)
-	QueryHistoryByFilenameFn                func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
-	QueryHistoryByIDFn                      func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
-	QueryHistoryDistinctFilenamesFn         func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
-	QueryHistoryDistinctFilenamesByParentFn func(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
-	QueryHistoryDistinctIDsFn               func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
-	QueryHistoryVersionByTimeFn             func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+	HasExtensionFn                                func(ctx context.Context, extName string) (bool, error)
+	TableExistsFn                                 func(ctx context.Context, schema, table string) (bool, error)
+	QueryHistoryByFilenameFn                      func(ctx context.Context, schema, historyTable, filename string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryByIDFn                            func(ctx context.Context, schema, historyTable, rowID string, limit int) ([]string, [][]interface{}, error)
+	QueryHistoryDistinctFilenamesFn               func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryDistinctFilenamesByParentFn       func(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
+	QueryHistoryFilenamesWithLastChangeFn         func(ctx context.Context, schema, historyTable string, limit int) ([]string, []string, error)
+	QueryHistoryFilenamesByParentWithLastChangeFn func(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, []string, error)
+	QueryHistoryDistinctIDsFn                     func(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
+	QueryHistoryVersionByTimeFn                   func(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+	QuerySavepointModTimesFn                      func(ctx context.Context, schema, table string, names []string) (map[string]string, error)
 }
 
 func (m *MockHistoryReader) HasExtension(ctx context.Context, extName string) (bool, error) {
@@ -679,6 +682,27 @@ func (m *MockHistoryReader) QueryHistoryDistinctFilenamesByParent(ctx context.Co
 		return m.QueryHistoryDistinctFilenamesByParentFn(ctx, schema, historyTable, parentID, limit)
 	}
 	return nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryFilenamesWithLastChange(ctx context.Context, schema, historyTable string, limit int) ([]string, []string, error) {
+	if m.QueryHistoryFilenamesWithLastChangeFn != nil {
+		return m.QueryHistoryFilenamesWithLastChangeFn(ctx, schema, historyTable, limit)
+	}
+	return nil, nil, nil
+}
+
+func (m *MockHistoryReader) QueryHistoryFilenamesByParentWithLastChange(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, []string, error) {
+	if m.QueryHistoryFilenamesByParentWithLastChangeFn != nil {
+		return m.QueryHistoryFilenamesByParentWithLastChangeFn(ctx, schema, historyTable, parentID, limit)
+	}
+	return nil, nil, nil
+}
+
+func (m *MockHistoryReader) QuerySavepointModTimes(ctx context.Context, schema, table string, names []string) (map[string]string, error) {
+	if m.QuerySavepointModTimesFn != nil {
+		return m.QuerySavepointModTimesFn(ctx, schema, table, names)
+	}
+	return map[string]string{}, nil
 }
 
 func (m *MockHistoryReader) QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {

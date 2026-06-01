@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/timescale/tigerfs/internal/tigerfs/db"
 	"github.com/timescale/tigerfs/internal/tigerfs/format"
 	"github.com/timescale/tigerfs/internal/tigerfs/fs/synth"
@@ -903,11 +902,11 @@ func (o *Operations) cachedQueryLogEntry(ctx context.Context, schema, logTable, 
 
 // uuidTimestamp extracts a UTC timestamp string from a UUID string.
 func uuidTimestamp(uuidStr string) string {
-	parsed, err := uuid.Parse(uuidStr)
-	if err != nil {
+	t := uuidv7ModTime(uuidStr)
+	if t.IsZero() {
 		return ""
 	}
-	return format.ExtractUUIDv7Time(parsed).UTC().Format(time.RFC3339)
+	return t.Format(time.RFC3339)
 }
 
 type summaryFileRow struct {
