@@ -16,6 +16,18 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg18
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -43,9 +55,16 @@ jobs:
         run: go vet ./...
 
       - name: Run unit tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: test
+          PGDATABASE: postgres
+          TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres?sslmode=disable
         run: |
           PACKAGES=$(go list ./... | grep -v /test/integration)
-          go test -v -race -coverprofile=coverage.txt $PACKAGES
+          go test -v -race -timeout 300s -coverprofile=coverage.txt $PACKAGES
 
       - name: Run integration tests
         if: inputs.run_integration == true
