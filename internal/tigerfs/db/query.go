@@ -1593,6 +1593,100 @@ func (c *Client) QueryHistoryOperation(ctx context.Context, schema, historyTable
 	return op, nil
 }
 
+// QuerySavepointModTimes returns a map of savepoint name -> savepoint_id (UUID
+// text) for the given names. The savepoint_id is a UUIDv7 from which the
+// caller can derive the savepoint's creation time (see fs.uuidv7ModTime).
+// Used to populate ModTime in the .savepoint/ directory listing -- without
+// this lookup, every entry would carry the same time.Now() value.
+func (c *Client) QuerySavepointModTimes(ctx context.Context, schema, table string, names []string) (map[string]string, error) {
+	if len(names) == 0 {
+		return map[string]string{}, nil
+	}
+	query := fmt.Sprintf(
+		`SELECT "name", "savepoint_id"::text FROM %s WHERE "name" = ANY($1::text[])`,
+		qt(schema, table),
+	)
+	rows, err := c.pool.Query(ctx, query, names)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query savepoint modtimes: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string, len(names))
+	for rows.Next() {
+		var name, id string
+		if err := rows.Scan(&name, &id); err != nil {
+			return nil, fmt.Errorf("failed to scan savepoint modtime row: %w", err)
+		}
+		out[name] = id
+	}
+	return out, nil
+}
+
+// QueryHistoryFilenamesWithLastChange returns filenames from the history table
+// along with each filename's most-recent version_id (MAX, UUIDv7 text). The
+// last-change ID lets callers derive a "when did this file last change?" time
+// for per-file directory entries under .history/. limit caps the filename
+// count to match the existing DirListingLimit semantics.
+func (c *Client) QueryHistoryFilenamesWithLastChange(ctx context.Context, schema, historyTable string, limit int) ([]string, []string, error) {
+	query := fmt.Sprintf(
+		`SELECT "filename", MAX("version_id"::text) AS last_change FROM %s GROUP BY "filename" ORDER BY "filename" LIMIT %d`,
+		qt(schema, historyTable), limit,
+	)
+	rows, err := c.pool.Query(ctx, query)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query history filenames with last change: %w", err)
+	}
+	defer rows.Close()
+
+	var filenames, lastChanges []string
+	for rows.Next() {
+		var fn, lc string
+		if err := rows.Scan(&fn, &lc); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan history filename row: %w", err)
+		}
+		filenames = append(filenames, fn)
+		lastChanges = append(lastChanges, lc)
+	}
+	return filenames, lastChanges, nil
+}
+
+// QueryHistoryFilenamesByParentWithLastChange is the parent-pointer-model
+// variant of QueryHistoryFilenamesWithLastChange: scoped to a directory by
+// parent_id (empty parentID means root level, i.e. parent_id IS NULL).
+func (c *Client) QueryHistoryFilenamesByParentWithLastChange(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, []string, error) {
+	var query string
+	var args []interface{}
+	if parentID == "" {
+		query = fmt.Sprintf(
+			`SELECT "filename", MAX("version_id"::text) AS last_change FROM %s WHERE "parent_id" IS NULL GROUP BY "filename" ORDER BY "filename" LIMIT %d`,
+			qt(schema, historyTable), limit,
+		)
+	} else {
+		query = fmt.Sprintf(
+			`SELECT "filename", MAX("version_id"::text) AS last_change FROM %s WHERE "parent_id" = $1 GROUP BY "filename" ORDER BY "filename" LIMIT %d`,
+			qt(schema, historyTable), limit,
+		)
+		args = []interface{}{parentID}
+	}
+	rows, err := c.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query history filenames by parent with last change: %w", err)
+	}
+	defer rows.Close()
+
+	var filenames, lastChanges []string
+	for rows.Next() {
+		var fn, lc string
+		if err := rows.Scan(&fn, &lc); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan history filename row: %w", err)
+		}
+		filenames = append(filenames, fn)
+		lastChanges = append(lastChanges, lc)
+	}
+	return filenames, lastChanges, nil
+}
+
 // QueryHistoryDistinctFilenames returns distinct filenames from the history table.
 func (c *Client) QueryHistoryDistinctFilenames(ctx context.Context, schema, historyTable string, limit int) ([]string, error) {
 	query := fmt.Sprintf(

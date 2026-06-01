@@ -818,10 +818,48 @@ func (o *Operations) readDirTable(ctx context.Context, parsed *ParsedPath) ([]En
 		}
 	}
 
+	// Per-row ModTime: for .log/ and .savepoint/ listings, each row's ModTime
+	// should reflect when that specific entry was created (encoded in its
+	// UUIDv7 identity column) rather than the single "now" value used for
+	// regular table rows. Without this, ls -l on .log/ and .savepoint/
+	// would stamp every entry with the current time, breaking sort-by-time
+	// and any agent that uses mtime as a recency signal.
+	rowModTime := func(rowPK string) time.Time { return now }
+	switch parsed.Type {
+	case PathLog:
+		// Log PK is the UUIDv7 itself, scanAndEncodePK formats it as the
+		// display name; uuidv7ModTime parses either form.
+		rowModTime = func(rowPK string) time.Time {
+			if t := uuidv7ModTime(rowPK); !t.IsZero() {
+				return t
+			}
+			return now
+		}
+	case PathSavepoint:
+		// Savepoint PK is a user-chosen name. Look up each name's
+		// savepoint_id (UUIDv7) in one batch query so we can extract the
+		// creation time. Failure falls back to now per row.
+		if idMap, err := o.db.QuerySavepointModTimes(ctx, fsCtx.Schema, fsCtx.TableName, rows); err == nil {
+			rowModTime = func(rowPK string) time.Time {
+				if id, ok := idMap[rowPK]; ok {
+					if t := uuidv7ModTime(id); !t.IsZero() {
+						return t
+					}
+				}
+				return now
+			}
+		} else {
+			logging.Warn("failed to load savepoint modtimes; falling back to now",
+				zap.String("schema", fsCtx.Schema),
+				zap.String("table", fsCtx.TableName),
+				zap.Error(err))
+		}
+	}
+
 	// Add rows as directories (row files like 1.json accessible but not listed)
 	cacheEntries := make(map[string]Entry, len(rows))
 	for _, rowPK := range rows {
-		entry := Entry{Name: rowPK, IsDir: true, Mode: os.ModeDir | 0755, ModTime: now}
+		entry := Entry{Name: rowPK, IsDir: true, Mode: os.ModeDir | 0755, ModTime: rowModTime(rowPK)}
 		entries = append(entries, entry)
 		cacheEntries[rowPK] = entry
 	}
@@ -1935,11 +1973,15 @@ func (o *Operations) statRow(ctx context.Context, parsed *ParsedPath) (*Entry, *
 
 	// No format extension means this is a row directory (can cd into it)
 	if parsed.Format == "" {
+		// rowModTimeFromID decodes UUIDv7-derived ModTimes for .log/ and
+		// .savepoint/ rows (no extra DB call -- the data is on parsed or
+		// in the row we just fetched). Falls back to now for ordinary
+		// user-table rows.
 		entry := Entry{
 			Name:    parsed.PrimaryKey,
 			IsDir:   true,
 			Mode:    os.ModeDir | 0755,
-			ModTime: now,
+			ModTime: rowModTimeFromID(parsed, row, now),
 		}
 		// Self-prime cache so subsequent statRow calls hit cache
 		o.statCache.set(fsCtx.Schema, fsCtx.TableName, parsed.PrimaryKey, entry)

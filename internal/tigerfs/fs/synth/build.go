@@ -10,6 +10,27 @@ import (
 // triggers, functions, and history tables.
 const TigerFSSchema = "tigerfs"
 
+// Suffixes appended to a synth app's table name to form the auxiliary
+// backing tables in the tigerfs schema. Prefer these constants over the
+// raw string literals when composing or matching the table names.
+const (
+	LogTableSuffix       = "_log"
+	SavepointTableSuffix = "_savepoint"
+	HistoryTableSuffix   = "_history"
+)
+
+// Column names on the auxiliary backing tables. Prefer these constants
+// for Go-side column lookups (e.g., columnIndex) and column matches.
+// SQL identifier literals in db/*.go remain quoted in place for now.
+const (
+	ColLogID       = "log_id"
+	ColSavepointID = "savepoint_id"
+	ColVersionID   = "version_id"
+	ColFileID      = "file_id"
+	ColFilename    = "filename"
+	ColParentID    = "parent_id"
+)
+
 // GenerateMarkdownTableSQL returns the CREATE TABLE statement for a markdown app.
 // The backing table is created in the tigerfs schema with the clean app name
 // (no underscore prefix).

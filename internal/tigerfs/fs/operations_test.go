@@ -2031,6 +2031,18 @@ func (m *mockDBClient) QueryHistoryDistinctIDs(ctx context.Context, schema, hist
 	return nil, nil
 }
 
+func (m *mockDBClient) QueryHistoryFilenamesWithLastChange(ctx context.Context, schema, historyTable string, limit int) ([]string, []string, error) {
+	return nil, nil, nil
+}
+
+func (m *mockDBClient) QueryHistoryFilenamesByParentWithLastChange(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, []string, error) {
+	return nil, nil, nil
+}
+
+func (m *mockDBClient) QuerySavepointModTimes(ctx context.Context, schema, table string, names []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 func (m *mockDBClient) QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error) {
 	return nil, nil, nil
 }

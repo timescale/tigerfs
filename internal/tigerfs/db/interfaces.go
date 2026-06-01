@@ -281,11 +281,25 @@ type HistoryReader interface {
 	// filtered by parent_id. Empty parentID means root level. Used by ADR-017.
 	QueryHistoryDistinctFilenamesByParent(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, error)
 
+	// QueryHistoryFilenamesWithLastChange returns filenames and each file's
+	// most-recent version_id (MAX, UUIDv7 text). Used to populate per-file
+	// directory mtimes in the .history/ listing.
+	QueryHistoryFilenamesWithLastChange(ctx context.Context, schema, historyTable string, limit int) ([]string, []string, error)
+
+	// QueryHistoryFilenamesByParentWithLastChange is the parent-pointer-model
+	// variant scoped to a directory by parent_id (empty means root level).
+	QueryHistoryFilenamesByParentWithLastChange(ctx context.Context, schema, historyTable, parentID string, limit int) ([]string, []string, error)
+
 	// QueryHistoryDistinctIDs returns distinct row UUIDs from the history table.
 	QueryHistoryDistinctIDs(ctx context.Context, schema, historyTable string, limit int) ([]string, error)
 
 	// QueryHistoryVersionByTime finds a history row matching a version ID timestamp.
 	QueryHistoryVersionByTime(ctx context.Context, schema, historyTable, filterColumn, filterValue string, targetTime interface{}, limit int) ([]string, [][]interface{}, error)
+
+	// QuerySavepointModTimes returns name -> savepoint_id (UUIDv7 text) for
+	// the given savepoint names. The savepoint_id encodes creation time;
+	// used by .savepoint/ listing to populate per-entry ModTime.
+	QuerySavepointModTimes(ctx context.Context, schema, table string, names []string) (map[string]string, error)
 }
 
 // HierarchyWriter provides operations for hierarchical directory management.

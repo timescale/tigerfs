@@ -902,3 +902,65 @@ func TestSynth_LoadSynthCache_SkipsMetadataForNonHistory(t *testing.T) {
 	assert.Nil(t, info.Metadata)
 	assert.Equal(t, 0, mockDB.metadataCalls, "QueryMetadata must not be called for non-history apps")
 }
+
+func TestSynth_UUIDv7ModTime(t *testing.T) {
+	// A known UUIDv7 with timestamp 2026-04-07T14:30:00.123Z. The hex form
+	// encodes the same time as the display name, so both inputs must yield
+	// the same time. Construct programmatically to avoid hand-encoding
+	// errors and to keep the test independent of clock drift.
+	ts := time.Date(2026, 4, 7, 14, 30, 0, 123_000_000, time.UTC)
+	ms := ts.UnixMilli()
+
+	// Build a UUIDv7 manually: 48-bit timestamp (ms) + version + random bits.
+	// We use a fixed entropy pattern so the value is deterministic.
+	var id [16]byte
+	id[0] = byte(ms >> 40)
+	id[1] = byte(ms >> 32)
+	id[2] = byte(ms >> 24)
+	id[3] = byte(ms >> 16)
+	id[4] = byte(ms >> 8)
+	id[5] = byte(ms)
+	id[6] = 0x70 | 0x0A // version 7, low nibble entropy
+	id[7] = 0xBC
+	id[8] = 0x80 | 0x12 // variant 10, low 6 bits entropy
+	id[9] = 0x34
+	id[10] = 0x56
+	id[11] = 0x78
+	id[12] = 0x9A
+	id[13] = 0xBC
+	id[14] = 0xDE
+	id[15] = 0xF0
+	hexForm := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		id[:4], id[4:6], id[6:8], id[8:10], id[10:])
+	// Display name format the helper accepts: "<RFC3339-ish>-<base36>".
+	// We rely on the production format helper to render it for parity.
+	displayName := synth.UUIDv7ToDisplayName(id)
+
+	tests := []struct {
+		name string
+		in   string
+		want time.Time
+	}{
+		{"hex UUIDv7", hexForm, ts},
+		{"display name", displayName, ts},
+		{"empty string", "", time.Time{}},
+		{"garbage", "not-a-uuid", time.Time{}},
+		// A non-v7 UUID (v4, all zeros version bits + random data). The
+		// helper should reject it because IsUUIDv7 is false. The check
+		// happens before fallback to display-name parsing, and a v4 UUID
+		// doesn't look like a display name either.
+		{"non-v7 UUID", "00000000-0000-4000-8000-000000000000", time.Time{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uuidv7ModTime(tt.in)
+			if tt.want.IsZero() {
+				assert.True(t, got.IsZero(), "expected zero time, got %v", got)
+				return
+			}
+			// Compare in millisecond precision -- UUIDv7 carries 48-bit ms.
+			assert.Equal(t, tt.want.UnixMilli(), got.UnixMilli(), "mtime mismatch")
+		})
+	}
+}
