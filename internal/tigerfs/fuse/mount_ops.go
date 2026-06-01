@@ -50,8 +50,8 @@ func MountOps(ctx context.Context, cfg *config.Config, connStr, mountpoint strin
 	// 3. Create FSAdapter bridge
 	adapter := NewFSAdapter(ops)
 
-	// 4. Create root OpsNode at "/"
-	root := newOpsNode(adapter, "/")
+	// 4. Create root OpsNode (path is derived dynamically from inode tree position).
+	root := newOpsNode(adapter)
 
 	// 5. Configure FUSE mount options
 	opts := &fs.Options{
