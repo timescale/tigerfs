@@ -126,15 +126,17 @@ func TestMount_Success(t *testing.T) {
 		t.Error("Expected mountpoint to be a directory")
 	}
 
-	// Attempt to list mountpoint (should be empty for now)
+	// Verify the mountpoint is a readable directory. We don't assert a
+	// specific entry count -- the contents depend on what's in the
+	// connected database (user tables, plus internal schemas from
+	// installed extensions like TimescaleDB), and asserting "empty"
+	// would only hold against a fresh public schema in a vanilla
+	// Postgres install.
 	entries, err := os.ReadDir(mountpoint)
 	if err != nil {
 		t.Fatalf("Failed to read mountpoint: %v", err)
 	}
-
-	if len(entries) != 0 {
-		t.Errorf("Expected empty directory, got %d entries", len(entries))
-	}
+	t.Logf("Mountpoint contains %d entries", len(entries))
 
 	// Close filesystem
 	err = filesystem.Close()
