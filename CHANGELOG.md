@@ -5,9 +5,11 @@ All notable changes to TigerFS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.0] - YYYY-MM-DD
+## [0.7.0] - 2026-06-02
 
 **Operation logs, savepoints, and atomic undo -- safe exploration on a transactional filesystem.**
+
+### Operation log, savepoints, and atomic undo
 
 - **Operation log** (`.log/`) -- every write produces a log entry capturing user, timestamp, before/after content, and operation type; browse via `.log/.last/N/.export/json` or index queries `.log/.by/file_id/`, `.log/.by/user_id/`, `.log/.by/type/`
 - **Diff symlinks** -- each log entry exposes `before`, `current`, and `after` virtual files so `diff -u .log/<id>/before .log/<id>/current` works directly
@@ -16,8 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Undo** (`.undo/`) -- three modes: `.undo/id/<log_id>/.apply` (single op), `.undo/to-id/<log_id>/.apply` (multi-file rollback to a log entry), `.undo/to-savepoint/<name>/.apply` (multi-file rollback to a savepoint); preview affected files via `.undo/<mode>/<target>/.info/summary` before applying
 - **Per-user undo** -- filter any undo by user via `.by/user_id/<user>/.apply`; agents only roll back their own changes in collaborative workspaces
 - **Undo of undo** -- undo operations are themselves logged, so you can reverse an undo by undoing its log entry; directory renames round-trip correctly even when batched with child file renames
+
+### Schema model and migration
+
+- **Composite primary key support** -- tables with multi-column PKs (e.g., `PRIMARY KEY (region, user_id)`) now mount cleanly; rows appear as comma-encoded directories like `us,1`, with `,` and `/` URL-escaped in PK values
 - **Relational directory structure** -- file/directory rows now reference their parent by `id` (UUID) rather than path string, so a directory rename is a single-row UPDATE that all children inherit (ADR-017)
 - **`tigerfs migrate` updates** -- new migrations move history triggers and add parent-pointer columns; idempotent and dry-run-safe
+
+### Filesystem behavior and correctness
+
+- **POSIX rename-as-replace** -- the atomic-rename pattern used by Vim, Claude Write/Edit, and most editors works correctly: `rename(tmp, target)` replaces `target` atomically instead of erroring
+- **Directory mtimes via trigger + `noac` mount option** -- directory mtimes reflect actual filesystem changes via a database-side trigger; the new `noac` mount option keeps the kernel from caching stale attributes across mounts of the same database
+- **Real dotfiles in file-first workspaces** -- user-created dotfiles (`.gitignore`, `.editorconfig`) coexist with the control-surface dotnames (`.log/`, `.savepoint/`, `.undo/`, etc.) without collision in `markdown,history`-built workspaces
+- **Directory-listing recursion safety** -- recursive scanners (`rm -rf`, `find`, agents probing structure) no longer infinite-loop on capability dirs; pipeline depth is capped and self-referential capability dirs are suppressed past a configurable limit
+- **FUSE_INTERRUPT decoupling** -- kernel interrupt signals (from `SIGURG`-driven Go preemption) no longer propagate as `context.Canceled` into the DB layer, eliminating spurious `EIO`/`ENOENT` under load on Linux FUSE mounts
+
+### Workspace identity and connectivity
+
+- **Mount-level user identity via `.info/user`** -- the mount's identity (used for per-user filtering on `.log/` and `.undo/.by/user_id/`) is exposed as a virtual file; configure via `--user`, `TIGERFS_USER`, or the process owner's username
+- **SELECT-only roles supported** -- primary-key and unique-constraint discovery now reads `pg_constraint` instead of relations a read-only role can't access, so workspaces mounted with a SELECT-only DB user work end-to-end
+
+### Tools
+
+- **`tigerfs-stress` harness** -- new companion binary for soak-testing a workspace under deterministic, PRNG-seeded filesystem + undo workloads; ships with diagnostic dumps, end-of-run monotonicity reporting, and a Docker FUSE mode (`./scripts/test-docker.sh`)
 
 ### Breaking Changes
 
