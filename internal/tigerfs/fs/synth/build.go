@@ -93,8 +93,15 @@ func GeneratePlainTextTableSQL(schema, name string) string {
 // the table in tableSchema. For build apps, the view lives in the user's
 // schema while the table lives in the tigerfs schema. For synthesized views
 // on existing tables, both schemas may be the same.
+//
+// The view is created with security_invoker = true (PostgreSQL 15+) so that
+// Row-Level Security policies on the backing table are evaluated as the
+// querying user, not the view owner. Without this, RLS policies are bypassed
+// when queries go through the view, since views execute as their owner by
+// default. This is safe for all deployments: when RLS is not enabled on the
+// backing table, security_invoker has no effect.
 func GenerateViewSQL(viewSchema, viewName, tableSchema, tableName string) string {
-	return fmt.Sprintf(`CREATE VIEW %s.%s AS SELECT * FROM %s.%s`,
+	return fmt.Sprintf(`CREATE VIEW %s.%s WITH (security_invoker = true) AS SELECT * FROM %s.%s`,
 		db.QuoteIdent(viewSchema), db.QuoteIdent(viewName),
 		db.QuoteIdent(tableSchema), db.QuoteIdent(tableName))
 }
