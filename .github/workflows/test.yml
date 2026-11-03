@@ -74,7 +74,7 @@ jobs:
         run: go tool cover -html=coverage.txt -o coverage.html
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         with:
           files: ./coverage.txt
